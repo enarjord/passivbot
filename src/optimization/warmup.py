@@ -275,18 +275,20 @@ def build_optimizer_max_config(config: dict) -> dict:
     )
 
 
-def _build_optimizer_boundary_configs(config: dict, *, minimum_positions: bool = False) -> list[dict]:
+def _build_optimizer_boundary_configs(config: dict, *, rms_consumer_corner: bool = False) -> list[dict]:
     anchor_plan = get_anchor_plan(config)
-    if anchor_plan is None and not minimum_positions:
+    if anchor_plan is None and not rms_consumer_corner:
         return [build_optimizer_max_config(config)]
     shape = build_optimization_shape(config)
     overrides_list = config.get("optimize", {}).get("enable_overrides", []) or []
     vector = [bound.high for bound in shape.bounds]
-    if minimum_positions:
-        # Ranking can become necessary at fewer slots even when the all-high
-        # corner fits the universe. Use the smallest positive slot count, then
-        # finalize normally so fixed runtime overrides and anchor pins still win.
+    if rms_consumer_corner:
+        # Ranking may need fewer slots; adverse cooldown may need a lower
+        # base/floor. Use that consumer-enabling corner with maximal weights
+        # and ceiling, then finalize so runtime overrides and anchor pins win.
         for i, ((_, path), bound) in enumerate(zip(shape.key_paths, shape.bounds)):
+            if path and path[-1] in ("base_duration_minutes", "min_duration_minutes"):
+                vector[i] = bound.low
             if path and path[-1] == "n_positions":
                 value = bound.quantize(max(1.0, bound.low))
                 if round(value) <= 0 and bound.is_stepped and bound.max_index > 0:
@@ -326,8 +328,9 @@ def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str)
         return
     from backtest import prep_backtest_args
     from warmup_utils import rms_side_enabled
+    from config.entry_cooldown import uses_adverse_rms
 
-    for candidate in _build_optimizer_boundary_configs(config, minimum_positions=True):
+    for candidate in _build_optimizer_boundary_configs(config, rms_consumer_corner=True):
         bot_params, _, _, _ = prep_backtest_args(candidate, mss, exchange)
         for side in ("long", "short"):
             eligible = sum(pair[side]["entry_eligible"] for pair in bot_params)
@@ -342,7 +345,7 @@ def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str)
                     and rms_side_enabled(params, side)
                     and (
                         (ranking_possible and params["forager_score_weights"]["unilateralness"] > 0.0)
-                        or params["entry_cooldown_weights_minutes"]["adverse_directionality"] > 0.0
+                        or uses_adverse_rms(params)
                     )
                 ):
                     raise ValueError(
@@ -389,7 +392,12 @@ def compute_optimizer_per_coin_warmup_minutes(
     Other indicators retain their existing worst-case activation budget.
     """
     merged: dict[str, int] = {}
-    for boundary_config in _build_optimizer_boundary_configs(config):
+    boundary_configs = _build_optimizer_boundary_configs(config)
+    if not for_trade_activation:
+        # The all-high corner can clamp cooldown to a constant even though
+        # lower base/floor candidates consume RMS and need its full history.
+        boundary_configs += _build_optimizer_boundary_configs(config, rms_consumer_corner=True)
+    for boundary_config in boundary_configs:
         warmup_map = compute_per_coin_warmup_minutes(
             boundary_config,
             for_trade_activation=for_trade_activation,

@@ -98,6 +98,19 @@ pub(crate) fn validate(params: &crate::types::BotParams) -> Result<(), String> {
     Ok(())
 }
 
+/// Nonnegative modifiers cannot change a duration already pinned to its ceiling.
+/// Callers validate the policy before using this input-independence check.
+pub(crate) fn constant_duration(params: &crate::types::BotParams) -> Option<f64> {
+    params.entry_cooldown_max_duration_minutes.filter(|max| {
+        params.risk_entry_cooldown_minutes.max(params.entry_cooldown_min_duration_minutes) >= *max
+    })
+}
+
+pub(crate) fn uses_adverse_rms(params: &crate::types::BotParams) -> bool {
+    params.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+        && constant_duration(params).is_none()
+}
+
 /// Optional inputs are read only for enabled weights. Exposure is not capped at one.
 pub(crate) fn effective_duration(
     params: &crate::types::BotParams,
@@ -105,6 +118,9 @@ pub(crate) fn effective_duration(
     adverse_score: Option<f64>,
 ) -> Result<f64, String> {
     validate(params)?;
+    if let Some(minutes) = constant_duration(params) {
+        return Ok(minutes);
+    }
     let mut minutes = params.risk_entry_cooldown_minutes;
     for (weight, input) in [
         (

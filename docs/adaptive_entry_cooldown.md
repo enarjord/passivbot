@@ -38,7 +38,8 @@ component, then combines it with the other relative weights. An absolute `1-U`
 score is not substituted for that existing normalization. With insufficient
 competition to require ranking, this input is not required for selection. CPU backtests
 request its history without postponing unrelated trading. An incomplete scoring window
-excludes the coin only while ranking actually requires it; no partial score is substituted.
+defers the entire ranking decision while a compared candidate lacks its required score;
+ready candidates are not ranked as a smaller substitute universe.
 
 Live ranking may carry the latest complete, contiguous RMS observation within the
 same per-symbol age allowance used by other Forager ranking metrics. Debug logs
@@ -157,5 +158,8 @@ CPU backtests require one-minute candles only when RMS can be consumed. A
 score-only side with one eligible coin, or a fixed position-slot budget covering
 its eligible universe, leaves RMS inactive and can use aggregated candles.
 Multi-coin dynamic-tradability budgets retain the requirement: held positions can
-occupy slots while new coins become tradable. Adverse cooldown always requires
-one-minute candles on an entry-eligible, enabled side.
+occupy slots while new coins become tradable. Adverse cooldown requires
+one-minute candles on an entry-eligible, enabled side unless the clamp makes the
+duration constant. Equal floor and ceiling, or a base already at/above the ceiling,
+needs no modifier inputs. Optimizer preflight also checks corners where a lower
+base/floor or higher ceiling makes those inputs necessary again.

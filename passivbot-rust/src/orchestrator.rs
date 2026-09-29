@@ -259,7 +259,7 @@ mod core {
             symbol_idx: usize,
             details: String,
         },
-        UnilateralnessWarming {
+        UnilateralnessUnavailable {
             symbol_idx: usize,
         },
         MissingEma {
@@ -425,6 +425,16 @@ mod core {
         pub tradable: bool,
     }
 
+    /// Explicit live transport unavailability, scoped to the span and consumer.
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct UnilateralnessUnavailable {
+        #[serde(default)]
+        pub current: Vec<f64>,
+        #[serde(default)]
+        pub forager: Vec<f64>,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct SymbolInput {
@@ -442,6 +452,8 @@ mod core {
         /// unrelated inputs and non-finite scores remain strict.
         #[serde(default)]
         pub unilateralness_warmup_spans: Vec<f64>,
+        #[serde(default)]
+        pub unilateralness_unavailable: UnilateralnessUnavailable,
         /// Backtest-only hint: next candle range for "peek fill" decisions.
         /// `None` => unknown (live mode), default to full-grid expansion.
         pub next_candle: Option<NextCandle>,
@@ -2320,6 +2332,7 @@ mod core {
         let ema_readiness_required = cfg.require_forager && normalized_weights.ema_readiness != 0.0;
         out.clear();
         out.reserve(candidate_indices.len());
+        let mut ranking_unavailable = false;
         for &symbol_idx in candidate_indices {
             let s = &symbols[symbol_idx];
             let forager_m1 = s.forager_m1.as_ref().unwrap_or(&s.emas.m1);
@@ -2337,6 +2350,26 @@ mod core {
                 },
                 side,
             )?;
+            let unilateralness_score =
+                if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
+                    match signed_unilateralness(s, &side.bot_params, true) {
+                        Ok(value) => value.abs(),
+                        Err(err) => {
+                            handle_strategy_input_error(
+                                err,
+                                s,
+                                pside,
+                                StrategyInputScope::ForagerSelection,
+                                diagnostics,
+                            )?;
+                            ranking_unavailable = true;
+                            out.push(unavailable_forager_candidate(s.symbol_idx));
+                            continue;
+                        }
+                    }
+                } else {
+                    0.0
+                };
             let volume_score = if volume_required {
                 let value = match ema_lookup(
                     &forager_m1.volume,
@@ -2385,37 +2418,6 @@ mod core {
             } else {
                 0.0
             };
-            let unilateralness_score =
-                if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
-                    match signed_unilateralness(s, &side.bot_params, true) {
-                        Ok(value) => value.abs(),
-                        Err(OrchestratorError::MissingEma { .. })
-                            if s.unilateralness_warmup_spans
-                                .contains(&side.bot_params.unilateralness_ema_span_1m) =>
-                        {
-                            diagnostics.warnings.push(OrchestratorWarning::StrategyInputUnavailable {
-                                symbol_idx: s.symbol_idx,
-                                pside,
-                                scope: StrategyInputScope::ForagerSelection,
-                            });
-                            out.push(unavailable_forager_candidate(s.symbol_idx));
-                            continue;
-                        }
-                        Err(err) => {
-                            handle_strategy_input_error(
-                                err,
-                                s,
-                                pside,
-                                StrategyInputScope::ForagerSelection,
-                                diagnostics,
-                            )?;
-                            out.push(unavailable_forager_candidate(s.symbol_idx));
-                            continue;
-                        }
-                    }
-                } else {
-                    0.0
-                };
             let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
             {
                 let ema_bands = match cached_ema_bands(
@@ -2468,6 +2470,11 @@ mod core {
                 ema_upper,
                 entry_initial_ema_dist,
             });
+        }
+        if ranking_unavailable {
+            // A missing compared score can change the winner. Never rank a
+            // ready subset merely because its history arrived first.
+            out.clear();
         }
         Ok(())
     }
@@ -2595,7 +2602,7 @@ mod core {
     ) -> Result<(), OrchestratorError> {
         let explicitly_unavailable = match &err {
             OrchestratorError::MissingEma { .. } => symbol.allow_missing_strategy_inputs,
-            OrchestratorError::UnilateralnessWarming { .. } => true,
+            OrchestratorError::UnilateralnessUnavailable { .. } => true,
             OrchestratorError::MissingTrailing { .. } => {
                 !symbol_side_input(symbol, pside).trailing_available
             }
@@ -2773,10 +2780,15 @@ mod core {
         };
         let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_1m)
             .ok_or_else(|| {
-                if !forager && symbol.unilateralness_warmup_spans
-                    .contains(&bp.unilateralness_ema_span_1m)
+                let unavailable = if forager {
+                    &symbol.unilateralness_unavailable.forager
+                } else {
+                    &symbol.unilateralness_unavailable.current
+                };
+                if symbol.unilateralness_warmup_spans.contains(&bp.unilateralness_ema_span_1m)
+                    || unavailable.contains(&bp.unilateralness_ema_span_1m)
                 {
-                    OrchestratorError::UnilateralnessWarming { symbol_idx: symbol.symbol_idx }
+                    OrchestratorError::UnilateralnessUnavailable { symbol_idx: symbol.symbol_idx }
                 } else {
                     OrchestratorError::MissingEma { symbol_idx: symbol.symbol_idx }
                 }
@@ -2802,6 +2814,9 @@ mod core {
             symbol_idx: Some(symbol.symbol_idx),
             field: "entry_cooldown",
         })?;
+        if let Some(minutes) = crate::entry_cooldown::constant_duration(bp) {
+            return Ok(minutes);
+        }
         // A held position with no remaining allocation is beyond any finite ratio.
         // Saturate the bounded duration without dividing by zero.
         if bp.entry_cooldown_weights_minutes.exposure_ratio > 0.0
@@ -2867,7 +2882,7 @@ mod core {
                 ) {
                     Ok(value) => Some(value),
                     Err(OrchestratorError::MissingEma { .. }
-                        | OrchestratorError::UnilateralnessWarming { .. }) => None,
+                        | OrchestratorError::UnilateralnessUnavailable { .. }) => None,
                     Err(err) => return Err(format!("{err:?}")),
                 };
                 result.insert(format!("{}:{name}", symbol.symbol_idx), value);
@@ -3008,8 +3023,9 @@ mod core {
         diagnostics: &mut OrchestratorDiagnostics,
     ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
         let side = symbol_side_input(symbol, pside);
-        let rms_warming = side.bot_params.entry_cooldown_weights_minutes.adverse_directionality > 0.0
-            && symbol.unilateralness_warmup_spans.contains(&side.bot_params.unilateralness_ema_span_1m);
+        let rms_warming = crate::entry_cooldown::uses_adverse_rms(&side.bot_params)
+            && (symbol.unilateralness_warmup_spans.contains(&side.bot_params.unilateralness_ema_span_1m)
+                || symbol.unilateralness_unavailable.current.contains(&side.bot_params.unilateralness_ema_span_1m));
         let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
             && wants_entries
             && wants_closes
@@ -4844,6 +4860,7 @@ mod core {
                 tradable: true,
                 allow_missing_strategy_inputs: false,
                 unilateralness_warmup_spans: Vec::new(),
+                unilateralness_unavailable: Default::default(),
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,

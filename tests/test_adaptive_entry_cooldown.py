@@ -154,7 +154,8 @@ def test_rms_forager_prefers_lower_penalty_and_ignores_direction_sign():
 
 
 @pytest.mark.asyncio
-async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch):
+@pytest.mark.parametrize("scoring_weight", [0.0, 1.0])
+async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch, scoring_weight):
     from live.unilateralness import load
     from candlestick_manager import CANDLE_DTYPE
 
@@ -175,9 +176,13 @@ async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch):
         cm=CM(),
         is_pside_enabled=lambda side: True,
         get_exchange_time=lambda: n * 60000 + 30000,
-        bp=lambda side, key, symbol: {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+        bp=lambda side, key, symbol: {
+            "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+            "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }[key],
         bot_value=lambda side, key: (
-            {"unilateralness": 0.0} if key == "forager_score_weights" else span
+            {"unilateralness": scoring_weight} if key == "forager_score_weights" else span
         ),
     )
     first, ranking, missing = await load(bot, ["BTC"], {"BTC"})
@@ -186,11 +191,12 @@ async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch):
     assert await load(bot, ["BTC"], {"BTC"}) == (first, ranking, missing)
     bot.get_exchange_time = lambda: (n + 2) * 60000 + 30000
     current, rank, missing = await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
-    assert current["BTC"] == {} and rank == first and missing == {"BTC"}
+    assert current["BTC"] == {} and rank == first and missing == {"BTC": {"current": [span], "forager": []}}
     bot.get_exchange_time = lambda: n * 60000 + 30000
     rows = rows[np.arange(n) != n // 2]
     second, ranking, missing = await load(bot, ["BTC"], {"BTC"})
-    assert missing == {"BTC"} and second["BTC"] == {}
+    assert missing == {"BTC": {"current": [span], "forager": [span] if scoring_weight else []}}
+    assert second["BTC"] == {}
 
 
 def test_cooldown_cli_and_partial_override_keep_effective_weights():
@@ -333,7 +339,7 @@ def test_forager_can_rank_carried_score_while_current_cooldown_is_unavailable():
     symbol["emas"]["m1"]["signed_unilateralness"] = []
     symbol["forager_m1"] = copy.deepcopy(symbol["emas"]["m1"])
     symbol["forager_m1"]["signed_unilateralness"] = [[60.0, 0.3]]
-    symbol["allow_missing_strategy_inputs"] = True
+    symbol["unilateralness_unavailable"] = {"current": [60.0]}
     result = compute(pbr, inp)
     assert not entries(result)
     # Ranking observations must never satisfy a current cooldown input.
@@ -531,7 +537,11 @@ async def test_live_rms_skips_dormant_side_spans(active_side):
         cm=SimpleNamespace(get_candles=candles),
         get_exchange_time=lambda: 21 * 60000,
         is_pside_enabled=lambda side: side == active_side,
-        bp=lambda side, key, symbol: {"exposure_ratio": 0.0, "adverse_directionality": 10.0},
+        bp=lambda side, key, symbol: {
+            "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 10.0},
+            "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }[key],
         bot_value=lambda side, key: (
             {"unilateralness": 1.0} if key == "forager_score_weights"
             else (1.0 if side == active_side else 100000.0)
@@ -835,3 +845,150 @@ def test_cpu_unused_forager_rms_preserves_aggregated_candle_results(side, interv
         cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
             run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("missing_idx", [0, 1])
+@pytest.mark.parametrize("marker", ["warmup", "live"])
+def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
+    import passivbot_rust as pbr
+
+    bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0, "forager_score_weights": {
+        "volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0,
+    }}
+    symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": bp}) for i in range(2)]
+    for i, symbol in enumerate(symbols):
+        symbol[side]["mode"] = None
+        symbol["emas"]["m1"]["signed_unilateralness"] = [[60.0, 0.8]] if i != missing_idx else []
+    missing = symbols[missing_idx]
+    if marker == "warmup":
+        missing["unilateralness_warmup_spans"] = [60.0]
+    else:
+        missing["unilateralness_unavailable"] = {"forager": [60.0]}
+    inp = make_input(balance=1000.0, global_bp=bot_params_pair(**{f"{side}_overrides": bp}), symbols=symbols)
+    result = compute(pbr, inp)
+    selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == side)
+    assert selection["ranking_required"]
+    assert selection["selected_symbol_indices"] == []
+    missing["emas"]["m1"]["signed_unilateralness"] = [[60.0, 0.0]]
+    result = compute(pbr, inp)
+    selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == side)
+    assert selection["selected_symbol_indices"] == [missing_idx]
+    # Invalid ready data remains fatal even alongside an explicitly missing score.
+    missing["emas"]["m1"]["signed_unilateralness"] = []
+    symbols[1-missing_idx]["emas"]["m1"]["signed_unilateralness"] = [[60.0, 1.5]]
+    with pytest.raises(ValueError):
+        compute(pbr, inp)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_cpu_staggered_listing_waits_for_every_compared_rms_window(side):
+    from backtest import build_backtest_payload, execute_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["live"]["approved_coins"][side] = ["LONGCOIN", "SHORTCOIN"]
+    cfg["bot"][side]["forager"].update(unilateralness_ema_span_1m=1.0)
+    cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    markets["SHORTCOIN"]["first_valid_index"] = 10
+    payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
+    # Both coins join the compared universe together, after one has enough
+    # history and while the later listing is still building its RMS window.
+    payload.backtest_params["trade_start_indices"] = [20, 20]
+    fills, _, _ = execute_backtest(payload, cfg)
+    times = [int(row[0]) for row in fills if str(row[13]).startswith("entry_") and side in str(row[13])]
+    assert times and min(times) == 31
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("base,floor,ceiling", [(0.0, 0.0, 0.0), (0.0, 5.0, 5.0), (10.0, 0.0, 5.0)])
+def test_constant_cooldown_does_not_require_directional_inputs(side, base, floor, ceiling):
+    import passivbot_rust as pbr
+    inp = adaptive_input(base=base, exposure=10.0)
+    symbol = inp["symbols"][0]
+    if side == "short":
+        symbol["short"]["bot_params"] = copy.deepcopy(symbol["long"]["bot_params"])
+    bp = symbol[side]["bot_params"]
+    bp["entry_cooldown_min_duration_minutes"] = floor
+    bp["entry_cooldown_max_duration_minutes"] = ceiling
+    symbol["emas"]["m1"]["signed_unilateralness"] = []
+    # Inspect just this policy; the opposite side has no active modifier.
+    symbol["short" if side == "long" else "long"]["bot_params"]["entry_cooldown_weights_minutes"] = {
+        "exposure_ratio": 0.0, "adverse_directionality": 0.0,
+    }
+    durations = json.loads(pbr.entry_cooldown_durations_json(json.dumps(inp)))
+    assert durations[f"0:{side}"] == ceiling
+    compute(pbr, inp)
+
+
+@pytest.mark.parametrize("marker", [{"current": [60.0]}, {"current": [30.0]}, {"forager": [60.0]}])
+def test_live_rms_unavailability_is_consumer_and_span_specific(marker):
+    import passivbot_rust as pbr
+    inp = adaptive_input()
+    symbol = inp["symbols"][0]
+    symbol["emas"]["m1"]["signed_unilateralness"] = []
+    symbol["unilateralness_unavailable"] = marker
+    if marker != {"current": [60.0]}:
+        with pytest.raises(ValueError, match="MissingEma"):
+            compute(pbr, inp)
+        return
+    symbol["long"]["position"] = {"size": 1.0, "price": 100.0}
+    result = compute(pbr, inp)
+    assert not entries(result)
+    assert any(o["order_type"].startswith("close_") for o in result["orders"])
+    symbol["emas"]["m1"]["close"] = []
+    with pytest.raises(ValueError, match="MissingEma"):
+        compute(pbr, inp)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("interval", [1, 5])
+@pytest.mark.parametrize("base,floor,ceiling", [(0, 0, 0), (0, 5, 5), (10, 0, 5)])
+def test_constant_clamp_cpu_needs_no_rms_history(side, interval, base, floor, ceiling):
+    from backtest import run_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = _ema_anchor_config(True)
+    cfg["backtest"]["candle_interval_minutes"] = interval
+    cfg["bot"][side]["entry_cooldown"].update(
+        base_duration_minutes=base, min_duration_minutes=floor, max_duration_minutes=ceiling,
+    )
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    cfg["optimize"]["bounds"][side]["entry_cooldown"]["base_duration_minutes"] = [base, base]
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    baseline = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    warmup = compute_backtest_warmup_minutes(cfg)
+    cfg["bot"][side]["entry_cooldown"]["weights_minutes"] = {
+        "adverse_directionality": 20.0, "exposure_ratio": 10.0,
+    }
+    assert compute_backtest_warmup_minutes(cfg) == warmup
+    actual = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    np.testing.assert_array_equal(actual[0], baseline[0])
+    np.testing.assert_array_equal(actual[1], baseline[1])
+    assert actual[2] == baseline[2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base,floor,ceiling", [(0, 0, 0), (0, 5, 5), (10, 0, 5)])
+async def test_live_constant_clamp_skips_rms_fetch(base, floor, ceiling):
+    from live.unilateralness import load
+    async def candles(*args, **kwargs):
+        pytest.fail("constant cooldown must not request RMS candles")
+    params = {
+        "entry_cooldown_weights_minutes": {"adverse_directionality": 20.0},
+        "risk_entry_cooldown_minutes": base,
+        "entry_cooldown_min_duration_minutes": floor,
+        "entry_cooldown_max_duration_minutes": ceiling,
+    }
+    bot = SimpleNamespace(
+        cm=SimpleNamespace(get_candles=candles), get_exchange_time=lambda: 60000,
+        is_pside_enabled=lambda side: True, bp=lambda side,key,symbol: params[key],
+        bot_value=lambda side,key: {"unilateralness": 0.0} if key=="forager_score_weights" else 60.0,
+    )
+    assert await load(bot, ["BTC"], set()) == ({"BTC": {}}, {"BTC": {}}, {})

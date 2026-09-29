@@ -44,6 +44,24 @@ def validate_entry_cooldown(cfg, *, path):
         raise ValueError(f"{path}.max_duration_minutes must be finite and >= min_duration_minutes")
 
 
+def constant_duration(params):
+    """Input-independence check for validated, flattened cooldown settings."""
+    maximum = params.get("entry_cooldown_max_duration_minutes")
+    if maximum is not None and max(
+        params.get("risk_entry_cooldown_minutes", 0.0),
+        params.get("entry_cooldown_min_duration_minutes", 0.0),
+    ) >= maximum:
+        return maximum
+    return None
+
+
+def uses_adverse_rms(params):
+    return (
+        params.get("entry_cooldown_weights_minutes", {}).get("adverse_directionality", 0.0) > 0.0
+        and constant_duration(params) is None
+    )
+
+
 def maximum_duration(cfg):
     validate_entry_cooldown(cfg, path="entry_cooldown")
     maximum = cfg["max_duration_minutes"]

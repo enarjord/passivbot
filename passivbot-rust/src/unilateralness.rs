@@ -7,7 +7,7 @@ pub fn backtest_enabled(params: &crate::types::BotParams, ranking_possible: bool
         && params.total_wallet_exposure_limit > 0.0
         && params.n_positions > 0
         && ((ranking_possible && params.forager_score_weights.unilateralness > 0.0)
-            || params.entry_cooldown_weights_minutes.adverse_directionality > 0.0)
+            || crate::entry_cooldown::uses_adverse_rms(params))
 }
 
 /// Static upper bound on score consumers. A single eligible coin never needs

@@ -525,3 +525,41 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
             validate_optimizer_dataset_intervals(cfg, markets, "binance")
     else:
         validate_optimizer_dataset_intervals(cfg, markets, "binance")
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("base_bounds,floor_bounds,ceil_bounds,reject", [
+    ([5, 5], [0, 0], [5, 5], False),
+    ([0, 5], [0, 0], [5, 5], True),
+    ([0, 5], [5, 5], [5, 5], False),
+    ([0, 5], [0, 5], [5, 5], True),
+    ([5, 5], [5, 5], [5, 10], True),
+    ([0, 0], [0, 0], [0, 0], False),
+])
+def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base_bounds, floor_bounds, ceil_bounds, reject):
+    from optimization.warmup import validate_optimizer_dataset_intervals, compute_optimizer_per_coin_warmup_minutes
+    from test_backtest_directional_eligibility import _synthetic_inputs
+
+    cfg = get_template_config()
+    cfg["backtest"]["candle_interval_minutes"] = 5
+    cfg["bot"][side]["entry_cooldown"].update(
+        base_duration_minutes=base_bounds[1], min_duration_minutes=floor_bounds[1],
+        max_duration_minutes=ceil_bounds[1],
+    )
+    cfg["optimize"]["bounds"][side]["risk"].update(n_positions=[1, 1], total_wallet_exposure_limit=[1, 1])
+    cfg["optimize"]["bounds"][side]["entry_cooldown"].update(
+        base_duration_minutes=base_bounds, min_duration_minutes=floor_bounds,
+        max_duration_minutes=ceil_bounds, weights_minutes={"adverse_directionality": [0, 20]},
+    )
+    cfg["live"]["max_warmup_minutes"] = 3
+    cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_1m"] = [1.0, 60.0]
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["live"]["approved_coins"] = {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]}
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    assert compute_optimizer_per_coin_warmup_minutes(cfg)["__default__"] == (1201 if reject else 3)
+    _, markets, _, _ = _synthetic_inputs()
+    if reject:
+        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+            validate_optimizer_dataset_intervals(cfg, markets, "binance")
+    else:
+        validate_optimizer_dataset_intervals(cfg, markets, "binance")

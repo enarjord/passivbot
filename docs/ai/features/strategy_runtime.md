@@ -289,10 +289,15 @@ Forager may carry a complete cached observation only within the existing candida
 age budget, without feeding invented flat returns. Cooldown requires a current
 completed window. Their values remain separate in the input envelope. Missing
 RMS is scoped to the consuming entry or ranking branch; closes remain independent.
+Live `unilateralness_unavailable` carries separate `current` and `forager` span
+lists. RMS transport failures must not set the generic missing-strategy-input
+permission. A valid cached ranking value does not satisfy current cooldown input.
 CPU history requests include RMS, but shared trade activation does not wait for it.
 The backtest marks exact spans still warming from known listing history in
 `unilateralness_warmup_spans`. A missing score at a marked span defers only required
-ranking or the side/order branch consuming adverse cooldown. Closes and unrelated
+ranking or the side/order branch consuming adverse cooldown. If any compared
+candidate lacks required RMS, defer the whole ranking decision, not just that
+candidate; never select from a history-ready subset. Closes and unrelated
 entries remain independent. Once enough closes exist the marker is removed.
 Unmarked missing inputs, unrelated required inputs and invalid scores remain fatal.
 The Python output validator evaluates the submitted cooldown inputs through the
@@ -300,6 +305,9 @@ same pure Rust policy, rather than trusting a producer-echoed duration.
 
 Cooldown uses nonnegative additive weights for existing exposure ratio (without a
 unit cap) and adverse signed RMS. Apply floor/ceiling once after composition.
+A validated policy whose base/floor already reaches its ceiling is constant and
+requires no modifier inputs. Inactive adverse modifiers impose no RMS history or
+interval requirement; optimizer bounds must account for nonconstant corners.
 Enabled weights require a finite ceiling; structural fill coverage, pair activation
 and restart anchors use that horizon even at base zero. Current effective duration,
 not base alone, governs elapsed-time gating and entry-ladder staging. At effective

@@ -181,6 +181,18 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
         scoring = upper("forager_score_weights_unilateralness", scoring)
         adverse = upper("entry_cooldown_weights_minutes_adverse_directionality", adverse)
         span = upper("unilateralness_ema_span_1m", span)
+    from config.entry_cooldown import constant_duration
+    duration_params = dict(params)
+    if bounds and not for_trade_activation:
+        for key in ("risk_entry_cooldown_minutes", "entry_cooldown_min_duration_minutes"):
+            raw = bounds.get(f"{pside}_{key}")
+            if raw is not None:
+                duration_params[key] = min(params.get(key, 0.0), Bound.from_config(key, raw).low)
+        duration_params["entry_cooldown_max_duration_minutes"] = upper(
+            "entry_cooldown_max_duration_minutes", params.get("entry_cooldown_max_duration_minutes")
+        )
+    if constant_duration(duration_params) is not None:
+        adverse = 0.0
     if adverse <= 0.0 and (for_trade_activation or scoring <= 0.0):
         return 0
     n_returns = math.ceil(_to_float(span, context=f"{pside}.unilateralness_ema_span_1m") * 20.0)

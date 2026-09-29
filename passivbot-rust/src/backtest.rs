@@ -1561,6 +1561,7 @@ impl<'a> Backtest<'a> {
                     tradable,
                     allow_missing_strategy_inputs: false,
                     unilateralness_warmup_spans: self.unilateralness_warmup_spans(idx, k),
+                    unilateralness_unavailable: Default::default(),
                     next_candle,
                     effective_min_cost,
                     emas,

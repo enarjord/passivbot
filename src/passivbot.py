@@ -17369,6 +17369,7 @@ class Passivbot:
         self._orchestrator_forager_m1_log_range_emas = {}
         self._orchestrator_signed_unilateralness = {}
         self._orchestrator_forager_signed_unilateralness = {}
+        self._orchestrator_unilateralness_unavailable = {}
         self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_allow_missing_strategy_inputs_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
@@ -19635,7 +19636,7 @@ class Passivbot:
 
         directional_enabled = any(
             self.bot_value(side, "forager_score_weights").get("unilateralness", 0.0) > 0
-            or self.bp(side, "entry_cooldown_weights_minutes", symbol)["adverse_directionality"] > 0
+            or unilateralness.adverse_enabled(self, side, symbol)
             for side in ("long", "short")
             for symbol in symbols
             if self.is_pside_enabled(side)
@@ -19646,7 +19647,7 @@ class Passivbot:
             )
             self._orchestrator_signed_unilateralness = directional
             self._orchestrator_forager_signed_unilateralness = ranking_directional
-            self._orchestrator_allow_missing_strategy_inputs_symbols.update(missing_directional)
+            self._orchestrator_unilateralness_unavailable = missing_directional
         else:
             directional = {}
             ranking_directional = {}
@@ -20013,6 +20014,9 @@ class Passivbot:
                     "allow_missing_strategy_inputs": (
                         symbol in allow_missing_strategy_inputs_symbols
                     ),
+                    "unilateralness_unavailable": getattr(
+                        self, "_orchestrator_unilateralness_unavailable", {}
+                    ).get(symbol, {}),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {

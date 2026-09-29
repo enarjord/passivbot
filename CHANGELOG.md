@@ -6,25 +6,17 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Move entry cooldown to `bot.<side>.entry_cooldown.base_duration_minutes` and matching optimizer
-  bounds (config schema v8.5.0), retaining legacy config/CLI/selector aliases and all numeric defaults.
-  Add opt-in CPU/live additive exposure and adverse-directionality cooldown weights with a floor
-  and ceiling, plus a Forager RMS unilateralness score that fades during inactivity. Share one
-  float EMA span, reconstruct inputs from completed candles, and preserve defaults with zero new
-  weights. Adaptive fill-history coverage works with a zero base; GPU rejects unsupported settings.
-  Validate adaptive optimizer ranges before evaluation and allow per-coin fixed cooldowns to clear
-  inherited ceilings. Scope score-only RMS activation and candle requirements to possible ranking and describe effective
-  cooldowns, including bounds and modifiers, in the trailing inspection overview. Size RMS history
-  for searched weights/spans, permit numeric ceiling searches from a null default, and reject
-  non-positive RMS closes with an actionable backtest error. Support joint ceiling/modifier
-  searches, reject eligible aggregated-candle RMS searches before evaluation, and use bounded rolling RMS
-  aggregates for linear CPU backtest work. Validate search corners against effective coin
-  overrides and omit RMS requirements on disabled or entry-ineligible sides. Disabled live
-  sides do not extend cooldown fill-history coverage. Activate adverse cooldown at the first
-  complete RMS return window, without an extra candle of delay. Scope RMS readiness to
-  consuming entry/ranking branches, leaving closes and unrelated sides/coins independent.
-  Keep RMS history budgets separate from shared backtest/optimizer activation metadata. Preserve mixed flat/nested
-  adaptive bounds, honor zero modifier pins, and allow explicit null ceiling CLI overrides.
+- Add opt-in CPU/live adaptive entry cooldown and Forager RMS unilateralness scoring for
+  sustained one-way price action. Cooldown uses additive exposure-ratio and adverse-directionality
+  weights with a floor/ceiling; RMS shares a floating-point EMA span across both consumers and
+  decays during flat prices. Move the base duration to `bot.<side>.entry_cooldown` (schema v8.5.0),
+  retaining legacy config/CLI/optimizer aliases, numeric defaults, and disabled-feature behavior.
+  New weights and optimizer dimensions remain opt-in; GPU rejects unsupported enabled settings.
+  Replay completed-candle windows consistently in live/CPU, wait for all compared scores before
+  ranking, and scope unavailable inputs to their consumers so closes remain independent.
+  Constant clamps need no modifier inputs. Validate optimizer bounds, coin overrides and candle
+  intervals against reachable consumers while keeping RMS history separate from shared activation.
+  Document configuration, benchmarks, effective cooldown inspection, and unchanged partial-fill semantics.
 
 - Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles. Prepared caches are rebuilt for the new policy, and candidates lacking the full requested BTC history are skipped.
 

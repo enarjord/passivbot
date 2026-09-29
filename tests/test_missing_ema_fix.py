@@ -3407,3 +3407,31 @@ def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
     payload["global"]["global_bot_params"][pside]["total_wallet_exposure_limit"] = 1.0
     with pytest.raises(ValueError, match="MissingEma"):
         pbr.compute_ideal_orders_json(json.dumps(payload))
+
+
+@pytest.mark.asyncio
+async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monkeypatch):
+    from passivbot import Passivbot
+    from live import unilateralness
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value")
+    bot.is_pside_enabled = lambda side: side == "long"
+    original = bot.bot_value
+    bot.bot_value = lambda side, key: (
+        {"volume": 0.0, "volatility": 1.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+        if key == "forager_score_weights" else original(side, key)
+    )
+    missing = {symbol: {"current": [60.0], "forager": []}}
+    async def load(*args):
+        return {symbol: {}}, {symbol: {60.0: 0.2}}, missing
+    monkeypatch.setattr(unilateralness, "load", load)
+    await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    assert bot._orchestrator_unilateralness_unavailable == missing
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == set()
+    # A subsequent complete bundle clears the RMS marker too.
+    async def ready(*args):
+        return {symbol: {60.0: 0.2}}, {symbol: {60.0: 0.2}}, {}
+    monkeypatch.setattr(unilateralness, "load", ready)
+    await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    assert bot._orchestrator_unilateralness_unavailable == {}
