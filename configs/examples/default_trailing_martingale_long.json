@@ -304,7 +304,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v9.0.0",
+    "config_version": "v8.5.0",
     "live": {
         "approved_coins": {
             "long": [

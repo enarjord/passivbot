@@ -13,7 +13,11 @@ since the latest release tag; these features may already be available when insta
   selection, terminal-threshold and recovery-grace controls and their implementations.
   Update public examples, migration guidance, tests and HSL documentation. Migrate
   and re-backtest existing HSL configurations; saved optimizer fitness is invalidated.
-  Development package version is `9.0.0.dev0`, with config schema `v9.0.0`.
+  Development package version is `8.2.0.dev0`, with config schema `v8.5.0`.
+  The v8 package line does not imply compatibility with previous HSL semantics.
+  Validate public examples through effective optimizer policies; the BTC example now
+  uses supported BTC equity peak-recovery hours for its 28-day recovery limit
+  and the currency-independent realized loss/profit ratio metric.
   Remove retired replay diagnostic panels; offline HSL previews now read scoped
   observations and mark expired captures stale. GPU panic-loss ratios include completed,
   recovered and unfinished panic segments without consuming reporting state.

@@ -2,10 +2,15 @@
 
 from copy import deepcopy
 import json
+from pathlib import Path
 
 import pytest
 
-from config.schema import get_template_config
+from config.schema import (
+    CONFIG_SCHEMA_VERSION,
+    SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS,
+    get_template_config,
+)
 from config.hsl import generated_template
 from tools.migrate_hsl_config import main, migrate
 
@@ -23,6 +28,7 @@ def deny_network(monkeypatch):
 
 def legacy(mode="coin"):
     cfg = get_template_config()
+    cfg["config_version"] = "v8.4.0"
     cfg["live"]["hsl_signal_mode"] = mode
     # Source fixture intentionally models the retired release, independent of defaults.
     for side in ("long", "short"):
@@ -757,3 +763,72 @@ def test_gpu_coarse_candle_interval_rejected_offline(scenario):
         cfg["backtest"]["candle_interval_minutes"] = 5
     with pytest.raises(ValueError, match="1m candles"):
         migrate(cfg, restart_policies={"long": "always"})
+
+
+@pytest.mark.parametrize("version", sorted(SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS))
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_previous_schema_migration_requires_policy_and_reloads_offline(
+    version, mode, tmp_path
+):
+    from config.load import load_prepared_config
+
+    cfg = legacy(mode)
+    cfg["config_version"] = version
+    cfg["live"]["hsl_engine"] = "legacy"
+    with pytest.raises(ValueError, match="explicit"):
+        migrate(cfg)
+    policy = None
+    choices = {"long": "never"}
+    if mode == "unified":
+        policy = generated_template(get_template_config(), mode)["bot"]["hsl"]
+        policy.update(enabled=True, restart_after_red_policy="never")
+        choices = None
+    original = deepcopy(cfg)
+    migrated = migrate(cfg, restart_policies=choices, portfolio=policy)
+    assert cfg == original
+    assert migrated["config_version"] == CONFIG_SCHEMA_VERSION
+    assert migrate(migrated) == migrated
+    output = tmp_path / "migrated.json"
+    output.write_text(json.dumps(migrated, allow_nan=False))
+    loaded = load_prepared_config(str(output), verbose=False)
+    assert loaded["config_version"] == CONFIG_SCHEMA_VERSION
+    assert loaded["live"]["hsl_signal_mode"] == mode
+    active = loaded["bot"]["hsl"] if mode == "unified" else loaded["bot"]["long"]["hsl"]
+    assert active["enabled"] is True
+    assert active["restart_after_red_policy"] == "never"
+    assert "hsl_engine" not in loaded["live"]
+
+
+@pytest.mark.parametrize("version", ["v8.6.0", "v9.0.0", "v8.0.999", "banana"])
+def test_cli_invalid_schema_preserves_input_and_existing_output(version, tmp_path):
+    source, output = tmp_path / "old.json", tmp_path / "converted.json"
+    cfg = legacy()
+    cfg["config_version"] = version
+    source.write_text(json.dumps(cfg))
+    original = source.read_bytes()
+    with pytest.raises(SystemExit):
+        main([str(source), str(output), "--restart-policy", "long=always"])
+    assert source.read_bytes() == original
+    assert not output.exists()
+    output.write_bytes(b"existing file must survive")
+    with pytest.raises(SystemExit):
+        main([str(source), str(output), "--restart-policy", "long=always"])
+    assert output.read_bytes() == b"existing file must survive"
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(
+        (Path(__file__).resolve().parents[1] / "configs" / "examples").glob("*.json")
+    ),
+    ids=lambda path: path.name,
+)
+def test_public_examples_pass_effective_optimizer_and_migration_validation(path):
+    from config.hsl import FIELDS
+
+    source = json.loads(path.read_text())
+    assert source["config_version"] == CONFIG_SCHEMA_VERSION
+    result = migrate(source, base_config_path=str(path))
+    assert migrate(result) == result
+    assert "hsl_engine" not in result["live"]
+    assert all(set(result["bot"][side]["hsl"]) == FIELDS for side in ("long", "short"))

@@ -188,7 +188,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v9.0.0",
+    "config_version": "v8.5.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -726,12 +726,12 @@
                 "value": 0.5
             },
             {
-                "metric": "flat_btc_balance_hours",
+                "metric": "peak_recovery_hours_equity_btc",
                 "penalize_if": "greater_than",
                 "value": 672
             },
             {
-                "metric": "loss_profit_ratio_usd",
+                "metric": "loss_profit_ratio",
                 "penalize_if": "greater_than",
                 "value": 0.35
             }

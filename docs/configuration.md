@@ -11,7 +11,7 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 ## Config version
 
 `config_version` is a top-level schema field, not a backtest setting or package version.
-Current configs use `v9.0.0`; supported v8.0.0–v8.4.0 inputs migrate on load. Review migration
+Current configs use `v8.5.0`; supported v8.0.0–v8.4.0 inputs migrate on load. Review migration
 warnings and normalized settings. For v7 trailing-grid configs, use the explicit
 [migration helper](v7_to_v8_migration.md). See [release status](releases.md) for the distinction
 between schemas, package versions, and tags.

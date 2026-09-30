@@ -30,6 +30,33 @@ Verify the loaded artifact's source fingerprint. Run the affected unit and fake-
 configuration roundtrips and public examples, documentation checks, and a bounded offline
 backtest/optimizer smoke. Current-head independent review and CI are separate requirements.
 
+## Migration qualification
+
+The package is `8.2.0.dev0`; the canonical config schema is `v8.5.0`. Package and schema
+versions have different meanings. Test every supported earlier v8 schema (`v8.0.0` through
+`v8.4.0`) in coin, pside and unified modes. Relabeling an old config is not a migration.
+Require explicit restart choices and an explicit portfolio policy for unified mode; check
+file-backed coin overrides, effective scenario/optimizer policies and removed dimensions.
+Write a separate output, reload it through the normal loader and repeat migration to prove
+idempotence. Failures must preserve the source and existing output. Future or unknown schemas
+must remain rejected. Migration does not preserve old HSL behavior or authorize deployment.
+
+From a source-verified environment, these offline checks cover that boundary:
+
+```bash
+PYTHONPATH=src pytest tests/test_passivbot_version.py tests/test_config_pipeline.py \
+  tests/test_migrate_hsl_config.py tests/test_hsl_config.py tests/test_hsl_cli.py \
+  tests/test_hsl_optimizer_contract.py tests/test_coin_overrides_hsl.py \
+  tests/test_retired_hsl_controls.py tests/test_ai_docs.py
+passivbot --version
+passivbot tool migrate-hsl --help
+```
+
+Re-backtest migrated thresholds and reevaluate optimizer candidates; never carry forward old
+fitness/checkpoints as evidence for the new calculation. Use fixed offline data and compare
+HSL-disabled trading traces, current RED/recovery, terminal cooldown and all three scopes.
+A package version, schema roundtrip or GREEN observation alone does not qualify execution.
+
 ## Performance
 
 Use fixed synthetic candles, identical policy, identical outputs and a source-verified release
