@@ -196,6 +196,9 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "migrate historical data layout (requires full install)",
         requires_full=True,
     ),
+    "migrate-hsl": CommandSpec(
+        "tools.migrate_hsl_config", "write a validated revised-HSL config without deploying it"
+    ),
     "migrate-config-v7": CommandSpec(
         "tools.migrate_config_v7",
         "migrate a v7 trailing-grid config to v8 trailing_grid_v7",

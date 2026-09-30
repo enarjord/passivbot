@@ -22,6 +22,7 @@ import numpy as np
 from config.gpu import GPU_SCREENING_DEFAULTS, resolve_gpu_screening
 from config.metrics import resolve_metric_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
+from config.validate import validate_limit_order_fill_buffer_pct
 from limit_utils import compute_limit_violation
 from metrics_schema import flatten_metric_stats
 from optimization.backend_shared import (
@@ -406,6 +407,7 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
     ("backtest", "dynamic_wel_by_tradability"),
     ("backtest", "filter_by_min_effective_cost"),
     ("backtest", "liquidation_threshold"),
+    ("backtest", "limit_order_fill_buffer_pct"),
     ("backtest", "maker_fee_override"),
     ("backtest", "market_order_slippage_pct"),
     ("backtest", "starting_balance"),
@@ -424,11 +426,9 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
 def _validate_gpu_static_scope(config: dict) -> str:
     """Reject immutable GPU limitations without touching data or optional runtime state."""
 
-    if config.get("backtest", {}).get("limit_order_fill_buffer_pct", 0.0) != 0.0:
-        raise ValueError(
-            "GPU optimization does not support nonzero "
-            "backtest.limit_order_fill_buffer_pct; use the CPU backend"
-        )
+    validate_limit_order_fill_buffer_pct(
+        config.get("backtest", {}).get("limit_order_fill_buffer_pct", 0.0)
+    )
     strategy_kind = (
         str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
     )
@@ -753,6 +753,12 @@ def _gpu_fixed_bound_context(
         target = effective_config
         for part in resolved:
             target = target[part]
+        if bound_key.startswith(
+            ("long_forager_score_weights_", "short_forager_score_weights_")
+        ):
+            # A fixed raw weight is normalized with each candidate's other
+            # weights. The template's normalized value is not a fixed input.
+            target = fixed_overrides[dotted_path]
         try:
             value = float(target)
         except (TypeError, ValueError) as exc:
@@ -3653,7 +3659,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 5,  # Independent adjusted unstuck EMA state in GPU screening.
+        "version": 6,  # Exact weight canonicalization and TM entry/selection/PnL parity.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {
@@ -3835,6 +3841,7 @@ def _build_proxy_parameter_dicts(
     anchor_parameter_overrides: list[dict[str, float]] | None = None,
     fixed_parameter_overrides: dict[str, float] | None = None,
     optimizer_overrides: set[str] | None = None,
+    sig_digits: int | None = None,
 ) -> list[dict]:
     """Include canonical pinned and active strategy values in each proxy candidate."""
 
@@ -3871,10 +3878,37 @@ def _build_proxy_parameter_dicts(
             }
         )
         parameters.update(fixed_parameter_overrides or {})
+        _apply_gpu_optimizer_overrides(parameters, optimizer_overrides or set())
+        _canonicalize_proxy_forager_weights(parameters, mapped, sig_digits)
+        # Exact config reconstruction reapplies fixed and mirrored values after
+        # snapping the normalized vector back to its optimizer bounds.
+        parameters.update(fixed_parameter_overrides or {})
         result.append(
             _apply_gpu_optimizer_overrides(parameters, optimizer_overrides or set())
         )
     return result
+
+
+def _canonicalize_proxy_forager_weights(parameters, mapped, sig_digits):
+    """Mirror the exact evaluator's normalize -> bound/step -> rebuild pass."""
+    from config.bot import normalize_forager_score_weights
+
+    for side in ("long", "short"):
+        names = {
+            key: f"{side}_forager_score_weights_{key}"
+            for key in ("volume", "ema_readiness", "volatility")
+        }
+        if not all(name in parameters for name in names.values()):
+            continue
+        normalized = normalize_forager_score_weights(
+            {key: parameters[name] for key, name in names.items()},
+            path=f"bot.{side}.forager.score_weights",
+        )
+        for key, name in names.items():
+            if name in mapped:
+                parameters[name] = enforce_bounds(
+                    [normalized[key]], [mapped[name][1]], sig_digits
+                )[0]
 
 
 def _build_anchor_parameter_context(
@@ -4985,6 +5019,7 @@ def run_backend(
             anchor_parameter_overrides=anchor_parameter_overrides,
             fixed_parameter_overrides=fixed_parameter_overrides,
             optimizer_overrides=gpu_optimizer_overrides,
+            sig_digits=sig_digits,
         )
 
     def full_vector(row: np.ndarray) -> list[float]:

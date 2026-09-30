@@ -1,6 +1,6 @@
 # Equity Hard Stop Loss Episode Contract
 
-## Runtime and experimental component scope
+## Runtime and implementation scope
 
 The runtime rules below describe legacy HSL, which remains the trading default.
 The `hsl_revised*` Rust components implement the approved
@@ -51,7 +51,12 @@ diagnosed `current_mark_history_estimate` for the absent pair while preserving o
 pairs' candles. Full candle absence keeps only current and supported-flat observations;
 retained realized cashflow peaks update references at those observations, without
 inventing minute samples. References reset at supported flats, and each observation
-uses only its consumed cashflow prefix. None of these components activates trading yet.
+uses only its consumed cashflow prefix. These components are active in the explicitly selected revised live, backtest and optimizer
+paths. The invariants and recovery rules below describe legacy HSL unless explicitly qualified;
+they must not be imported into revised HSL. In particular, revised HSL does not latch past RED,
+demand a final close fill to recognize current flatness, or retain an emergency journal.
+See the [sole-engine migration plan](../../plans/hsl_sole_engine_migration.md) for retirement
+and acceptance boundaries.
 
 ## Invariants
 

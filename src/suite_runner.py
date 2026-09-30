@@ -1174,6 +1174,27 @@ async def prepare_master_datasets(
 # --------------------------------------------------------------------------- #
 
 
+def apply_scenario_overrides(config, overrides, tracker=None):
+    """Apply and validate normalized scenario policy without market-data selection.
+
+    Mutates config, matching apply_scenario's existing configuration stage.
+    """
+    if tracker is None:
+        tracker = ConfigTransformTracker()
+    if overrides:
+        from config.hsl_revised import validate_override_paths
+        validate_override_paths(config, overrides)
+        for dotted_path, value in overrides.items():
+            if not isinstance(dotted_path, str):
+                raise ValueError("Scenario override keys must be dotted strings")
+            _apply_override(config, dotted_path, deepcopy(value), tracker)
+
+    from config.hsl_revised import engine, normalize_revised
+    from config.schema import get_template_config
+    if engine(config) == "revised":
+        normalize_revised(config, get_template_config(), verbose=False)
+
+
 def apply_scenario(
     base_config: Dict[str, Any],
     scenario: SuiteScenario,
@@ -1311,18 +1332,7 @@ def apply_scenario(
         )
         backtest_section["coin_sources"] = resolved_sources
 
-    if scenario.overrides:
-        from config.hsl_revised import validate_override_paths
-        validate_override_paths(cfg, scenario.overrides)
-        for dotted_path, value in scenario.overrides.items():
-            if not isinstance(dotted_path, str):
-                raise ValueError(f"Scenario '{scenario.label}' override keys must be dotted strings")
-            _apply_override(cfg, dotted_path, value, tracker)
-
-    from config.hsl_revised import engine, normalize_revised
-    from config.schema import get_template_config
-    if engine(cfg) == "revised":
-        normalize_revised(cfg, get_template_config(), verbose=False)
+    apply_scenario_overrides(cfg, scenario.overrides, tracker)
 
     if tracker.summary() and not quiet:
         details = tracker.merge_details({"scenario": scenario.label})

@@ -688,6 +688,41 @@ def parse_old_coin_flags(config) -> dict:
     return result
 
 
+def normalize_coin_override_keys(coin_overrides, *, symbol_normalizer=None, verbose=True):
+    """Normalize authored keys without loading files or changing patch precedence."""
+    if not isinstance(coin_overrides, dict):
+        raise TypeError("coin_overrides must be a dict")
+    if symbol_normalizer is None:
+        symbol_normalizer = symbol_to_coin
+    normalized_overrides = {}
+    normalized_sources = {}
+    for coin, overrides in coin_overrides.items():
+        if not isinstance(coin, str):
+            raise TypeError("coin_overrides keys must be strings")
+        formatted_coin = (
+            coin if looks_like_exact_market_identifier(coin) else symbol_normalizer(coin)
+        )
+        if not formatted_coin:
+            raise ValueError(f"coin_overrides.{coin} is not a valid coin or symbol")
+        if formatted_coin in normalized_overrides:
+            prior = normalized_sources[formatted_coin]
+            raise ValueError(
+                f"coin_overrides keys {prior!r} and {coin!r} both normalize to "
+                f"{formatted_coin!r}"
+            )
+        normalized_overrides[formatted_coin] = deepcopy(overrides)
+        normalized_sources[formatted_coin] = coin
+        if formatted_coin != coin:
+            log_config_message(
+                verbose,
+                logging.INFO,
+                "Renamed %s -> %s for coin_overrides",
+                coin,
+                formatted_coin,
+            )
+    return normalized_overrides
+
+
 def parse_overrides(
     config,
     *,
@@ -724,33 +759,9 @@ def parse_overrides(
     if "live" in result:
         result["live"].pop("coin_flags", None)
         result["live"].setdefault("coin_flags", {})
-    normalized_overrides = {}
-    normalized_sources = {}
-    for coin, overrides in result["coin_overrides"].items():
-        if not isinstance(coin, str):
-            raise TypeError("coin_overrides keys must be strings")
-        formatted_coin = (
-            coin if looks_like_exact_market_identifier(coin) else symbol_normalizer(coin)
-        )
-        if not formatted_coin:
-            raise ValueError(f"coin_overrides.{coin} is not a valid coin or symbol")
-        if formatted_coin in normalized_overrides:
-            prior = normalized_sources[formatted_coin]
-            raise ValueError(
-                f"coin_overrides keys {prior!r} and {coin!r} both normalize to "
-                f"{formatted_coin!r}"
-            )
-        normalized_overrides[formatted_coin] = deepcopy(overrides)
-        normalized_sources[formatted_coin] = coin
-        if formatted_coin != coin:
-            log_config_message(
-                verbose,
-                logging.INFO,
-                "Renamed %s -> %s for coin_overrides",
-                coin,
-                formatted_coin,
-            )
-    result["coin_overrides"] = normalized_overrides
+    result["coin_overrides"] = normalize_coin_override_keys(
+        result["coin_overrides"], symbol_normalizer=symbol_normalizer, verbose=verbose
+    )
     strategy_kind = normalize_strategy_kind(result.get("live", {}).get("strategy_kind"))
     live_config = result.get("live", {})
     hsl_signal_mode = normalize_hsl_signal_mode(

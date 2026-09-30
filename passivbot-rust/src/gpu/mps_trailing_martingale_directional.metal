@@ -603,15 +603,14 @@ inline float crop_entry(
     if (qty <= 0.0f) return 0.0f;
     float cost = s.psize * s.pprice * c_mult;
     float we_if = (cost + qty * price * c_mult) / fmax(balance, 1.0e-9f);
-    if (we_if <= s.allowed_wel * 1.01f) return qty;
+    float mq = min_entry_qty(price, qty_step, min_qty, min_cost, c_mult);
+    if (we_if <= s.allowed_wel * 1.01f) return fmax(qty, mq);
     float q = round_step(
         (s.allowed_wel * balance - cost)
             / fmax(price * c_mult, 1.0e-12f),
         qty_step
     );
-    float mq = min_entry_qty(price, qty_step, min_qty, min_cost, c_mult);
-    q = fmax(q, mq);
-    return q < qty ? q : qty;
+    return fmax(q, mq);
 }
 
 inline float gate_entry_by_twel_strict(
@@ -963,10 +962,14 @@ inline void generate_orders(
     // Exact Rust chooses the controlling raw/target value in float64, then
     // finalize_next_entry quantizes the executable order directionally.
     float initial_price = float(initial_ticks) * price_step;
-    float min_iq = min_entry_qty(initial_price, qty_step, min_qty, min_cost, c_mult);
+    // Size the strategy order at the selected raw touch before finalizing
+    // its executable tick, as Rust's calc_initial_entry_qty does.
+    float initial_sizing_price = initial_touch_controls ? price_now : initial_price;
+    float min_iq = initial_touch_controls ? touch_min_qty
+        : min_entry_qty(initial_price, qty_step, min_qty, min_cost, c_mult);
     float iq = fmax(min_iq, round_step(
         balance * s.allowed_wel * s.initial_qty_pct
-            / fmax(initial_price * c_mult, 1.0e-12f), qty_step
+            / fmax(initial_sizing_price * c_mult, 1.0e-12f), qty_step
     ));
     bool flat = s.psize <= 0.0f;
     bool partial = !flat && s.psize < iq * 0.8f;
@@ -1041,23 +1044,27 @@ inline void generate_orders(
         : touch_up_ticks <= raw_reentry_ticks);
     int reentry_ticks = reentry_touch_controls ? entry_touch : raw_reentry_ticks;
     float reentry_price = float(reentry_ticks) * price_step;
+    float reentry_sizing_price = reentry_touch_controls ? price_now : reentry_price;
     if (s.gate_reentry) {
         bool band_controls = entry_up
             ? band_ticks >= reentry_ticks : band_ticks <= reentry_ticks;
         if (band_controls) {
             reentry_ticks = band_ticks;
             reentry_price = band_price;
+            reentry_sizing_price = band_price;
+            reentry_touch_controls = false;
         }
     }
-    float min_rq = min_entry_qty(reentry_price, qty_step, min_qty, min_cost, c_mult);
+    float min_rq = reentry_touch_controls ? touch_min_qty
+        : min_entry_qty(reentry_sizing_price, qty_step, min_qty, min_cost, c_mult);
     float rq = fmax(iq_effective, fmax(min_rq, round_step(
         fmax(
             s.psize * s.ddf,
             balance * s.allowed_wel * s.initial_qty_pct
-                / fmax(reentry_price * c_mult, 1.0e-12f)
+                / fmax(reentry_sizing_price * c_mult, 1.0e-12f)
         ), qty_step
     )));
-    float we_if = (s.psize * s.pprice + rq * reentry_price)
+    float we_if = (s.psize * s.pprice + rq * reentry_sizing_price)
         * c_mult / fmax(balance, 1.0e-9f);
     float crop_fraction = (s.allowed_wel - we)
         / fmax(we_if - we, 1.0e-12f);
