@@ -78,27 +78,43 @@ def make_table(result_):
     table.align["Value"] = "l"
     table.title = "Summary"
 
-    table.add_row(["Exchange", result["exchange"] if "exchange" in result else "unknown"])
-    table.add_row(["Market type", result["market_type"] if "market_type" in result else "unknown"])
+    table.add_row(
+        ["Exchange", result["exchange"] if "exchange" in result else "unknown"]
+    )
+    table.add_row(
+        ["Market type", result["market_type"] if "market_type" in result else "unknown"]
+    )
     table.add_row(["Symbol", result["symbol"] if "symbol" in result else "unknown"])
     table.add_row(
-        ["Passivbot mode", result["passivbot_mode"] if "passivbot_mode" in result else "unknown"]
+        [
+            "Passivbot mode",
+            result["passivbot_mode"] if "passivbot_mode" in result else "unknown",
+        ]
     )
     table.add_row(
         [
             "ADG n subdivisions",
-            result["adg_n_subdivisions"] if "adg_n_subdivisions" in result else "unknown",
+            (
+                result["adg_n_subdivisions"]
+                if "adg_n_subdivisions" in result
+                else "unknown"
+            ),
         ]
     )
     table.add_row(["No. days", pbr.round_dynamic(result["result"]["n_days"], 2)])
-    table.add_row(["Starting balance", pbr.round_dynamic(result["result"]["starting_balance"], 6)])
+    table.add_row(
+        ["Starting balance", pbr.round_dynamic(result["result"]["starting_balance"], 6)]
+    )
     for title, key, precision, mul, suffix in [
         ("Win rate", "win_rate", 4, 100, "%"),
         ("Worst trade loss", "trade_loss_max", 4, 100, "%"),
     ]:
         if key in result["result"]:
             table.add_row(
-                [title, f"{pbr.round_dynamic(result['result'][key] * mul, precision)}{suffix}"]
+                [
+                    title,
+                    f"{pbr.round_dynamic(result['result'][key] * mul, precision)}{suffix}",
+                ]
             )
     for side in ["long", "short"]:
         if side not in result:
@@ -109,7 +125,8 @@ def make_table(result_):
             profit_color = (
                 Fore.RED
                 if f"final_balance_{side}" in result["result"]
-                and result["result"][f"final_balance_{side}"] < result["result"]["starting_balance"]
+                and result["result"][f"final_balance_{side}"]
+                < result["result"]["starting_balance"]
                 else Fore.RESET
             )
             for title, key, precision, mul, suffix in [
@@ -158,8 +175,20 @@ def make_table(result_):
                     1,
                     "",
                 ),
-                ("Equity/balance ratio std", f"equity_balance_ratio_std_{side}", 4, 1, ""),
-                ("Ratio of time spent at max exposure", f"time_at_max_exposure_{side}", 4, 1, ""),
+                (
+                    "Equity/balance ratio std",
+                    f"equity_balance_ratio_std_{side}",
+                    4,
+                    1,
+                    "",
+                ),
+                (
+                    "Ratio of time spent at max exposure",
+                    f"time_at_max_exposure_{side}",
+                    4,
+                    1,
+                    "",
+                ),
             ]:
                 if key in result["result"]:
                     val = pbr.round_dynamic(result["result"][key] * mul, precision)
@@ -189,10 +218,14 @@ def make_table(result_):
                 ("Max hours stuck", f"hrs_stuck_max_{side}", 6),
             ]:
                 if key in result["result"]:
-                    table.add_row([title, pbr.round_dynamic(result["result"][key], precision)])
+                    table.add_row(
+                        [title, pbr.round_dynamic(result["result"][key], precision)]
+                    )
 
             if f"pnl_sum_{side}" in result["result"]:
-                profit_color = Fore.RED if result["result"][f"pnl_sum_{side}"] < 0 else Fore.RESET
+                profit_color = (
+                    Fore.RED if result["result"][f"pnl_sum_{side}"] < 0 else Fore.RESET
+                )
 
                 table.add_row(
                     [
@@ -209,7 +242,9 @@ def make_table(result_):
                 ("Biggest pos size", f"biggest_psize_{side}", 3),
             ]:
                 if key in result["result"]:
-                    table.add_row([title, pbr.round_dynamic(result["result"][key], precision)])
+                    table.add_row(
+                        [title, pbr.round_dynamic(result["result"][key], precision)]
+                    )
     return table
 
 
@@ -230,7 +265,11 @@ def dump_plots(
         print("error setting pandas precision", e)
 
     result["plots_dirpath"] = make_get_filepath(
-        os.path.join(result["plots_dirpath"], f"{ts_to_date(time.time())[:19].replace(':', '')}", "")
+        os.path.join(
+            result["plots_dirpath"],
+            f"{ts_to_date(time.time())[:19].replace(':', '')}",
+            "",
+        )
     )
     # sdf = sdf.set_index(pd.to_datetime(pd.to_datetime(sdf.timestamp * 1000 * 1000)))
     # longs = longs.set_index(pd.to_datetime(pd.to_datetime(sdf.timestamp * 1000 * 1000)))
@@ -241,7 +280,9 @@ def dump_plots(
     table = make_table(result)
 
     dump_config(result, result["plots_dirpath"] + "live_config.json")
-    json.dump(denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4)
+    json.dump(
+        denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4
+    )
 
     print("writing backtest_result.txt...\n")
     with open(f"{result['plots_dirpath']}backtest_result.txt", "w") as f:
@@ -259,7 +300,9 @@ def dump_plots(
     for side, fdf in [("long", longs), ("short", shorts)]:
         if result[side]["enabled"]:
             plt.clf()
-            fig = plot_fills(df, fdf, plot_whole_df=True, title=f"Overview Fills {side.capitalize()}")
+            fig = plot_fills(
+                df, fdf, plot_whole_df=True, title=f"Overview Fills {side.capitalize()}"
+            )
             if not fig:
                 continue
             fig.savefig(f"{result['plots_dirpath']}whole_backtest_{side}.png")
@@ -267,20 +310,28 @@ def dump_plots(
             plt.clf()
             sdf[f"balance_{side}"].plot()
             sdf[f"equity_{side}"].plot(
-                title=f"Balance and equity {side.capitalize()}", xlabel="Time", ylabel="Balance"
+                title=f"Balance and equity {side.capitalize()}",
+                xlabel="Time",
+                ylabel="Balance",
             )
-            plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_{side}.png")
+            plt.savefig(
+                f"{result['plots_dirpath']}balance_and_equity_sampled_{side}.png"
+            )
 
             if result["passivbot_mode"] == "clock":
                 spans = sorted(
                     [
                         result[side]["ema_span_0"],
-                        (result[side]["ema_span_0"] * result[side]["ema_span_1"]) ** 0.5,
+                        (result[side]["ema_span_0"] * result[side]["ema_span_1"])
+                        ** 0.5,
                         result[side]["ema_span_1"],
                     ]
                 )
                 emas = pd.DataFrame(
-                    {f"ema_{span}": df.price.ewm(span=span, adjust=False).mean() for span in spans},
+                    {
+                        f"ema_{span}": df.price.ewm(span=span, adjust=False).mean()
+                        for span in spans
+                    },
                     index=df.index,
                 )
                 ema_dist_lower = result[side][
@@ -306,14 +357,18 @@ def dump_plots(
             for z in range(n_parts):
                 start_ = z / n_parts
                 end_ = (z + 1) / n_parts
-                print(f"{side} {z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%")
+                print(
+                    f"{side} {z} of {n_parts} {start_ * 100:.2f}% to {end_ * 100:.2f}%"
+                )
                 fig = plot_fills(
                     df,
                     fdf.iloc[int(len(fdf) * start_) : int(len(fdf) * end_)],
                     title=f"Fills {side} {z+1} of {n_parts}",
                 )
                 if fig is not None:
-                    fig.savefig(f"{result['plots_dirpath']}backtest_{side}{z + 1}of{n_parts}.png")
+                    fig.savefig(
+                        f"{result['plots_dirpath']}backtest_{side}{z + 1}of{n_parts}.png"
+                    )
                 else:
                     print(f"no {side} fills...")
             if result["passivbot_mode"] == "clock":
@@ -368,22 +423,41 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         long_types = longs["type"].astype(str)
 
         mask_entry = _mask(long_types, "rentry") | _mask(long_types, "ientry")
-        ax.scatter(longs.index[mask_entry], longs.loc[mask_entry, "price"], c="b", marker="o")
-
-        mask_secondary = _mask(long_types, "secondary")
-        ax.scatter(longs.index[mask_secondary], longs.loc[mask_secondary, "price"], c="g", marker="o")
-
-        mask_nclose = long_types == "long_nclose"
-        ax.scatter(longs.index[mask_nclose], longs.loc[mask_nclose, "price"], c="r", marker="o")
-
-        mask_unstuck_entry = _mask(long_types, "unstuck_entry") | (long_types == "clock_entry_long")
         ax.scatter(
-            longs.index[mask_unstuck_entry], longs.loc[mask_unstuck_entry, "price"], c="b", marker="x"
+            longs.index[mask_entry], longs.loc[mask_entry, "price"], c="b", marker="o"
         )
 
-        mask_unstuck_close = _mask(long_types, "unstuck_close") | (long_types == "clock_close_long")
+        mask_secondary = _mask(long_types, "secondary")
         ax.scatter(
-            longs.index[mask_unstuck_close], longs.loc[mask_unstuck_close, "price"], c="r", marker="x"
+            longs.index[mask_secondary],
+            longs.loc[mask_secondary, "price"],
+            c="g",
+            marker="o",
+        )
+
+        mask_nclose = long_types == "long_nclose"
+        ax.scatter(
+            longs.index[mask_nclose], longs.loc[mask_nclose, "price"], c="r", marker="o"
+        )
+
+        mask_unstuck_entry = _mask(long_types, "unstuck_entry") | (
+            long_types == "clock_entry_long"
+        )
+        ax.scatter(
+            longs.index[mask_unstuck_entry],
+            longs.loc[mask_unstuck_entry, "price"],
+            c="b",
+            marker="x",
+        )
+
+        mask_unstuck_close = _mask(long_types, "unstuck_close") | (
+            long_types == "clock_close_long"
+        )
+        ax.scatter(
+            longs.index[mask_unstuck_close],
+            longs.loc[mask_unstuck_close, "price"],
+            c="r",
+            marker="x",
         )
 
         lppu = longs[(longs.pprice != longs.pprice.shift(1)) & (longs.pprice != 0.0)]
@@ -399,15 +473,25 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
         short_types = shorts["type"].astype(str)
 
         mask_entry = _mask(short_types, "rentry") | _mask(short_types, "ientry")
-        ax.scatter(shorts.index[mask_entry], shorts.loc[mask_entry, "price"], c="r", marker="o")
+        ax.scatter(
+            shorts.index[mask_entry], shorts.loc[mask_entry, "price"], c="r", marker="o"
+        )
 
         mask_secondary = _mask(short_types, "secondary")
         ax.scatter(
-            shorts.index[mask_secondary], shorts.loc[mask_secondary, "price"], c="g", marker="o"
+            shorts.index[mask_secondary],
+            shorts.loc[mask_secondary, "price"],
+            c="g",
+            marker="o",
         )
 
         mask_nclose = short_types == "short_nclose"
-        ax.scatter(shorts.index[mask_nclose], shorts.loc[mask_nclose, "price"], c="b", marker="o")
+        ax.scatter(
+            shorts.index[mask_nclose],
+            shorts.loc[mask_nclose, "price"],
+            c="b",
+            marker="o",
+        )
 
         mask_unstuck_entry = _mask(short_types, "unstuck_entry") | (
             short_types == "clock_entry_short"
@@ -429,7 +513,9 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
             marker="x",
         )
 
-        sppu = shorts[(shorts.pprice != shorts.pprice.shift(1)) & (shorts.pprice != 0.0)]
+        sppu = shorts[
+            (shorts.pprice != shorts.pprice.shift(1)) & (shorts.pprice != 0.0)
+        ]
         if len(sppu) > 1:
             for idx_start, idx_end, price_val in zip(
                 sppu.index[:-1],
@@ -543,7 +629,9 @@ def plot_pnls_separate(sdf, fdf, start_pct=0.0, end_pct=1.0, symbols=None):
     return plt
 
 
-def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_threshold=0.9):
+def plot_pnls_stuck(
+    sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_threshold=0.9
+):
     plt.clf()
     symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
     start_minute = int(sdf.index[-1] * start_pct)
@@ -554,11 +642,19 @@ def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_t
     for symbol in fdfc.symbol.unique():
         fdfcc = fdfc[(fdfc.symbol == symbol) & (fdfc.pnl < 0.0)]
         stuck_threshold_long = fdfcc[(fdfcc.type.str.contains("long"))].WE.mean() * 0.99
-        stuck_threshold_short = fdfcc[(fdfcc.type.str.contains("short"))].WE.mean() * 0.99
-        is_stuck_long = sdfc.loc[:, f"{symbol}_WE_l"] / stuck_threshold_long > unstuck_threshold
-        is_stuck_short = sdfc.loc[:, f"{symbol}_WE_s"] / stuck_threshold_short > unstuck_threshold
+        stuck_threshold_short = (
+            fdfcc[(fdfcc.type.str.contains("short"))].WE.mean() * 0.99
+        )
+        is_stuck_long = (
+            sdfc.loc[:, f"{symbol}_WE_l"] / stuck_threshold_long > unstuck_threshold
+        )
+        is_stuck_short = (
+            sdfc.loc[:, f"{symbol}_WE_s"] / stuck_threshold_short > unstuck_threshold
+        )
         any_stuck = (
-            pd.DataFrame({"0": any_stuck, "1": is_stuck_long.values, "2": is_stuck_short.values})
+            pd.DataFrame(
+                {"0": any_stuck, "1": is_stuck_long.values, "2": is_stuck_short.values}
+            )
             .any(axis=1)
             .values
         )
@@ -695,7 +791,9 @@ def plot_fills_forager(
         if fast and np.issubdtype(shorts_price_series.dtype, np.number):
             shorts_price = shorts_price_series.to_numpy(copy=False)
         else:
-            shorts_price = pd.to_numeric(shorts_price_series, errors="coerce").to_numpy()
+            shorts_price = pd.to_numeric(
+                shorts_price_series, errors="coerce"
+            ).to_numpy()
         mask_entry = shorts_types.str.contains("entry", regex=False).to_numpy()
         mask_close = shorts_types.str.contains("close", regex=False).to_numpy()
         ax.scatter(
@@ -844,7 +942,9 @@ def create_forager_balance_figures(
             ],
         ),
     ]
-    panel_data = [_extract_columns(df, [key for _, key in specs]) for _, specs in panel_configs]
+    panel_data = [
+        _extract_columns(df, [key for _, key in specs]) for _, specs in panel_configs
+    ]
     x = df.index.to_numpy()
 
     autoplot = (_ipy_display is not None) if autoplot is None else autoplot
@@ -857,7 +957,11 @@ def create_forager_balance_figures(
 
     for mode in modes:
         fig, axes = plt.subplots(2, 1, sharex=True, figsize=figsize)
-        y_transform = (lambda arr: np.where(arr > 0.0, arr, np.nan)) if mode else (lambda arr: arr)
+        y_transform = (
+            (lambda arr: np.where(arr > 0.0, arr, np.nan))
+            if mode
+            else (lambda arr: arr)
+        )
 
         for ax, (title, series_specs), data in zip(axes, panel_configs, panel_data):
             ax.set_yscale("log" if mode else "linear")
@@ -918,7 +1022,9 @@ def create_forager_twe_figure(
         return_figures = not autoplot
 
     # Resample to reduce point density — take last value per time bucket
-    twe = fdf.set_index("timestamp")[["twe_long", "twe_short"]].apply(pd.to_numeric, errors="coerce")
+    twe = fdf.set_index("timestamp")[["twe_long", "twe_short"]].apply(
+        pd.to_numeric, errors="coerce"
+    )
     # twe_short is stored as signed negative; ensure it plots below zero
     twe["twe_short"] = -twe["twe_short"].abs()
     twe = twe.resample("1h").mean().dropna(how="all").ffill()
@@ -926,8 +1032,17 @@ def create_forager_twe_figure(
     fig, ax = plt.subplots(1, 1, figsize=figsize)
     x = twe.index.to_numpy()
 
-    ax.fill_between(x, 0, twe["twe_long"].to_numpy(), alpha=0.35, color="tab:blue", label="TWE Long")
-    ax.fill_between(x, 0, twe["twe_short"].to_numpy(), alpha=0.35, color="tab:red", label="TWE Short")
+    ax.fill_between(
+        x, 0, twe["twe_long"].to_numpy(), alpha=0.35, color="tab:blue", label="TWE Long"
+    )
+    ax.fill_between(
+        x,
+        0,
+        twe["twe_short"].to_numpy(),
+        alpha=0.35,
+        color="tab:red",
+        label="TWE Short",
+    )
     ax.plot(x, twe["twe_long"].to_numpy(), linewidth=0.7, color="tab:blue")
     ax.plot(x, twe["twe_short"].to_numpy(), linewidth=0.7, color="tab:red")
 
@@ -1001,7 +1116,12 @@ def create_forager_pnl_figure(
     fig, ax = plt.subplots(1, 1, figsize=figsize)
     x = combined.index.to_numpy()
     ax.plot(x, combined["pnl_cumsum"].to_numpy(), linewidth=1.0, label="PnL Cumsum")
-    ax.plot(x, combined["pnl_cumsum_plus_upnl"].to_numpy(), linewidth=1.0, label="PnL Cumsum + uPnL")
+    ax.plot(
+        x,
+        combined["pnl_cumsum_plus_upnl"].to_numpy(),
+        linewidth=1.0,
+        label="PnL Cumsum + uPnL",
+    )
     ax.set_title("Cumulative Net PnL (USD)")
     ax.set_ylabel("USD")
     ax.set_xlabel("Time")
@@ -1025,6 +1145,7 @@ def create_forager_pnl_figure(
 
     return figures if return_figures else {}
 
+
 def create_forager_hard_stop_drawdown_figure(
     bal_eq: pd.DataFrame,
     config: dict,
@@ -1034,328 +1155,19 @@ def create_forager_hard_stop_drawdown_figure(
     autoplot: bool | None = None,
     return_figures: bool | None = None,
 ) -> dict:
-    from config.hsl_revised import engine
-    from hsl_revised_reporting import revised_report, create_revised_hsl_figures
+    from hsl_reporting import hsl_report, create_hsl_figures
 
-    report = revised_report(hard_stop_plot_data)
-    if report is not None or engine(config or {}) == "revised":
-        autoplot = (_ipy_display is not None) if autoplot is None else autoplot
-        return create_revised_hsl_figures(
-            report, figsize=figsize, autoplot=autoplot,
-            return_figures=(not autoplot) if return_figures is None else return_figures,
-            display=_ipy_display,
-        )
-
-    figures: dict = {}
-
-    def _resolve_pside_cfg(pside: str) -> dict:
-        bot = ((config or {}).get("bot") or {})
-        pside_cfg = flatten_shared_bot_side(bot.get(pside) or {})
-        if not isinstance(pside_cfg, dict):
-            return {}
-        twel = float(pside_cfg.get("total_wallet_exposure_limit", 0.0) or 0.0)
-        n_positions = int(round(float(pside_cfg.get("n_positions", 0.0) or 0.0)))
-        return {
-            "enabled": bool(pside_cfg.get("hsl_enabled", False)) and twel > 0.0 and n_positions > 0,
-            "red_threshold": float(pside_cfg.get("hsl_red_threshold", 0.0) or 0.0),
-            "ema_span_minutes": float(pside_cfg.get("hsl_ema_span_minutes", 0.0) or 0.0),
-            "tier_ratios": pside_cfg.get("hsl_tier_ratios", {}) or {},
-        }
-
-    def _minute_quantized_drawdown_ema(trace_df: pd.DataFrame, ema_span_minutes: float) -> pd.Series:
-        drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0).astype(float)
-        if drawdown_raw.empty:
-            return drawdown_raw
-        alpha = 2.0 / (ema_span_minutes + 1.0)
-        ema_values = []
-        prev_ema = 0.0
-        minutes = (trace_df.index.view("int64") // 60_000_000_000).astype(np.int64)
-        last_minute = int(minutes[0])
-        for idx, raw in enumerate(drawdown_raw.to_numpy()):
-            current_minute = int(minutes[idx])
-            if idx == 0:
-                ema_values.append(prev_ema)
-                continue
-            elapsed_minutes = max(0, current_minute - last_minute)
-            if elapsed_minutes > 0:
-                decay = (1.0 - alpha) ** float(elapsed_minutes)
-                prev_ema = float(raw) + (prev_ema - float(raw)) * decay
-            ema_values.append(prev_ema)
-            last_minute = current_minute
-        return pd.Series(ema_values, index=trace_df.index, dtype=float)
-
+    report = hsl_report(hard_stop_plot_data)
     autoplot = (_ipy_display is not None) if autoplot is None else autoplot
-    if return_figures is None:
-        return_figures = not autoplot
-    hsl_signal_mode = str(
-        (((config or {}).get("live") or {}).get("hsl_signal_mode", "coin") or "coin")
-    ).strip().lower()
-
-    pside_cfgs = {
-        pside: _resolve_pside_cfg(pside)
-        for pside in ("long", "short")
-    }
-    pside_cfgs = {
-        pside: cfg
-        for pside, cfg in pside_cfgs.items()
-        if bool(cfg.get("enabled", False))
-        and float(cfg.get("red_threshold", 0.0) or 0.0) > 0.0
-        and float(cfg.get("ema_span_minutes", 0.0) or 0.0) > 0.0
-    }
-    if not pside_cfgs:
-        return figures
-
-    def _trace_from_values(timestamps_ms, raw_values, ema_values=None, score_values=None):
-        sample_count = min(len(timestamps_ms), len(raw_values))
-        if sample_count <= 0:
-            return pd.DataFrame()
-        data = {
-            "drawdown_raw": pd.to_numeric(
-                np.asarray(raw_values[:sample_count]), errors="coerce"
-            )
-        }
-        if ema_values is not None and len(ema_values) >= sample_count:
-            data["drawdown_ema"] = pd.to_numeric(
-                np.asarray(ema_values[:sample_count]), errors="coerce"
-            )
-        if score_values is not None and len(score_values) >= sample_count:
-            data["drawdown_score"] = pd.to_numeric(
-                np.asarray(score_values[:sample_count]), errors="coerce"
-            )
-        trace = pd.DataFrame(
-            data,
-            index=pd.to_datetime(np.asarray(timestamps_ms[:sample_count], dtype=np.int64), unit="ms"),
-        )
-        return trace.dropna(subset=["drawdown_raw"])[~trace.index.duplicated(keep="first")].sort_index()
-
-    traces: dict[str, pd.DataFrame] = {}
-    if isinstance(hard_stop_plot_data, dict):
-        for pside in ("long", "short"):
-            trace = _trace_from_values(
-                hard_stop_plot_data.get(f"timestamps_ms_{pside}", []) or [],
-                hard_stop_plot_data.get(f"drawdown_raw_{pside}", []) or [],
-                hard_stop_plot_data.get(f"drawdown_ema_{pside}", []) or None,
-                hard_stop_plot_data.get(f"drawdown_score_{pside}", []) or None,
-            )
-            if not trace.empty:
-                traces[pside] = trace
-        if not traces and "long" in pside_cfgs:
-            legacy_trace = _trace_from_values(
-                hard_stop_plot_data.get("timestamps_ms", []) or [],
-                hard_stop_plot_data.get("drawdown_raw", []) or [],
-            )
-            if not legacy_trace.empty:
-                traces["long"] = legacy_trace
-
-    if not traces:
-        if bal_eq.empty or "usd_total_equity" not in bal_eq.columns:
-            return figures
-        df = bal_eq[["usd_total_equity"]].copy()
-        df["usd_total_equity"] = pd.to_numeric(df["usd_total_equity"], errors="coerce")
-        df = df.dropna()
-        if df.empty:
-            return figures
-        df = df[~df.index.duplicated(keep="first")].sort_index()
-        pnls_lookback = parse_pnls_max_lookback_days(
-            (((config or {}).get("live") or {}).get("pnls_max_lookback_days", 30.0) or 30.0),
-            field_name="live.pnls_max_lookback_days",
-        )
-        if len(df.index) >= 2:
-            sample_minutes = max(
-                1.0,
-                float((df.index[1] - df.index[0]).total_seconds() / 60.0),
-            )
-        else:
-            sample_minutes = 1.0
-        if pnls_lookback.is_all:
-            peak_strategy_equity = df["usd_total_equity"].cummax()
-        else:
-            lookback_window = pd.Timedelta(
-                days=max(pnls_lookback.days, sample_minutes / (24.0 * 60.0))
-            )
-            peak_strategy_equity = (
-                df["usd_total_equity"].rolling(lookback_window, min_periods=1).max()
-            )
-        generic_trace = pd.DataFrame(
-            {
-                "drawdown_raw": (
-                    1.0
-                    - (df["usd_total_equity"] / peak_strategy_equity.clip(lower=np.finfo(float).eps))
-                ).clip(lower=0.0)
-            },
-            index=df.index,
-        )
-        traces = {pside: generic_trace.copy() for pside in pside_cfgs}
-
-    series_by_side = {}
-    for pside, trace_df in traces.items():
-        hard_stop_cfg = pside_cfgs.get(pside)
-        if hard_stop_cfg is None or trace_df.empty:
-            continue
-        red_threshold = float(hard_stop_cfg.get("red_threshold", 0.0) or 0.0)
-        ema_span_minutes = float(hard_stop_cfg.get("ema_span_minutes", 0.0) or 0.0)
-        drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0)
-        if "drawdown_ema" in trace_df:
-            drawdown_ema = trace_df["drawdown_ema"].clip(lower=0.0).astype(float)
-        else:
-            drawdown_ema = _minute_quantized_drawdown_ema(trace_df, ema_span_minutes)
-        if "drawdown_score" in trace_df:
-            drawdown_score = trace_df["drawdown_score"].clip(lower=0.0).astype(float)
-        else:
-            drawdown_score = pd.concat([drawdown_raw, drawdown_ema], axis=1).min(axis=1)
-        tier_ratios = hard_stop_cfg.get("tier_ratios", {}) or {}
-        series_by_side[pside] = {
-            "trace": trace_df,
-            "raw": drawdown_raw,
-            "ema": drawdown_ema,
-            "score": drawdown_score,
-            "proximity_pct": (drawdown_score / red_threshold) * 100.0,
-            "red_threshold": red_threshold,
-            "yellow_threshold": float(tier_ratios.get("yellow", 0.5) or 0.5) * red_threshold,
-            "orange_threshold": float(tier_ratios.get("orange", 0.75) or 0.75) * red_threshold,
-        }
-    if not series_by_side:
-        return figures
-
-    side_order = [pside for pside in ("long", "short") if pside in series_by_side]
-    height_ratios = []
-    for _ in side_order:
-        height_ratios.extend([3, 1])
-    fig_height = figsize[1] * (len(side_order) if len(side_order) > 1 else 1)
-    fig, axes = plt.subplots(
-        len(height_ratios),
-        1,
-        sharex=True,
-        figsize=(figsize[0], fig_height),
-        gridspec_kw={"height_ratios": height_ratios},
+    return create_hsl_figures(
+        report,
+        figsize=figsize,
+        autoplot=autoplot,
+        return_figures=(not autoplot) if return_figures is None else return_figures,
+        display=_ipy_display,
     )
-    axes = np.atleast_1d(axes).tolist()
-    colors = {
-        "long": {"raw": "#1f77b4", "ema": "#ff7f0e", "score": "#2ca02c", "proximity": "#2a9d8f"},
-        "short": {"raw": "#9467bd", "ema": "#8c564b", "score": "#e377c2", "proximity": "#6a4c93"},
-    }
-    threshold_colors = {"yellow": "#d4a017", "orange": "#d95f02", "red": "#b22222"}
-    multiple_sides = len(side_order) > 1
 
-    def _drawdown_title(pside: str) -> str:
-        if hsl_signal_mode == "coin":
-            return f"{pside.capitalize()} Coin HSL Max Drawdown"
-        if multiple_sides:
-            return f"{pside.capitalize()} Equity Hard Stop Drawdown"
-        return "Equity Hard Stop Drawdown"
 
-    for side_idx, pside in enumerate(side_order):
-        series = series_by_side[pside]
-        x = series["trace"].index.to_numpy()
-        drawdown_ax = axes[side_idx * 2]
-        proximity_ax = axes[side_idx * 2 + 1]
-        drawdown_ax.plot(
-            x,
-            series["raw"].to_numpy(),
-            color=colors[pside]["raw"],
-            linewidth=1.0,
-            alpha=0.45,
-            label="Raw Drawdown",
-        )
-        drawdown_ax.plot(
-            x,
-            series["ema"].to_numpy(),
-            color=colors[pside]["ema"],
-            linewidth=1.0,
-            alpha=0.75,
-            label="EMA Drawdown",
-        )
-        drawdown_ax.plot(
-            x,
-            series["score"].to_numpy(),
-            color=colors[pside]["score"],
-            linewidth=1.5,
-            linestyle="--",
-            label="Trigger Score",
-        )
-        drawdown_ax.axhline(
-            series["yellow_threshold"],
-            color=threshold_colors["yellow"],
-            linestyle=":",
-            linewidth=1.0,
-            alpha=0.75,
-            label="Yellow Threshold",
-        )
-        drawdown_ax.axhline(
-            series["orange_threshold"],
-            color=threshold_colors["orange"],
-            linestyle=":",
-            linewidth=1.0,
-            alpha=0.75,
-            label="Orange Threshold",
-        )
-        drawdown_ax.axhline(
-            series["red_threshold"],
-            color=threshold_colors["red"],
-            linestyle="--",
-            linewidth=1.2,
-            alpha=0.75,
-            label="RED Threshold",
-        )
-        drawdown_ax.set_title(_drawdown_title(pside))
-        drawdown_ax.set_ylabel("Max Coin Drawdown" if hsl_signal_mode == "coin" else "Drawdown")
-        drawdown_ax.grid(True, linestyle="--", alpha=0.3)
-        drawdown_ax.legend(loc="upper left", ncol=3)
-
-        proximity_values = series["proximity_pct"].to_numpy()
-        proximity_ax.plot(
-            x,
-            proximity_values,
-            color=colors[pside]["proximity"],
-            linewidth=1.1,
-            label="RED Proximity",
-        )
-        proximity_ax.fill_between(
-            x,
-            0.0,
-            proximity_values,
-            where=(proximity_values < 100.0),
-            color=colors[pside]["proximity"],
-            alpha=0.14,
-        )
-        proximity_ax.fill_between(
-            x,
-            100.0,
-            proximity_values,
-            where=(proximity_values >= 100.0),
-            color="#b22222",
-            alpha=0.18,
-        )
-        proximity_ax.axhline(
-            100.0,
-            color="#b22222",
-            linestyle="--",
-            linewidth=1.2,
-            label="RED Hit",
-        )
-        proximity_ax.set_ylabel("% of RED")
-        proximity_ax.grid(True, linestyle="--", alpha=0.3)
-        proximity_ax.legend(loc="upper left")
-
-    axes[-1].set_xlabel("Time")
-
-    fig.tight_layout()
-
-    key = "hard_stop_drawdown"
-    if return_figures:
-        figures[key] = fig
-    if autoplot:
-        if _ipy_display is not None:
-            _ipy_display(fig)
-        else:  # pragma: no cover
-            try:
-                fig.show()
-            except Exception:
-                pass
-    if not return_figures:
-        plt.close(fig)
-
-    return figures if return_figures else {}
 def create_forager_coin_figures(
     coins: list,
     fdf: pd.DataFrame,
@@ -1387,7 +1199,9 @@ def create_forager_coin_figures(
             ):
                 hlcvs_df["timestamp"] = ts_arr[: len(hlcvs_df)]
         plt.figure(figsize=figsize)
-        plot_fills_forager(fdfc, hlcvs_df, clear=False, start_pct=start_pct, end_pct=end_pct)
+        plot_fills_forager(
+            fdfc, hlcvs_df, clear=False, start_pct=start_pct, end_pct=end_pct
+        )
         fig = plt.gcf()
         ax = fig.axes[0] if fig.axes else fig.add_subplot(111)
         ax.set_title(f"Fills {coin_}")
@@ -1402,10 +1216,14 @@ def create_forager_coin_figures(
     return figures
 
 
-def save_figures(figures: dict, output_dir: str, suffix: str = ".png", close: bool = True) -> dict:
+def save_figures(
+    figures: dict, output_dir: str, suffix: str = ".png", close: bool = True
+) -> dict:
     if not figures:
         return {}
-    output_dir = make_get_filepath(output_dir if output_dir.endswith("/") else f"{output_dir}/")
+    output_dir = make_get_filepath(
+        output_dir if output_dir.endswith("/") else f"{output_dir}/"
+    )
     saved_paths = {}
     for name, fig in figures.items():
         filepath = os.path.join(output_dir, f"{name}{suffix}")
@@ -1458,7 +1276,9 @@ def plot_pareto_front(df, metrics, minimize=(True, True)):
                         costs_comp[is_efficient] < costs_comp[i], axis=1
                     )
                 else:  # not minimize[0] and not minimize[1]
-                    is_efficient[is_efficient] = np.any(-costs[is_efficient] < -c, axis=1)
+                    is_efficient[is_efficient] = np.any(
+                        -costs[is_efficient] < -c, axis=1
+                    )
                 is_efficient[i] = True
         return is_efficient
 
@@ -1470,7 +1290,13 @@ def plot_pareto_front(df, metrics, minimize=(True, True)):
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # Plot all points
-    ax.scatter(x[~pareto_mask], y[~pareto_mask], c="gray", alpha=0.5, label="Non-Pareto optimal")
+    ax.scatter(
+        x[~pareto_mask],
+        y[~pareto_mask],
+        c="gray",
+        alpha=0.5,
+        label="Non-Pareto optimal",
+    )
 
     # Plot Pareto optimal points
     ax.scatter(x[pareto_mask], y[pareto_mask], c="red", label="Pareto optimal")
@@ -1501,6 +1327,9 @@ def add_metrics_to_fdf(fdf):
     # Signed wallet exposure: long positive, short negative.
     fdf.loc[:, "wallet_exposure"] = fdf.psize * fdf.pprice / fdf.balance
     fdf.loc[:, "pprice_dist"] = fdf.apply(
-        lambda x: pbr.calc_pprice_diff_int(0 if "long" in x.type else 1, x.pprice, x.price), axis=1
+        lambda x: pbr.calc_pprice_diff_int(
+            0 if "long" in x.type else 1, x.pprice, x.price
+        ),
+        axis=1,
     )
     return fdf

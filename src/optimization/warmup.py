@@ -36,7 +36,8 @@ def _refresh_shared_bot_runtime_aliases(config: dict) -> None:
 def _apply_config_overrides(config: dict, overrides: dict) -> None:
     if not overrides:
         return
-    from config.hsl_revised import validate_override_paths
+    from config.hsl import validate_override_paths
+
     validate_override_paths(config, overrides)
     for dotted_path, value in overrides.items():
         if not isinstance(dotted_path, str):
@@ -82,7 +83,9 @@ def optimizer_dead_param_values(
     """Return exact canonical values for optimizer genes made semantically dead."""
 
     live_cfg = config.get("live", {})
-    strategy_kind = str(live_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
+    strategy_kind = (
+        str(live_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
+    )
     if strategy_kind != "trailing_martingale":
         return {}
     flat_bounds = flatten_optimize_bounds(
@@ -161,19 +164,6 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
     config = optimizer_overrides(overrides_list or [], config, None)
     _refresh_shared_bot_runtime_aliases(config)
-    for pside in ("long", "short"):
-        pside_cfg = config.get("bot", {}).get(pside, {})
-        if not isinstance(pside_cfg, dict):
-            continue
-        red_threshold = pside_cfg.get("hsl_red_threshold")
-        no_restart = pside_cfg.get("hsl_no_restart_drawdown_threshold")
-        if red_threshold is not None and no_restart is not None:
-            if float(no_restart) < float(red_threshold):
-                clamped = float(red_threshold)
-                pside_cfg["hsl_no_restart_drawdown_threshold"] = clamped
-                hsl_cfg = pside_cfg.get("hsl")
-                if isinstance(hsl_cfg, dict):
-                    hsl_cfg["no_restart_drawdown_threshold"] = clamped
     for pside in (side for side in ("long", "short") if side in config.get("bot", {})):
         config = optimizer_overrides(overrides_list or [], config, pside)
     for pside in ("long", "short"):
@@ -190,10 +180,10 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
             forager_cfg["score_weights"] = deepcopy(normalized)
     canonicalize_dead_optimizer_params(config)
     materialize_coupled_scenario_spans(config)
-    from config.hsl_revised import engine, normalize_revised
+    from config.hsl import normalize_hsl
     from config.schema import get_template_config
-    if engine(config) == "revised":
-        normalize_revised(config, get_template_config(), verbose=False)
+
+    normalize_hsl(config, get_template_config(), verbose=False)
     return config
 
 
@@ -208,9 +198,9 @@ def _build_anchored_optimizer_vector_config(
         raise ValueError("anchored fine-tune plan is missing anchors")
     key_paths = [tuple(item) for item in plan.get("key_paths") or []]
     expected_len = 1 + len(key_paths)
-    assert len(vector) == expected_len, (
-        f"anchored individual length {len(vector)} does not match expected {expected_len}"
-    )
+    assert (
+        len(vector) == expected_len
+    ), f"anchored individual length {len(vector)} does not match expected {expected_len}"
     anchors = plan["anchors"]
     anchor_id = int(round(float(vector[0])))
     anchor_id = max(0, min(len(anchors) - 1, anchor_id))
@@ -249,9 +239,9 @@ def build_optimizer_vector_config(
     config = deepcopy(template)
     if key_paths is None:
         key_paths = get_optimization_key_paths(config)
-    assert len(vector) == len(key_paths), (
-        f"individual length {len(vector)} does not match optimization key count {len(key_paths)}"
-    )
+    assert len(vector) == len(
+        key_paths
+    ), f"individual length {len(vector)} does not match optimization key count {len(key_paths)}"
     for value, (_, path) in zip(vector, key_paths):
         _set_path(config, path, value)
     return _finalize_optimizer_vector_config(config, overrides_list=overrides_list)
@@ -327,7 +317,9 @@ def build_optimizer_data_config(config: dict) -> dict:
         for field in ("n_positions", "total_wallet_exposure_limit"):
             path = resolve_optimization_bound_path(data_config, f"{pside}_{field}")
             if path is None:
-                raise KeyError(f"optimizer data side gate does not resolve: {pside}_{field}")
+                raise KeyError(
+                    f"optimizer data side gate does not resolve: {pside}_{field}"
+                )
             value = _try_get_path(source, path)
             if value is None:
                 raise KeyError(

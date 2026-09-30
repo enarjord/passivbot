@@ -1,60 +1,46 @@
-# Equity Hard Stop Loss Risks
+# HSL risks and operational limits
 
-Hard stop loss (HSL) is reconstructed from exchange state plus config. Local
-files may speed replay or improve diagnostics, but they are not authoritative
-trading state. A fresh VPS with the same exchange account and config must be
-able to reconstruct the same HSL decision.
+HSL reconstructs its current decision from exchange facts and configuration. Local caches
+improve performance; they do not preserve a panic decision or cooldown independently.
+See the [HSL guide](equity_hard_stop_loss.md) for the signal and lifecycle.
 
-## History Reinterpretation
+## Incomplete historical evidence
 
-HSL replay does not infer user intent behind account transfers or config
-changes. The following can reinterpret historical drawdown:
+Missing or delayed fills, ambiguous execution order and candle gaps can change the estimated
+equity peak. The Rust reconciler preserves usable evidence and reports approximations.
+It does not require complete historical proof before evaluating current protection.
+An absent realized loss cannot be recovered from current positions alone, so an estimate
+can stop earlier or later than a calculation with complete history.
 
-- deposits and withdrawals
-- balance overrides
-- switching `live.hsl_signal_mode`
-- enabling HSL on an account with existing fill history
-- changing `bot.long/short.risk.total_wallet_exposure_limit`
-- changing `bot.long/short.risk.n_positions`
-- changing HSL thresholds, cooldown, or restart policy
+There is no incomplete-history waiver or separate timed emergency fallback. With no useful
+history, the same evaluator measures current loss from position size, entry basis, mark
+and balance budget. Fresh usable current account and market facts are still required.
+A GREEN label from an old observation is not proof that those facts are fresh now.
 
-This is intentional. The bot should not guess whether a balance change was a
-transfer, a realized trading result, or an operator baseline reset. Treat HSL
-config changes on live accounts as risk changes, not harmless formatting edits.
+## Changes to the reconstructed signal
 
-## Practical Guidance
+Deposits, withdrawals, balance overrides, configured slot counts, signal modes and policy
+changes can reinterpret the retained equity curve and the latest episode's terminal RED.
+This can remove or restore cooldown. The remaining wait is always measured from that
+episode's flatten timestamp, not from the time the evidence changed.
 
-- Run `passivbot tool live-config-preflight` before enabling or changing HSL.
-- Use `passivbot tool hsl-startup-preview` where available to inspect
-  reconstructed HSL state before live trading.
-- Be extra cautious when enabling HSL on an account that was previously traded
-  without HSL.
-- If account deposits or withdrawals happened inside the HSL lookback window,
-  review reconstructed drawdown before trusting startup behavior.
-- Do not use `live.balance_override` with account-level HSL modes
-  (`unified` or `pside`). Use `coin` mode or remove the override.
+HSL does not infer transfer intent or maintain an authoritative transfer ledger. Re-backtest
+policy changes, inspect current diagnostics and treat changes to live risk settings as
+operational decisions. TWEL does not scale HSL's balance budget. Aggregate modes do not
+support a live balance override; use the actual account balance.
 
-## Current Limitation
+## Execution and coverage
 
-HSL replay currently models fills, positions, prices, and current balance. It
-does not build a separate authoritative transfer ledger. Future diagnostics may
-detect suspicious balance jumps, but trading behavior should remain derived
-from exchange state plus config unless an explicit stateless contract is added.
+RED is current intent, not a guarantee of a fill. Limit orders may remain unfilled, and
+network failures, missing current facts or exchange restrictions can delay execution.
+Price recovery cancels panic intent; a partial close continues only while the current
+signal remains RED. Restarts reconstruct intent from current exchange evidence.
 
-## Incomplete fill history and the override flag
+A fixed, bounded settling gate lets exchange fills catch up after an observed position
+change. Approximate historical evidence must not turn this gate into an indefinite lock.
+Other ordinary strategy and unstucking inputs retain their own readiness requirements.
 
-With `restart_after_red_policy=always`, HSL startup tolerates missing
-pre-episode fill coverage when the current episode is provable from covered
-fills, because `always` ignores historical no-restart evidence. `threshold`
-and `never` require full configured lookback coverage. Coin-mode readiness
-still proves the flat-scope cooldown horizon; a recent fill for a currently
-flat pair keeps the full lookback requirement because that episode may still
-own an active RED cooldown.
-
-`--hsl-accept-incomplete-history` is a dangerous per-run CLI flag that starts
-the bot on incomplete HSL evidence for any policy. While it is active,
-panic, cooldown, and no-restart decisions may be wrong. Pass it on the
-command line for the specific run that needs it. Persisting it in config
-files does not work: any `hsl_accept_incomplete_history: true` found in a
-config file is stripped at load time with a critical log, before CLI
-overrides are applied, so the waiver can never survive a restart.
+The lookback is intentionally finite. Expired fills and cooldown evidence are forgotten;
+`restart_after_red_policy=never` is therefore lookback-bounded, not a permanent halt.
+Neither HSL nor its tests remove the need to monitor running bots. Offline unit, native,
+fake-live and GPU tests do not establish actual exchange execution correctness.

@@ -16,7 +16,9 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
         execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
         _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
-        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _record_emitted_order_custom_id = (
+            pb_mod.Passivbot._record_emitted_order_custom_id
+        )
         _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
         _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
         _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
@@ -118,7 +120,9 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id(
         execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
         _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
-        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _record_emitted_order_custom_id = (
+            pb_mod.Passivbot._record_emitted_order_custom_id
+        )
         _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
         _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
         _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
@@ -223,7 +227,9 @@ async def test_execute_orders_parent_does_not_throttle_rejected_create_response(
         execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
         _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
-        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _record_emitted_order_custom_id = (
+            pb_mod.Passivbot._record_emitted_order_custom_id
+        )
         _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
         _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
         _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
@@ -315,7 +321,9 @@ async def test_execute_orders_parent_tracks_hard_failed_create_as_ambiguous(
 
     class FakeBot:
         execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
-        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _record_emitted_order_custom_id = (
+            pb_mod.Passivbot._record_emitted_order_custom_id
+        )
         _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
         _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
         _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
@@ -406,7 +414,7 @@ async def test_execute_order_plan_bounds_raised_create_exception_diagnostics(
     hostile_secret = "https://hostile.example.invalid/create?token=batch-secret"
     HostileError = type(hostile_type_name, (RuntimeError,), {})
 
-    async def keep_fresh_creations(_bot, orders):
+    async def keep_fresh_creations(_bot, orders, **_kwargs):
         return orders
 
     monkeypatch.setattr(
@@ -473,7 +481,9 @@ async def test_execute_order_plan_bounds_raised_create_exception_diagnostics(
     batch_records = [
         record
         for record in caplog.records
-        if record.getMessage().startswith("[order] create batch raised before completion")
+        if record.getMessage().startswith(
+            "[order] create batch raised before completion"
+        )
     ]
     assert [(record.levelno, record.getMessage()) for record in batch_records] == [
         (
@@ -489,7 +499,9 @@ async def test_execute_orders_parent_tracks_empty_create_response_as_ambiguous()
 
     class FakeBot:
         execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
-        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _record_emitted_order_custom_id = (
+            pb_mod.Passivbot._record_emitted_order_custom_id
+        )
         _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
         _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
         _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
@@ -557,7 +569,9 @@ async def test_execute_orders_parent_tracks_partial_create_response_as_ambiguous
 
     class FakeBot:
         execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
-        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _record_emitted_order_custom_id = (
+            pb_mod.Passivbot._record_emitted_order_custom_id
+        )
         _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
         _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
         _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
@@ -911,7 +925,9 @@ def test_ambiguous_create_records_use_shorter_prune_window():
     ambiguous_custom_id = _pb_custom_id("entry_grid_normal_long", "amb")
     bot.orders_emitted_to_exchange = [
         {
-            "timestamp": now_ts - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS - 1,
+            "timestamp": now_ts
+            - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS
+            - 1,
             "exchange_id": "",
             "custom_id": ambiguous_custom_id,
             "canonical_custom_id": "0x0004-amb",
@@ -920,7 +936,9 @@ def test_ambiguous_create_records_use_shorter_prune_window():
             "fingerprint": None,
         },
         {
-            "timestamp": now_ts - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS + 1,
+            "timestamp": now_ts
+            - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS
+            + 1,
             "exchange_id": "",
             "custom_id": ambiguous_custom_id,
             "canonical_custom_id": "0x0004-amb",
@@ -929,7 +947,9 @@ def test_ambiguous_create_records_use_shorter_prune_window():
             "fingerprint": None,
         },
         {
-            "timestamp": now_ts - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS - 1,
+            "timestamp": now_ts
+            - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS
+            - 1,
             "exchange_id": "",
             "custom_id": ack_custom_id,
             "canonical_custom_id": "0x0004-ack",
@@ -945,7 +965,9 @@ def test_ambiguous_create_records_use_shorter_prune_window():
         "create_error_ambiguous",
         "acknowledged",
     ]
-    assert [record["canonical_custom_id"] for record in bot.orders_emitted_to_exchange] == [
+    assert [
+        record["canonical_custom_id"] for record in bot.orders_emitted_to_exchange
+    ] == [
         "0x0004-amb",
         "0x0004-ack",
     ]
@@ -1233,12 +1255,17 @@ async def test_detect_foreign_passivbot_orders_stops_after_unique_threshold():
     with pytest.raises(Exception, match="foreign Passivbot writer detected"):
         await pb_mod.Passivbot._detect_foreign_passivbot_orders(bot, third)
 
-    assert len(bot.foreign_passivbot_seen) == pb_mod.FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW
+    assert (
+        len(bot.foreign_passivbot_seen)
+        == pb_mod.FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW
+    )
     assert bot.stop_signal_received is True
 
 
 @pytest.mark.asyncio
-async def test_foreign_writer_stop_redacts_maintainer_failure_and_still_propagates(caplog):
+async def test_foreign_writer_stop_redacts_maintainer_failure_and_still_propagates(
+    caplog,
+):
     import passivbot as pb_mod
 
     bot = _make_detection_bot(now_ts=2_000_000, start_ts=1_000_000)

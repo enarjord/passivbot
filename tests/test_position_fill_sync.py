@@ -84,7 +84,7 @@ def test_scope_dependency_for_both_create_and_cancel(mode, blocked):
     bot = SimpleNamespace(
         _position_fill_sync=sync,
         config={
-            "live": {"hsl_engine": "revised", "hsl_signal_mode": mode},
+            "live": {"hsl_engine": "hsl", "hsl_signal_mode": mode},
             "bot": {"hsl": {"enabled": True}, "long": {"hsl": {"enabled": True}}},
         },
     )
@@ -105,11 +105,11 @@ def test_restart_does_not_restore_expired_local_gate():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["create", "cancel"])
-@pytest.mark.parametrize("engine", ["revised"])
+@pytest.mark.parametrize("engine", ["hsl"])
 async def test_connector_boundary_defers_all_actions_before_any_io(
     action, engine, monkeypatch
 ):
-    from live.hsl_revised_live import connector_write
+    from live.hsl_live import connector_write
     from live.executor import DeferredOrderCreation, DeferredOrderCancellation
 
     sync, now = gate()
@@ -139,7 +139,6 @@ async def test_connector_boundary_defers_all_actions_before_any_io(
     assert not called and not recorded
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["create", "cancel"])
 async def test_batch_gate_does_not_require_available_history_to_release(action):
@@ -162,8 +161,8 @@ async def test_new_change_while_queued_is_checked_again_at_connector(
 ):
     import asyncio
     import utils
-    from live import hsl_revised_live, executor
-    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    from live import hsl_live, executor
+    from test_hsl_runtime import bot as make_bot, quotes, NOW, SYMBOL
 
     monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
     bot = make_bot()
@@ -173,14 +172,14 @@ async def test_new_change_while_queued_is_checked_again_at_connector(
     bot._ensure_freshness_ledger().stamp("open_orders", now_ms=NOW)
     sync = bot._position_fill_sync = PositionFillSync(lambda: 0.0)
     sync.observe({(SYMBOL, "long"): (9.0, 100.0)})
-    owner = hsl_revised_live.owner(bot)
+    owner = hsl_live.owner(bot)
     wave = owner.capture(quotes())
     order = dict(symbol=SYMBOL, position_side="long")
     owner.bind(wave, (), (order,))
     assert owner.admit(order)
     calls = []
 
-    @hsl_revised_live.connector_write(action)
+    @hsl_live.connector_write(action)
     async def write(bot, order):
         calls.append(order)
 
@@ -221,7 +220,7 @@ def test_disabled_aggregate_policy_keeps_only_own_coin_side_dependency(mode):
     bot = SimpleNamespace(
         _position_fill_sync=sync,
         config={
-            "live": {"hsl_engine": "revised", "hsl_signal_mode": mode},
+            "live": {"hsl_engine": "hsl", "hsl_signal_mode": mode},
             "bot": {"hsl": {"enabled": False}, "long": {"hsl": {"enabled": False}}},
         },
     )

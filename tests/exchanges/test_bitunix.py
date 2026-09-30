@@ -34,7 +34,6 @@ from fill_events_manager import (
 )
 from candlestick_manager import CandlestickManager
 
-
 MARKET_ROW = {
     "symbol": "BTCUSDT",
     "base": "BTC",
@@ -230,14 +229,14 @@ def test_candlestick_manager_uses_bitunix_kline_page_limit(tmp_path):
 
 def test_rest_signature_matches_documented_double_sha256(monkeypatch):
     client = BitunixClient({"apiKey": "api", "secret": "secret"})
-    monkeypatch.setattr("exchanges.bitunix.uuid.uuid4", lambda: SimpleNamespace(hex="nonce"))
+    monkeypatch.setattr(
+        "exchanges.bitunix.uuid.uuid4", lambda: SimpleNamespace(hex="nonce")
+    )
     monkeypatch.setattr(client, "milliseconds", lambda: 1_700_000_000_000)
 
     headers = client._signed_headers({"symbol": "BTCUSDT", "limit": 10}, "")
 
-    first = hashlib.sha256(
-        b"nonce1700000000000apilimit10symbolBTCUSDT"
-    ).hexdigest()
+    first = hashlib.sha256(b"nonce1700000000000apilimit10symbolBTCUSDT").hexdigest()
     expected = hashlib.sha256(f"{first}secret".encode()).hexdigest()
     assert headers == {
         "api-key": "api",
@@ -251,7 +250,9 @@ def test_rest_signature_matches_documented_double_sha256(monkeypatch):
 def test_private_websocket_signature_uses_seconds(monkeypatch):
     client = BitunixClient({"apiKey": "api", "secret": "secret"})
     stream = BitunixOrderStream(client)
-    monkeypatch.setattr("exchanges.bitunix.uuid.uuid4", lambda: SimpleNamespace(hex="nonce"))
+    monkeypatch.setattr(
+        "exchanges.bitunix.uuid.uuid4", lambda: SimpleNamespace(hex="nonce")
+    )
     monkeypatch.setattr("exchanges.bitunix.time.time", lambda: 1_700_000_000.9)
 
     payload = stream._login_payload()
@@ -311,9 +312,7 @@ async def test_load_markets_maps_base_quantity_and_tick_sizes():
 @pytest.mark.asyncio
 async def test_load_markets_retries_observed_network_error(monkeypatch):
     client = BitunixClient()
-    client._request = AsyncMock(
-        side_effect=[NetworkError("transient"), [MARKET_ROW]]
-    )
+    client._request = AsyncMock(side_effect=[NetworkError("transient"), [MARKET_ROW]])
     sleep = AsyncMock()
     monkeypatch.setattr("exchanges.bitunix.asyncio.sleep", sleep)
 
@@ -795,9 +794,7 @@ def test_hedge_order_normalization_preserves_position_and_action_side():
 
     entry = client._normalize_order(_order_row())
     close = client._normalize_order(
-        _order_row(
-            side="SELL", reduceOnly=True, clientId="clock_close_long_1"
-        )
+        _order_row(side="SELL", reduceOnly=True, clientId="clock_close_long_1")
     )
     short_close = client._normalize_order(
         _order_row(
@@ -943,12 +940,10 @@ async def test_open_orders_paginate_to_stable_reported_total():
 
     assert [order["id"] for order in orders] == ["order-1", "order-2"]
     assert [
-        call.kwargs["params"]["skip"]
-        for call in client._request.await_args_list
+        call.kwargs["params"]["skip"] for call in client._request.await_args_list
     ] == [0, 1]
     assert {
-        call.kwargs["params"]["endTime"]
-        for call in client._request.await_args_list
+        call.kwargs["params"]["endTime"] for call in client._request.await_args_list
     } == {1_700_001_000_000}
 
 
@@ -1106,9 +1101,7 @@ async def test_positions_accept_documented_and_live_hedge_side_aliases(
 @pytest.mark.parametrize("entry_price", [None, "", "0", "-1", "nan"])
 async def test_nonzero_position_requires_positive_finite_entry_price(entry_price):
     client = _prepared_client()
-    client._request = AsyncMock(
-        return_value=[_position_row(avgOpenPrice=entry_price)]
-    )
+    client._request = AsyncMock(return_value=[_position_row(avgOpenPrice=entry_price)])
 
     with pytest.raises(ValueError, match="entry price"):
         await client.fetch_positions(["BTC/USDT:USDT"])
@@ -1170,8 +1163,7 @@ async def test_fill_history_paginates_and_normalizes_hedge_actions():
     assert trades[1]["info"]["positionSide"] == "LONG"
     assert client._request.await_args_list[1].kwargs["params"]["skip"] == 1
     assert {
-        call.kwargs["params"]["endTime"]
-        for call in client._request.await_args_list
+        call.kwargs["params"]["endTime"] for call in client._request.await_args_list
     } == {1_700_001_000_000}
 
 
@@ -1192,8 +1184,7 @@ async def test_fill_history_freezes_end_time_when_until_is_omitted(monkeypatch):
         call.kwargs["params"]["skip"] for call in client._request.await_args_list
     ] == [0, 1]
     assert {
-        call.kwargs["params"]["endTime"]
-        for call in client._request.await_args_list
+        call.kwargs["params"]["endTime"] for call in client._request.await_args_list
     } == {1_700_001_000_000}
 
 
@@ -1289,9 +1280,7 @@ async def test_ohlcv_derives_forward_page_end_from_since_when_venue_ignores_star
     client = _prepared_client()
     client._request = AsyncMock(return_value=[])
 
-    await client.fetch_ohlcv(
-        "BTC/USDT:USDT", "1m", since=60_000, limit=200
-    )
+    await client.fetch_ohlcv("BTC/USDT:USDT", "1m", since=60_000, limit=200)
 
     query = client._request.await_args.kwargs["params"]
     assert query["startTime"] == 60_000
@@ -1335,9 +1324,7 @@ async def test_ohlcv_accepts_explicit_zero_base_volume():
         ]
     )
 
-    candles = await client.fetch_ohlcv(
-        "BTC/USDT:USDT", "1m", since=60_000
-    )
+    candles = await client.fetch_ohlcv("BTC/USDT:USDT", "1m", since=60_000)
 
     assert candles[0][5] == 0.0
 
@@ -1446,9 +1433,7 @@ async def test_order_stream_multiplexes_public_klines_and_uses_json_ping(
 async def test_order_stream_routes_persistent_malformed_klines_to_one_watcher():
     client = _prepared_client()
     socket = _PublicKlineSocket()
-    client._get_session = AsyncMock(
-        return_value=_PublicKlineSession(socket)
-    )
+    client._get_session = AsyncMock(return_value=_PublicKlineSession(socket))
     stream = BitunixOrderStream(client)
     symbol = "BTC/USDT:USDT"
     queue = asyncio.Queue(maxsize=stream.KLINE_QUEUE_SIZE)
@@ -1496,9 +1481,7 @@ async def test_order_stream_public_failure_wakes_all_watchers_for_rest_fallback(
     client.markets_by_id["ETHUSDT"] = eth_market
     client.symbols.append(eth_symbol)
     socket = _PublicKlineSocket()
-    client._get_session = AsyncMock(
-        return_value=_PublicKlineSession(socket)
-    )
+    client._get_session = AsyncMock(return_value=_PublicKlineSession(socket))
     stream = BitunixOrderStream(client)
 
     waiters = [
@@ -1529,9 +1512,7 @@ async def test_order_stream_setup_failure_wakes_shard_watchers(setup_surface):
     client.markets_by_id["ETHUSDT"] = eth_market
     client.symbols.append(eth_symbol)
     if setup_surface == "session":
-        client._get_session = AsyncMock(
-            side_effect=NetworkError("session unavailable")
-        )
+        client._get_session = AsyncMock(side_effect=NetworkError("session unavailable"))
     else:
         session = MagicMock()
         session.ws_connect.side_effect = NetworkError("socket unavailable")
@@ -1545,10 +1526,7 @@ async def test_order_stream_setup_failure_wakes_shard_watchers(setup_surface):
     )
 
     assert all(isinstance(result, NetworkError) for result in results)
-    assert all(
-        f"failed: {type(result).__name__}" in str(result)
-        for result in results
-    )
+    assert all(f"failed: {type(result).__name__}" in str(result) for result in results)
     await stream.close()
 
 
@@ -1561,15 +1539,11 @@ async def test_order_stream_transport_failure_preserves_every_fallback_signal():
     client.markets_by_id["ETHUSDT"] = eth_market
     client.symbols.append(eth_symbol)
     socket = _PublicKlineSocket()
-    client._get_session = AsyncMock(
-        return_value=_PublicKlineSession(socket)
-    )
+    client._get_session = AsyncMock(return_value=_PublicKlineSession(socket))
     stream = BitunixOrderStream(client)
     symbols = {"BTC/USDT:USDT", eth_symbol}
     for symbol in symbols:
-        stream._ohlcv_queues[symbol] = asyncio.Queue(
-            maxsize=stream.KLINE_QUEUE_SIZE
-        )
+        stream._ohlcv_queues[symbol] = asyncio.Queue(maxsize=stream.KLINE_QUEUE_SIZE)
     stream._ensure_ohlcv_task()
     for _ in range(100):
         if stream._ohlcv_ws is socket:
@@ -1601,9 +1575,7 @@ async def test_order_stream_silence_timeout_wakes_waiter_for_rest_fallback():
     stream = BitunixOrderStream(client)
     stream.KLINE_SILENCE_TIMEOUT_SECONDS = 0.02
 
-    waiter = asyncio.create_task(
-        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
-    )
+    waiter = asyncio.create_task(stream.watch_ohlcv("BTC/USDT:USDT", "1m"))
 
     with pytest.raises(NetworkError, match="failed: NetworkError"):
         await asyncio.wait_for(waiter, timeout=1.0)
@@ -1620,15 +1592,11 @@ async def test_order_stream_tracks_kline_silence_per_subscription():
     client.markets_by_id["ETHUSDT"] = eth_market
     client.symbols.append(eth_symbol)
     socket = _PublicKlineSocket()
-    client._get_session = AsyncMock(
-        return_value=_PublicKlineSession(socket)
-    )
+    client._get_session = AsyncMock(return_value=_PublicKlineSession(socket))
     stream = BitunixOrderStream(client)
     stream.KLINE_SILENCE_TIMEOUT_SECONDS = 0.05
 
-    btc_waiter = asyncio.create_task(
-        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
-    )
+    btc_waiter = asyncio.create_task(stream.watch_ohlcv("BTC/USDT:USDT", "1m"))
     eth_waiter = asyncio.create_task(stream.watch_ohlcv(eth_symbol, "1m"))
     for _ in range(100):
         subscribed = {
@@ -1760,14 +1728,10 @@ async def test_order_stream_scopes_rejected_subscription_to_affected_watcher(
     client.markets_by_id["ETHUSDT"] = eth_market
     client.symbols.append(eth_symbol)
     socket = _PublicKlineSocket()
-    client._get_session = AsyncMock(
-        return_value=_PublicKlineSession(socket)
-    )
+    client._get_session = AsyncMock(return_value=_PublicKlineSession(socket))
     stream = BitunixOrderStream(client)
 
-    btc_waiter = asyncio.create_task(
-        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
-    )
+    btc_waiter = asyncio.create_task(stream.watch_ohlcv("BTC/USDT:USDT", "1m"))
     eth_waiter = asyncio.create_task(stream.watch_ohlcv(eth_symbol, "1m"))
     for _ in range(100):
         subscribed = {
@@ -1813,9 +1777,7 @@ async def test_order_stream_scopes_rejected_subscription_to_affected_watcher(
     assert stream._ohlcv_task is not None
     assert not stream._ohlcv_task.done()
 
-    btc_recovery = asyncio.create_task(
-        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
-    )
+    btc_recovery = asyncio.create_task(stream.watch_ohlcv("BTC/USDT:USDT", "1m"))
     # Subscription reconciliation polls at one-second intervals. Allow one
     # complete poll plus scheduler slack before declaring recovery absent.
     for _ in range(200):
@@ -1851,9 +1813,7 @@ async def test_order_stream_can_resubscribe_immediately_after_last_unwatch():
     client._get_session = AsyncMock(side_effect=lambda: next(sessions))
     stream = BitunixOrderStream(client)
 
-    first_waiter = asyncio.create_task(
-        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
-    )
+    first_waiter = asyncio.create_task(stream.watch_ohlcv("BTC/USDT:USDT", "1m"))
     for _ in range(100):
         if stream._ohlcv_ws is first_socket:
             break
@@ -1862,9 +1822,7 @@ async def test_order_stream_can_resubscribe_immediately_after_last_unwatch():
     with pytest.raises(NetworkError, match="subscription was removed"):
         await first_waiter
 
-    second_waiter = asyncio.create_task(
-        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
-    )
+    second_waiter = asyncio.create_task(stream.watch_ohlcv("BTC/USDT:USDT", "1m"))
     for _ in range(100):
         if stream._ohlcv_ws is second_socket:
             break
@@ -1918,9 +1876,7 @@ async def test_order_stream_surfaces_unenriched_row_when_detail_is_not_found():
 async def test_order_stream_sends_documented_json_ping_when_idle(monkeypatch):
     client = _prepared_client()
     stream = BitunixOrderStream(client)
-    stream._last_ping_monotonic = (
-        time.monotonic() - stream.PING_INTERVAL_SECONDS - 1.0
-    )
+    stream._last_ping_monotonic = time.monotonic() - stream.PING_INTERVAL_SECONDS - 1.0
     monkeypatch.setattr("exchanges.bitunix.time.time", lambda: 1_700_000_000.9)
     order_message = SimpleNamespace(
         type=aiohttp.WSMsgType.TEXT,
@@ -1947,9 +1903,7 @@ async def test_order_stream_sends_documented_json_ping_when_idle(monkeypatch):
 
     rows = await stream.watch_orders()
 
-    ws.send_json.assert_awaited_once_with(
-        {"op": "ping", "ping": 1_700_000_000}
-    )
+    ws.send_json.assert_awaited_once_with({"op": "ping", "ping": 1_700_000_000})
     assert rows == [{"id": "order-1", "symbol": "BTC/USDT:USDT"}]
 
 
@@ -2053,9 +2007,7 @@ async def test_order_stream_forwards_malformed_rows_for_account_refresh():
     assert rows == [
         {
             "symbol": "BTC/USDT:USDT",
-            "info": {
-                "raw": {"symbol": "BTCUSDT", "status": "FILLED"}
-            },
+            "info": {"raw": {"symbol": "BTCUSDT", "status": "FILLED"}},
         },
         {"info": {"raw": "malformed"}},
     ]
@@ -2064,9 +2016,7 @@ async def test_order_stream_forwards_malformed_rows_for_account_refresh():
     bot = build_contract_bot("bitunix")
     bot.ccp = SimpleNamespace(has={"watchOrders": True})
     bot.stop_websocket = False
-    bot._do_watch_orders = AsyncMock(
-        side_effect=[rows, asyncio.CancelledError]
-    )
+    bot._do_watch_orders = AsyncMock(side_effect=[rows, asyncio.CancelledError])
     bot._mark_account_critical_state_dirty = MagicMock()
     bot.handle_order_update = MagicMock()
 
@@ -2376,9 +2326,7 @@ def test_native_session_applies_bitunix_domain_rewrite():
     bot = build_contract_bot("bitunix")
     bot.endpoint_override = ResolvedEndpointOverride(
         exchange_id="bitunix",
-        rest_domain_rewrites={
-            "https://fapi.bitunix.com": "https://proxy.example"
-        },
+        rest_domain_rewrites={"https://fapi.bitunix.com": "https://proxy.example"},
     )
     bot.ws_enabled = False
 
@@ -2395,7 +2343,9 @@ def test_native_session_rejects_unsupported_endpoint_url_keys():
     )
     bot.ws_enabled = False
 
-    with pytest.raises(CustomEndpointConfigError, match="unsupported REST URL override"):
+    with pytest.raises(
+        CustomEndpointConfigError, match="unsupported REST URL override"
+    ):
         bot.create_ccxt_sessions()
 
 
@@ -2500,9 +2450,7 @@ async def test_bitunix_fetcher_normalizes_accounting_fields():
     fetcher = BitunixFetcher(client)
     cache = {}
 
-    events = await fetcher.fetch(
-        1_699_999_000_000, 1_700_001_000_000, cache
-    )
+    events = await fetcher.fetch(1_699_999_000_000, 1_700_001_000_000, cache)
 
     assert len(events) == 1
     assert events[0]["id"] == "trade-1"
@@ -2516,7 +2464,9 @@ async def test_bitunix_fetcher_normalizes_accounting_fields():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fee", ["missing", None, "", "0", "-0.01", "0.01"])
-async def test_bitunix_missing_fee_uses_shared_fallback_and_preserves_reported_fees(fee):
+async def test_bitunix_missing_fee_uses_shared_fallback_and_preserves_reported_fees(
+    fee,
+):
     client = _prepared_client()
     raw = _trade_row()
     if fee == "missing":
@@ -2527,7 +2477,9 @@ async def test_bitunix_missing_fee_uses_shared_fallback_and_preserves_reported_f
     events = await BitunixFetcher(client).fetch(None, None, {})
     event = FillEvent.from_dict(events[0])
     if fee in ("missing", None, ""):
-        assert event.fee_paid == pytest.approx(-abs(event.qty * event.price) * DEFAULT_FEE_PCT_FALLBACK)
+        assert event.fee_paid == pytest.approx(
+            -abs(event.qty * event.price) * DEFAULT_FEE_PCT_FALLBACK
+        )
         assert event.fee_source == "fallback_pct"
         assert event.fee_quality == "fallback"
     else:
@@ -2595,51 +2547,72 @@ def test_setup_bot_bitunix_uses_native_adapter():
     mock_cls.assert_called_once_with(config)
 
 
-@pytest.mark.parametrize('configured, expected', [(None, 'symbols'), ('auto', 'symbols'), ('symbols', 'symbols'), ('bulk', 'bulk')])
-def test_bitunix_snapshot_default_is_scoped_but_preserves_override(configured, expected):
-    bot = build_contract_bot('bitunix')
+@pytest.mark.parametrize(
+    "configured, expected",
+    [(None, "symbols"), ("auto", "symbols"), ("symbols", "symbols"), ("bulk", "bulk")],
+)
+def test_bitunix_snapshot_default_is_scoped_but_preserves_override(
+    configured, expected
+):
+    bot = build_contract_bot("bitunix")
     bot.ws_enabled = True
     if configured is None:
-        bot.config['live'].pop('market_snapshot_ticker_strategy', None)
+        bot.config["live"].pop("market_snapshot_ticker_strategy", None)
     else:
-        bot.config['live']['market_snapshot_ticker_strategy'] = configured
+        bot.config["live"]["market_snapshot_ticker_strategy"] = configured
     assert bot._market_snapshot_ticker_strategy() == expected
 
 
 @pytest.mark.asyncio
-async def test_revised_quote_refresh_does_not_wait_for_unrelated_bitunix_market(monkeypatch):
+async def test_hsl_quote_refresh_does_not_wait_for_unrelated_bitunix_market(
+    monkeypatch,
+):
     """Exercise the real connector/provider/owner with offline websocket receipts."""
-    from live.hsl_revised_live import Owner
+    from live.hsl_live import Owner
     from live.market_snapshot import MarketSnapshotProvider
     import live.market_snapshot as snapshots
 
     client = _prepared_client()
-    symbol = 'BTC/USDT:USDT'
-    absent = {**_market(), 'id': 'ETHUSDT', 'symbol': 'ETH/USDT:USDT'}
-    client.markets[absent['symbol']] = absent
-    client.markets_by_id[absent['id']] = absent
-    client.symbols.append(absent['symbol'])
+    symbol = "BTC/USDT:USDT"
+    absent = {**_market(), "id": "ETHUSDT", "symbol": "ETH/USDT:USDT"}
+    client.markets[absent["symbol"]] = absent
+    client.markets_by_id[absent["id"]] = absent
+    client.symbols.append(absent["symbol"])
     client._ensure_ticker_tasks = lambda: None
     # No packet will arrive for the unrelated market. Waiting for it is the bug.
-    client._ticker_ready.wait = AsyncMock(side_effect=AssertionError('unrelated ticker wait'))
-    client._fetch_depth_ticker = AsyncMock(side_effect=AssertionError('unneeded REST fallback'))
+    client._ticker_ready.wait = AsyncMock(
+        side_effect=AssertionError("unrelated ticker wait")
+    )
+    client._fetch_depth_ticker = AsyncMock(
+        side_effect=AssertionError("unneeded REST fallback")
+    )
     clock = [1_000_000]
-    monkeypatch.setattr(snapshots, 'utc_ms', lambda: clock[0])
-    bot = build_contract_bot('bitunix')
+    monkeypatch.setattr(snapshots, "utc_ms", lambda: clock[0])
+    bot = build_contract_bot("bitunix")
     bot.ws_enabled = True
-    bot.config['live']['market_snapshot_ticker_strategy'] = 'auto'
+    bot.config["live"]["market_snapshot_ticker_strategy"] = "auto"
     bot.cca = client
     bot.markets_dict = client.markets
-    provider = MarketSnapshotProvider(exchange_name='bitunix', fetch_tickers=bot.fetch_tickers,
+    provider = MarketSnapshotProvider(
+        exchange_name="bitunix",
+        fetch_tickers=bot.fetch_tickers,
         fetch_tickers_for_symbols=bot.fetch_tickers_for_symbols,
-        ticker_strategy=bot._market_snapshot_ticker_strategy())
-    owner = Owner(SimpleNamespace(_get_orchestrator_market_snapshots=provider.get_snapshots))
+        ticker_strategy=bot._market_snapshot_ticker_strategy(),
+    )
+    owner = Owner(
+        SimpleNamespace(_get_orchestrator_market_snapshots=provider.get_snapshots)
+    )
     try:
         # Every pass expires the provider cache, reproducing repeated refreshes.
-        for price in (100., 90., 105.):
+        for price in (100.0, 90.0, 105.0):
             clock[0] += 11_000
-            client._ticker_cache[symbol] = dict(symbol=symbol, bid=price-1, ask=price+1,
-                                                last=price, timestamp=clock[0])
+            client._ticker_cache[symbol] = dict(
+                symbol=symbol,
+                bid=price - 1,
+                ask=price + 1,
+                last=price,
+                timestamp=clock[0],
+            )
             client._ticker_received_monotonic[symbol] = time.monotonic()
             quotes = await owner.acquire_quotes({symbol})
             assert quotes[symbol].last == price

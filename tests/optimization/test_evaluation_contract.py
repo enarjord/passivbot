@@ -149,7 +149,8 @@ def test_result_writers_persist_contract_before_candidate_projection(
 
     config = _config()
     if mode != "legacy":
-        from config.hsl_revised import generated_template
+        from config.hsl import generated_template
+
         config = generated_template(config, mode)
     config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     metrics = {"suite_metrics": {"scenario": {}}} if suite else {}
@@ -181,7 +182,10 @@ def test_result_writers_persist_contract_before_candidate_projection(
     else:
         assert entry["backtest"]["coins"] == config["backtest"]["coins"]
         config["backtest"]["coins"]["binance"].remove("ETH")
-        assert any("backtest.coins" in diff for diff in optimize._resume_config_mismatches(entry, config))
+        assert any(
+            "backtest.coins" in diff
+            for diff in optimize._resume_config_mismatches(entry, config)
+        )
 
 
 def test_added_fixed_backtest_settings_do_not_evade_legacy_comparison():

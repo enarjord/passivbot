@@ -39,7 +39,7 @@ create or cancel orders.
 
 ```bash
 PYTHONPATH=src python src/tools/run_fake_live.py \
-  configs/fake_live_hsl_btc.hjson \
+  configs/examples/fake_live_hsl.json \
   scenarios/fake_live/hsl_long_red_restart.hjson \
   --user fake_hsl_restart_test
 pytest tests/test_run_fake_live.py -m fake_live

@@ -56,7 +56,7 @@ unstucking and PnL consumers retain their own readiness contracts.
 
 ## Configuration and removal boundary
 
-The canonical engine is revised. Explicit legacy selection fails with migration guidance.
+HSL has one implementation. Old configurations require migration and revalidation.
 Retired tier/intervention/terminal-threshold controls cannot silently acquire a different
 meaning; optimization over removed controls is rejected. Unified policy is never hydrated
 from a side or hidden template. Legacy optimizer fitness and checkpoints are not evidence
@@ -64,11 +64,11 @@ for new signal semantics; reevaluate configurations.
 
 ## Code and validation
 
-- `passivbot-rust/src/hsl_revised_*`: factual reconciliation, signal and current controller.
+- `passivbot-rust/src/hsl_*`: factual reconciliation, signal and current controller.
 - `passivbot-rust/src/backtest_hsl_*`: simulator integration, disposable caches and reporting.
-- `src/live/hsl_revised_*`: immutable observation, current execution admission and diagnostics.
+- `src/live/hsl_*`: immutable observation, current execution admission and diagnostics.
 - `src/live/position_fill_sync.py`: bounded shared position-to-fill confirmation.
-- `src/config/hsl_revised.py`: canonical policy/configuration validation.
+- `src/config/hsl.py`: canonical policy/configuration validation.
 
 Require shared reference/unit tests, source-verified native caller tests, offline fake-live
 cycles, restart and history-repair cases, current RED recovery, terminal cooldown and

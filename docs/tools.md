@@ -379,12 +379,12 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   between two local configs.
 - `passivbot tool hsl-startup-preview` emits a read-only offline JSON preview for one live
   config plus optional local monitor events. It reports configured HSL settings and latest
-  local HSL status/cooldown observations when present, while explicitly marking current
-  drawdown and startup panic-order prediction unavailable unless a future slice adds safe
-  local replay inputs.
+  scoped HSL observations when present, with expired or degraded captures explicitly
+  labeled stale/unavailable. Current drawdown, cooldown and startup panic-order prediction
+  remain unavailable: a saved observation does not prove current exchange state.
 - HSL performance probes use the current evaluator: see
-  `tests/hsl_revised_live_benchmark.py`, `tests/hsl_revised_backtest_benchmark.py`
-  and `tests/hsl_revised_gpu_benchmark.py`. These deterministic offline probes
+  `tests/hsl_live_benchmark.py`, `tests/hsl_backtest_benchmark.py`
+  and `tests/hsl_gpu_benchmark.py`. These deterministic offline probes
   replace the retired legacy `hsl-replay-benchmark` tool.
 - `passivbot tool live-event-query` validates and queries local structured monitor event
   segments. It is read-only and does not contact exchanges. Use `--event-type`,
@@ -701,7 +701,7 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   The mapping uses the same legacy snapshot-ID normalization as `live-event-query` and
   selects the latest sample by stable event position (`ts`, `seq`, path, and line).
   The `operation_durations` section
-  collates startup, cycle, state-refresh, remote-call, HSL replay, cache, decision-boundary,
+  collates startup, cycle, state-refresh, remote-call, risk activity, cache, decision-boundary,
   input-staleness, fill-refresh, execution, and shutdown timing groups into one bounded table with operation
   category, trading-impact, blocking-scope, and timing-kind counters. The `resource_pressure` section
   summarizes whitelisted process and event-pipeline health fields from existing
@@ -717,10 +717,7 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   age-unlink, and byte-cap-unlink totals/maxima with visited, candidate, and successful
   deletion counts. These fields are diagnostic only and do not change retention policy or
   report verdicts.
-  The `hsl_replay_profile` section derives bounded HSL replay work/progress summaries from
-  existing `hsl.replay.*` events, including pair counts, timeline rows, rows/s, estimated
-  dense pair-row work, observed progress percentage, and startup-blocking elapsed time where
-  available. The `cache_warmup` section derives bounded warm-cache reuse, cold-path,
+  The `cache_warmup` section derives bounded warm-cache reuse, cold-path,
   candle cache load, and candle cache flush summaries from existing cache events without
   exposing raw cache paths or payloads. The `fill_refresh` section derives bounded
   fill-cache refresh status, coverage, retry, count, and elapsed summaries from existing
@@ -834,12 +831,12 @@ The archive helper also supports symmetric `pull` and local `extract` modes, inc
 passivbot tool generate-mcap-list -n 80 -m 200 -e binance,bybit -o configs/approved_coins_top80.json
 ```
 
-## Revised HSL configuration migration
+## HSL configuration migration
 
-`passivbot tool migrate-hsl input.json output.json` prepares a separate revised-HSL
+`passivbot tool migrate-hsl input.json output.json` prepares a separate HSL
 configuration without exchange access or deployment. File-backed coin overrides are validated
 and saved inline (including scenario-local patches), so moving the output cannot change their policy.
 Effective optimizer and scenario policies are validated as well as the base config. Explicit restart choices also
 update matching optimizer fixed overrides; retired or unmatched fixed selectors are rejected.
-See the [migration contract](plans/hsl_sole_engine_migration.md#offline-configuration-preparation)
+See the [migration contract](configuration.md#hsl-configuration)
 for explicit restart choices, unified portfolio policy, and compatibility limits.

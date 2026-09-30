@@ -21,13 +21,11 @@ from config.bot import (
 )
 from config.load import load_prepared_config as staged_load_prepared_config
 from config.coerce import (
-    HSL_COOLDOWN_POSITION_POLICIES,
     HSL_RESTART_AFTER_RED_POLICIES,
     HSL_SIGNAL_MODES,
     MONITOR_BOOL_KEYS,
     PYMOO_ALGORITHMS,
     PYMOO_REF_DIR_METHODS,
-    normalize_hsl_cooldown_position_policy,
     normalize_hsl_restart_after_red_policy,
     normalize_hsl_signal_mode,
 )
@@ -139,8 +137,10 @@ _APPROVED_COINS_LOG_SYMBOL_MAX_LENGTH = 8
 def _format_approved_coins_symbol_for_log(value: Any) -> str:
     if not isinstance(value, str):
         return f"<{type(value).__name__}>"
-    symbol = value[:_APPROVED_COINS_LOG_SYMBOL_MAX_LENGTH].replace("\n", " ").replace(
-        "\r", " "
+    symbol = (
+        value[:_APPROVED_COINS_LOG_SYMBOL_MAX_LENGTH]
+        .replace("\n", " ")
+        .replace("\r", " ")
     )
     if len(value) > _APPROVED_COINS_LOG_SYMBOL_MAX_LENGTH:
         return f"{symbol}..."
@@ -213,18 +213,6 @@ def _format_config_change_message(
 
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
-HSL_TIER_RATIO_KEYS = ("yellow", "orange")
-HSL_PSIDE_KEYS = (
-    "hsl_enabled",
-    "hsl_red_threshold",
-    "hsl_ema_span_minutes",
-    "hsl_cooldown_minutes_after_red",
-    "hsl_no_restart_drawdown_threshold",
-    "hsl_restart_after_red_policy",
-    "hsl_orange_tier_mode",
-    "hsl_panic_close_order_type",
-    "hsl_tier_ratios",
-)
 FIELD_RUNTIME_RULES = {
     "backtest.offline": {
         "owner": "backtest",
@@ -374,24 +362,6 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.hsl_accept_incomplete_history": {
-        "owner": "live",
-        "consumed_by": {"live"},
-        "cli_exposed_on": {"live"},
-        "help_group": {
-            "live": "Behavior",
-        },
-    },
-    "live.hsl_engine": {
-        "owner": "live",
-        "consumed_by": {"live", "backtest", "optimize"},
-        "cli_exposed_on": {"live", "backtest", "optimize"},
-        "help_group": {
-            "live": "Behavior",
-            "backtest": "Backtest Runtime",
-            "optimize": "Backtest Runtime",
-        },
-    },
     "live.hsl_signal_mode": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -420,36 +390,6 @@ OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
         "metavar": "Y/N",
         "commands": {"optimize"},
         "help": "Override bot.short.hsl.enabled for this optimize run.",
-    },
-    "bot.long.hsl.orange_tier_mode": {
-        "visible": ["--bot.long.hsl.orange_tier_mode"],
-        "hidden": ["--bot.long.hsl_orange_tier_mode", "--bot_long_hsl_orange_tier_mode"],
-        "type": str,
-        "metavar": "VALUE",
-        "commands": {"optimize"},
-        "choices": [
-            "manual",
-            "panic",
-            "graceful_stop",
-            "tp_only",
-            "tp_only_with_active_entry_cancellation",
-        ],
-        "help": "Override bot.long.hsl.orange_tier_mode for this optimize run.",
-    },
-    "bot.short.hsl.orange_tier_mode": {
-        "visible": ["--bot.short.hsl.orange_tier_mode"],
-        "hidden": ["--bot.short.hsl_orange_tier_mode", "--bot_short_hsl_orange_tier_mode"],
-        "type": str,
-        "metavar": "VALUE",
-        "commands": {"optimize"},
-        "choices": [
-            "manual",
-            "panic",
-            "graceful_stop",
-            "tp_only",
-            "tp_only_with_active_entry_cancellation",
-        ],
-        "help": "Override bot.short.hsl.orange_tier_mode for this optimize run.",
     },
     "bot.long.hsl.panic_close_order_type": {
         "visible": ["--bot.long.hsl.panic_close_order_type"],
@@ -832,31 +772,35 @@ def clean_config(config: dict) -> dict:
     Return a sanitized config aligned with the template structure, stripped of helper keys,
     with dictionaries sorted recursively.
     """
-    from config.hsl_revised import FIELDS, engine, normalization_template
+    from config.hsl import FIELDS, normalization_template
     from config.migrations.gpu_screening import migrate_gpu_screening
 
     source = config or {}
     optimize_section = source.get("optimize")
-    legacy_gpu = optimize_section.get("gpu") if isinstance(optimize_section, dict) else None
+    legacy_gpu = (
+        optimize_section.get("gpu") if isinstance(optimize_section, dict) else None
+    )
     if isinstance(legacy_gpu, dict) and "successive_halving" in legacy_gpu:
         source = deepcopy(source)
         migrate_gpu_screening(source)
     template = normalization_template(get_template_config(), source)
-    if engine(source) == "revised" and "hsl" in source.get("bot", {}):
+    if "hsl" in source.get("bot", {}):
         portfolio = source["bot"]["hsl"]
         if not isinstance(portfolio, dict):
             raise TypeError("bot.hsl must be a mapping")
         # Preserve only explicitly supplied portfolio fields. Cleaning/export is
         # not authorization to hydrate a missing unified policy or restart choice.
         template["bot"]["hsl"] = {key: None for key in FIELDS if key in portfolio}
-    if engine(source) == "revised" and "hsl" in source.get("optimize", {}).get("bounds", {}):
+    if "hsl" in source.get("optimize", {}).get("bounds", {}):
         from config.optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY
 
         bounds = source["optimize"]["bounds"]["hsl"]
         if not isinstance(bounds, dict):
             raise TypeError("optimize.bounds.hsl must be a mapping")
         template["optimize"]["bounds"]["hsl"] = {
-            key: None for key in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"] if key in bounds
+            key: None
+            for key in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"]
+            if key in bounds
         }
     cleaned = _clean_with_template(template, source)
     prune_inactive_strategy_subtrees(cleaned)
@@ -1259,7 +1203,10 @@ RESERVED_CLI_ARGS = {
     },
     "live.fee_conversion_max_age_ms": {
         "visible": ["--fee-conversion-max-age-ms"],
-        "hidden": ["--live.fee_conversion_max_age_ms", "--live_fee_conversion_max_age_ms"],
+        "hidden": [
+            "--live.fee_conversion_max_age_ms",
+            "--live_fee_conversion_max_age_ms",
+        ],
         "type": int,
         "metavar": "INT",
         "commands": {"live"},
@@ -1278,34 +1225,6 @@ RESERVED_CLI_ARGS = {
             "optimize": "Backtest Runtime",
         },
         "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
-    },
-    "live.hsl_accept_incomplete_history": {
-        "visible": ["--hsl-accept-incomplete-history"],
-        "hidden": [
-            "--live.hsl_accept_incomplete_history",
-            "--live_hsl_accept_incomplete_history",
-        ],
-        "action": "store_true",
-        "default": None,
-        "help": (
-            "DANGEROUS per-run override: start despite incomplete HSL fill-history "
-            "evidence (panic/cooldown/no-restart may be wrong). Per-invocation only; "
-            "values persisted in config files are ignored."
-        ),
-    },
-    "live.hsl_engine": {
-        "visible": ["--hsl-engine"],
-        "hidden": ["--live.hsl_engine", "--live_hsl_engine"],
-        "type": str,
-        "metavar": "ENGINE",
-        "choices": ("legacy", "revised"),
-        "commands": {"live", "backtest", "optimize"},
-        "group": {
-            "live": "Behavior",
-            "backtest": "Backtest Runtime",
-            "optimize": "Backtest Runtime",
-        },
-        "help": "HSL implementation: legacy or revised. Defaults to the config value (legacy when omitted).",
     },
     "live.hsl_signal_mode": {
         "visible": ["--hsl-signal-mode"],
@@ -1771,24 +1690,9 @@ for _pside in ("long", "short"):
                 f"Minutes to wait after {_pside} HSL RED is flattened before "
                 "restart is allowed."
             ),
-            f"bot.{_pside}.hsl.no_restart_drawdown_threshold": (
-                f"Terminal {_pside} HSL drawdown threshold. Values below "
-                "red_threshold are clamped up to red_threshold."
-            ),
             f"bot.{_pside}.hsl.restart_after_red_policy": (
                 f"Restart policy after {_pside} HSL RED. Allowed values: "
-                "always, threshold, or never."
-            ),
-            f"bot.{_pside}.hsl.tier_ratios.yellow": (
-                f"Multiplier of red_threshold used for the {_pside} YELLOW HSL tier."
-            ),
-            f"bot.{_pside}.hsl.tier_ratios.orange": (
-                f"Multiplier of red_threshold used for the {_pside} ORANGE HSL tier."
-            ),
-            f"bot.{_pside}.hsl.orange_tier_mode": (
-                "Allowed values: graceful_stop or "
-                "tp_only_with_active_entry_cancellation. Controls ORANGE-tier "
-                f"behavior for the {_pside} side."
+                "always or never."
             ),
             f"bot.{_pside}.hsl.panic_close_order_type": (
                 "Allowed values: limit or market. market uses "
@@ -2243,7 +2147,9 @@ def add_arguments_recursively(
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
             elif full_name == "optimize.gpu.screening.scenarios":
                 type_ = parse_screening_scenarios
-                appendix = "Comma-separated labels or JSON array; [] disables screening."
+                appendix = (
+                    "Comma-separated labels or JSON array; [] disables screening."
+                )
             elif isinstance(value, list) and "bounds" not in full_name:
                 type_ = comma_separated_values
             elif value is None:
@@ -2371,9 +2277,14 @@ def update_config_with_args(
 ):
     transform_root = config
     config = effective_config_payload(config)
-    from config.hsl_revised import validate_override_paths
-    supplied = {key: value for key, value in vars(args).items()
-                if value is not None and (key in allowed_keys if allowed_keys is not None else "." in key)}
+    from config.hsl import validate_override_paths
+
+    supplied = {
+        key: value
+        for key, value in vars(args).items()
+        if value is not None
+        and (key in allowed_keys if allowed_keys is not None else "." in key)
+    }
     validate_override_paths(config, supplied, allow_engine=True)
     changed_keys = []
     diffs = []

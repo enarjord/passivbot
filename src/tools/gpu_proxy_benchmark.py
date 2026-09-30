@@ -118,11 +118,7 @@ def _base_parameter_values() -> dict[str, float]:
         "hsl_red_threshold": 0.2,
         "hsl_ema_span_minutes": 60.0,
         "hsl_cooldown_minutes_after_red": 0.0,
-        "hsl_no_restart_drawdown_threshold": 1.0,
         "hsl_restart_policy": 1.0,
-        "hsl_tier_ratio_yellow": 0.5,
-        "hsl_tier_ratio_orange": 0.75,
-        "hsl_orange_graceful_stop": 0.0,
         "hsl_signal_mode": 0.0,
         "hsl_slot_count": 1.0,
         "wallet_exposure_limit": -1.0,
@@ -321,9 +317,7 @@ def _build_case(
                 long_enabled=True,
                 short_enabled=False,
                 hsl_enabled=hsl_enabled,
-                pnl_lookback_bars=(
-                    HSL_PNL_LOOKBACK_BARS if hsl_enabled else 0
-                ),
+                pnl_lookback_bars=(HSL_PNL_LOOKBACK_BARS if hsl_enabled else 0),
                 hsl_diagnostics_enabled=(
                     "hsl_diagnostics" in requested_metric_features
                 ),
@@ -410,23 +404,28 @@ def _build_case(
     tm_multicoin = name == "tm-multicoin-overhead"
     runner_cls = (
         MpsTrailingMartingaleMulticoinRunner
-        if tm_multicoin else MpsEmaAnchorMulticoinRunner
+        if tm_multicoin
+        else MpsEmaAnchorMulticoinRunner
     )
     param_keys = (
         TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-        if tm_multicoin else EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if tm_multicoin
+        else EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     )
     runner = runner_cls(
         runs[0],
         data,
         side="long",
         coin_overrides=overrides,
-        **({"max_dispatch_candidate_bars": MAX_DISPATCH_CANDIDATE_BARS}
-           if tm_multicoin else {}),
+        **(
+            {"max_dispatch_candidate_bars": MAX_DISPATCH_CANDIDATE_BARS}
+            if tm_multicoin
+            else {}
+        ),
     )
     matrix = _parameter_matrix(param_keys, candidates, seed)
     proxy = MpsMulticoinProxy.__new__(MpsMulticoinProxy)
-    proxy.hsl_engine = "legacy"
+
     proxy.batch_size = candidates
     proxy.dispatch_batch_size = dispatch_batch_size
     proxy.interrupt_check = lambda: None
@@ -485,10 +484,7 @@ def _run_once(proxy, candidates) -> dict:
         batch_size = max(profile["actual_dispatch_batch_sizes"], default=0)
         dispatch_count = int(profile["dispatch_count"])
         dispatch_chunk_wall_seconds_max = max(
-            (
-                float(value)
-                for value in profile.get("dispatch_chunk_wall_seconds", ())
-            ),
+            (float(value) for value in profile.get("dispatch_chunk_wall_seconds", ())),
             default=0.0,
         )
     else:
@@ -570,12 +566,8 @@ def run_benchmark_case(
                 candidates * bars * coin_count * side_count,
             )
         ),
-        "hsl_pnl_lookback_bars": int(
-            getattr(runner, "pnl_lookback_bars", 0)
-        ),
-        "hsl_signal_mode": float(
-            candidate_dicts[0].get("long_hsl_signal_mode", 0.0)
-        ),
+        "hsl_pnl_lookback_bars": int(getattr(runner, "pnl_lookback_bars", 0)),
+        "hsl_signal_mode": float(candidate_dicts[0].get("long_hsl_signal_mode", 0.0)),
         "recursive_close_ladder_candidate_count": (
             _recursive_close_ladder_candidate_count(candidate_dicts)
         ),

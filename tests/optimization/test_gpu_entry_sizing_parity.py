@@ -19,7 +19,6 @@ def _fixture(side, coin_count, entry_kind):
         strategy_kind="trailing_martingale",
         max_warmup_minutes=1,
         market_orders_allowed=False,
-        hsl_engine="legacy",
         approved_coins={"long": coins, "short": coins},
     )
     config["backtest"].update(
@@ -76,10 +75,17 @@ def _fixture(side, coin_count, entry_kind):
     btc = np.full(count, 50_000.0)
     mss = {
         coin: dict(
-            qty_step=0.001, price_step=1.0, min_qty=0.001,
+            qty_step=0.001,
+            price_step=1.0,
+            min_qty=0.001,
             min_cost=100.0 if entry_kind == "minimum" else 0.0,
-            c_mult=1.0, maker=0.0, taker=0.0, exchange="bybit",
-            first_valid_index=0, last_valid_index=count - 1, warmup_minutes=1,
+            c_mult=1.0,
+            maker=0.0,
+            taker=0.0,
+            exchange="bybit",
+            first_valid_index=0,
+            last_valid_index=count - 1,
+            warmup_minutes=1,
         )
         for coin in coins
     }
@@ -95,8 +101,14 @@ def _evaluate(side, inputs):
     coin_count = candles.shape[1]
     cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
     proxy = cls(
-        config=config, hlcvs=candles, mss=mss, btc=btc, timestamps=timestamps,
-        exchange="bybit", batch_size=1, needed_metrics={"adg_strategy_eq"},
+        config=config,
+        hlcvs=candles,
+        mss=mss,
+        btc=btc,
+        timestamps=timestamps,
+        exchange="bybit",
+        batch_size=1,
+        needed_metrics={"adg_strategy_eq"},
     )
     outputs = []
     runner = proxy.runner if coin_count == 1 else proxy.runners[side]
@@ -140,8 +152,10 @@ def test_flat_selection_tracks_readiness_without_fills(side):
         volume_drop_pct=0.0,
     )
     bot["strategy"]["trailing_martingale"]["entry"].update(
-        ema_gate_mode="all", initial_ema_dist=0.1,
-        ema_span_0=1000.0, ema_span_1=1000.0,
+        ema_gate_mode="all",
+        initial_ema_dist=0.1,
+        ema_span_0=1000.0,
+        ema_span_1=1000.0,
     )
     # Both initial orders are away from the touch. ETH then becomes more ready
     # without a fill or eligibility change, and must replace the flat incumbent.

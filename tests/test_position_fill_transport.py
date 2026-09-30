@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 import pytest
-from live import position_fill_sync as syncmod, hsl_revised_live, executor
+from live import position_fill_sync as syncmod, hsl_live, executor
 from ccxt.async_support.base.exchange import Exchange
 from exchanges.fake import FakeCCXTClient
 from test_fake_exchange import _scenario
@@ -12,9 +12,8 @@ from test_fake_exchange import _scenario
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["create", "cancel"])
 @pytest.mark.parametrize("transport", ["ccxt", "fake", "bitunix"])
-@pytest.mark.parametrize("engine", ["legacy", "revised"])
 async def test_change_during_connector_queue_defers_at_transport(
-    action, transport, engine, monkeypatch
+    action, transport, monkeypatch
 ):
     key = ("BTC/USDT:USDT", "long")
     sync = syncmod.PositionFillSync(lambda: 0.0)
@@ -76,14 +75,11 @@ async def test_change_during_connector_queue_defers_at_transport(
                 )
             return await client.cancel_order(existing["id"], key[0])
 
-    bot = SimpleNamespace(
-        cca=client, _position_fill_sync=sync, config={"live": {"hsl_engine": engine}}
-    )
+    bot = SimpleNamespace(cca=client, _position_fill_sync=sync, config={"live": {}})
 
-    if engine == "revised":
-        owner = SimpleNamespace(_write_lock=asyncio.Lock(), admit=lambda order: True)
-        monkeypatch.setattr(hsl_revised_live, "owner", lambda bot: owner)
-        bot._request_authoritative_confirmation = lambda scopes: None
+    owner = SimpleNamespace(_write_lock=asyncio.Lock(), admit=lambda order: True)
+    monkeypatch.setattr(hsl_live, "owner", lambda bot: owner)
+    bot._request_authoritative_confirmation = lambda scopes: None
     ownership, cancellations, events = [], [], []
     bot.add_to_recent_order_cancellations = cancellations.append
     bot.log_order_action = lambda *a, **kw: None
@@ -97,7 +93,7 @@ async def test_change_during_connector_queue_defers_at_transport(
     )
     monkeypatch.setattr(executor, "_pb_attr", lambda name: callbacks)
 
-    @hsl_revised_live.connector_write(action)
+    @hsl_live.connector_write(action)
     async def write(bot, order):
         if action == "create":
             executor.record_create_connector_admission(bot, order)
@@ -140,7 +136,7 @@ async def test_fake_runner_settles_without_waiting_on_frozen_market_clock():
     calls = []
 
     class Bot:
-        config = {"live": {"hsl_engine": "legacy"}}
+        config = {"live": {}}
         cca = FakeCCXTClient(_scenario(), quote="USDT")
 
         async def update_pnls(self, **kwargs):

@@ -9,6 +9,8 @@ or defaults. For current capabilities and upgrade requirements, use the changelo
 [release status](releases.md). This is an archived ledger, not a published release or an active
 place to append new changes.
 
+Historical HSL implementation details are omitted; see the [current HSL guide](equity_hard_stop_loss.md).
+
 ## Detailed entries (newest first)
 
 - GPU optimization uses bounded temporal replay for long-history, single-coin Trailing Martingale
@@ -19,13 +21,6 @@ place to append new changes.
   after checkpoint resume, avoiding duplicate replay while preserving exact validation. Small
   two-sided MPS batches use unchunked replay when they fit the dispatch work limit.
 
-- Risk-input recovery now stops after `live.risk_input_max_attempts` failed attempts (default 10)
-  per recovery episode, without entering the full-bot restart loop. Each failed attempt logs its
-  count, limit, safe balance diagnostics, and retry delay; the first and final failures include
-  bounded tracebacks. Changing failure reasons or passing an early check does not renew the budget.
-  Ordinary trading resumes after successful recovery; valid HSL protection remains available while
-  waiting. Invalid balances are never substituted and required history is never discarded.
-
 - Trailing-martingale price EMA spans now live at
   `bot.<side>.strategy.trailing_martingale.entry.ema_span_0/1` (schema v8.4.0).
   Existing configs, bounds, coin files/inline overrides, and scenario paths migrate without
@@ -34,11 +29,6 @@ place to append new changes.
   these spans; coupled unstuck search, CPU/GPU execution, and warmup use the new paths.
   Shared volatility spans and other strategies keep their existing locations.
 
-- Coin HSL no longer clears live protection or repeatedly reconstructs history when a delayed
-  ordinary flatten falls before the bounded replay window. Successful empty-window replays now
-  establish the proven episode boundary before calculating current risk, preventing discarded
-  losses from triggering RED while retaining re-entry fees (including validated same-millisecond
-  re-entries) and required cooldown/no-restart history.
 - Add `couple_unstuck_ema_spans` to `optimize.enable_overrides` to search strategy and unstuck
   EMA spans together on CPU or Apple MPS, including effective coin/scenario strategy overrides.
   Coupled search omits redundant unstuck span genes and saves explicit horizons for ordinary
@@ -176,10 +166,6 @@ place to append new changes.
 - The monitor relay rejects foreign or malformed browser WebSocket origins before reading or
   sending account snapshots, while preserving the dashboard and originless native clients.
 
-- Wrapped config documents now strip persisted `hsl_accept_incomplete_history` overrides before
-  normalization and apply CLI overrides to the wrapped payload, so the HSL coverage waiver remains
-  an explicit per-run CLI choice after reload.
-
 - Live order creation now rechecks account invalidation after exchange configuration and quote
   refreshes and immediately before each connector call, preventing orders based on a superseded
   plan when a private fill update arrives. Partial-fill updates also invalidate account state when
@@ -189,23 +175,6 @@ place to append new changes.
   actual balance into their equity-versus-balance calculations, preventing open losing positions
   from receiving artificially favorable scores. Equity peak-recovery metrics now include an
   unrecovered drawdown through the final sample.
-
-- Equity Hard Stop Loss now resets RED-free episodes at the fill that flattens the configured
-  coin, position-side, or unified scope, including a re-entry in the same minute. Live replay,
-  exact backtests, and Apple MPS screening retain closing PnL and fees before resetting episode
-  drawdown, while preserving RED-triggered cooldowns and persistent no-restart limits. Closing
-  fills that first trigger RED finalize before same-step re-entry. Ambiguous required episode
-  evidence defers startup replay and ordinary planning while already-latched RED supervision and
-  panic protection for active cooldown positions remain available. Resting cooldown entries are
-  cancelled according to the configured policy, preserving orders after a proven manual-policy
-  intervention and graceful-stop adds to held positions. Terminal no-restart scopes also cancel
-  resting entries. Normal-policy restart overrides and cooldown expiry retain the new episode's
-  baseline and entry fees before replaying later exact boundaries; live and restart paths retain
-  losses incurred before the next observation. Proven ordinary RED closes and panic closes follow
-  the same restart rules, including proven same-millisecond interventions, with terminal no-restart
-  protection taking precedence. Coin replay uses the account balance at each boundary, excluding
-  later fills and fees on other symbols. Offline fake-live
-  scenarios retain complete fill history when their simulated dates differ from wall time.
 
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the
@@ -239,16 +208,6 @@ place to append new changes.
   reducer allocations while preserving the ordinary close ladder. The deterministic GPU benchmark
   adds paired static-close and recursive-close cases so this cost remains reproducible and visible.
 
-- Apple M3-family MPS optimization now auto-selects a 2304-candidate population and 4.5-billion
-  candidate-bar dispatch envelope for the proven lean one-sided Trailing Martingale kernel,
-  restoring roughly 110–117 proxy candidates/second in the long-history benchmark while keeping
-  command buffers near 20 seconds. Other Apple Silicon families plus coin-overridden, HSL,
-  multicoin, suite, market-order, reducer, recursive-mode, and active-volatility kernels retain the
-  1-billion safety envelope. Runs requesting opt-in proxy metric features, including BTC analysis,
-  entry intervals, recovery distributions, equity-balance divergence, and HSL diagnostics, also
-  retain the 1-billion envelope. Set `optimize.gpu.auto_lean_parallelism` to `false`, or set any
-  GPU sizing value explicitly, to disable the automatic selection.
-
 - Apple MPS optimization now defaults to a 1-billion candidate-bar dispatch envelope instead of
   500 million, approximately doubling per-dispatch parallelism on long one-sided histories.
   `optimize.gpu.max_dispatch_candidate_bars` may restore the former `500000000` conservative
@@ -266,15 +225,6 @@ place to append new changes.
   most recent portion of the configured date range, with the normal indicator warmup immediately
   preceding each scoring window. The final rung remains the full configured history. Checkpoint
   identity distinguishes these recent-suffix semantics from the former historical-prefix behavior.
-- Apple MPS single-coin `coin`-mode HSL screening now retains up to 8,192 realized-PnL event
-  candles in the finite lookback window and coalesces all same-candle entry fees and close PnL.
-  High-cadence candidates with more than 2,048 valid close events no longer receive an artificial
-  early-stop penalty from fill multiplicity crossing the old capacity, which could poison
-  proxy/exact drift evidence;
-  overflow remains bounded and fail closed. The effective ring capacity is part of checkpoint
-  identity, so finite-lookback coin-HSL checkpoints from the old capacity cannot mix stale proxy
-  evidence with new evaluations. Exact Rust validation, CPU optimization, backtests, and live
-  behavior are unchanged.
 - Apple MPS single-coin Trailing Martingale screening now compiles out the 1-minute and 1-hour
   volatility EMA state, candle-range loads, and volatility-weight arithmetic when every active
   candidate in a dispatch uses zero volatility weights for entry and close thresholds and
@@ -290,42 +240,9 @@ place to append new changes.
   Rust validation and proxy/exact drift evidence; CPU optimization, backtests, live behavior, and
   ordinary GPU runs are unchanged.
 
-- Apple MPS single-coin Trailing Martingale screening now selects dispatch-proven Metal variants
-  that compile out recursive entry/close grids when every active candidate uses positive
-  retracement, and compile out WEL/TWEL enforcers plus auto-unstuck when every active candidate has
-  those reducers disabled. Ordinary market execution and the realized-loss gate are likewise
-  removed only when their fixed run settings disable them. Mixed or enabled-feature dispatches
-  keep the full kernel. HSL configured only on an exposure-disabled side no longer promotes the
-  active side to an HSL kernel. Exact Rust validation remains unchanged and authoritative.
-
 - The Apple MPS optimizer now defaults to a 1024-candidate NSGA-II population instead of 4096,
   allowing long-history runs to reach exact Rust validation four times sooner. Explicit population
   sizes and the independent 4096-candidate dispatch-batch upper bound remain unchanged.
-
-- Apple MPS single-coin Trailing Martingale optimization now compiles dedicated long-only and
-  short-only kernels while HSL is enabled, allowing Metal to eliminate the inactive strategy side
-  and use a one-controller HSL update. HSL lifecycle, drawdown, tail, and recovery accumulators are
-  compiled only when requested by a proxy objective or limit; controller behavior remains active
-  when those diagnostics are omitted. The existing dispatch safety envelope remains unchanged.
-  Dual-side, EMA Anchor, multi-coin, HSL-disabled, and CPU paths retain their existing kernel and
-  dispatch contracts, and exact Rust validation remains authoritative.
-
-- Long-running Apple MPS proxy generations now emit rate-limited dispatch progress with elapsed
-  time and ETA after 30 seconds, while opt-in profiles record each dispatch chunk's wall time. The
-  deterministic offline benchmark adds a single-side Trailing Martingale case with HSL enabled so
-  HSL-heavy dispatch sizing and kernel changes can be measured directly.
-
-- The deterministic Apple MPS HSL benchmark now matches the production proxy feature contract:
-  it compiles HSL-only diagnostics only when requested and exercises the default 30-day finite
-  coin-PnL lookback in `coin` signal mode, recording that lookback and mode in each report. This
-  prevents benchmark-only HSL work from overstating or bypassing normal optimizer cost; optimizer
-  behavior is unchanged.
-
-- Apple MPS EMA Anchor optimization now compiles a one-side kernel when HSL is disabled, allowing
-  Metal to eliminate the inactive side and HSL state from the hot candle loop. Dual-side and HSL
-  runs keep the generic kernel, and exact Rust validation remains authoritative. The offline GPU
-  benchmark also accepts an independent dispatch batch size so saturation studies can hold the
-  candidate matrix constant while varying only dispatch chunking.
 
 - Apple MPS optimization now provides disabled-by-default structured profiling for candidate
   materialization and packing, buffer upload/clearing, cold and warm shader-library work, kernel
@@ -335,15 +252,6 @@ place to append new changes.
   `passivbot tool gpu-proxy-benchmark` harness covers long-history EMA Anchor and Trailing
   Martingale, short-history multicoin, and coin-override workloads with fixed seeds, cold timing,
   and warm p50 throughput. Profiling remains opt-in and exact Rust results remain authoritative.
-
-- Apple MPS optimization now keeps exact-analysis diagnostics separate from proxy objectives and
-  proxy-side limits. Raw gain/PnL, positive equity-balance divergence, completed-only account
-  recovery, raw or split fill activity, raw HSL event/absolute-loss metrics, legacy recovery/profit
-  aliases, and the self-relative high-exposure duration family remain available from exact Rust
-  backtests but fail closed when requested as GPU optimization signals. Removing high-exposure proxy scoring
-  also removes its second complete Metal strategy replay, so every valid EMA Anchor and Trailing
-  Martingale proxy evaluation dispatches its strategy kernel once. CPU optimizers, backtesting, and
-  live operation are unchanged.
 
 - GPU optimization now runs an Apple MPS capability preflight before loading historical data.
   Missing MPS support, unsupported strategies, positive `backtest.btc_collateral_cap`, and
@@ -404,14 +312,6 @@ place to append new changes.
   identity only when a BTC metric is requested. Positive BTC collateral remains fail-closed
   pending its separate simulation slice.
 
-- Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports both wallet-
-  exposure denominator modes. With `backtest.dynamic_wel_by_tradability: false`, Metal divides
-  total wallet exposure by each side's configured `n_positions`, matching exact Rust across
-  long-only, short-only, hedge-mode, one-way, HSL, exposure repair, coin overrides, and compatible
-  suite scenarios. The existing dynamic mode continues to use its grow-only observed-tradability
-  denominator, while current Forager selection remains based on currently tradable coins in both
-  modes.
-
 - Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now supports the same
   modeled static `coin_overrides` leaves as multi-coin runs. Static values retain exact Rust's
   last-write precedence over optimizer candidates for long-only, short-only, hedge-mode, and
@@ -419,93 +319,15 @@ place to append new changes.
   entry-cooldown payload key, preserving configured and overridden cooldowns in GPU screening.
   GPU checkpoint identity retains the resolved float64 override values before Metal packing.
 
-- Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports
-  `coin_overrides.<coin>.live.forced_mode_<side>: normal` for every enabled side. Long-only,
-  short-only, and fused long+short kernels reserve eligible forced-normal symbols before Forager
-  ranking and expand the active-set cap when forced symbols outnumber configured positions, while
-  retaining exact Rust's separately configured wallet-exposure denominator, one-way initial-entry
-  exclusion, minimum-effective-cost gate, and per-coin HSL eligibility.
-
-- Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now continues through
-  declared periods where no prepared coin is valid, including gaps between disjoint coin histories
-  and tails after every coin has ended. Long-only, short-only, and fused long+short kernels keep
-  exact Rust's balance-only equity, HSL, exposure, restart, daily, recovery, and elapsed-time
-  accounting after tracking begins, but do not activate tracking from tradability seen only before
-  the requested-start guard. Validity still blocks fills, orders, and unrealized PnL. A timestep
-  covered by a declared valid range whose raw H/L/C values are all NaN is likewise treated
-  as non-tradable balance-only time. Single-coin kernels now apply the same rule to these internal
-  gaps, and exact Rust now classifies the same row as non-tradable without triggering delist panic
-  handling during mandatory validation. Only the GPU optimizer operation explicitly admits these
-  internal gaps; retaining `optimize.backend: gpu` in a config does not relax normal backtest,
-  suite, download, or reproduction validation. Coarser GPU candle intervals ignore complete NaN
-  minutes inside mixed buckets, preserve all-gap buckets as non-tradable gaps, and retain any
-  malformed non-gap price as a fail-closed aggregate. Gap rows must be strictly internal: the
-  first-valid candle and any forced-delist endpoint remain valid finite prices, with the endpoint
-  cutoff scaled to the prepared candle interval. Directional Metal kernels clear pending orders at
-  a supported gap so they cannot fill stale pre-gap intents afterward. This enables
-  account-equity and strategy-equity recovery
-  metrics on such histories. Finite
-  non-positive, partially invalid, or float32-unrepresentable prices remain fail-closed for GPU
-  screening; HSL-enabled coins still require contiguous candles, and a forced-delist endpoint must
-  remain representable because it supplies an executable close.
-
 - Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now mirrors exact Rust's
   forced-delist close when at least 1,400 prepared candles follow a coin's final valid candle,
   including adverse market slippage, directional price rounding, taker fees, panic-loss and fill
   accounting, position-duration finalization, pending-order clearing, and balance-only tail
   accounting. Multi-coin forced delists are covered by the expanded support below.
 
-- Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now mirrors per-coin exact
-  Rust forced delists for long-only, short-only, and fused long+short runs while another coin keeps
-  the prepared timeline alive. Metal preserves ordinary-fill and order-generation chronology,
-  closes long before short using adverse market slippage, directional price rounding, and taker
-  fees, records panic-loss, realized-PnL, fill, duration, and HSL equity effects, and clears both
-  sides' pending orders for the delisted coin. Forced-delist final candles that cannot be represented
-  as finite positive float32 H/L/C fail before dispatch. Exact Rust remains authoritative.
-  All-coins-ended tails and declared all-invalid gaps are covered by the expanded support above.
-
-- Apple MPS HSL optimization now supports per-side
-  `drawdown_worst_mean_1pct_strategy_eq_{long,short}` scoring and limits for EMA Anchor and
-  Trailing Martingale across single-coin, one-sided multi-coin, and fused dual-side multi-coin
-  topologies. The opt-in Metal proxy reduces full-resolution controller drawdowns to one worst
-  sample per observed day, then applies a bounded logarithmic tail histogram; exact Rust
-  retains each controller sample's timestamp for matching daily reduction, while exact validation
-  and rolling drift gates remain authoritative.
-
-- Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports staggered
-  ordinary invalid candle tails when at least one prepared coin remains valid through the endpoint,
-  and at least one candle whose packed float32 H/L/C values remain finite and positive inside the
-  declared valid ranges covers every timestep after coverage begins. Tailed coins become
-  non-tradable, contribute no unrealized PnL, and cannot leave stale orders blocking HSL, while
-  portfolio and coin HSL controllers continue through the surviving timeline. Forced-delist tails
-  are covered by the expanded support above, as are all-coins-ended tails and declared all-invalid
-  gaps.
-
 - Fixed live bot startup on Windows without symlink privileges by writing a visible pointer to the
   timestamped run log instead of failing while creating the stable log alias. Built-in monitor
   tooling resolves that pointer so the stable per-user path remains tail-able.
-
-- Apple MPS single-coin HSL optimization now continues hard-stop sampling, rolling-PnL expiry,
-  tier accounting, and restart checks through supported invalid candle tails. Tail candles remain
-  non-tradable and cannot satisfy stale blocking orders. Multi-coin all-coins-ended tails are
-  covered by the expanded support above.
-
-- Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now accepts invalid
-  candles after the coin's final valid candle when HSL is disabled. Metal keeps shorter tails
-  non-tradable and records balance-only account equity like exact Rust; the forced-delist boundary
-  and multi-coin invalid-time behavior are covered by the expanded support above.
-
-- Apple MPS multi-coin EMA Anchor optimization now supports any positive integer
-  `backtest.candle_interval_minutes` for long-only, short-only, and fused long+short runs. Global
-  and static per-coin minute spans, Forager spans, HSL decay, and cooldowns are converted to
-  per-candle equivalents, while hourly windows and elapsed-day accounting retain exact Rust time
-  semantics.
-
-- Apple MPS multi-coin Trailing Martingale optimization now supports any positive integer
-  `backtest.candle_interval_minutes` for long-only, short-only, and fused long+short runs. Global
-  and static per-coin minute spans, Forager spans, HSL decay, and cooldowns are converted to
-  per-candle equivalents, while hourly windows and elapsed-day accounting retain exact Rust time
-  semantics.
 
 - Hardened Bitunix live support: wallet balance now remains realized and stable across unrealized
   PnL changes, pending-order snapshots retain code-like venue transition statuses until
@@ -516,11 +338,6 @@ place to append new changes.
 - Apple MPS single-coin optimization now matches exact Rust hourly volatility windows when an
   aggregated candle interval does not evenly divide an hour, retaining the boundary-crossing
   candle in the following hourly bucket instead of dropping it.
-
-- Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now supports any positive
-  integer `backtest.candle_interval_minutes`. Minute-denominated strategy EMA spans, HSL EMA decay,
-  and entry/HSL cooldowns are converted to per-candle equivalents for Metal while timestamp-based
-  metrics and exact Rust validation retain elapsed-time semantics.
 
 - Apple MPS multi-coin Trailing Martingale optimization now supports static per-coin
   `entry.ema_gate_mode` overrides. Initial entries and recursive reentries independently inherit
@@ -537,49 +354,6 @@ place to append new changes.
   fill-volume and account-equity day series, excluding ambiguous partial cutoff-day volume rather
   than admitting pre-cutoff fills, while exact Rust validation and rolling drift gates remain
   authoritative.
-
-- Added asymmetric long/short coin universes to non-suite dual-side Apple MPS multi-coin EMA
-  Anchor and Trailing Martingale optimization. The proxy now preserves exact payload `entry_eligible`
-  decisions as side-specific zero-exposure coin overrides, so Forager selection, dynamic wallet
-  exposure, HSL, auto-unstuck, and one-way arbitration exclude the same side-ineligible coins as
-  exact Rust without requiring matching long and short approved or ignored lists.
-
-- Added baseline multi-coin Trailing Martingale ordinary market execution to Apple MPS
-  optimization for long-only, short-only, fused long+short, hedge-mode, one-way, and compatible
-  suite runs, with recursive or trailing entry and close mode selected per candidate and coin.
-  Metal retains
-  generation-time market intent, executes promoted orders on the next valid candle with adverse
-  directional slippage and taker fees, applies executable-touch minimum sizing to short entries and
-  all closes, and prices the strict portfolio entry cap at the market touch. For recursive closes,
-  passive
-  next-candle reachability alone decides whether to emit only the next close or the immutable
-  recursive suffix; an emitted suffix promotes and minimum-sizes each merged group against its
-  generation market before aggregate position trimming. Recursive entries retain immutable
-  strategy sizing, require strict passive first-rung reachability before exposing their suffix,
-  classify every emitted rung against the generation market, and preserve positive-cooldown
-  single-entry staging. The portfolio entry gate globally orders first and recursive suffix rungs,
-  removes the farthest orders with exact deterministic ties, and may retain one minimum-valid
-  partial boundary strictly below the TWEL cap. Static coin overrides may select trailing or
-  recursive entry and close mode independently. HSL and forager selection remain supported.
-  Position- and total-exposure repair may now promote to market execution, resize against the
-  executable-touch minimum before finalized reducer selection, and retain adverse slippage plus
-  taker fees. Auto-unstuck now follows the same contract: the one globally selected reducer may be
-  enabled by the side template or a static coin override, is resized at the executable touch while
-  preserving the independently generated ordinary recursive ladder, and fills with adverse
-  slippage and taker fees. Realized-loss gating now also composes with market execution: proxy
-  screening projects adverse slippage and taker fees for ordinary closes and protective reducers,
-  while exact Rust remains authoritative for the shared peak-balance allowance.
-
-- Added baseline multi-coin EMA Anchor ordinary market execution to Apple MPS optimization for
-  long-only, short-only, and fused long+short runs. The proxy retains generation-time entry and
-  ordinary-close intent, executes it on the next valid candle with adverse directional slippage
-  and taker fees, applies executable-touch minimum sizing, and prices total-exposure entry
-  allocation at the market touch. HSL, auto-unstuck, TWEL repair, static unstuck overrides, and
-  realized-loss gating may coexist with this path. Metal finalizes TWEL and unstuck candidates
-  against ordinary closes, ranks their executable quantities globally across symbols and sides,
-  advances only a rejected position to its fallback, and spends one shared loss allowance before
-  gating ordinary closes. These generation-time decisions include market slippage and taker fees
-  and remain attached to pending orders.
 
 - Added single-coin Trailing Martingale recursive-close market execution to Apple MPS
   optimization. Exact passive next-candle expansion remains authoritative: a market-only next
@@ -607,32 +381,15 @@ place to append new changes.
   nearest prefix ends at the first partially cropped portfolio-boundary rung. Entry optimizer
   bounds may cross the recursive/trailing mode boundary.
 
-- Extended single-coin Trailing Martingale ordinary market-order optimization on Apple MPS to
-  compatible HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, position- and
-  total-exposure repair, and realized-loss gating. Market-promoted reducers are resized at
-  executable touch before selection and aggregate allocation, and adverse slippage plus taker fees
-  participate in the conservative loss projection.
-
 - Added baseline ordinary market-order execution to Apple MPS optimization for single-coin
   Trailing Martingale, covering long, short, and dual-side near-touch trailing entries and closes,
   executable-touch minimum sizing, adverse slippage, and taker fees.
-
-- Extended single-coin EMA Anchor ordinary market-order optimization on Apple MPS to compatible
-  HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, total-exposure repair, and
-  realized-loss gating. Market-promoted closes are resized at executable touch before reducer
-  selection and aggregate/loss gating, with adverse slippage and taker fees included in projected
-  loss. Active HSL panic closes participate in reducer ordering without consuming shared loss
-  allowance, matching exact Rust's execution ordering.
 
 - Added baseline ordinary market-order execution to Apple MPS optimization for single-coin EMA
   Anchor, including near-touch promotion, next-candle adverse slippage, taker fees, executable-touch
   sizing, directional and one-way modes, and compatible suites. Auto-unstuck, exposure repair,
   realized-loss gating, and Trailing Martingale were added in later slices; baseline multi-coin
   EMA Anchor support is now also available under the restrictions described above.
-
-- Added Apple MPS suite scenario overrides for `live.hsl_signal_mode`. Coin, position-side, and
-  unified HSL signal topology may now vary by scenario when each effective scenario passes the
-  existing Metal topology and per-coin override checks.
 
 - Expanded Apple MPS suite scenario overrides to the already-modeled taker-fee, market-order
   slippage, minimum-effective-cost filtering, and PnL-lookback execution settings. Every effective
@@ -650,48 +407,10 @@ place to append new changes.
 - Added Apple MPS GPU optimizer support for dual-side multi-coin one-way mode in EMA Anchor and
   Trailing Martingale, with per-symbol initial-entry arbitration matching exact Rust.
 
-- Added global strategy-equity recovery-distribution scoring and limits to Apple MPS optimization
-  for EMA Anchor and Trailing Martingale across single-coin, one-sided multi-coin, and fused
-  shared-account dual-side multi-coin runs. Strategy kernels emit opt-in candidate-relative hourly
-  strategy-equity samples with mandatory initial and terminal/liquidation endpoints, and a bounded
-  Metal postprocessor applies Rust's strict
-  time-to-exceed, percentile, and worst-tail definitions for
-  `strategy_eq_recovery_days_{mean,median,p95,p99,mean_worst_5pct,mean_worst_1pct}`. Exact Rust
-  validation and rolling drift gates remain authoritative. Internal all-NaN H/L/C gaps
-  contribute balance-only samples, and a bounded single-coin coin-HSL rolling-PnL overflow emits a
-  conservative full-horizon recovery penalty. Independent dual-side multi-coin summaries remain
-  fail closed
-  because they cannot reconstruct one shared portfolio-equity curve.
-
-- Added raw per-side HSL strategy-equity worst-drawdown scoring and limits to Apple MPS
-  optimization for EMA Anchor and Trailing Martingale, across single-coin and multi-coin
-  topologies. The bounded peak-and-maximum state is compiled into Metal only when either the long
-  or short metric is requested; exact Rust validation and rolling drift gates remain authoritative.
-
-- Added mean-worst-1% EMA-smoothed HSL strategy-equity drawdown scoring and limits to Apple MPS
-  optimization for the account, long side, and short side. The Metal proxy uses an opt-in bounded
-  logarithmic histogram so normal GPU runs do not pay the per-candidate state cost; exact Rust
-  validation and rolling drift gates remain authoritative.
-
-- Added per-side HSL strategy-equity peak-recovery scoring and limits to Apple MPS optimization.
-  EMA Anchor and Trailing Martingale kernels now retain the longest strict time-to-exceed interval
-  for each long and short HSL controller, including an unrecovered tail through the backtest end,
-  and expose it in hours and days. Exact Rust validation remains authoritative.
-
 - Fixed Apple MPS optimization halting when a converged or single-objective proxy front repeats an
   already exact-validated candidate. The backend now revalidates that actual current-front member
   (or waits for its in-flight exact job) instead of relabeling an off-front candidate, preserving
   the proxy-front drift gate and exact Rust authority while allowing the search to continue.
-
-- Added worst EMA-smoothed HSL strategy-equity drawdown scoring and limits to Apple MPS
-  optimization for the account, long side, and short side. Metal retains each controller's
-  maximum across cooldown restarts and coin-mode controllers, then applies the same account-level
-  `max(long, short)` reduction as exact Rust. Exact Rust validation remains authoritative.
-
-- Accelerated HSL-disabled, one-sided single-coin Trailing Martingale optimization on Apple MPS
-  with Rust-owned long-only and short-only Metal variants. The backend selects these variants
-  automatically, logs the selected topology, and retains the generic kernel for dual-side or
-  HSL-enabled runs. Exact Rust validation and the existing drift gates remain authoritative.
 
 - Bounded Apple MPS proxy command buffers by candidate-candle workload so large populations and
   long histories cannot monopolize the shared display GPU in one Metal dispatch. The configured
@@ -711,83 +430,6 @@ place to append new changes.
   Martingale also supports its per-position WEL reducer and static coin overrides. Each directional
   surface computes its exact-Rust-style action set from the same pre-fill shared account snapshot;
   exact Rust validation and the existing drift gates remain authoritative.
-
-- Fixed finite `live.pnls_max_lookback_days` handling for single-coin `coin`-mode HSL on Apple
-  MPS. EMA Anchor and Trailing Martingale screening now expire realized-PnL fill events with the
-  same rolling-window rule as exact Rust instead of retaining an all-history peak; bounded GPU
-  scratch overflow fails the affected candidate closed, and exact Rust remains authoritative.
-
-- Added fused shared-account dual-side multi-coin Trailing Martingale screening to Apple MPS
-  optimization. Long and short candidates now run in one portfolio kernel for unified, pside,
-  and coin HSL, including shared event/tier metrics, directional PnL, coin overrides, forager
-  selection, and the existing TM entry/close behavior. Exact Rust remains authoritative.
-
-- Added fused shared-account dual-side multi-coin EMA Anchor screening to Apple MPS optimization.
-  Unified, pside, and coin HSL now run inside one portfolio kernel, including per-coin HSL
-  overrides and shared event/tier scoring metrics. Exact Rust remains authoritative.
-
-- Added dual-side single-coin `unified` HSL to Apple MPS optimization for EMA Anchor and
-  Trailing Martingale. Both Metal controllers now consume account-wide realized and unrealized
-  PnL and require positions and blocking orders on both sides to be flat before ending a RED
-  episode, matching exact Rust. Dual-side multi-coin `coin` and `unified` remain fail closed.
-
-- Fixed exact Rust backtests so `unified` HSL confirms the whole account is flat before ending a
-  RED episode. A position or blocking order on either side now prevents both unified controllers
-  from halting or beginning cooldown, matching the documented live HSL scope.
-
-- Added dual-side multi-coin `pside` HSL lifecycle and panic-loss scoring/limits to Apple MPS
-  optimization. The proxy now reduces directional episode counters, durations, drawdowns,
-  restarts, and absolute panic losses with the same aggregate formulas used by exact Rust, and
-  replays HSL summaries through the conservative combined liquidation cutoff. Exact Rust remains
-  authoritative. Account-normalized event losses and yellow/orange/RED time percentages remain
-  fail closed until the proxy owns shared event-level equity and minute-level tier state.
-
-- Added dual-side multi-coin HSL behavior to Apple MPS optimization for EMA Anchor and Trailing
-  Martingale in `pside` signal mode. Each directional Metal controller owns its exact pside
-  realized-plus-unrealized signal while the existing hedged portfolio reducer retains its
-  conservative shared-equity liquidation cutoff; exact Rust validation remains authoritative.
-  Dual-side multi-coin `coin` and `unified` modes, and dual-side multi-coin HSL scoring metrics,
-  remain fail closed until a fused account controller can model their shared state.
-
-- Added all ten canonical per-coin HSL setting overrides to one-sided multi-coin Apple MPS
-  optimization for EMA Anchor and Trailing Martingale in `coin` signal mode. Each Metal coin
-  controller now resolves its own enablement, thresholds, EMA span, cooldown, restart policy,
-  tier ratios, orange behavior, and limit/market panic execution. Compatible suites may also
-  supply scenario-local HSL coin overrides. Exact Rust validation remains authoritative;
-  per-coin HSL overrides outside this topology fail closed.
-
-- Added `coin` signal mode to one-sided multi-coin HSL Apple MPS optimization for EMA Anchor
-  and Trailing Martingale. Metal now maintains an independent HSL episode per coin, including
-  realized net PnL and fees, dynamic effective-slot scaling, warning/RED state, panic flattening,
-  halt/restart lifecycle, and per-episode metrics. Directional outputs aggregate the same way as
-  exact Rust: episode metrics are combined across coins while time-in-tier uses the worst active
-  coin tier once per minute. Exact Rust validation remains authoritative; dual-side multi-coin
-  `coin` mode remains fail closed.
-
-- Added market panic-close execution to one-sided multi-coin HSL Apple MPS optimization for EMA
-  Anchor and Trailing Martingale. The portfolio proxy now fills every panic close on the next
-  tradable bar using directionally quantized close-price slippage and each coin's taker fee,
-  matching the exact Rust backtest execution contract. Exact Rust validation remains
-  authoritative.
-
-- Added one-sided multi-coin HSL to Apple MPS optimization for EMA Anchor and Trailing
-  Martingale in `unified` and `pside` signal modes, including compatible suites. Each Metal
-  candidate now applies one shared-balance portfolio HSL controller across every coin on the
-  enabled side, including warning tiers, RED entry blocking, limit panic flattening, cooldown
-  restart, lifecycle metrics, and panic-loss metrics. Exact Rust validation remains authoritative;
-  dual-side multi-coin HSL is currently limited to `pside` behavior without HSL scoring metrics.
-
-- Added dual-side single-coin HSL to Apple MPS optimization for EMA Anchor and Trailing
-  Martingale in `coin` and `pside` signal modes, including compatible suites. Metal now tracks
-  realized net PnL independently for long and short while retaining shared account balance and
-  exact Rust validation. Dual-side `unified` HSL remains fail closed until its documented
-  account-wide flatten contract and exact-backtest finalization scope are reconciled. Dual-side
-  multi-coin HSL currently supports only `pside` behavior without HSL scoring metrics.
-
-- Consolidated the supported one-sided single-coin HSL Apple MPS screening behavior into one
-  Rust-owned Metal controller shared by EMA Anchor and Trailing Martingale. Signal modes now use
-  explicit unified, pside, and coin identities, with direct M3 trace conformance against the exact
-  Rust HSL runtime. That foundation did not itself expand GPU support.
 
 - Added directional close-fill PnL scoring and limits to Apple MPS optimization:
   `loss_profit_ratio_long`, `loss_profit_ratio_short`, `pnl_ratio_long_short`, and its
@@ -902,42 +544,6 @@ place to append new changes.
   to match Rust's `Fill.pnl` analysis contract. Dual-side multi-coin runs remain fail closed because
   independent directional totals cannot be truncated at a shared portfolio liquidation. Exact
   Rust validation and drift gates remain authoritative.
-
-- Added finite `live.pnls_max_lookback_days` support to the existing one-sided single-coin HSL
-  Apple MPS optimizer path. Metal deliberately retains an all-history candidate-local peak as a
-  conservative envelope over Rust's rolling peak, so it may trigger HSL early after an old peak
-  expires but cannot hide a drawdown for that reason. Exact Rust validation and drift gates remain
-  authoritative.
-
-- Added HSL market panic-close execution to the supported one-sided single-coin EMA Anchor and
-  Trailing Martingale Apple MPS optimizer path. The Metal proxy guarantees the persisted panic
-  order on the next valid bar, uses that bar's close with directionally adverse configured
-  slippage and price-step rounding, and charges the resolved taker fee. Resting-limit behavior is
-  unchanged, while exact Rust validation and drift gates remain authoritative.
-
-- Added resting-limit HSL panic-loss scoring and limit metrics to the supported one-sided
-  single-coin Apple MPS optimizer path: panic-close loss sum/max, per-episode loss drawdown
-  min/mean/max, and halt-to-restart equity loss. The proxy tags only HSL panic fills and retains
-  exact Rust validation and drift gates as authoritative. Trailing Martingale panic closes now
-  remain one exclusive full-position order and bypass the ordinary realized-loss gate, matching
-  Rust instead of being reinterpreted as recursive close-grid rungs. Directional proxy filtering
-  retains every HSL lifecycle and panic-loss accumulator; missing directional output and requests
-  for these metrics on multi-coin kernels fail closed instead of substituting zeros.
-
-- Added non-loss HSL lifecycle scoring and limit metrics to the supported one-sided single-coin
-  Apple MPS optimizer path: trigger/restart counts and yearly rates, warning-tier occupancy, halt
-  and flatten durations, trigger drawdown, and post-restart retriggers. Exact Rust validation and
-  drift gates remain authoritative; HSL strategy-equity time-series metrics remain fail closed.
-
-- Added the first HSL slice to Apple MPS optimization for one-sided single-coin EMA Anchor and
-  Trailing Martingale runs, in both long and short directions and compatible suites. The Metal
-  proxy models coin, pside, and unified drawdown signals; tunable RED threshold, EMA span, and
-  cooldown; yellow/orange entry suppression; RED latching; resting-limit panic flattening;
-  flat confirmation; positive-cooldown restart; zero-cooldown indefinite halt; cumulative
-  no-restart peak tracking; effective coin-slot scaling; and terminal no-restart. The initial
-  slice requires all-history PnL peaks and contiguous valid candles. Market panic execution,
-  finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, and HSL
-  strategy-equity time-series metrics remain fail closed.
 
 - Added auto-unstuck to Apple MPS EMA Anchor and Trailing Martingale optimization for single-coin
   long-only, short-only, dual-side hedge/one-way, and compatible suite runs, plus one-sided
@@ -1157,54 +763,6 @@ place to append new changes.
   validation, supports selecting the master input, and can optionally retain that input's
   backtest and optimizer sections for fixed-override fine-tuning. Full output with coin overrides
   remains unsupported by the GPU optimizer backend.
-- Add an experimental, purely additive Apple Silicon MPS optimizer backend for single-coin,
-  EMA-anchor and trailing-martingale searches in long-only, short-only, and long+short modes.
-  Single-side long-only or short-only multi-coin EMA-anchor searches are also supported for up to
-  64 coins with shared balance, per-coin market and indicator state, dynamic wallet-exposure
-  allocation, Forager
-  selection, searchable Forager parameters and position count, strict tick-boundary fills, and
-  compact unified-memory inputs guarded against excessive MPS allocation.
-  Large NSGA-II populations run through strategy-specific Rust-owned Metal screening programs and
-  feed feasible, diverse candidates into the unchanged exact Rust backtester; only exact results
-  reach the Pareto store, and independent broad-probe rank checks halt on proxy drift. Dual-side
-  screening preserves separate indicator/trailing/position state, a shared balance, Rust fill
-  ordering, and hedge/one-way initial-side semantics. Multi-coin selection deliberately omits
-  Forager score hysteresis and reselects on fills or effective position-count growth; exact Rust
-  validation and rolling drift gates remain authoritative for this screening approximation.
-  Recursive trailing-martingale entry and close ladders use immutable generation snapshots, merge
-  equal-price closes, and fill every strictly crossed rung in Rust's canonical order. Other
-  strategies, suites, multi-coin hedged or trailing-martingale runs, HSL, auto-unstuck,
-  collateral, minimum-effective-cost filtering, market-order execution, incomplete candle tails,
-  and unmodeled risk gates fail closed. Fused delta-form Metal
-  EMA updates reduce long-horizon float32 path drift. Optimizer-limit feasibility disagreements
-  feed aggregate, proxy-front, and broad-probe rolling constraint-agreement gates, retain exact
-  Rust as the only authoritative classification, and persist per-limit proxy/exact diagnostics.
-  Strict candle/order
-  crossing comparisons are precomputed as
-  integer price-tick boundaries, preventing float32 Metal prices from missing fills that exact Rust
-  sees just beyond a decimal tick. Candle-derived EMA touches use Rust-compatible directional ticks.
-  Trailing-martingale uses float64-derived directional ticks to choose the controlling raw/target
-  value before Metal float32 can collapse them, then mirrors Rust's directional entry and nearest-
-  tick close finalization. Raw-touch close minimum quantities are sized from the original float64
-  price before that finalization, including their ordering relative to an aligned quantity step
-  when float32 rounds both values together. Tick-aligned targets remain on their exchange tick,
-  and partial final validation batches scale their reserved broad probes proportionally. True proxy-front
-  membership is persisted independently from off-front probe eligibility, with the safety window
-  and exact budget sized for a one-member proxy front; a generation with no novel front candidate
-  fails closed instead of silently consuming that evidence budget. Resume also proves that its
-  recovered evidence plus remaining exact budget can still activate the mandatory proxy-front
-  gate, while truthful broad-probe scarcity remains admissible across restart and recovered probes
-  continue feeding their independent gates; exact worker completions are durably consumed in
-  submission order so that proof remains valid when workers finish out of order. Feasibility
-  disagreements are evaluated by the independent constraint-agreement gates and excluded from rank
-  correlation, preventing the same disagreement from being double-counted as arbitrary ordering of
-  otherwise exact near-ties. Window, exact-budget, and fresh/resumed suffix checks reserve enough
-  broad-probe capacity to retain eight rank-comparable samples whenever the current generations
-  contain that many truthful off-front candidates. When a many-objective generation has fewer
-  off-front candidates than requested, all available probes keep their true classification and
-  diverse true-front candidates fill the unused exact slots; allocation shortfalls and recovery are
-  logged instead of aborting the run. Existing CPU bot, backtest, and optimizer paths do not import
-  or require the optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable
@@ -1231,20 +789,6 @@ place to append new changes.
 - Normalize nested suite scenario override documents to leaf config paths while keeping dynamic
   `coin_overrides` mappings atomic, preventing partial `live` or `bot` overrides from replacing the
   complete section during optimizer evaluation.
-- Bound coin-mode HSL `always` restart reconstruction to its canonical fill-proven replay start.
-  Older sparse fills still seed exact balance and position state, but discarded closed episodes no
-  longer expand candle fetches, minute arrays, panic markers, or replay-event iteration;
-  ambiguous evidence and strict restart policies retain the full configured lookback.
-- Remove the persisted HSL replay cache and reconstruct every restart from authoritative fill/PnL
-  history, candles, exchange state, config, and current time. Compact/sparse replay remains the
-  performance path; obsolete replay-cache artifacts are ignored and no longer inspected by the
-  cache doctor.
-
-## Release-section correction
-
-The following change landed after the v8.1.0 tag but was previously filed under that release.
-It belongs to the post-v8.1.0 development history.
-
 - Resolve plain underlying names across exchange denomination conventions. Prefix forms such as
   `1000SHIB`, suffix forms such as `SHIB1000`, and Hyperliquid's `kSHIB` notation now share one
   denomination-aware identity when established by that venue's market convention. Numeric ticker

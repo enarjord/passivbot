@@ -113,7 +113,10 @@ def _make_analysis_entry(value):
 
 
 def test_backtest_hsl_signal_mode_requires_normalized_live_config():
-    assert bt._resolve_backtest_hsl_signal_mode({"live": {"hsl_signal_mode": "coin"}}) == "coin"
+    assert (
+        bt._resolve_backtest_hsl_signal_mode({"live": {"hsl_signal_mode": "coin"}})
+        == "coin"
+    )
 
     with pytest.raises(KeyError, match="live.hsl_signal_mode"):
         bt._resolve_backtest_hsl_signal_mode({"live": {}})
@@ -377,7 +380,13 @@ def test_execute_backtest_captures_metrics_only_rust_profile(monkeypatch):
     )
 
     def fake_run_backtest_bundle(*_args):
-        return None, equities, analysis_usd, analysis_btc, {"_rust_profile": rust_profile}
+        return (
+            None,
+            equities,
+            analysis_usd,
+            analysis_btc,
+            {"_rust_profile": rust_profile},
+        )
 
     monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle)
     payload = BacktestPayload(
@@ -667,7 +676,9 @@ def test_create_forager_balance_figures_adds_strategy_equity_drawdown():
     plotting.plt.close("all")
 
 
-def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, monkeypatch):
+def test_post_process_disable_plotting_skips_all_figure_generation(
+    tmp_path, monkeypatch
+):
     calls = {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
 
     def _fake_process_forager_fills(*args, **kwargs):
@@ -678,15 +689,20 @@ def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, mon
     monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
-    monkeypatch.setattr(bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        bt, "dump_config", lambda config, path: open(path, "w", encoding="utf-8").write("{}")
+        bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        bt,
+        "dump_config",
+        lambda config, path: open(path, "w", encoding="utf-8").write("{}"),
     )
 
     monkeypatch.setattr(
         bt,
         "create_forager_balance_figures",
-        lambda *args, **kwargs: calls.__setitem__("balance", calls["balance"] + 1) or {},
+        lambda *args, **kwargs: calls.__setitem__("balance", calls["balance"] + 1)
+        or {},
     )
     monkeypatch.setattr(
         bt,
@@ -712,11 +728,27 @@ def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, mon
     config = {
         "disable_plotting": True,
         "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
-        "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 0.0},
+        },
         "live": {},
     }
 
     bt.post_process(
+        plot_context=bt.BacktestPlotContext(
+            hard_stop_plot_data={
+                "hsl": {
+                    "schema_version": 1,
+                    "engine": "hsl",
+                    "mode": "coin",
+                    "detailed": False,
+                    "scopes": [],
+                    "samples": [],
+                    "events": [],
+                }
+            }
+        ),
         config=config,
         hlcvs=np.zeros((1, 1, 3), dtype=np.float64),
         fills=[],
@@ -730,7 +762,9 @@ def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, mon
     assert calls == {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
 
 
-def test_post_process_writes_original_config_for_dataset_override(tmp_path, monkeypatch):
+def test_post_process_writes_original_config_for_dataset_override(
+    tmp_path, monkeypatch
+):
     dumped = []
 
     def _fake_process_forager_fills(*args, **kwargs):
@@ -745,7 +779,9 @@ def test_post_process_writes_original_config_for_dataset_override(tmp_path, monk
     monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "dump_config", _fake_dump_config)
-    monkeypatch.setattr(bt, "create_forager_balance_figures", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        bt, "create_forager_balance_figures", lambda *args, **kwargs: {}
+    )
     monkeypatch.setattr(bt, "create_forager_twe_figure", lambda *args, **kwargs: {})
     monkeypatch.setattr(bt, "create_forager_pnl_figure", lambda *args, **kwargs: {})
     monkeypatch.setattr(bt, "save_figures", lambda *args, **kwargs: {})
@@ -762,7 +798,10 @@ def test_post_process_writes_original_config_for_dataset_override(tmp_path, monk
             "coins": {"binance": ["BTC"]},
             "hlcvs_data_dir": "caches/hlcvs_data/custom__abc",
         },
-        "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 0.0},
+        },
         "live": {"approved_coins": {"long": ["BTC"], "short": []}},
         "_original_backtest_config": original_config,
         "metrics": {"stale": True},
@@ -770,6 +809,19 @@ def test_post_process_writes_original_config_for_dataset_override(tmp_path, monk
     }
 
     bt.post_process(
+        plot_context=bt.BacktestPlotContext(
+            hard_stop_plot_data={
+                "hsl": {
+                    "schema_version": 1,
+                    "engine": "hsl",
+                    "mode": "coin",
+                    "detailed": False,
+                    "scopes": [],
+                    "samples": [],
+                    "events": [],
+                }
+            }
+        ),
         config=config,
         hlcvs=np.zeros((1, 1, 3), dtype=np.float64),
         fills=[],
@@ -781,8 +833,12 @@ def test_post_process_writes_original_config_for_dataset_override(tmp_path, monk
     )
 
     dumped_by_name = {path.split("/")[-1]: cfg for cfg, path in dumped}
-    assert dumped_by_name["config.original.json"]["backtest"]["coins"]["binance"] == ["ETH"]
-    assert dumped_by_name["config.original.json"]["live"]["approved_coins"]["long"] == ["ETH"]
+    assert dumped_by_name["config.original.json"]["backtest"]["coins"]["binance"] == [
+        "ETH"
+    ]
+    assert dumped_by_name["config.original.json"]["live"]["approved_coins"]["long"] == [
+        "ETH"
+    ]
     assert dumped_by_name["config.json"]["backtest"]["coins"]["binance"] == ["BTC"]
     assert dumped_by_name["config.json"]["metrics"]["stats"]["gain_usd"]["mean"] == 1.0
     assert "suite_metrics" not in dumped_by_name["config.json"]
@@ -800,25 +856,32 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
-    monkeypatch.setattr(bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        bt, "dump_config", lambda config, path: open(path, "w", encoding="utf-8").write("{}")
+        bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        bt,
+        "dump_config",
+        lambda config, path: open(path, "w", encoding="utf-8").write("{}"),
     )
 
     monkeypatch.setattr(
         bt,
         "create_forager_balance_figures",
-        lambda *args, **kwargs: calls.__setitem__("balance", calls["balance"] + 1) or {"balance": object()},
+        lambda *args, **kwargs: calls.__setitem__("balance", calls["balance"] + 1)
+        or {"balance": object()},
     )
     monkeypatch.setattr(
         bt,
         "create_forager_twe_figure",
-        lambda *args, **kwargs: calls.__setitem__("twe", calls["twe"] + 1) or {"twe": object()},
+        lambda *args, **kwargs: calls.__setitem__("twe", calls["twe"] + 1)
+        or {"twe": object()},
     )
     monkeypatch.setattr(
         bt,
         "create_forager_pnl_figure",
-        lambda *args, **kwargs: calls.__setitem__("pnl", calls["pnl"] + 1) or {"pnl": object()},
+        lambda *args, **kwargs: calls.__setitem__("pnl", calls["pnl"] + 1)
+        or {"pnl": object()},
     )
     monkeypatch.setattr(
         bt,
@@ -834,11 +897,27 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     config = {
         "disable_plotting": "coin_fills",
         "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
-        "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 0.0},
+        },
         "live": {},
     }
 
     bt.post_process(
+        plot_context=bt.BacktestPlotContext(
+            hard_stop_plot_data={
+                "hsl": {
+                    "schema_version": 1,
+                    "engine": "hsl",
+                    "mode": "coin",
+                    "detailed": False,
+                    "scopes": [],
+                    "samples": [],
+                    "events": [],
+                }
+            }
+        ),
         config=config,
         hlcvs=np.zeros((1, 1, 3), dtype=np.float64),
         fills=[],
@@ -852,7 +931,9 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     assert calls == {"balance": 1, "twe": 1, "pnl": 1, "save": 3, "coin": 0}
 
 
-def test_post_process_visible_metrics_filters_logged_output_only(tmp_path, monkeypatch, caplog):
+def test_post_process_visible_metrics_filters_logged_output_only(
+    tmp_path, monkeypatch, caplog
+):
     def _fake_process_forager_fills(*args, **kwargs):
         fdf = pd.DataFrame(columns=["coin", "pnl"])
         bal_eq = pd.DataFrame({"balance": [1000.0], "equity": [1000.0]})
@@ -861,11 +942,17 @@ def test_post_process_visible_metrics_filters_logged_output_only(tmp_path, monke
     monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
-    monkeypatch.setattr(bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        bt, "dump_config", lambda config, path: open(path, "w", encoding="utf-8").write("{}")
+        bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None
     )
-    monkeypatch.setattr(bt, "create_forager_balance_figures", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        bt,
+        "dump_config",
+        lambda config, path: open(path, "w", encoding="utf-8").write("{}"),
+    )
+    monkeypatch.setattr(
+        bt, "create_forager_balance_figures", lambda *args, **kwargs: {}
+    )
     monkeypatch.setattr(bt, "create_forager_twe_figure", lambda *args, **kwargs: {})
     monkeypatch.setattr(bt, "create_forager_pnl_figure", lambda *args, **kwargs: {})
     monkeypatch.setattr(bt, "save_figures", lambda *args, **kwargs: {})
@@ -891,6 +978,19 @@ def test_post_process_visible_metrics_filters_logged_output_only(tmp_path, monke
 
     caplog.set_level(logging.INFO)
     bt.post_process(
+        plot_context=bt.BacktestPlotContext(
+            hard_stop_plot_data={
+                "hsl": {
+                    "schema_version": 1,
+                    "engine": "hsl",
+                    "mode": "coin",
+                    "detailed": False,
+                    "scopes": [],
+                    "samples": [],
+                    "events": [],
+                }
+            }
+        ),
         config=config,
         hlcvs=np.zeros((1, 1, 3), dtype=np.float64),
         fills=[],
@@ -932,269 +1032,6 @@ def test_disable_plotting_help_lists_every_plot_group():
     assert "coin_fills disables per-coin fill plots only" in DISABLE_PLOTTING_HELP
 
 
-def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monkeypatch):
-    class _Axis:
-        def plot(self, *args, **kwargs):
-            return None
-
-        def axhline(self, *args, **kwargs):
-            return None
-
-        def set_title(self, *args, **kwargs):
-            return None
-
-        def set_ylabel(self, *args, **kwargs):
-            return None
-
-        def set_xlabel(self, *args, **kwargs):
-            return None
-
-        def grid(self, *args, **kwargs):
-            return None
-
-        def legend(self, *args, **kwargs):
-            return None
-
-        def fill_between(self, *args, **kwargs):
-            return None
-
-    class _Figure:
-        def tight_layout(self):
-            return None
-
-    monkeypatch.setattr(
-        plotting.plt,
-        "subplots",
-        lambda *args, **kwargs: (_Figure(), [_Axis(), _Axis()]),
-    )
-
-    idx = pd.date_range("2021-01-01", periods=6, freq="1h")
-    bal_eq = pd.DataFrame(
-        {
-            "usd_total_balance": [1000.0, 1000.0, 980.0, 970.0, 990.0, 995.0],
-            "usd_total_equity": [1000.0, 990.0, 950.0, 940.0, 980.0, 992.0],
-        },
-        index=idx,
-    )
-    config = {
-        "live": {"hsl_signal_mode": "pside", "pnls_max_lookback_days": 30.0},
-        "bot": {
-            "long": {
-                "hsl_enabled": True,
-                "hsl_red_threshold": 0.1,
-                "hsl_ema_span_minutes": 60.0,
-                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-            },
-            "short": {
-                "hsl_enabled": False,
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-            },
-        },
-    }
-    hard_stop_plot_data = {
-        "timestamps_ms": (idx.view("int64") // 10**6).tolist(),
-        "drawdown_raw": [0.0, 0.01, 0.05, 0.06, 0.02, 0.01],
-    }
-
-    figs = create_forager_hard_stop_drawdown_figure(
-        bal_eq,
-        config,
-        hard_stop_plot_data=hard_stop_plot_data,
-        autoplot=False,
-        return_figures=True,
-    )
-    assert "hard_stop_drawdown" in figs
-
-
-def test_create_forager_hard_stop_drawdown_figure_plots_both_sides(monkeypatch):
-    class _Axis:
-        def __init__(self):
-            self.labels = []
-            self.hlines = []
-            self.titles = []
-
-        def plot(self, *args, **kwargs):
-            self.labels.append(kwargs.get("label"))
-            return None
-
-        def axhline(self, *args, **kwargs):
-            self.hlines.append(args[0] if args else kwargs.get("y"))
-            self.labels.append(kwargs.get("label"))
-            return None
-
-        def set_title(self, *args, **kwargs):
-            if args:
-                self.titles.append(args[0])
-            return None
-
-        def set_ylabel(self, *args, **kwargs):
-            return None
-
-        def set_xlabel(self, *args, **kwargs):
-            return None
-
-        def grid(self, *args, **kwargs):
-            return None
-
-        def legend(self, *args, **kwargs):
-            return None
-
-        def fill_between(self, *args, **kwargs):
-            return None
-
-    class _Figure:
-        def tight_layout(self):
-            return None
-
-    axes = [_Axis(), _Axis(), _Axis(), _Axis()]
-    monkeypatch.setattr(plotting.plt, "subplots", lambda *args, **kwargs: (_Figure(), axes))
-
-    idx = pd.date_range("2021-01-01", periods=3, freq="1h")
-    timestamps_ms = (idx.view("int64") // 10**6).tolist()
-    bal_eq = pd.DataFrame({"usd_total_equity": [1000.0, 990.0, 995.0]}, index=idx)
-    config = {
-        "live": {"hsl_signal_mode": "pside", "pnls_max_lookback_days": 30.0},
-        "bot": {
-            "long": {
-                "hsl_enabled": True,
-                "hsl_red_threshold": 0.10,
-                "hsl_ema_span_minutes": 60.0,
-                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-            },
-            "short": {
-                "hsl_enabled": True,
-                "hsl_red_threshold": 0.03,
-                "hsl_ema_span_minutes": 120.0,
-                "hsl_tier_ratios": {"yellow": 0.4, "orange": 0.8},
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-            },
-        },
-    }
-    hard_stop_plot_data = {
-        "timestamps_ms_long": timestamps_ms,
-        "drawdown_raw_long": [0.0, 0.08, 0.02],
-        "drawdown_ema_long": [0.0, 0.04, 0.03],
-        "drawdown_score_long": [0.0, 0.04, 0.02],
-        "timestamps_ms_short": timestamps_ms,
-        "drawdown_raw_short": [0.0, 0.02, 0.04],
-        "drawdown_ema_short": [0.0, 0.01, 0.02],
-        "drawdown_score_short": [0.0, 0.01, 0.02],
-    }
-
-    figs = create_forager_hard_stop_drawdown_figure(
-        bal_eq,
-        config,
-        hard_stop_plot_data=hard_stop_plot_data,
-        autoplot=False,
-        return_figures=True,
-    )
-
-    assert "hard_stop_drawdown" in figs
-    assert "Long Equity Hard Stop Drawdown" in axes[0].titles
-    assert "Short Equity Hard Stop Drawdown" in axes[2].titles
-    long_labels = set(axes[0].labels + axes[1].labels)
-    short_labels = set(axes[2].labels + axes[3].labels)
-    assert "Raw Drawdown" in long_labels
-    assert "Raw Drawdown" in short_labels
-    assert "RED Threshold" in long_labels
-    assert "RED Threshold" in short_labels
-    assert "RED Proximity" in long_labels
-    assert "RED Proximity" in short_labels
-    assert 0.10 in axes[0].hlines
-    assert 0.03 in axes[2].hlines
-
-
-def test_create_forager_hard_stop_drawdown_figure_labels_coin_mode_max_drawdown(monkeypatch):
-    class _Axis:
-        def __init__(self):
-            self.titles = []
-            self.ylabels = []
-
-        def plot(self, *args, **kwargs):
-            return None
-
-        def axhline(self, *args, **kwargs):
-            return None
-
-        def set_title(self, *args, **kwargs):
-            if args:
-                self.titles.append(args[0])
-            return None
-
-        def set_ylabel(self, *args, **kwargs):
-            if args:
-                self.ylabels.append(args[0])
-            return None
-
-        def set_xlabel(self, *args, **kwargs):
-            return None
-
-        def grid(self, *args, **kwargs):
-            return None
-
-        def legend(self, *args, **kwargs):
-            return None
-
-        def fill_between(self, *args, **kwargs):
-            return None
-
-    class _Figure:
-        def tight_layout(self):
-            return None
-
-    axes = [_Axis(), _Axis()]
-    monkeypatch.setattr(plotting.plt, "subplots", lambda *args, **kwargs: (_Figure(), axes))
-
-    idx = pd.date_range("2024-10-01", periods=3, freq="1h")
-    timestamps_ms = (idx.view("int64") // 10**6).tolist()
-    bal_eq = pd.DataFrame({"usd_total_equity": [1000.0, 990.0, 995.0]}, index=idx)
-    config = {
-        "live": {"hsl_signal_mode": "coin", "pnls_max_lookback_days": 30.0},
-        "bot": {
-            "long": {
-                "hsl_enabled": True,
-                "hsl_red_threshold": 0.247,
-                "hsl_ema_span_minutes": 60.0,
-                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                "n_positions": 3,
-                "total_wallet_exposure_limit": 1.5,
-            },
-            "short": {
-                "hsl_enabled": True,
-                "hsl_red_threshold": 0.01,
-                "hsl_ema_span_minutes": 1.0,
-                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                "n_positions": 3,
-                "total_wallet_exposure_limit": 0.0,
-            },
-        },
-    }
-    hard_stop_plot_data = {
-        "timestamps_ms_long": timestamps_ms,
-        "drawdown_raw_long": [0.0, 0.20, 0.05],
-        "drawdown_ema_long": [0.0, 0.10, 0.08],
-        "drawdown_score_long": [0.0, 0.10, 0.05],
-    }
-
-    figs = create_forager_hard_stop_drawdown_figure(
-        bal_eq,
-        config,
-        hard_stop_plot_data=hard_stop_plot_data,
-        autoplot=False,
-        return_figures=True,
-    )
-
-    assert "hard_stop_drawdown" in figs
-    assert "Long Coin HSL Max Drawdown" in axes[0].titles
-    assert "Max Coin Drawdown" in axes[0].ylabels
-
-
 @pytest.mark.parametrize("columns", [1, 4])
 @pytest.mark.parametrize("count", [0, 1, 3])
 def test_analysis_period_uses_actual_equity_timestamps(columns, count):
@@ -1203,49 +1040,87 @@ def test_analysis_period_uses_actual_equity_timestamps(columns, count):
     equities[:, 0] = timestamps
     duration = 1.0 if count == 3 else 0.0
     result = expand_analysis(
-        {"fills_analysis_duration_days": duration}, {}, None, equities,
-        {"bot": {"long": {}, "short": {}},
-         "backtest": {"start_date": "2020-01-01", "end_date": "2025-01-01"}},
+        {"fills_analysis_duration_days": duration},
+        {},
+        None,
+        equities,
+        {
+            "bot": {"long": {}, "short": {}},
+            "backtest": {"start_date": "2020-01-01", "end_date": "2025-01-01"},
+        },
     )
     assert result["n_days"] == result["fills_analysis_duration_days"] == duration
     assert result["effective_start_date"] == ("2024-01-02T00:00:00Z" if count else None)
     assert result["effective_end_date"] == (
-        "2024-01-03T00:00:00Z" if count == 3 else
-        "2024-01-02T00:00:00Z" if count else None
+        "2024-01-03T00:00:00Z"
+        if count == 3
+        else "2024-01-02T00:00:00Z" if count else None
     )
 
 
-def test_post_process_persists_artifacts_with_infinite_diagnostic(tmp_path, monkeypatch):
+def test_post_process_persists_artifacts_with_infinite_diagnostic(
+    tmp_path, monkeypatch
+):
     import json
     from copy import deepcopy
 
     fdf = pd.DataFrame(columns=["coin", "pnl"])
     bal_eq = pd.DataFrame({"balance": [1000.0, 1000.0], "equity": [1000.0, 1000.0]})
-    monkeypatch.setattr(bt, "process_forager_fills", lambda *args, **kwargs: (fdf, {}, bal_eq))
+    monkeypatch.setattr(
+        bt, "process_forager_fills", lambda *args, **kwargs: (fdf, {}, bal_eq)
+    )
     monkeypatch.setattr(bt, "sanitize_prepared_config_for_dump", deepcopy)
-    monkeypatch.setattr(bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None
+    )
     plot_calls = []
     monkeypatch.setattr(
-        bt, "create_forager_balance_figures",
+        bt,
+        "create_forager_balance_figures",
         lambda *args, **kwargs: plot_calls.append("balance") or {},
     )
-    monkeypatch.setattr(bt, "save_figures", lambda *args, **kwargs: plot_calls.append("save"))
+    monkeypatch.setattr(
+        bt, "save_figures", lambda *args, **kwargs: plot_calls.append("save")
+    )
     config = {
         "disable_plotting": ["twe", "pnl", "hard_stop", "coin_fills"],
         "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
-        "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 0.0},
+        },
         "live": {},
     }
     bt.post_process(
+        plot_context=bt.BacktestPlotContext(
+            hard_stop_plot_data={
+                "hsl": {
+                    "schema_version": 1,
+                    "engine": "hsl",
+                    "mode": "coin",
+                    "detailed": False,
+                    "scopes": [],
+                    "samples": [],
+                    "events": [],
+                }
+            }
+        ),
         config=config,
         hlcvs=np.zeros((2, 1, 3), dtype=np.float64),
         fills=[],
-        equities_array=np.array([[1704067200000, 1000.0, 1000.0], [1704240000000, 1000.0, 1000.0]]),
+        equities_array=np.array(
+            [[1704067200000, 1000.0, 1000.0], [1704240000000, 1000.0, 1000.0]]
+        ),
         btc_usd_prices=np.array([]),
-        analysis={"gain_usd": 1.0, "n_days": 2.0, "equity_choppiness": float("inf"),
-                  "effective_start_date": "2024-01-01T00:00:00Z",
-                  "effective_end_date": "2024-01-03T00:00:00Z"},
-        results_path=str(tmp_path), exchange="binance",
+        analysis={
+            "gain_usd": 1.0,
+            "n_days": 2.0,
+            "equity_choppiness": float("inf"),
+            "effective_start_date": "2024-01-01T00:00:00Z",
+            "effective_end_date": "2024-01-03T00:00:00Z",
+        },
+        results_path=str(tmp_path),
+        exchange="binance",
     )
     result_dir = next(tmp_path.iterdir())
     raw = json.loads((result_dir / "analysis.json").read_text())
@@ -1265,7 +1140,11 @@ def test_expand_analysis_keeps_position_held_time_weighted_metric_shared():
         _make_analysis_entry(9.0),
         fills=np.empty((0, 0)),
         equities_array=np.empty((0, 3)),
-        config={"bot": {side: {"total_wallet_exposure_limit": 1.0} for side in ("long", "short")}},
+        config={
+            "bot": {
+                side: {"total_wallet_exposure_limit": 1.0} for side in ("long", "short")
+            }
+        },
     )
     assert result["position_held_time_weighted_mean_hours"] == 2.5
     assert "position_held_time_weighted_mean_hours_usd" not in result

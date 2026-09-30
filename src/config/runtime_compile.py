@@ -7,7 +7,9 @@ from .strategy import prune_inactive_strategy_subtrees, sync_canonical_strategy_
 from .transform_log import record_transform
 
 
-def compile_runtime_config(config: dict, runtime: str = "generic", *, record_step: bool = True) -> dict:
+def compile_runtime_config(
+    config: dict, runtime: str = "generic", *, record_step: bool = True
+) -> dict:
     normalized_runtime = str(runtime).strip().lower()
     result = deepcopy(config)
     for pside in BOT_POSITION_SIDES:
@@ -28,14 +30,16 @@ def compile_runtime_config(config: dict, runtime: str = "generic", *, record_ste
                 path_prefix=("coin_overrides", pside),
                 seed_missing_groups=False,
             )
-    from .hsl_revised import engine, normalize_revised
+    from .hsl import normalize_hsl
     from .schema import get_template_config
-    if engine(result) == "revised":
-        normalize_revised(result, get_template_config(), verbose=False)
+
+    normalize_hsl(result, get_template_config(), verbose=False)
     sync_canonical_strategy_config(result)
     prune_inactive_strategy_subtrees(result)
     prune_inactive_optimize_strategy_bounds(result)
     apply_forager_internal_aliases(result)
     if record_step:
-        record_transform(result, "compile_runtime_config", {"runtime": normalized_runtime})
+        record_transform(
+            result, "compile_runtime_config", {"runtime": normalized_runtime}
+        )
     return result

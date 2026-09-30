@@ -21,7 +21,6 @@ def _sample_config() -> dict:
         "live": {
             "user": "binance_01",
             "hsl_signal_mode": "unified",
-            "hsl_position_during_cooldown_policy": "panic",
             "approved_coins": {
                 "long": ["BTC", "ETH", "SOL", "XMR"],
                 "short": ["BTC"],
@@ -43,11 +42,9 @@ def _sample_config() -> dict:
                     "enabled": True,
                     "red_threshold": 0.05,
                     "cooldown_minutes_after_red": 60,
-                    "no_restart_drawdown_threshold": 0.08,
                     "ema_span_minutes": 120,
-                    "tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                    "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                     "panic_close_order_type": "limit",
+                    "restart_after_red_policy": "always",
                 },
             },
             "short": {
@@ -86,16 +83,16 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
     assert report["hsl"]["sides"]["short"]["enabled"] is False
     hsl_evidence = report["cache"]["readiness"]["surfaces"]["hsl"]["evidence"]
-    assert {
-        item["code"]
-        for item in hsl_evidence
-    } >= {"hsl_enabled", "hsl_history_reinterpretation_caveat"}
+    assert {item["code"] for item in hsl_evidence} >= {
+        "hsl_enabled",
+        "hsl_history_reinterpretation_caveat",
+    }
     caveat = next(
         item
         for item in hsl_evidence
         if item["code"] == "hsl_history_reinterpretation_caveat"
     )
-    assert caveat["doc"] == "docs/equity_hard_stop_loss_risks.md"
+    assert caveat["doc"] == "docs/equity_hard_stop_loss.md"
     assert "deposits" in caveat["message"]
     assert "HSL mode changes" in caveat["message"]
     assert report["universe"]["approved_coins"]["long"] == {
@@ -197,7 +194,9 @@ def test_live_config_preflight_warns_on_invalid_balance_hysteresis(tmp_path, val
     assert report["issues"][0]["path"] == "live.balance_hysteresis_snap_pct"
 
 
-def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(tmp_path):
+def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
+    tmp_path,
+):
     config = _sample_config()
     config["live"].update(
         {
@@ -328,7 +327,9 @@ def test_live_config_preflight_allows_coin_hsl_with_balance_override(tmp_path):
     ]
 
 
-def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(tmp_path):
+def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(
+    tmp_path,
+):
     config = _sample_config()
     del config["live"]["hsl_signal_mode"]
     config_path = tmp_path / "live.json"
@@ -357,11 +358,9 @@ def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
         "hsl_enabled": True,
         "hsl_red_threshold": 0.05,
         "hsl_cooldown_minutes_after_red": 60,
-        "hsl_no_restart_drawdown_threshold": 0.08,
         "hsl_ema_span_minutes": 120,
-        "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
-        "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
         "hsl_panic_close_order_type": "limit",
+        "hsl_restart_after_red_policy": "always",
     }
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
@@ -372,15 +371,10 @@ def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
     assert report["hsl"]["sides"]["long"]["present"] is True
     assert report["hsl"]["sides"]["long"]["enabled"] is True
     assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
-    assert report["hsl"]["sides"]["long"]["tier_ratios"] == {
-        "yellow": 0.5,
-        "orange": 0.75,
-    }
+    assert report["hsl"]["sides"]["long"]["restart_after_red_policy"] == "always"
     assert report["forager"]["sides"]["long"]["n_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True
-    assert report["forager"]["sides"]["long"]["settings"] == {
-        "volume_drop_pct": 0.02
-    }
+    assert report["forager"]["sides"]["long"]["settings"] == {"volume_drop_pct": 0.02}
 
 
 def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp_path):
@@ -435,12 +429,14 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
         "value": 45,
     }
     assert changes["cache.readiness.summary"]["category"] == "cache"
-    assert changes["cache.readiness.summary"]["before"]["value"][
-        "disabled_surface_count"
-    ] == 0
-    assert changes["cache.readiness.summary"]["after"]["value"][
-        "disabled_surface_count"
-    ] == 1
+    assert (
+        changes["cache.readiness.summary"]["before"]["value"]["disabled_surface_count"]
+        == 0
+    )
+    assert (
+        changes["cache.readiness.summary"]["after"]["value"]["disabled_surface_count"]
+        == 1
+    )
     assert changes["live.approved_coins.long"]["added_count"] == 2
     assert changes["live.approved_coins.long"]["removed_count"] == 1
     assert changes["live.approved_coins.long"]["added_sample"] == ["ADA"]
@@ -618,9 +614,7 @@ def test_live_config_preflight_compare_cli_emits_diff(tmp_path, capsys):
         "present": True,
         "value": True,
     }
-    assert changes["cache.readiness.summary"]["after"]["value"][
-        "attention_count"
-    ] == 8
+    assert changes["cache.readiness.summary"]["after"]["value"]["attention_count"] == 8
 
 
 def test_live_config_preflight_cli_balance_override_returns_nonzero(tmp_path, capsys):
@@ -642,7 +636,9 @@ def test_live_config_preflight_cli_balance_override_returns_nonzero(tmp_path, ca
     assert report["hsl"]["balance_override"]["source"] == "argument"
 
 
-def test_live_config_preflight_cli_zero_balance_override_returns_nonzero(tmp_path, capsys):
+def test_live_config_preflight_cli_zero_balance_override_returns_nonzero(
+    tmp_path, capsys
+):
     config_path = tmp_path / "live.json"
     _write_config(config_path, _sample_config())
 

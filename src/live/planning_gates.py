@@ -25,15 +25,18 @@ def staged_planner_required_surfaces(
 ) -> frozenset[str]:
     """Return live input surfaces required before staged order planning may proceed."""
     surfaces = set(ACCOUNT_SURFACES)
-    from live import hsl_revised_live
+    from config.pnl_lookback import parse_pnls_max_lookback_days
+
     now = int(bot.get_exchange_time())
-    start = max(0, now - round(bot.config['live']['pnls_max_lookback_days'] * 86_400_000))
+    start = parse_pnls_max_lookback_days(
+        bot.config["live"]["pnls_max_lookback_days"]
+    ).event_history_start_ms(now)
     required, _ = bot._required_fill_history_start_ms(now, pnl_start_ms=start)
     if not required:
-        # Revised HSL can estimate history. Other enabled fill/PnL
+        # HSL can estimate history. Other enabled fill/PnL
         # consumers retain the canonical strict surface; trailing input
         # availability is scoped separately by the strategy reader.
-        surfaces.discard('fills')
+        surfaces.discard("fills")
     if include_market_snapshot:
         surfaces.add("market_snapshot")
     return frozenset(surfaces)
@@ -233,7 +236,9 @@ async def defer_staged_execution_cycle(bot, details: dict, loop_start_ms: int) -
     bot._set_log_silence_watchdog_context(
         phase="runtime", stage="staged_precondition_delay"
     )
-    await asyncio.sleep(bot._authoritative_confirmation_retry_delay_seconds(details=details))
+    await asyncio.sleep(
+        bot._authoritative_confirmation_retry_delay_seconds(details=details)
+    )
 
 
 def build_staged_planning_snapshot(
@@ -359,7 +364,10 @@ def build_protective_planning_snapshot(
 
 
 def current_planning_snapshot_invalid_for_creations(
-    bot, symbols: Iterable[str], *, snapshot=None,
+    bot,
+    symbols: Iterable[str],
+    *,
+    snapshot=None,
 ) -> list[dict]:
     """Return reasons the supplied/current planning snapshot is unsafe for creations."""
     if snapshot is None:

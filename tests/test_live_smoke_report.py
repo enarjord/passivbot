@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import gzip
 import json
 import os
@@ -136,7 +138,12 @@ def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):
         tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
     )
     rotated_path = (
-        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "20260629.ndjson.gz"
+        tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "20260629.ndjson.gz"
     )
     _write_ndjson(
         events_path,
@@ -219,7 +226,9 @@ def test_live_smoke_report_scan_cost_tracks_plain_full_and_seek_tail_reads(tmp_p
     assert scan_cost["records_read"] == 3
     assert scan_cost["read_methods"] == {"full_scan": 1}
     assert summarize_live_smoke_report(report)["monitor"]["scan_cost"] == scan_cost
-    assert summarize_live_smoke_report_brief(report)["monitor"]["scan_cost"] == scan_cost
+    assert (
+        summarize_live_smoke_report_brief(report)["monitor"]["scan_cost"] == scan_cost
+    )
 
     tail_report = build_live_smoke_report(
         tmp_path / "monitor", logs_root=None, event_tail_lines=1
@@ -324,9 +333,7 @@ def test_live_smoke_report_scan_cost_marks_unmeasurable_and_failed_reads_unknown
     assert failed["issues"][0]["code"] == "read_failed"
     assert failed["scan_cost"]["elapsed_ms"] >= 0
     assert {
-        key: value
-        for key, value in failed["scan_cost"].items()
-        if key != "elapsed_ms"
+        key: value for key, value in failed["scan_cost"].items() if key != "elapsed_ms"
     } == {
         "physical_bytes_read": None,
         "physical_bytes_known": False,
@@ -687,10 +694,7 @@ def test_live_smoke_report_selects_only_segments_overlapping_exact_window(
             (events_dir / "1970-01-01T00-00-02.ndjson").stat().st_size
             + len(
                 gzip.decompress(
-                    (
-                        events_dir
-                        / "1970-01-01T00-00-03.abcdef12.ndjson.gz"
-                    ).read_bytes()
+                    (events_dir / "1970-01-01T00-00-03.abcdef12.ndjson.gz").read_bytes()
                 )
             )
         ),
@@ -949,8 +953,7 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
                     "error_type": "RequestTimeout",
                     "elapsed_ms": 12345,
                     "error": (
-                        "binance GET https://example.test/account"
-                        "?api_key=AKIA123"
+                        "binance GET https://example.test/account" "?api_key=AKIA123"
                     ),
                 },
             ),
@@ -1399,12 +1402,11 @@ def test_live_smoke_report_remote_call_health_totals_mixed_groups(tmp_path):
     groups_by_surface = {
         (group.get("kind"), group.get("surface")): group for group in health["groups"]
     }
-    assert groups_by_surface[
-        ("authoritative_state_fetch", "balance")
-    ]["failed"] == 2
-    assert groups_by_surface[
-        ("authoritative_state_fetch", "open_orders")
-    ]["succeeded"] == 8
+    assert groups_by_surface[("authoritative_state_fetch", "balance")]["failed"] == 2
+    assert (
+        groups_by_surface[("authoritative_state_fetch", "open_orders")]["succeeded"]
+        == 8
+    )
     assert groups_by_surface[("ccxt_fetch_ohlcv", None)]["throttled"] == 1
 
 
@@ -1910,9 +1912,9 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     brief_logs = dict(brief["logs"])
     scan_cost = brief_logs.pop("scan_cost")
     assert scan_cost["elapsed_ms"] >= 0
-    assert scan_cost["physical_bytes_read"] == (
-        logs_dir / "kucoin_01.log"
-    ).stat().st_size
+    assert (
+        scan_cost["physical_bytes_read"] == (logs_dir / "kucoin_01.log").stat().st_size
+    )
     assert scan_cost["physical_bytes_known"] is True
     assert scan_cost["decoded_bytes_read"] == scan_cost["physical_bytes_read"]
     assert scan_cost["decoded_bytes_known"] is True
@@ -1979,13 +1981,9 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         assert "latest_line" not in group
     assert brief["remote_calls"]["total"] == 1
     assert brief["remote_calls"]["failed"] == 1
-    assert brief["remote_calls"]["failed_reason_codes"] == {
-        "authoritative_balance": 1
-    }
+    assert brief["remote_calls"]["failed_reason_codes"] == {"authoritative_balance": 1}
     assert brief["remote_calls"]["failed_error_types"] == {"RequestTimeout": 1}
-    assert brief["remote_calls"]["failed_kinds"] == {
-        "authoritative_state_fetch": 1
-    }
+    assert brief["remote_calls"]["failed_kinds"] == {"authoritative_state_fetch": 1}
     assert brief["remote_calls"]["failed_surfaces"] == {"balance": 1}
     assert brief["remote_calls"]["slowest"] == [
         {
@@ -2010,9 +2008,7 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     assert brief["account_critical_remote_calls"]["failed_kinds"] == {
         "authoritative_state_fetch": 1
     }
-    assert brief["account_critical_remote_calls"]["failed_surfaces"] == {
-        "balance": 1
-    }
+    assert brief["account_critical_remote_calls"]["failed_surfaces"] == {"balance": 1}
     assert brief["account_critical_remote_calls"]["slowest"] == [
         {
             "bot": "binance/binance_01",
@@ -2105,19 +2101,13 @@ def test_live_smoke_report_splits_problem_event_types_by_hardness(tmp_path):
     assert summary["problem_events"]["hard_event_types"] == {
         "execution.create_failed": 1
     }
-    assert summary["problem_events"]["non_hard_event_types"] == {
-        "ema.unavailable": 1
-    }
+    assert summary["problem_events"]["non_hard_event_types"] == {"ema.unavailable": 1}
     assert brief["problem_events"]["event_types"] == {
         "ema.unavailable": 1,
         "execution.create_failed": 1,
     }
-    assert brief["problem_events"]["hard_event_types"] == {
-        "execution.create_failed": 1
-    }
-    assert brief["problem_events"]["non_hard_event_types"] == {
-        "ema.unavailable": 1
-    }
+    assert brief["problem_events"]["hard_event_types"] == {"execution.create_failed": 1}
+    assert brief["problem_events"]["non_hard_event_types"] == {"ema.unavailable": 1}
 
 
 def test_live_smoke_report_brief_bounds_problem_event_types(tmp_path):
@@ -2462,7 +2452,9 @@ def test_live_smoke_report_problem_events_include_market_compatibility_data(tmp_
     }
 
 
-def test_live_smoke_report_projects_safe_isolated_only_market_compatibility_data(tmp_path):
+def test_live_smoke_report_projects_safe_isolated_only_market_compatibility_data(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -2521,11 +2513,27 @@ def test_live_smoke_report_projects_safe_hip3_account_mode_compatibility_data(tm
                 data={
                     "account_abstraction": "unknown",
                     "action": "fatal_live_state_rejected",
-                    "approved_symbols": {"count": 1, "sample": ["xyz:TSLA"], "truncated": False},
+                    "approved_symbols": {
+                        "count": 1,
+                        "sample": ["xyz:TSLA"],
+                        "truncated": False,
+                    },
                     "position_symbols": {"count": 0, "sample": [], "truncated": False},
-                    "open_order_symbols": {"count": 1, "sample": ["xyz:SP500"], "truncated": False},
-                    "isolated_only_symbols": {"count": 2, "sample": ["xyz:SP500", "xyz:TSLA"], "truncated": False},
-                    "live_isolated_symbols": {"count": 1, "sample": ["xyz:SP500"], "truncated": False},
+                    "open_order_symbols": {
+                        "count": 1,
+                        "sample": ["xyz:SP500"],
+                        "truncated": False,
+                    },
+                    "isolated_only_symbols": {
+                        "count": 2,
+                        "sample": ["xyz:SP500", "xyz:TSLA"],
+                        "truncated": False,
+                    },
+                    "live_isolated_symbols": {
+                        "count": 1,
+                        "sample": ["xyz:SP500"],
+                        "truncated": False,
+                    },
                     "order_ids": ["must_not_surface"],
                     "config_path": "/private/secret.json",
                     "error": "free form exception text",
@@ -2545,8 +2553,16 @@ def test_live_smoke_report_projects_safe_hip3_account_mode_compatibility_data(tm
         "approved_symbols": {"count": 1, "sample": ["xyz:TSLA"], "truncated": False},
         "position_symbols": {"count": 0, "truncated": False},
         "open_order_symbols": {"count": 1, "sample": ["xyz:SP500"], "truncated": False},
-        "isolated_only_symbols": {"count": 2, "sample": ["xyz:SP500", "xyz:TSLA"], "truncated": False},
-        "live_isolated_symbols": {"count": 1, "sample": ["xyz:SP500"], "truncated": False},
+        "isolated_only_symbols": {
+            "count": 2,
+            "sample": ["xyz:SP500", "xyz:TSLA"],
+            "truncated": False,
+        },
+        "live_isolated_symbols": {
+            "count": 1,
+            "sample": ["xyz:SP500"],
+            "truncated": False,
+        },
     }
 
 
@@ -2672,9 +2688,7 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
     assert health["latest_unavailable_total"] == 5
     assert health["latest_optional_drop_total"] == 2
     assert health["event_types"] == {"ema.unavailable": 2}
-    assert health["latest_candidate_reason_counts"] == {
-        "cache_only_fetch_failed": 2
-    }
+    assert health["latest_candidate_reason_counts"] == {"cache_only_fetch_failed": 2}
     assert health["latest_unavailable_reason_counts"] == {
         "never_fetched_cache_only": 3,
         "cache_only_fetch_failed": 2,
@@ -2698,9 +2712,7 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
             "truncated": 0,
         },
     }
-    assert health["latest_candidate_error_type_counts"] == {
-        "MissingLogRangeEma": 1
-    }
+    assert health["latest_candidate_error_type_counts"] == {"MissingLogRangeEma": 1}
     assert health["groups"][0]["count"] == 2
     assert health["groups"][0]["latest_ids"] == {"cycle_id": "cy_ema_2"}
     assert health["groups"][0]["latest_candidate_unavailable_count"] == 2
@@ -3468,12 +3480,16 @@ def test_live_smoke_report_resource_pressure_brief_keeps_missing_min_as_null(tmp
     assert pressure["total"] == 0
     assert "latest_system_memory_available_bytes_min" not in pressure
     assert "latest_event_age_ms_max" not in pressure
-    assert brief["resource_pressure"]["latest_system_memory_available_bytes_min"] is None
+    assert (
+        brief["resource_pressure"]["latest_system_memory_available_bytes_min"] is None
+    )
     assert brief["resource_pressure"]["latest_event_age_ms_max"] is None
     assert brief["resource_pressure"]["latest_event_age_reporting_bots"] == 0
 
 
-def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_overflow(tmp_path):
+def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_overflow(
+    tmp_path,
+):
     okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
     gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
@@ -3799,7 +3815,7 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_publisher_retention_age_deleted": 3,
                     "event_monitor_publisher_retention_cap_deleted": 2,
                 },
-            )
+            ),
         ],
     )
     _write_ndjson(
@@ -3875,8 +3891,14 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
     assert groups["okx/okx_01"].get("latest_structured_sink_write_count") == 8
     assert groups["gateio/gateio_01"].get("latest_monitor_sink_service_ms_max") == 2
     assert groups["okx/okx_01"].get("latest_monitor_publisher_persist_ms_max") == 2
-    assert groups["okx/okx_01"].get("latest_monitor_publisher_manifest_checkpoint_count") == 2
-    assert groups["gateio/gateio_01"].get("latest_monitor_publisher_retention_run_count") == 1
+    assert (
+        groups["okx/okx_01"].get("latest_monitor_publisher_manifest_checkpoint_count")
+        == 2
+    )
+    assert (
+        groups["gateio/gateio_01"].get("latest_monitor_publisher_retention_run_count")
+        == 1
+    )
     retention_group_fields = (
         "latest_monitor_publisher_retention_thread_cpu_ms_total",
         "latest_monitor_publisher_retention_thread_cpu_ms_max",
@@ -3897,9 +3919,7 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
         "latest_monitor_publisher_retention_age_deleted",
         "latest_monitor_publisher_retention_cap_deleted",
     )
-    assert {
-        key: groups["okx/okx_01"][key] for key in retention_group_fields
-    } == {
+    assert {key: groups["okx/okx_01"][key] for key in retention_group_fields} == {
         "latest_monitor_publisher_retention_thread_cpu_ms_total": 0.4,
         "latest_monitor_publisher_retention_thread_cpu_ms_max": 0.25,
         "latest_monitor_publisher_retention_non_cpu_ms_total": 0.6,
@@ -3919,9 +3939,7 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
         "latest_monitor_publisher_retention_age_deleted": 3,
         "latest_monitor_publisher_retention_cap_deleted": 2,
     }
-    assert {
-        key: groups["gateio/gateio_01"][key] for key in retention_group_fields
-    } == {
+    assert {key: groups["gateio/gateio_01"][key] for key in retention_group_fields} == {
         "latest_monitor_publisher_retention_thread_cpu_ms_total": 0.05,
         "latest_monitor_publisher_retention_thread_cpu_ms_max": 0.04,
         "latest_monitor_publisher_retention_non_cpu_ms_total": 0.15,
@@ -4035,7 +4053,7 @@ def test_live_smoke_report_omits_missing_monitor_maintenance_attribution(tmp_pat
                     "event_monitor_publisher_maintenance_ms_total": 2.5,
                     "event_monitor_publisher_maintenance_ms_max": 1.5,
                 },
-            )
+            ),
         ],
     )
 
@@ -4608,9 +4626,7 @@ def test_live_smoke_report_summarizes_latest_initial_entry_eligibility_per_bot(
                         "low_balance": 1,
                         "rust_no_initial_candidate": 2,
                     },
-                    "records": [
-                        {"symbol": "api_key=SHOULD_NOT_RENDER"}
-                    ],
+                    "records": [{"symbol": "api_key=SHOULD_NOT_RENDER"}],
                     "records_truncated": True,
                 },
             ),
@@ -5589,9 +5605,7 @@ def test_live_smoke_report_startup_budget_no_baseline(tmp_path):
     assert brief["startup_timings"]["elapsed_budget_status_counts"] == {
         "no_baseline": 1
     }
-    assert brief["startup_timings"]["phase_budget_status_counts"] == {
-        "no_baseline": 1
-    }
+    assert brief["startup_timings"]["phase_budget_status_counts"] == {"no_baseline": 1}
     assert brief["startup_timings"]["incomplete_budget_phases"] == 1
     assert brief["startup_timings"]["invalid_or_missing_budget_assessments"] == 0
 
@@ -5990,9 +6004,9 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
     assert summary["shutdown_events"]["total"] == 3
     assert summary["shutdown_events"]["groups_truncated"] is True
     assert len(summary["shutdown_events"]["groups"]) == 2
-    assert summary["shutdown_events"]["lifecycle"] == report["shutdown_events"]["lifecycle"] | {
-        "rows_truncated": False
-    }
+    assert summary["shutdown_events"]["lifecycle"] == report["shutdown_events"][
+        "lifecycle"
+    ] | {"rows_truncated": False}
     assert brief["shutdown_events"] == {
         "total": 3,
         "event_types": {
@@ -6129,12 +6143,16 @@ def test_live_smoke_report_shutdown_lifecycle_rows_are_bounded(tmp_path):
     report = build_live_smoke_report(monitor_root, logs_root=None)
     lifecycle = report["shutdown_events"]["lifecycle"]
 
-    assert lifecycle["observed_bots"] == smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT + 1
+    assert (
+        lifecycle["observed_bots"] == smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT + 1
+    )
     assert lifecycle["rows_truncated"] is True
     assert len(lifecycle["rows"]) == smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT
 
 
-def test_live_smoke_report_shutdown_lifecycle_marks_tail_limited_coverage_incomplete(tmp_path):
+def test_live_smoke_report_shutdown_lifecycle_marks_tail_limited_coverage_incomplete(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -6156,7 +6174,9 @@ def test_live_smoke_report_shutdown_lifecycle_marks_tail_limited_coverage_incomp
     assert lifecycle["complete_bots"] == 0
 
 
-def test_live_smoke_report_shutdown_lifecycle_uses_latest_event_position_across_files(tmp_path):
+def test_live_smoke_report_shutdown_lifecycle_uses_latest_event_position_across_files(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -6956,7 +6976,7 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
                     "balance": 98765.43,
                     "secret_marker": "new-pending-secret",
                 },
-            )
+            ),
         ],
     )
 
@@ -7021,9 +7041,10 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
             }
         ],
     }
-    assert brief["risk_events"]["hsl_raw_red_pending"] == summary["risk_events"][
-        "hsl_raw_red_pending"
-    ]
+    assert (
+        brief["risk_events"]["hsl_raw_red_pending"]
+        == summary["risk_events"]["hsl_raw_red_pending"]
+    )
     rendered = json.dumps(report["risk_events"], sort_keys=True)
     assert "drawdown_score" not in rendered
     assert "drawdown_raw" not in rendered
@@ -7039,12 +7060,7 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
 
 def test_live_smoke_report_summarizes_cache_health(tmp_path):
     _write_ndjson(
-        tmp_path
-        / "monitor"
-        / "binance"
-        / "binance_01"
-        / "events"
-        / "current.ndjson",
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson",
         [
             _monitor_row(
                 event_type="cache.warmup_decision",
@@ -7134,574 +7150,6 @@ def test_live_smoke_report_summarizes_cache_health(tmp_path):
     rendered = json.dumps(report["cache_health"], sort_keys=True)
     assert "private-cache" not in rendered
     assert "raw-cache-row" not in rendered
-
-
-def test_compact_hsl_replay_data_exposes_protective_readiness_counts():
-    compact = smoke_report_module._compact_hsl_replay_data(
-        {
-            "data": {
-                "signal_mode": "coin",
-                "stage": "held_protective_ready",
-                "pairs": 12,
-                "held_pairs": 2,
-                "ready_pairs": 2,
-                "pending_pairs": 10,
-                "protective_elapsed_s": 1.25,
-                "secret": "must-not-render",
-            }
-        }
-    )
-
-    assert compact == {
-        "signal_mode": "coin",
-        "stage": "held_protective_ready",
-        "pairs": 12,
-        "held_pairs": 2,
-        "ready_pairs": 2,
-        "pending_pairs": 10,
-        "protective_elapsed_s": 1.25,
-    }
-    assert smoke_report_module._hsl_replay_derived(compact)[
-        "protective_elapsed_ms"
-    ] == 1250
-
-
-@pytest.mark.parametrize("required_pairs", (0, 1))
-def test_hsl_replay_derived_prefers_scanned_work_for_eta(required_pairs):
-    compact = smoke_report_module._compact_hsl_replay_data(
-        {
-            "data": {
-                "stage": "pair_replay",
-                "timeline_rows": 100,
-                "pairs": 3,
-                "required_pairs": required_pairs,
-                "total_applied_rows": 10,
-                "rows_per_second": 2.0,
-                "scanned_rows": 75,
-                "candidate_rows": 150,
-                "total_scanned_rows": 150,
-                "scanned_rows_per_second": 50.0,
-                "pair_elapsed_s": 1.5,
-                "secret": "must-not-render",
-            }
-        }
-    )
-    derived = smoke_report_module._hsl_replay_derived(compact)
-
-    assert compact["scanned_rows"] == 75
-    assert compact["candidate_rows"] == 150
-    assert compact["pair_elapsed_s"] == 1.5
-    assert "secret" not in compact
-    assert derived["throughput_source"] == "scanned_rows"
-    assert derived["observed_applied_rows"] == 10
-    assert derived["observed_scanned_rows"] == 150
-    assert derived["observed_work_pct"] == 50.0
-    assert derived["estimated_dense_remaining_rows"] == 150
-    assert derived["estimated_dense_remaining_ms"] == 3000
-    assert derived["estimated_required_remaining_rows"] == 0
-    assert derived["estimated_required_remaining_ms"] == 0
-    assert derived["work_estimate_source"] == "dense_rows_upper_bound"
-    assert derived["estimated_remaining_rows"] == 150
-    assert derived["estimated_remaining_ms"] == 3000
-
-    terminal_data = {
-        **compact,
-        "stage": "full_replay",
-    }
-    terminal = smoke_report_module._hsl_replay_derived(terminal_data)
-    assert terminal["work_estimate_source"] == "candidate_rows_terminal"
-    assert terminal["estimated_candidate_pair_row_work"] == 150
-    assert terminal["estimated_candidate_remaining_rows"] == 0
-    assert terminal["estimated_remaining_rows"] == 0
-
-
-def test_hsl_replay_derived_keeps_legacy_applied_work_fallback():
-    data = {
-        "timeline_rows": 100,
-        "pairs": 3,
-        "total_applied_rows": 10,
-        "rows_per_second": 2.0,
-    }
-    derived = smoke_report_module._hsl_replay_derived(data)
-
-    assert derived["throughput_source"] == "applied_rows_legacy"
-    assert derived["observed_applied_rows"] == 10
-    assert "observed_scanned_rows" not in derived
-    assert derived["estimated_dense_remaining_rows"] == 290
-    assert derived["estimated_dense_remaining_ms"] == 145000
-    assert derived["work_estimate_source"] == "dense_rows_upper_bound"
-
-    terminal = smoke_report_module._hsl_replay_derived(
-        {**data, "stage": "full_replay"}
-    )
-    assert terminal["estimated_dense_remaining_rows"] == 290
-    assert terminal["work_estimate_source"] == "legacy_terminal_no_candidate_rows"
-    assert terminal["estimated_remaining_rows"] == 0
-    assert terminal["estimated_remaining_ms"] == 0
-
-
-def test_hsl_replay_health_retains_protective_ready_after_later_progress():
-    groups = {}
-    path = Path("events.ndjson")
-    ready = _monitor_row(
-        event_type="hsl.replay.progress",
-        seq=1,
-        ts=1000,
-        reason_code="hsl_held_protective_ready",
-        status="succeeded",
-        data={
-            "signal_mode": "coin",
-            "stage": "held_protective_ready",
-            "pairs": 10,
-            "ready_pairs": 1,
-            "pending_pairs": 9,
-            "protective_elapsed_s": 2.0,
-        },
-    )
-    later = _monitor_row(
-        event_type="hsl.replay.progress",
-        seq=2,
-        ts=2000,
-        reason_code="pair_replay_progress",
-        status="started",
-        data={
-            "signal_mode": "coin",
-            "stage": "pair_replay",
-            "pairs": 10,
-            "pair_idx": 2,
-        },
-    )
-    for line_no, row in enumerate((ready, later), start=1):
-        smoke_report_module._merge_hsl_replay_group(
-            groups,
-            bot_key="binance/test",
-            row=row,
-            live_event=row["payload"]["_live_event"],
-            path=path,
-            line_no=line_no,
-        )
-
-    summary = smoke_report_module._summarize_hsl_replay_health(
-        groups,
-        Counter({"hsl.replay.progress": 2}),
-        report_ts_ms=2500,
-    )
-    group = summary["groups"][0]
-    assert group["latest"]["data"]["stage"] == "pair_replay"
-    assert group["protective_ready"]["data"] == {
-        "signal_mode": "coin",
-        "stage": "held_protective_ready",
-        "pairs": 10,
-        "ready_pairs": 1,
-        "pending_pairs": 9,
-        "protective_elapsed_s": 2,
-    }
-
-
-def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
-    monkeypatch.setattr(smoke_report_module, "utc_ms", lambda: 365000)
-    _write_ndjson(
-        tmp_path
-        / "monitor"
-        / "binance"
-        / "binance_01"
-        / "events"
-        / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.started",
-                seq=1,
-                ts=1000,
-                reason_code="coin_history_replay",
-                level="debug",
-                status="started",
-                data={"signal_mode": "coin", "lookback_days": 30.0},
-            ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=2,
-                ts=2000,
-                reason_code="history_loaded",
-                level="debug",
-                status="started",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "loaded",
-                    "symbols": 26,
-                    "pairs": 26,
-                    "held_pairs": 1,
-                    "cooldown_pairs": 1,
-                    "required_pairs": 20,
-                    "timeline_rows": 43201,
-                    "fill_events": 2700,
-                    "secret": "must-not-render",
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=3,
-                ts=3000,
-                reason_code="coin_history_replay_completed",
-                level="debug",
-                status="succeeded",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "full_replay",
-                    "rows": 985965,
-                    "pairs": 26,
-                    "timeline_rows": 43201,
-                    "full_elapsed_s": 1623.4,
-                    "startup_blocking_elapsed_s": 1623.4,
-                },
-            ),
-        ],
-    )
-    _write_ndjson(
-        tmp_path
-        / "monitor"
-        / "gateio"
-        / "gateio_01"
-        / "events"
-        / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.started",
-                seq=4,
-                ts=4000,
-                exchange="gateio",
-                user="gateio_01",
-                reason_code="coin_history_replay",
-                level="debug",
-                status="started",
-                data={"signal_mode": "coin", "lookback_days": 30.0},
-            ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=5,
-                ts=5000,
-                exchange="gateio",
-                user="gateio_01",
-                reason_code="pair_replay_progress",
-                level="debug",
-                status="started",
-                symbol="ZEC/USDT:USDT",
-                pside="long",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "pair_replay",
-                    "pair_idx": 3,
-                    "pairs": 29,
-                    "held_pairs": 1,
-                    "cooldown_pairs": 1,
-                    "required_pairs": 20,
-                    "current_position_pairs": 1,
-                    "timeline_rows": 43201,
-                    "start_ts": 1782492000000,
-                    "end_ts": 1782492600000,
-                    "record_start_ts": 1782492000000,
-                    "applied_rows": 12000,
-                    "total_applied_rows": 64000,
-                    "skipped_price_symbols": 1,
-                    "missing_price_symbols": 2,
-                    "rows_per_second": 318.415,
-                    "elapsed_s": 701.2,
-                    "history_build_elapsed_s": 755.75,
-                    "price_history_fetch_elapsed_s": 210.5,
-                    "timeline_replay_elapsed_s": 12.25,
-                    "timeframe": "1m",
-                    "history_minutes": 43201,
-                    "price_replay_symbols": 29,
-                    "is_held_pair": True,
-                    "is_cooldown_pair": False,
-                    "balance": 1234.56,
-                    "equity": 1200.0,
-                    "drawdown_score": 0.42,
-                    "error": "api_key=AKIA123",
-                },
-            ),
-        ],
-    )
-    _write_ndjson(
-        tmp_path
-        / "monitor"
-        / "okx"
-        / "okx_01"
-        / "events"
-        / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.started",
-                seq=6,
-                ts=6000,
-                exchange="okx",
-                user="okx_01",
-                reason_code="coin_history_replay",
-                level="debug",
-                status="started",
-                data={"signal_mode": "coin", "lookback_days": 30.0},
-            ),
-            _monitor_row(
-                event_type="hsl.replay.failed",
-                seq=7,
-                ts=7000,
-                exchange="okx",
-                user="okx_01",
-                reason_code="coin_history_replay_failed",
-                level="warning",
-                status="failed",
-                data={
-                    "signal_mode": "coin",
-                    "error_type": "RuntimeError",
-                    "elapsed_s": 12.3,
-                    "secret": "must-not-render",
-                },
-            ),
-        ],
-    )
-    _write_ndjson(
-        tmp_path
-        / "monitor"
-        / "kucoin"
-        / "kucoin_01"
-        / "events"
-        / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.started",
-                seq=8,
-                ts=8000,
-                exchange="kucoin",
-                user="kucoin_01",
-                reason_code="coin_history_replay",
-                level="debug",
-                status="started",
-                data={"signal_mode": "coin", "lookback_days": 30.0},
-            ),
-            _monitor_row(
-                event_type="hsl.replay.failed",
-                seq=9,
-                ts=9000,
-                exchange="kucoin",
-                user="kucoin_01",
-                reason_code="shutdown_cancelled",
-                level="debug",
-                status="failed",
-                data={
-                    "signal_mode": "coin",
-                    "elapsed_s": 1.0,
-                },
-            ),
-        ],
-    )
-
-    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
-    summary = summarize_live_smoke_report(report)
-    brief = summarize_live_smoke_report_brief(report)
-
-    assert report["ok"] is True
-    assert report["attention"] is True
-    assert report["hard_failures"] == 0
-    assert report["attention_sources"]["problem_events"] == 1
-    assert report["attention_sources"]["hsl_replay_active_bots"] == 1
-    assert report["attention_sources"]["hsl_replay_failed_bots"] == 1
-    assert report["attention_sources"]["total"] == 3
-    assert report["hsl_replay_health"]["active_bots"] == 1
-    assert report["hsl_replay_health"]["stale_active_bots"] == 1
-    assert report["hsl_replay_health"]["long_running_active_bots"] == 1
-    assert report["hsl_replay_health"]["completed_bots"] == 1
-    assert report["hsl_replay_health"]["failed_bots"] == 2
-    assert report["hsl_replay_health"]["failed_attention_bots"] == 1
-    assert report["hsl_replay_health"]["event_types"] == {
-        "hsl.replay.progress": 2,
-        "hsl.replay.started": 4,
-        "hsl.replay.completed": 1,
-        "hsl.replay.failed": 2,
-    }
-    active_group = report["hsl_replay_health"]["groups"][0]
-    assert active_group["bot"] == "gateio/gateio_01"
-    assert active_group["active"] is True
-    assert active_group["active_latest_event_age_ms"] == 360000
-    assert active_group["active_stale"] is True
-    assert active_group["active_stale_threshold_ms"] == 300000
-    assert active_group["active_long_running"] is True
-    assert active_group["active_long_running_threshold_ms"] == 600000
-    assert active_group["latest"]["symbol"] == "ZEC/USDT:USDT"
-    assert active_group["latest"]["data"]["timeframe"] == "1m"
-    assert active_group["latest"]["data"]["history_minutes"] == 43201
-    assert active_group["latest"]["data"]["price_replay_symbols"] == 29
-    assert active_group["latest"]["data"]["current_position_pairs"] == 1
-    assert active_group["latest"]["data"]["skipped_price_symbols"] == 1
-    assert active_group["latest"]["data"]["missing_price_symbols"] == 2
-    assert active_group["latest"]["data"]["start_ts"] == 1782492000000
-    assert active_group["latest"]["data"]["end_ts"] == 1782492600000
-    assert active_group["latest"]["data"]["record_start_ts"] == 1782492000000
-    assert active_group["latest"]["derived"]["history_build_elapsed_ms"] == 755750
-    assert active_group["latest"]["derived"]["latest_event_age_ms"] == 360000
-    assert active_group["latest"]["derived"]["price_history_fetch_elapsed_ms"] == 210500
-    assert active_group["latest"]["derived"]["timeline_replay_elapsed_ms"] == 12250
-    assert active_group["latest"]["derived"]["estimated_dense_pair_row_work"] == (
-        43201 * 29
-    )
-    assert active_group["latest"]["derived"]["estimated_held_pair_row_work"] == 43201
-    assert active_group["latest"]["derived"]["estimated_cooldown_pair_row_work"] == 43201
-    assert active_group["latest"]["derived"]["estimated_required_pair_row_work"] == (
-        43201 * 20
-    )
-    assert active_group["latest"]["derived"]["estimated_dense_remaining_rows"] == (
-        43201 * 29 - 64000
-    )
-    assert active_group["latest"]["derived"]["estimated_required_remaining_rows"] == (
-        43201 * 20 - 64000
-    )
-    assert active_group["latest"]["derived"]["estimated_remaining_rows"] == (
-        43201 * 29 - 64000
-    )
-    assert active_group["latest"]["derived"]["estimated_dense_remaining_ms"] == 3733584
-    assert active_group["latest"]["derived"]["estimated_required_remaining_ms"] == 2512507
-    assert active_group["latest"]["derived"]["estimated_remaining_ms"] == 3733584
-    assert active_group["latest"]["derived"]["observed_work_pct"] == pytest.approx(
-        5.108
-    )
-    assert active_group["latest"]["derived"]["observed_required_work_pct"] == pytest.approx(
-        7.407
-    )
-    assert "AKIA123" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
-    assert "must-not-render" not in json.dumps(
-        report["hsl_replay_health"],
-        sort_keys=True,
-    )
-    assert "balance" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
-    assert "equity" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
-    assert "drawdown_score" not in json.dumps(
-        report["hsl_replay_health"],
-        sort_keys=True,
-    )
-    assert summary["hsl_replay_health"]["active_bots"] == 1
-    assert summary["hsl_replay_health"]["stale_active_bots"] == 1
-    assert summary["hsl_replay_health"]["long_running_active_bots"] == 1
-    assert summary["hsl_replay_health"]["groups"][0]["active"] is True
-    failed_group = next(
-        group
-        for group in report["hsl_replay_health"]["groups"]
-        if group["bot"] == "okx/okx_01"
-    )
-    assert failed_group["active"] is False
-    assert failed_group["failed"]["event_type"] == "hsl.replay.failed"
-    assert failed_group["failed"]["status"] == "failed"
-    shutdown_group = next(
-        group
-        for group in report["hsl_replay_health"]["groups"]
-        if group["bot"] == "kucoin/kucoin_01"
-    )
-    assert shutdown_group["active"] is False
-    assert shutdown_group["failed"]["reason_code"] == "shutdown_cancelled"
-    assert brief["hsl_replay"] == {
-        "total": 9,
-        "bots": 4,
-        "active_bots": 1,
-        "stale_active_bots": 1,
-        "long_running_active_bots": 1,
-        "completed_bots": 1,
-        "failed_bots": 2,
-        "failed_attention_bots": 1,
-        "max_active_latest_elapsed_ms": 755750,
-        "max_active_latest_event_age_ms": 360000,
-        "max_active_estimated_remaining_rows": 43201 * 29 - 64000,
-        "max_active_estimated_remaining_ms": 3733584,
-        "max_active_estimated_dense_remaining_rows": 43201 * 29 - 64000,
-        "max_active_estimated_dense_remaining_ms": 3733584,
-        "max_active_estimated_required_remaining_rows": 43201 * 20 - 64000,
-        "max_active_estimated_required_remaining_ms": 2512507,
-        "max_completed_elapsed_ms": 1623400,
-        "active_stage_counts": {"pair_replay": 1},
-        "active": [
-            {
-                "bot": "gateio/gateio_01",
-                "stage": "pair_replay",
-                "signal_mode": "coin",
-                "symbol": "ZEC/USDT:USDT",
-                "pside": "long",
-                "latest_elapsed_ms": 755750,
-                "latest_event_age_ms": 360000,
-                "active_stale": True,
-                "active_long_running": True,
-                "pair_idx": 3,
-                "pairs": 29,
-                "required_pairs": 20,
-                "held_pairs": 1,
-                "cooldown_pairs": 1,
-                "total_applied_rows": 64000,
-                "rows_per_second": 318.415,
-                "throughput_source": "applied_rows_legacy",
-                "work_estimate_source": "dense_rows_upper_bound",
-                "observed_required_work_pct": 7.407,
-                "observed_work_pct": 5.108,
-                "estimated_dense_remaining_rows": 43201 * 29 - 64000,
-                "estimated_dense_remaining_ms": 3733584,
-                "estimated_required_remaining_rows": 43201 * 20 - 64000,
-                "estimated_required_remaining_ms": 2512507,
-                "estimated_remaining_rows": 43201 * 29 - 64000,
-                "estimated_remaining_ms": 3733584,
-            }
-        ],
-        "event_types": {
-            "hsl.replay.progress": 2,
-            "hsl.replay.started": 4,
-            "hsl.replay.completed": 1,
-            "hsl.replay.failed": 2,
-        },
-    }
-
-
-def test_live_smoke_report_hsl_replay_latest_failure_overrides_stale_completion(tmp_path):
-    _write_ndjson(
-        tmp_path
-        / "monitor"
-        / "binance"
-        / "binance_01"
-        / "events"
-        / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.started",
-                seq=1,
-                ts=1000,
-                reason_code="coin_history_replay",
-                level="debug",
-                status="started",
-                data={"signal_mode": "coin"},
-            ),
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=2,
-                ts=2000,
-                reason_code="coin_history_replay_completed",
-                level="debug",
-                status="succeeded",
-                data={"signal_mode": "coin", "stage": "full_replay"},
-            ),
-            _monitor_row(
-                event_type="hsl.replay.failed",
-                seq=3,
-                ts=4000,
-                reason_code="coin_history_replay_failed",
-                level="warning",
-                status="failed",
-                data={"signal_mode": "coin", "error_type": "RuntimeError"},
-            ),
-        ],
-    )
-
-    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
-    health = report["hsl_replay_health"]
-
-    assert health["active_bots"] == 0
-    assert health["completed_bots"] == 0
-    assert health["failed_bots"] == 1
-    assert health["failed_attention_bots"] == 1
-    assert report["attention_sources"]["hsl_replay_failed_bots"] == 1
-    assert health["groups"][0]["latest"]["event_type"] == "hsl.replay.failed"
-    assert health["groups"][0]["completed"]["event_type"] == "hsl.replay.completed"
 
 
 def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
@@ -7871,12 +7319,14 @@ def test_live_smoke_report_retains_hard_problem_evidence_after_mixed_sample_evic
             },
         ],
     }
-    assert summarize_live_smoke_report(report)["hard_problem_events"] == report[
-        "hard_problem_events"
-    ]
-    assert summarize_live_smoke_report_brief(report)["hard_problem_events"] == report[
-        "hard_problem_events"
-    ]
+    assert (
+        summarize_live_smoke_report(report)["hard_problem_events"]
+        == report["hard_problem_events"]
+    )
+    assert (
+        summarize_live_smoke_report_brief(report)["hard_problem_events"]
+        == report["hard_problem_events"]
+    )
 
 
 def test_live_smoke_report_hard_problem_evidence_respects_zero_sample_limit(tmp_path):
@@ -8490,7 +7940,7 @@ def test_live_smoke_report_log_window_drop_preserves_unparseable_hard_signal(tmp
             [
                 "1970-01-01T00:00:03Z ERROR exchange call failed",
                 "Traceback (most recent call last):",
-                "  File \"/tmp/passivbot.py\", line 1, in run",
+                '  File "/tmp/passivbot.py", line 1, in run',
                 "old unparseable non-signal noise",
             ]
         )
@@ -8611,7 +8061,7 @@ def test_live_smoke_report_log_window_drops_contextless_tailed_traceback(tmp_pat
                 "1970-01-01T00:00:01Z ERROR old exchange call failed",
                 "old stack line before tail",
                 "Traceback (most recent call last):",
-                "  File \"/tmp/passivbot.py\", line 1, in run",
+                '  File "/tmp/passivbot.py", line 1, in run',
             ]
         )
         + "\n",
@@ -8751,10 +8201,7 @@ def test_live_smoke_report_default_logs_root_follows_monitor_root(tmp_path, caps
     )
 
     assert default_logs_root_for_monitor(bot_root / "monitor") == logs_dir
-    assert (
-        live_smoke_report.main([str(bot_root / "monitor"), "--compact"])
-        == 0
-    )
+    assert live_smoke_report.main([str(bot_root / "monitor"), "--compact"]) == 0
 
     report = json.loads(capsys.readouterr().out)
     assert report["logs"]["root"] == str(logs_dir)
@@ -9308,9 +8755,7 @@ def test_live_smoke_report_cli_rejects_unbounded_process_sampling(capsys):
     assert "--process-samples must be between" in capsys.readouterr().err
 
     with pytest.raises(SystemExit) as exc_info:
-        live_smoke_report.main(
-            ["monitor", "--process-sample-interval-s", "nan"]
-        )
+        live_smoke_report.main(["monitor", "--process-sample-interval-s", "nan"])
 
     assert exc_info.value.code == 2
     assert "--process-sample-interval-s must be between" in capsys.readouterr().err
@@ -9439,9 +8884,10 @@ def test_live_process_report_fingerprints_commands_before_public_redaction(
         supervisor_config=second_path,
     )
 
-    assert first["supervisor_contract"]["fingerprint"] != second[
-        "supervisor_contract"
-    ]["fingerprint"]
+    assert (
+        first["supervisor_contract"]["fingerprint"]
+        != second["supervisor_contract"]["fingerprint"]
+    )
     serialized = json.dumps([first, second], sort_keys=True)
     assert "FIRST" not in serialized
     assert "SECOND" not in serialized
@@ -9565,12 +9011,10 @@ def test_live_smoke_report_samples_process_state_recovery_and_persistence(
 ):
     _write_minimal_monitor_event(tmp_path / "monitor")
     command = (
-        "/root/passivbot/venv/bin/passivbot live "
-        "configs/forager.json -u binance_01"
+        "/root/passivbot/venv/bin/passivbot live " "configs/forager.json -u binance_01"
     )
     gateio_command = (
-        "/root/passivbot/venv/bin/passivbot live "
-        "configs/forager.json -u gateio_01"
+        "/root/passivbot/venv/bin/passivbot live " "configs/forager.json -u gateio_01"
     )
     scans = iter(
         [
@@ -9601,7 +9045,13 @@ def test_live_smoke_report_samples_process_state_recovery_and_persistence(
     )
     sleeps = []
     monkeypatch.setattr(smoke_report_module, "_ps_process_rows", lambda: next(scans))
-    monkeypatch.setattr(smoke_report_module.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        smoke_report_module,
+        "time",
+        SimpleNamespace(
+            sleep=sleeps.append, perf_counter=smoke_report_module.time.perf_counter
+        ),
+    )
 
     report = build_live_smoke_report(
         tmp_path / "monitor",
@@ -9781,12 +9231,14 @@ def test_live_smoke_report_process_status_reports_duplicates_and_extra_live_proc
     assert report["processes"]["tmux_pane_ownership"] == (
         "not_available_from_process_table"
     )
-    assert report["processes"]["duplicate_configured_command_matches"][0][
-        "account"
-    ] == "binance_01"
-    assert report["processes"]["duplicate_configured_command_matches"][0][
-        "match_count"
-    ] == 2
+    assert (
+        report["processes"]["duplicate_configured_command_matches"][0]["account"]
+        == "binance_01"
+    )
+    assert (
+        report["processes"]["duplicate_configured_command_matches"][0]["match_count"]
+        == 2
+    )
     assert [
         process["pid"]
         for process in report["processes"]["duplicate_configured_command_matches"][0][
@@ -9812,9 +9264,10 @@ def test_live_smoke_report_process_status_reports_duplicates_and_extra_live_proc
             "command_key": "passivbot live configs/old.json -u okx_old",
         }
     ]
-    assert report["processes"]["unexpected_running"] == report["processes"][
-        "extra_passivbot_live_processes"
-    ]
+    assert (
+        report["processes"]["unexpected_running"]
+        == report["processes"]["extra_passivbot_live_processes"]
+    )
     assert summary["processes"]["duplicate_configured_command_matches_count"] == 1
     assert summary["processes"]["extra_passivbot_live_processes_count"] == 1
     assert len(summary["processes"]["duplicate_configured_command_matches"]) == 1
@@ -10140,7 +9593,9 @@ def test_live_smoke_report_repository_root_redacts_home_prefix(tmp_path, monkeyp
 
 
 def test_live_smoke_report_repository_root_redacts_common_user_dirs():
-    assert smoke_report_module._user_safe_display_path("/root/passivbot") == "~/passivbot"
+    assert (
+        smoke_report_module._user_safe_display_path("/root/passivbot") == "~/passivbot"
+    )
     assert (
         smoke_report_module._user_safe_display_path("/home/deploy/passivbot")
         == "~/passivbot"
@@ -10151,7 +9606,9 @@ def test_live_smoke_report_repository_root_redacts_common_user_dirs():
     )
 
 
-def test_live_smoke_report_discovers_repository_from_monitor_root(tmp_path, monkeypatch):
+def test_live_smoke_report_discovers_repository_from_monitor_root(
+    tmp_path, monkeypatch
+):
     repo_root = tmp_path / "passivbot"
     (repo_root / ".git").mkdir(parents=True)
     _write_minimal_monitor_event(repo_root / "monitor")

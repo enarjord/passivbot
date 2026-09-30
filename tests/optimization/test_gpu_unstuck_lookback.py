@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from test_gpu_entry_sizing_parity import _fixture
-from test_gpu_revised_hsl_multicoin import compare, raw
+from test_gpu_hsl_multicoin import compare, raw
 
 torch = pytest.importorskip("torch")
 pytestmark = pytest.mark.skipif(
@@ -23,11 +23,16 @@ def make_proxy(sides, lookback=8 / 1440):
     for side in sides:
         bot = config["bot"][side]
         bot["risk"].update(
-            n_positions=2, total_wallet_exposure_limit=2.0, entry_cooldown_minutes=1000.0
+            n_positions=2,
+            total_wallet_exposure_limit=2.0,
+            entry_cooldown_minutes=1000.0,
         )
         bot["unstuck"].update(
-            enabled=True, ema_gating_enabled=False, close_pct=0.1,
-            loss_allowance_pct=0.001, threshold=0.3,
+            enabled=True,
+            ema_gating_enabled=False,
+            close_pct=0.1,
+            loss_allowance_pct=0.001,
+            threshold=0.3,
         )
         bot["strategy"]["trailing_martingale"]["entry"].update(
             initial_qty_pct=0.5, threshold_base_pct=10.0
@@ -43,19 +48,30 @@ def make_proxy(sides, lookback=8 / 1440):
     btc = np.full(count, 50_000.0)
     for coin in ("BTC", "ETH"):
         markets[coin].update(
-            last_valid_index=count - 1, price_step=0.01,
-            qty_step=0.1, min_qty=0.1, maker=0.0002,
+            last_valid_index=count - 1,
+            price_step=0.01,
+            qty_step=0.1,
+            min_qty=0.1,
+            maker=0.0002,
         )
     inputs = candles, markets, config, "bybit", btc, timestamps
     proxy = MpsMulticoinProxy(
-        config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
-        exchange="bybit", batch_size=3, needed_metrics={"adg_strategy_eq"},
+        config=config,
+        hlcvs=candles,
+        mss=markets,
+        btc=btc,
+        timestamps=timestamps,
+        exchange="bybit",
+        batch_size=3,
+        needed_metrics={"adg_strategy_eq"},
     )
     return proxy, inputs
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
-@pytest.mark.parametrize("policy", ["disabled", "enabled", "coin_enabled", "coins_disabled"])
+@pytest.mark.parametrize(
+    "policy", ["disabled", "enabled", "coin_enabled", "coins_disabled"]
+)
 def test_unstuck_history_requires_an_effective_consumer(sides, policy):
     from optimization.gpu.service import MpsMulticoinProxy
 
@@ -65,7 +81,10 @@ def test_unstuck_history_requires_an_effective_consumer(sides, policy):
         config["bot"][side]["risk"].update(
             n_positions=2, total_wallet_exposure_limit=2.0
         )
-        config["bot"][side]["unstuck"]["enabled"] = policy in {"enabled", "coins_disabled"}
+        config["bot"][side]["unstuck"]["enabled"] = policy in {
+            "enabled",
+            "coins_disabled",
+        }
         # These are optimizer genes: a zero base value must not elide history.
         config["bot"][side]["unstuck"]["loss_allowance_pct"] = 0.0
     if len(sides) == 1:
@@ -81,8 +100,14 @@ def test_unstuck_history_requires_an_effective_consumer(sides, policy):
             for coin in ("BTC", "ETH")
         }
     proxy = MpsMulticoinProxy(
-        config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
-        exchange="bybit", batch_size=2, needed_metrics={"adg_strategy_eq"},
+        config=config,
+        hlcvs=candles,
+        mss=markets,
+        btc=btc,
+        timestamps=timestamps,
+        exchange="bybit",
+        batch_size=2,
+        needed_metrics={"adg_strategy_eq"},
     )
     runner, finite = raw(proxy, [{}, {}])
     expected = policy in {"enabled", "coin_enabled"}
@@ -90,11 +115,19 @@ def test_unstuck_history_requires_an_effective_consumer(sides, policy):
     assert runner.unstuck_pnl_capacity == (len(candles) if expected else 0)
     assert bool(runner._unstuck_pnl_buffers) == expected
     if not expected:
-        assert runner._history_bytes_per_candidate() == 0
+        # Disabled HSL retains bounded binding scratch, not a history tape.
+        assert runner.hsl_capacity == 2
+        assert runner._history_bytes_per_candidate() < 1024
         config["live"]["pnls_max_lookback_days"] = "all"
         all_history_proxy = MpsMulticoinProxy(
-            config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
-            exchange="bybit", batch_size=2, needed_metrics={"adg_strategy_eq"},
+            config=config,
+            hlcvs=candles,
+            mss=markets,
+            btc=btc,
+            timestamps=timestamps,
+            exchange="bybit",
+            batch_size=2,
+            needed_metrics={"adg_strategy_eq"},
         )
         _, all_history = raw(all_history_proxy, [{}, {}])
         for key in ("balance", "fill_count", "psize"):
@@ -123,24 +156,32 @@ def test_unstuck_expiring_loss_budget_matches_exact_rust(sides, lookback):
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_unstuck_history_replay_reuse_and_bounded_batches(sides):
     proxy, _ = make_proxy(sides)
-    candidates = [{}, {f"{sides[0]}_unstuck_loss_allowance_pct": 0.002},
-                  {f"{sides[0]}_unstuck_loss_allowance_pct": 0.003}]
+    candidates = [
+        {},
+        {f"{sides[0]}_unstuck_loss_allowance_pct": 0.002},
+        {f"{sides[0]}_unstuck_loss_allowance_pct": 0.003},
+    ]
     runner, expected = raw(proxy, candidates)
     if len(sides) == 1:
         runner.max_dispatch_candidate_bars = 24
     ends = np.array([runner.n, runner.n, runner.n], dtype=np.int32)
     _, chunked = raw(proxy, candidates, end_steps=ends)
     compare(expected, chunked)
-    runner.revised_scratch_budget_bytes = runner._history_bytes_per_candidate() * 2
+    runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() * 2
     _, split = raw(proxy, candidates, profile=True)
     compare(expected, split)
     assert runner.last_profile["candidate_batch_count"] == 2
     _, repeated = raw(proxy, candidates)
     compare(expected, repeated)
     _, reordered = raw(proxy, candidates[::-1])
-    compare({k: v.flip(0) if isinstance(v, torch.Tensor) else v
-             for k, v in expected.items()}, reordered)
-    runner.revised_scratch_budget_bytes = runner._history_bytes_per_candidate() - 1
+    compare(
+        {
+            k: v.flip(0) if isinstance(v, torch.Tensor) else v
+            for k, v in expected.items()
+        },
+        reordered,
+    )
+    runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() - 1
     with pytest.raises(ValueError, match="history exceeds"):
         raw(proxy, [{}])
 
@@ -162,6 +203,9 @@ def test_shared_unstuck_window_preserves_intrabar_peak_and_expires_without_fills
     from optimization.gpu.runtime import compile_shader, gpu_device
 
     source = (
+        "#define PASSIVBOT_HSL_CAPACITY 1\n"
+        "#define PASSIVBOT_HSL_TREE_SIZE 1\n"
+        "#define PASSIVBOT_HSL_LOOKBACK 0\n"
         "#define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS 9\n"
         "#define PASSIVBOT_UNSTUCK_PNL_CAPACITY 10\n"
         + passivbot_rust.mps_trailing_martingale_multicoin_source_py()

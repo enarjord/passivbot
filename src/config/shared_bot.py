@@ -1,7 +1,6 @@
 from copy import deepcopy
 from typing import Optional
 
-
 BOT_POSITION_SIDES = ("long", "short")
 BOT_SHARED_GROUPS = ("risk", "forager", "hsl", "unstuck")
 
@@ -29,12 +28,9 @@ BOT_GROUP_FIELD_MAP = {
         "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
         "ema_span_minutes": "hsl_ema_span_minutes",
         "enabled": "hsl_enabled",
-        "no_restart_drawdown_threshold": "hsl_no_restart_drawdown_threshold",
-        "orange_tier_mode": "hsl_orange_tier_mode",
         "panic_close_order_type": "hsl_panic_close_order_type",
         "red_threshold": "hsl_red_threshold",
         "restart_after_red_policy": "hsl_restart_after_red_policy",
-        "tier_ratios": "hsl_tier_ratios",
     },
     "unstuck": {
         "close_pct": "unstuck_close_pct",
@@ -130,7 +126,9 @@ def inject_flattened_shared_bot_side(bot_side: dict | None) -> None:
         bot_side.setdefault(flat_key, deepcopy(value))
 
 
-def canonical_shared_bot_path_for_flat_key(pside: str, flat_key: str) -> tuple[str, ...] | None:
+def canonical_shared_bot_path_for_flat_key(
+    pside: str, flat_key: str
+) -> tuple[str, ...] | None:
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is None:
         return None
@@ -138,7 +136,9 @@ def canonical_shared_bot_path_for_flat_key(pside: str, flat_key: str) -> tuple[s
     return ("bot", pside, group_name, local_key)
 
 
-def resolve_shared_bot_path(bot_side: dict | None, pside: str, flat_key: str) -> tuple[str, ...] | None:
+def resolve_shared_bot_path(
+    bot_side: dict | None, pside: str, flat_key: str
+) -> tuple[str, ...] | None:
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if isinstance(bot_side, dict) and group_path is not None:
         group_name, local_key = group_path
@@ -194,7 +194,9 @@ def canonicalize_shared_bot_side(
             old_value = group_cfg[local_key]
             group_cfg[local_key] = moved_value
             if tracker is not None:
-                tracker.update([*path_prefix, group_name, local_key], old_value, moved_value)
+                tracker.update(
+                    [*path_prefix, group_name, local_key], old_value, moved_value
+                )
                 tracker.remove([*path_prefix, flat_key], moved_value)
         elif tracker is not None:
             tracker.remove([*path_prefix, flat_key], moved_value)

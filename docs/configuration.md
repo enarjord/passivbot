@@ -11,7 +11,7 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 ## Config version
 
 `config_version` is a top-level schema field, not a backtest setting or package version.
-Current configs use `v8.4.0`; supported v8.0.0–v8.3.0 inputs migrate on load. Review migration
+Current configs use `v9.0.0`; supported v8.0.0–v8.4.0 inputs migrate on load. Review migration
 warnings and normalized settings. For v7 trailing-grid configs, use the explicit
 [migration helper](v7_to_v8_migration.md). See [release status](releases.md) for the distinction
 between schemas, package versions, and tags.
@@ -59,8 +59,8 @@ between schemas, package versions, and tags.
   (balance × wallet_exposure_limit × the active strategy initial sizing fraction, including WE
   excess allowance)
   would fall below the exchange’s effective minimum cost.
-- **dynamic_wel_by_tradability**: Backtest-only WEL denominator mode.  
-  - `true` (default): `wallet_exposure_limit = total_wallet_exposure_limit / min(n_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins that have had real candles at any timestep so far (non-shrinking).  
+- **dynamic_wel_by_tradability**: Backtest-only WEL denominator mode.
+  - `true` (default): `wallet_exposure_limit = total_wallet_exposure_limit / min(n_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins that have had real candles at any timestep so far (non-shrinking).
   - `false`: fixed denominator, same as live: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
 - **candle_interval_minutes**: Aggregates raw 1m OHLCVs into coarser candles before the backtest loop runs. `1` keeps native 1m behavior; values above `1` speed up backtests and optimizer runs at the cost of losing intra-interval fill ordering.
 - **gap_tolerance_ohlcvs_minutes**: Maximum internal hole size that can be filled in prepared OHLCV data. Larger or persistent gaps are repaired from local v2 data, legacy shards, and targeted remote fetches; if a large internal gap remains, it is excluded from the returned tradable window rather than made tradable with synthetic candles. Verified exchange-side late starts and early ends do not by themselves abort a run, but local corruption, malformed candles, missing BTC benchmark data, or no tradable candles still fail loudly.
@@ -154,7 +154,7 @@ HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/pside modes,
 and explicit `bot.hsl` for unified mode. Supported leaves are `enabled`,
 `red_threshold`, `ema_span_minutes`, `cooldown_minutes_after_red`,
 `restart_after_red_policy`, and `panic_close_order_type`.
-The sole engine is revised; explicit legacy selection is rejected. See the
+HSL has one implementation; obsolete engine selectors are not runtime options. See the
 [configuration migration rules](#hsl-configuration) before using older settings.
 
 `live.hsl_signal_mode` selects `coin` (default), `pside`, or `unified` signal construction.
@@ -355,13 +355,9 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
         hsl.cooldown_minutes_after_red,
         hsl.ema_span_minutes,
         hsl.enabled,
-        hsl.no_restart_drawdown_threshold,
-        hsl.orange_tier_mode,
         hsl.panic_close_order_type,
         hsl.red_threshold,
         hsl.restart_after_red_policy,
-        hsl.tier_ratios.orange,
-        hsl.tier_ratios.yellow,
         unstuck.close_pct,
         unstuck.ema_dist,
         unstuck.ema_gating_enabled,
@@ -570,12 +566,10 @@ HSL bounds now use side-specific prefixes:
 5. `short_hsl_ema_span_minutes`
 6. `short_hsl_cooldown_minutes_after_red`
 
-`long_hsl_no_restart_drawdown_threshold` and `short_hsl_no_restart_drawdown_threshold` are intentionally not part of the default optimize bounds. The runtime parameters still live under `bot.{long,short}.hsl.*`, but optimizer runs disable terminal no-restart by default via:
-
-1. `optimize.fixed_runtime_overrides["bot.long.hsl.no_restart_drawdown_threshold"] = 1.0`
-2. `optimize.fixed_runtime_overrides["bot.short.hsl.no_restart_drawdown_threshold"] = 1.0`
-
-Risk should be constrained through canonical `*_strategy_eq` metrics instead. Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.
+Unified HSL uses portfolio bounds under `optimize.bounds.hsl`; coin and pside modes use
+side-specific bounds. Set an explicit `restart_after_red_policy` of `always` or `never`
+for each enabled policy. Constrain optimization with the canonical `*_strategy_eq`
+metrics; saved fitness must be recomputed after migrating HSL semantics.
 
 **Validation:**
 
@@ -592,7 +586,7 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
 - **crossover_probability**: Probability of performing crossover between two individuals in the genetic algorithm. Determines how often parents exchange genetic information to create offspring.
 - **crossover_eta**: Crowding factor (η) for simulated-binary crossover. Lower values (<20) allow offspring to move farther away from their parents; higher values keep them closer. Default is `20.0`.
 - **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_pct` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
-- **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use this for optimizer-specific safety knobs such as disabling terminal HSL no-restart while still keeping the live/backtest config unchanged on disk.
+- **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use this to choose an explicit HSL restart policy during optimization while keeping the saved live/backtest policy unchanged.
 - **iters**: Number of backtests per optimize session.
 - **mutation_probability**: Probability of mutating an individual in the genetic algorithm. Determines how often random changes are introduced to maintain diversity.
 - **mutation_eta**: Crowding factor (η) for polynomial mutation. Smaller values (<20) produce heavier-tailed steps that explore more aggressively, while larger values confine mutations near the current value. Default is `20.0`.
@@ -753,23 +747,19 @@ ignored by persistence helpers to keep user configs tidy.
 
 See [Equity Hard Stop Loss](equity_hard_stop_loss.md) for formulas and lifecycle behavior.
 
-Live, offline fake execution, backtesting and CPU/GPU optimization share the sole revised
-HSL implementation. The optional compatibility selector `live.hsl_engine=revised` is
-accepted; `legacy` fails with migration guidance. The selector cannot be changed by
-scenario or fixed optimizer overrides. CPU `deap`/`pymoo` and GPU support all three
-signal modes; the GPU path requires 1m candles and exact Rust candidate validation.
-Changing a source/configuration file does not switch an already-running process.
-Use `backtest.offline=true` with a complete local market-data cache for offline runs;
-selecting the revised engine alone does not disable public market-data downloads.
+Live, offline fake execution, backtesting and CPU/GPU optimization share one HSL
+implementation; no engine selector is needed. See the [HSL guide](equity_hard_stop_loss.md)
+for formulas, reconstruction, cooldown and input requirements. Use existing local market data
+for an offline backtest; normal data preparation can otherwise download public candles.
 
-Revised backtests save HSL summaries and RED/flat/restart transitions by default.
+Backtests save HSL summaries and RED/flat/restart transitions by default.
 Set `backtest.hsl_detailed_report=true` (CLI: `--backtest.hsl_detailed_report true`)
 to also retain per-minute drawdown, EMA and controller samples and enable HSL drawdown
 plots. This diagnostic option increases runtime and memory use; it does not change fills,
 equity or analysis metrics. Disabling plots does not override an explicit report opt-in.
 Metrics-only optimizer evaluations always omit sample and event lists.
 
-For revised `coin`/`pside`, use `bot.long.hsl` and `bot.short.hsl`. Revised `unified`
+For `coin`/`pside`, use `bot.long.hsl` and `bot.short.hsl`. `unified`
 requires an explicitly supplied `bot.hsl` block, even when side settings match or HSL
 is disabled. Supply all six fields: `enabled`, `red_threshold`, `ema_span_minutes`,
 `panic_close_order_type`, `cooldown_minutes_after_red`, and `restart_after_red_policy`.
@@ -778,19 +768,19 @@ No side or template is silently promoted to portfolio authority.
 An enabled active scope must explicitly choose `restart_after_red_policy="always"`
 or `"never"`; missing choices and legacy `"threshold"` fail with migration guidance.
 A disabled scope can defer this choice, but later CLI/scenario/coin enablement must
-supply it. New revised configurations generated by `config.hsl_revised.generated_template`
+supply it. New configurations generated by `config.hsl.generated_template`
 write `"always"` explicitly. Existing configs are never assigned that choice by hydration.
 
-Revised HSL removes `tier_ratios`, `orange_tier_mode`, and
+HSL removes `tier_ratios`, `orange_tier_mode`, and
 `no_restart_drawdown_threshold`. Ordinary supplied fields are removed with migration
 warnings; optimizer bounds, explicit patches, and fixed overrides targeting them are
 rejected. Removed yellow/orange time metrics are rejected as objectives or limits.
-`live.hsl_position_during_cooldown_policy` is also removed from revised configurations
+`live.hsl_position_during_cooldown_policy` is also removed from HSL configurations
 with a warning; any renewed exposure clears cooldown.
 The legacy recovery settings `hsl_unavailable_grace_seconds`,
 `hsl_accept_incomplete_history` and `risk_input_max_attempts` are also removed
 with a warning; they cannot be used as optimizer or scenario parameters.
-Explicit revised optimizer/scenario overrides targeting the removed parameter are rejected.
+Explicit optimizer/scenario overrides targeting the removed parameter are rejected.
 Enabled HSL requires
 `live.pnls_max_lookback_days` in **[1, 90]**, including fractional days; invalid values
 fail rather than being clamped. EMA spans remain fractional and at least one minute.
@@ -798,7 +788,7 @@ fail rather than being clamped. EMA spans remain fractional and at least one min
 Unified optimizer bounds use `optimize.bounds.hsl` and resolve to `bot.hsl` fields;
 fixed overrides use explicit paths such as `bot.hsl.restart_after_red_policy`.
 Side HSL bounds/overrides and per-coin HSL patches are rejected in unified mode.
-Per-coin HSL patches are supported only in coin mode. Engine selection and effective HSL parameters
-participate in the saved-fitness contract; legacy scores cannot be treated as revised
+Per-coin HSL patches are supported only in coin mode. The calculation contract and effective HSL parameters
+participate in the saved-fitness contract; old scores cannot be treated as current
 results. Rolling back the implementation requires an older source version and a
 matching configuration; there is no legacy engine inside this version.

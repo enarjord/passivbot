@@ -110,7 +110,7 @@ must not alter event production, trading decisions, counters, or monitor history
 Each family that uses numeric materiality or hysteresis must define that boundary explicitly and
 test values on both sides; the console sink must not invent a generic threshold after emission.
 
-Revised-HSL console state includes every scope's identity, action/tier, availability and unavailable
+HSL console state includes every scope's identity, action/tier, availability and unavailable
 reason, plus whether estimates are in use. Estimation-reason churn and ordinary numeric/timestamp
 movement remain structured detail. Current-observation freshness, account availability and severity changes print
 immediately; equivalent degraded observations get an event-driven repeat summary at most every

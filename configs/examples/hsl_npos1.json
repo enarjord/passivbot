@@ -292,7 +292,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.4.0",
+    "config_version": "v9.0.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -379,8 +379,7 @@
         "user": "bybit_01",
         "warmup_concurrency": 0,
         "warmup_jitter_seconds": 30,
-        "warmup_ratio": 0.3,
-        "hsl_engine": "revised"
+        "warmup_ratio": 0.3
     },
     "logging": {
         "backup_count": 5,

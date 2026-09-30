@@ -57,7 +57,9 @@ def test_cuda_dispatch_bounds_and_current_stream(cuda, count):
         output = torch.full_like(values, -1)
         library.transform(values, output, threads=(count, 1, 1))
         actual = output.cpu().numpy()
-    np.testing.assert_array_equal(actual[:count], np.arange(count, dtype=np.float32) * 6 + 1)
+    np.testing.assert_array_equal(
+        actual[:count], np.arange(count, dtype=np.float32) * 6 + 1
+    )
     np.testing.assert_array_equal(actual[count:], -np.ones(64))
     for invalid in [0, 2**32]:
         with pytest.raises(ValueError, match="dispatch must contain"):
@@ -101,7 +103,9 @@ def test_shader_buffer_annotations_preserve_argument_order():
     with pytest.raises(ValueError, match="positional argument order"):
         cuda_source(source.replace("buffer(1)", "buffer(0)"))
     with pytest.raises(ValueError, match="positional argument order"):
-        cuda_source(source.replace(" [[buffer(0)]]", "").replace("buffer(1)", "buffer(0)"))
+        cuda_source(
+            source.replace(" [[buffer(0)]]", "").replace("buffer(1)", "buffer(0)")
+        )
 
 
 def test_checkpoint_keeps_mps_compatibility_and_identifies_cuda(monkeypatch):
@@ -111,7 +115,9 @@ def test_checkpoint_keeps_mps_compatibility_and_identifies_cuda(monkeypatch):
     runtime = SimpleNamespace(
         __version__="test-torch",
         backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
-        cuda=SimpleNamespace(is_available=lambda: True, get_device_capability=lambda: (8, 6)),
+        cuda=SimpleNamespace(
+            is_available=lambda: True, get_device_capability=lambda: (8, 6)
+        ),
     )
     assert checkpoint_runtime(runtime) == {}
     runtime.backends.mps.is_available = lambda: False
@@ -193,16 +199,17 @@ def test_disabled_hsl_specialization_requires_explicit_shader_guard(monkeypatch)
     )
     assert _with_hsl_disabled(guarded, False) == guarded
     compact = _with_hsl_disabled(guarded, True)
-    assert compact == (
-        "#define PASSIVBOT_HSL_DISABLED 1\n" + guarded
-    )
+    assert compact == ("#define PASSIVBOT_HSL_DISABLED 1\n" + guarded)
     assert "#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 0" not in compact
-    assert _with_hsl_features(
-        compact,
-        ema_tail_enabled=False,
-        raw_drawdown_enabled=False,
-        raw_tail_enabled=False,
-    ) == compact
+    assert (
+        _with_hsl_features(
+            compact,
+            ema_tail_enabled=False,
+            raw_drawdown_enabled=False,
+            raw_tail_enabled=False,
+        )
+        == compact
+    )
     with pytest.raises(RuntimeError, match="disabled-HSL feature guard"):
         _with_hsl_disabled("kernel void unguarded() {}", True)
     sys.modules.pop("optimization.gpu.mps_kernel", None)
@@ -225,7 +232,10 @@ def test_disabled_hsl_source_removes_hsl_portfolio_scans():
         / "passivbot-rust/src/gpu/mps_ema_anchor_multicoin_long.metal"
     ).read_text()
 
-    assert "#if PASSIVBOT_HSL_DISABLED\n        float hsl_equity_before_fills = 0.0f;" in source
+    assert (
+        "#if PASSIVBOT_HSL_DISABLED\n        float hsl_equity_before_fills = 0.0f;"
+        in source
+    )
     assert "#if !PASSIVBOT_HSL_DISABLED\n        if (can_generate && alive" in source
 
 
@@ -237,8 +247,13 @@ def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
 
     def evaluate(full_capacity):
         proxy, candidates, *_ = _build_case(
-            case, candidates=4, dispatch_batch_size=4, single_bars=256,
-            multicoin_bars=256, coins=coins, seed=7,
+            case,
+            candidates=4,
+            dispatch_batch_size=4,
+            single_bars=256,
+            multicoin_bars=256,
+            coins=coins,
+            seed=7,
         )
         runner = proxy.runners["long"]
         expected_capacity = 1 << (coins - 1).bit_length()
@@ -252,7 +267,8 @@ def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
         output = runner.run(proxy._parameter_matrix(candidates, "long"))
         return {
             key: value.cpu().numpy().copy()
-            for key, value in output.items() if isinstance(value, torch.Tensor)
+            for key, value in output.items()
+            if isinstance(value, torch.Tensor)
         }
 
     specialized = evaluate(False)
@@ -317,10 +333,12 @@ def test_cuda_completion_wait_yields_until_ready(monkeypatch, pending_queries):
     monkeypatch.setitem(sys.modules, "torch", torch)
     ticks = iter([0.0] + [0.5] * pending_queries)
     monkeypatch.setattr(
-        runtime, "time", SimpleNamespace(
+        runtime,
+        "time",
+        SimpleNamespace(
             perf_counter=lambda: next(ticks),
             sleep=lambda seconds: calls.append(seconds),
-        )
+        ),
     )
     runtime.synchronize()
     assert calls == ["record", *([0.001] * pending_queries), "device_sync"]
@@ -396,13 +414,20 @@ def test_cuda_completion_keeps_short_wait_active(monkeypatch):
         backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
         cuda=SimpleNamespace(
             is_available=lambda: True,
-            Event=lambda: SimpleNamespace(record=lambda: None, query=lambda: next(ready)),
+            Event=lambda: SimpleNamespace(
+                record=lambda: None, query=lambda: next(ready)
+            ),
         ),
     )
     monkeypatch.setitem(sys.modules, "torch", torch)
-    monkeypatch.setattr(runtime, "time", SimpleNamespace(
-        perf_counter=lambda: next(ticks), sleep=lambda seconds: calls.append(seconds),
-    ))
+    monkeypatch.setattr(
+        runtime,
+        "time",
+        SimpleNamespace(
+            perf_counter=lambda: next(ticks),
+            sleep=lambda seconds: calls.append(seconds),
+        ),
+    )
     runtime.wait_for_cuda_stream()
     assert calls == []
 
@@ -414,14 +439,28 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
 
     monkeypatch.setattr(mps_kernel, "gpu_device", lambda *_: device)
     runner = SimpleNamespace(
-        **{name: object() for name in (
-            "bars", "fill_ticks", "touch_ticks", "touch_nearest_ticks",
-            "touch_min_qty_bits", "touch_min_qty_relation", "hour_log_ranges",
-            "coin_settings", "coin_overrides", "settings",
-        )},
-        btc_prices_enabled=False, equity_balance_diff_enabled=False,
-        entry_interval_enabled=False, recovery_distribution_enabled=False,
-        max_dispatch_candidate_bars=None, revised_capacity=0, unstuck_pnl_capacity=0,
+        **{
+            name: object()
+            for name in (
+                "bars",
+                "fill_ticks",
+                "touch_ticks",
+                "touch_nearest_ticks",
+                "touch_min_qty_bits",
+                "touch_min_qty_relation",
+                "hour_log_ranges",
+                "coin_settings",
+                "coin_overrides",
+                "settings",
+            )
+        },
+        btc_prices_enabled=False,
+        equity_balance_diff_enabled=False,
+        entry_interval_enabled=False,
+        recovery_distribution_enabled=False,
+        max_dispatch_candidate_bars=None,
+        hsl_capacity=0,
+        unstuck_pnl_capacity=0,
     )
     calls = []
     library = SimpleNamespace(
@@ -447,8 +486,13 @@ def test_cuda_tm_unchunked_blocks_preserve_raw_outputs(cuda, monkeypatch, count,
     from tools.gpu_proxy_benchmark import _build_case
 
     proxy, candidates, *_ = _build_case(
-        "tm-multicoin-overhead", candidates=count, dispatch_batch_size=count,
-        single_bars=256, multicoin_bars=256, coins=coins, seed=7,
+        "tm-multicoin-overhead",
+        candidates=count,
+        dispatch_batch_size=count,
+        single_bars=256,
+        multicoin_bars=256,
+        coins=coins,
+        seed=7,
     )
     runner = proxy.runners["long"]
     runner.max_dispatch_candidate_bars = None
@@ -486,15 +530,17 @@ def test_cuda_tm_unchunked_blocks_preserve_raw_outputs(cuda, monkeypatch, count,
 @pytest.mark.parametrize("capacity", [None, 4])
 def test_cuda_multicoin_relation_bytes_preserve_signed_values(cuda, capacity):
     torch, library_cls = cuda
-    source = '''
+    source = """
         constant int MAX_COINS = 64;
         kernel void relations(constant int* touch_min_qty_relation,
                               device int* output,
                               uint i [[thread_position_in_grid]]) {
             output[i] = touch_min_qty_relation[i];
         }
-    '''
-    assert "const signed char* touch_min_qty_relation" in cuda_source(source, coin_capacity=4)
+    """
+    assert "const signed char* touch_min_qty_relation" in cuda_source(
+        source, coin_capacity=4
+    )
     assert "const signed char* touch_min_qty_relation" in cuda_source(source)
     library = library_cls(source, coin_capacity=capacity)
     values = torch.tensor([-1, 0, 1] * 50, device="cuda", dtype=torch.int8)
@@ -507,13 +553,20 @@ def test_cuda_multicoin_relation_bytes_preserve_signed_values(cuda, capacity):
 
 @pytest.mark.parametrize("coins", [3, 28, 64])
 @pytest.mark.parametrize("count", [1023, 1025])
-def test_cuda_temporal_batch_increase_preserves_outputs_and_partial_tail(cuda, coins, count):
+def test_cuda_temporal_batch_increase_preserves_outputs_and_partial_tail(
+    cuda, coins, count
+):
     torch, _ = cuda
     from tools.gpu_proxy_benchmark import _build_case
 
     proxy, candidates, *_ = _build_case(
-        "tm-multicoin-overhead", candidates=count, dispatch_batch_size=1024,
-        single_bars=256, multicoin_bars=1513, coins=coins, seed=7,
+        "tm-multicoin-overhead",
+        candidates=count,
+        dispatch_batch_size=1024,
+        single_bars=256,
+        multicoin_bars=1513,
+        coins=coins,
+        seed=7,
     )
     runner = proxy.runners["long"]
     runner.max_dispatch_candidate_bars = 1024 * coins * 47
@@ -523,13 +576,18 @@ def test_cuda_temporal_batch_increase_preserves_outputs_and_partial_tail(cuda, c
     def evaluate(batch):
         chunks = []
         for offset in range(0, count, batch):
-            params = matrix[offset:offset + batch]
-            raw = runner.run(params, end_steps=ends[offset:offset + batch])
-            chunks.append({
-                key: value.cpu().numpy().copy()
-                for key, value in raw.items() if isinstance(value, torch.Tensor)
-            })
-        return {key: np.concatenate([chunk[key] for chunk in chunks]) for key in chunks[0]}
+            params = matrix[offset : offset + batch]
+            raw = runner.run(params, end_steps=ends[offset : offset + batch])
+            chunks.append(
+                {
+                    key: value.cpu().numpy().copy()
+                    for key, value in raw.items()
+                    if isinstance(value, torch.Tensor)
+                }
+            )
+        return {
+            key: np.concatenate([chunk[key] for chunk in chunks]) for key in chunks[0]
+        }
 
     baseline = evaluate(512)
     assert baseline

@@ -7,9 +7,9 @@ import json
 import hjson
 import pytest
 from config import prepare_config
-from config.hsl_revised import generated_template
+from config.hsl import generated_template
 from config_utils import load_config
-from live import hsl_revised_live, position_fill_sync
+from live import hsl_live, position_fill_sync
 from test_run_fake_live import REPO_ROOT, _cleanup_fake_user_state
 import tools.run_fake_live as runner
 
@@ -77,7 +77,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
     completed = []
 
     async def exercise(bot):
-        old = hsl_revised_live.owner(bot)
+        old = hsl_live.owner(bot)
         old.cancel_inputs()
         await asyncio.sleep(0.01)
         clock = [0.0]
@@ -90,7 +90,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
         bot.config["bot"][side]["hsl"]["red_threshold"] = 0.03
         bot.cca.get_current_step()["prices"][symbol] = 10.0 if side == "long" else 190.0
         bot.market_snapshot_provider._cache.clear()
-        owner = bot._hsl_revised_live = hsl_revised_live.Owner(bot)
+        owner = bot._hsl_live = hsl_live.Owner(bot)
         await bot.refresh_protective_authoritative_state(require_balance=True)
         before = len(
             [c for c in bot.cca.export_request_log() if c["method"] == "create_order"]
@@ -124,7 +124,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
                 assert await bot.update_pnls(since_ms=0) is False
                 assert not attempts
                 # Ordinary batch creates and cancels obey the same gate, even
-                # before a revised wave has been prepared for connector writes.
+                # before a hsl wave has been prepared for connector writes.
                 order = dict(
                     symbol=symbol,
                     position_side=side,
@@ -157,7 +157,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
             else:
                 await asyncio.wait_for(task, 3.0)
             if failure == "fetch_skipped":
-                assert bot._hsl_revised_fill_capture_interval is None
+                assert bot._hsl_fill_capture_interval is None
                 assert bot._last_fill_refresh_block_reason == "fill_refresh_skipped"
             if failure == "missing_forever":
                 # Successful late fetch with no opening fill releases immediately;
@@ -222,4 +222,5 @@ async def test_pending_history_cannot_starve_real_protective_execution(
     finally:
         _cleanup_fake_user_state(user)
 
-from hsl_revised_fixture import load_fake_hsl_config
+
+from hsl_fixture import load_fake_hsl_config

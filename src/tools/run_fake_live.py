@@ -31,7 +31,6 @@ import passivbot as passivbot_mod
 from passivbot import setup_bot, shutdown_bot
 from procedures import ensure_parent_directory
 
-
 MAX_CAPTURED_LIVE_EVENTS = 2_000
 
 
@@ -90,7 +89,11 @@ def _summarize_remote_calls(call_log: List[dict]) -> dict:
     }
     for entry in call_log:
         method = str(entry.get("method") or "unknown")
-        step_key = str(entry.get("step_index") if entry.get("step_index") is not None else "unknown")
+        step_key = str(
+            entry.get("step_index")
+            if entry.get("step_index") is not None
+            else "unknown"
+        )
         if method in account_state_methods:
             category = "account_state"
         elif method in market_data_methods:
@@ -121,14 +124,19 @@ def _summarize_remote_calls(call_log: List[dict]) -> dict:
             )
     for step_bucket in by_step.values():
         for method, count in step_bucket.items():
-            max_per_step_by_method[method] = max(max_per_step_by_method.get(method, 0), count)
+            max_per_step_by_method[method] = max(
+                max_per_step_by_method.get(method, 0), count
+            )
     return {
         "total_calls": len(call_log),
         "by_category": dict(sorted(by_category.items())),
         "by_method": dict(sorted(by_method.items())),
-        "by_step": {key: dict(sorted(value.items())) for key, value in sorted(by_step.items())},
+        "by_step": {
+            key: dict(sorted(value.items())) for key, value in sorted(by_step.items())
+        },
         "by_step_category": {
-            key: dict(sorted(value.items())) for key, value in sorted(by_step_category.items())
+            key: dict(sorted(value.items()))
+            for key, value in sorted(by_step_category.items())
         },
         "max_per_step_by_method": dict(sorted(max_per_step_by_method.items())),
         "ohlcv_calls": ohlcv_calls,
@@ -186,7 +194,9 @@ def _install_live_event_capture(
         existing_sinks = ()
     else:
         if not callable(getattr(pipeline, "flush", None)):
-            raise RuntimeError("fake-live event pipeline does not support capture flushing")
+            raise RuntimeError(
+                "fake-live event pipeline does not support capture flushing"
+            )
         existing_sinks = tuple(getattr(pipeline, "structured_sinks", ()))
         pipeline.structured_sinks = (*existing_sinks, capture_sink)
 
@@ -215,9 +225,10 @@ def _serialize_live_event_capture(
 
 
 def _extract_hsl_trace(bot) -> Dict[str, dict]:
-    from live import hsl_revised_diagnostics
+    from live import hsl_diagnostics
     from utils import utc_ms
-    return {'revised': hsl_revised_diagnostics.snapshot(bot, now_ms=int(utc_ms()))}
+
+    return {"hsl": hsl_diagnostics.snapshot(bot, now_ms=int(utc_ms()))}
 
 
 def _coerce_numeric_assertion(spec: Any) -> Dict[str, float]:
@@ -257,7 +268,9 @@ def _assert_value(name: str, actual: Any, expected: Any) -> None:
     if isinstance(expected, dict) and "contains" in expected:
         needle = str(expected["contains"])
         if needle not in str(actual):
-            raise AssertionError(f"{name}: expected to contain {needle!r}, got {actual!r}")
+            raise AssertionError(
+                f"{name}: expected to contain {needle!r}, got {actual!r}"
+            )
         return
     if actual != expected:
         raise AssertionError(f"{name}: expected {expected!r} got {actual!r}")
@@ -271,7 +284,9 @@ def _get_path_value(root: Any, path: str) -> Any:
         elif isinstance(current, dict):
             current = current[segment]
         else:
-            raise KeyError(f"Cannot descend into {segment!r} on non-container value {current!r}")
+            raise KeyError(
+                f"Cannot descend into {segment!r} on non-container value {current!r}"
+            )
     return current
 
 
@@ -306,7 +321,9 @@ def _apply_assertions(
     hsl_trace = _extract_hsl_trace(bot)
 
     if "fill_count" in assertions:
-        _assert_numeric("fill_count", float(len(fake_client.fills)), assertions["fill_count"])
+        _assert_numeric(
+            "fill_count", float(len(fake_client.fills)), assertions["fill_count"]
+        )
     if "final_balance" in assertions:
         _assert_numeric(
             "final_balance",
@@ -318,14 +335,18 @@ def _apply_assertions(
         for symbol, expected in assertions["last_prices"].items():
             if symbol not in current_prices:
                 raise AssertionError(f"last_prices: missing symbol {symbol}")
-            _assert_numeric(f"last_price[{symbol}]", float(current_prices[symbol]), expected)
+            _assert_numeric(
+                f"last_price[{symbol}]", float(current_prices[symbol]), expected
+            )
     if "final_positions" in assertions:
         actual_positions = _positions_map(fake_client)
         for key, expected in assertions["final_positions"].items():
             actual = float(actual_positions.get(key, 0.0))
             _assert_numeric(f"final_position[{key}]", actual, expected)
     if "halted_psides" in assertions:
-        raise ValueError("halted_psides is a retired legacy HSL assertion; use hsl_paths with scoped action diagnostics")
+        raise ValueError(
+            "halted_psides is a retired legacy HSL assertion; use hsl_paths with scoped action diagnostics"
+        )
     if "state_paths" in assertions:
         _apply_path_assertions("state_paths", state, assertions["state_paths"])
     if "hsl_paths" in assertions:
@@ -336,11 +357,14 @@ def _apply_assertions(
             "last": (step_summaries or [None])[-1],
             "steps": step_summaries or [],
         }
-        _apply_path_assertions("summary_paths", summary_root, assertions["summary_paths"])
+        _apply_path_assertions(
+            "summary_paths", summary_root, assertions["summary_paths"]
+        )
     if "remote_call_paths" in assertions:
         remote_root = {
             "calls": remote_calls or [],
-            "summary": remote_call_summary or _summarize_remote_calls(remote_calls or []),
+            "summary": remote_call_summary
+            or _summarize_remote_calls(remote_calls or []),
             "candle_fetches": candle_remote_fetches or [],
         }
         _apply_path_assertions(
@@ -354,7 +378,9 @@ def _apply_assertions(
                 raise AssertionError(f"log_contains missing fragment: {fragment!r}")
 
 
-def _install_fake_user_override(config: dict, scenario_path: str, user: str | None) -> tuple[str, callable]:
+def _install_fake_user_override(
+    config: dict, scenario_path: str, user: str | None
+) -> tuple[str, callable]:
     config.setdefault("live", {})
     fake_user = user or str(config["live"].get("user") or "fake_runner")
     config["live"]["user"] = fake_user
@@ -374,7 +400,9 @@ def _install_fake_user_override(config: dict, scenario_path: str, user: str | No
     return fake_user, lambda: setattr(passivbot_mod, "load_user_info", original)
 
 
-def _prime_fake_fill_cache(bot, fake_client: FakeCCXTClient, cache_root: Path | None = None) -> Path:
+def _prime_fake_fill_cache(
+    bot, fake_client: FakeCCXTClient, cache_root: Path | None = None
+) -> Path:
     root = cache_root or Path("caches") / "fill_events"
     cache_path = root / str(bot.exchange) / str(bot.user)
     cache_path.mkdir(parents=True, exist_ok=True)
@@ -384,11 +412,15 @@ def _prime_fake_fill_cache(bot, fake_client: FakeCCXTClient, cache_root: Path | 
     if metadata_path.exists():
         metadata_path.unlink()
     cache = FillEventCache(cache_path)
-    events = [FillEvent.from_dict(event) for event in fake_client.get_fill_events(None, None)]
+    events = [
+        FillEvent.from_dict(event) for event in fake_client.get_fill_events(None, None)
+    ]
     cache.save(events)
     if events:
         cache.update_metadata_from_events(events)
-    coverage_start_ms, history_scope = _fake_fill_cache_coverage(bot, fake_client, events)
+    coverage_start_ms, history_scope = _fake_fill_cache_coverage(
+        bot, fake_client, events
+    )
     if coverage_start_ms is not None:
         cache.mark_covered_start(coverage_start_ms)
     if history_scope is not None:
@@ -432,7 +464,9 @@ def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
     if provider is not None and hasattr(provider, "_cache"):
         provider._cache.clear()
     for symbol in fake_client.symbols:
-        rows = fake_client._candles_by_symbol.get(symbol, [])[: fake_client.current_index + 1]
+        rows = fake_client._candles_by_symbol.get(symbol, [])[
+            : fake_client.current_index + 1
+        ]
         arr = np.zeros(len(rows), dtype=CANDLE_DTYPE)
         for idx, row in enumerate(rows):
             arr[idx]["ts"] = int(row[0])
@@ -451,14 +485,15 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         fake_client = bot.cca
         from live import position_fill_sync
+
         settle_offset = [0.0]
-        settle_clock = lambda: fake_client.now_ms / 1000. + settle_offset[0]
+        settle_clock = lambda: fake_client.now_ms / 1000.0 + settle_offset[0]
         position_fill_sync.state(bot).clock = settle_clock
-        from live import hsl_revised_live
-        if hsl_revised_live.selected(bot):
-            # Retry cadence follows scenario time, while acquisition timestamps,
-            # TTLs and bounded I/O waits remain on the actual observation clock.
-            hsl_revised_live.owner(bot)._schedule_clock = lambda: fake_client.now_ms / 1000.
+        from live import hsl_live
+
+        # Retry cadence follows scenario time, while acquisition timestamps,
+        # TTLs and bounded I/O waits remain on the actual observation clock.
+        hsl_live.owner(bot)._schedule_clock = lambda: fake_client.now_ms / 1000.0
         bot.get_exchange_time = lambda: int(fake_client.now_ms)
         update_pnls = getattr(bot, "update_pnls", None)
         if callable(update_pnls):
@@ -468,11 +503,15 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
                 sync = position_fill_sync.state(self)
                 if sync.clock is settle_clock and not sync.fetch_ready():
                     # Simulate the finite settling wait inside this market bar.
-                    # Do not trap a legacy supervisor on a frozen scenario clock,
+                    # Do not trap the execution owner on a frozen scenario clock,
                     # or consume wall-clock seconds for every deterministic pass.
-                    deadline = min(min(p.changed + position_fill_sync.SETTLE_SECONDS,
-                                       p.first + position_fill_sync.MAX_WAIT_SECONDS)
-                                   for p in sync.pending.values())
+                    deadline = min(
+                        min(
+                            p.changed + position_fill_sync.SETTLE_SECONDS,
+                            p.first + position_fill_sync.MAX_WAIT_SECONDS,
+                        )
+                        for p in sync.pending.values()
+                    )
                     settle_offset[0] += max(0.0, deadline - settle_clock())
                 # Cache refresh watermarks use wall time, while scenarios can
                 # replay any date. Fetch the finite fake tape explicitly so a
@@ -484,14 +523,6 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
             bot.update_pnls = MethodType(update_fake_pnls, bot)
         if hasattr(bot, "cm"):
             bot.cm._now_ms_callback = lambda: int(fake_client.now_ms)
-
-
-
-
-
-
-
-
 
 
 async def _run_fake_bot(
@@ -564,36 +595,52 @@ async def _run_fake_cycle(bot):
 
 
 async def _run_fake_cycle_ready(bot):
-    from live import hsl_revised_live
-    instance = hsl_revised_live.owner(bot)
+    from live import hsl_live
+
+    instance = hsl_live.owner(bot)
     # Settle fast fake reads/planning at one scenario timestamp. An outage
     # remains pending after a bounded number of production passes; never
     # await arbitrary ordinary work to completion before protection.
     for attempt in range(8):
         # poll_inputs() runs at the start of cycle(). A read completing
         # during that cycle still needs a subsequent consuming pass.
-        completed_before = {task for task in (getattr(instance, '_fill_task', None),
-            getattr(instance, '_source_task', None)) if task is not None and task.done()}
+        completed_before = {
+            task
+            for task in (
+                getattr(instance, "_fill_task", None),
+                getattr(instance, "_source_task", None),
+            )
+            if task is not None and task.done()
+        }
         result = await instance.cycle()
-        input_tasks = [task for task in (getattr(instance, '_fill_task', None),
-            getattr(instance, '_source_task', None)) if task is not None]
+        input_tasks = [
+            task
+            for task in (
+                getattr(instance, "_fill_task", None),
+                getattr(instance, "_source_task", None),
+            )
+            if task is not None
+        ]
         for task in input_tasks:
             if task.done():
                 task.result()  # Never relegate a final-step failure to shutdown.
         inputs_consumed = all(task in completed_before for task in input_tasks)
-        if not result['updated'] or (result['ordinary_executed'] and inputs_consumed):
-            return dict(result, engine='revised', passes=attempt+1)
+        if not result["updated"] or (result["ordinary_executed"] and inputs_consumed):
+            return dict(result, engine="hsl", passes=attempt + 1)
         # A completed ordinary plan does not settle newly scheduled history
         # reads. Give them the same bounded opportunity before advancing the
         # scenario clock; the next production pass observes their results.
-        pending = [task for task in (instance._ordinary, *input_tasks)
-            if task is not None and not task.done()]
+        pending = [
+            task
+            for task in (instance._ordinary, *input_tasks)
+            if task is not None and not task.done()
+        ]
         if pending:
-            await asyncio.wait(pending, timeout=.25)
+            await asyncio.wait(pending, timeout=0.25)
             for task in input_tasks:
                 if task.done():
                     task.result()  # Includes completion during the final bounded wait.
-    return dict(result, engine='revised', passes=8, preparation_pending=True)
+    return dict(result, engine="hsl", passes=8, preparation_pending=True)
 
 
 def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
@@ -637,12 +684,12 @@ def _canonical_fill(fill: dict[str, Any]) -> dict[str, Any]:
 
 def _canonical_hsl_trace(trace: dict[str, Any]) -> dict[str, Any]:
     normalized = json.loads(json.dumps(trace))
-    revised = normalized.get("revised")
-    if isinstance(revised, dict):
+    hsl = normalized.get("hsl")
+    if isinstance(hsl, dict):
         # Preserve native actions, exchange-time lifecycle and quality evidence;
         # only observation wall-clock bookkeeping varies between identical runs.
         for key in ("captured_at_ms", "input_expires_at_ms", "age_ms"):
-            revised.pop(key, None)
+            hsl.pop(key, None)
     for pside_state in normalized.values():
         if not isinstance(pside_state, dict):
             continue
@@ -667,7 +714,7 @@ def _canonicalize_artifact(name: str, payload: Any) -> Any:
                     parsed = ast.literal_eval(result)
                 except (ValueError, SyntaxError):
                     parsed = None
-                if isinstance(parsed, dict) and parsed.get("engine") == "revised":
+                if isinstance(parsed, dict) and parsed.get("engine") == "hsl":
                     parsed.pop("passes", None)
                     step["result"] = parsed
             normalized.append(step)
@@ -701,7 +748,9 @@ def _canonicalize_artifact(name: str, payload: Any) -> Any:
         if isinstance(normalized.get("fills"), list):
             normalized["fills"] = _canonicalize_artifact("fills", normalized["fills"])
         if isinstance(normalized.get("positions"), list):
-            normalized["positions"] = _canonicalize_artifact("positions", normalized["positions"])
+            normalized["positions"] = _canonicalize_artifact(
+                "positions", normalized["positions"]
+            )
         if isinstance(normalized.get("open_orders"), list):
             normalized["open_orders"] = sorted(
                 [
@@ -727,7 +776,9 @@ def _canonicalize_artifact(name: str, payload: Any) -> Any:
     return payload
 
 
-def _compare_run_artifacts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+def _compare_run_artifacts(
+    left: dict[str, Any], right: dict[str, Any]
+) -> dict[str, Any]:
     keys = ("step_summaries", "fake_exchange_state", "fills", "positions", "hsl_trace")
     diffs = []
     for key in keys:
@@ -804,7 +855,9 @@ async def _run_fake_case(
         if not isinstance(bot.cca, FakeCCXTClient):
             raise TypeError("Fake harness expected bot.cca to be FakeCCXTClient")
         live_event_sink, restore_live_event_capture = _install_live_event_capture(bot)
-        candle_remote_fetches, restore_candle_trace = _install_candle_remote_fetch_trace(bot)
+        candle_remote_fetches, restore_candle_trace = (
+            _install_candle_remote_fetch_trace(bot)
+        )
         _prime_fake_fill_cache(bot, bot.cca)
         _prime_fake_candles(bot, bot.cca)
         _install_runtime_overrides(bot, scenario)
@@ -902,10 +955,14 @@ async def _async_main(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run passivbot against the fake exchange harness")
+    parser = argparse.ArgumentParser(
+        description="Run passivbot against the fake exchange harness"
+    )
     parser.add_argument("config", help="Passivbot config path")
     parser.add_argument("scenario", help="Fake scenario path (HJSON or JSON)")
-    parser.add_argument("--user", default=None, help="Override live.user from the config")
+    parser.add_argument(
+        "--user", default=None, help="Override live.user from the config"
+    )
     parser.add_argument(
         "--max-steps",
         type=int,

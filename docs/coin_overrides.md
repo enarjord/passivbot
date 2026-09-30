@@ -34,11 +34,7 @@ The complete conditional HSL override group is:
 - `hsl.red_threshold`
 - `hsl.ema_span_minutes`
 - `hsl.cooldown_minutes_after_red`
-- `hsl.no_restart_drawdown_threshold`
 - `hsl.restart_after_red_policy`
-- `hsl.tier_ratios.yellow`
-- `hsl.tier_ratios.orange`
-- `hsl.orange_tier_mode`
 - `hsl.panic_close_order_type`
 
 These fields are per `coin+side` only when the main config selects
@@ -99,10 +95,7 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
             "red_threshold": 0.08,
             "ema_span_minutes": 10.0,
             "cooldown_minutes_after_red": 60.0,
-            "no_restart_drawdown_threshold": 0.25,
-            "restart_after_red_policy": "threshold",
-            "tier_ratios": {"yellow": 0.5, "orange": 0.75},
-            "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "restart_after_red_policy": "always",
             "panic_close_order_type": "market"
           },
           "wallet_exposure_limit": 0.18
@@ -192,8 +185,8 @@ Main config:
   coin+side. A per-coin `unstuck.ema_gating_enabled=false` disables only that coin+side's unstuck
   EMA trigger/readiness gate; the other unstuck eligibility checks still apply.
 - In global `coin` signal mode, per-coin HSL values drive the live supervisor and Rust backtest for
-  only the selected `coin+side`, including enablement, tier thresholds, cooldown/restart policy,
-  orange behavior, and panic execution type. Other coins inherit the main config.
+  only the selected `coin+side`, including enablement, RED threshold, drawdown EMA span, cooldown/restart policy,
+  and panic execution type. Other coins inherit the main config.
 
 ## Composing single-coin configs
 

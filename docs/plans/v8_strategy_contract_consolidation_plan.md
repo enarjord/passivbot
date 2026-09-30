@@ -275,7 +275,7 @@ Suggested files:
 4. Shared bot grouped override survives runtime alias refresh.
    - Start with a config containing both grouped and stale flat aliases.
    - Apply an override like:
-     - `bot.long.hsl_no_restart_drawdown_threshold = 1.0`
+     - `bot.long.hsl_cooldown_minutes_after_red = 60.0`
      - `bot.long.risk.entry_cooldown_minutes = 2.5`
    - Assert grouped canonical values and flat runtime aliases both equal the new value.
    - Repeat through suite scenario override application, not only optimizer override application.

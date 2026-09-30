@@ -5,7 +5,7 @@ from typing import Optional
 
 from pure_funcs import sort_dict_keys, str2bool
 
-from .hsl_revised import normalization_template, normalize_revised
+from .hsl import normalization_template, normalize_hsl
 from .log_output import log_config_message
 from .migrations import apply_backward_compatibility_renames
 from .optimize_bounds import get_optimize_bounds_defaults
@@ -24,7 +24,6 @@ from .tree_ops import add_missing_keys_recursively
 from risk_limits import normalize_we_excess_allowance_mode
 
 DEFAULT_FORAGER_SCORE_WEIGHTS = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
-DEFAULT_HSL_TIER_RATIOS = {"yellow": 0.5, "orange": 0.75}
 REQUIRED_BOT_KEYS = ()
 CLIFF_EDGE_THRESHOLD_KEYS = (
     "risk_wel_enforcer_threshold",
@@ -99,7 +98,9 @@ def _validate_positive_ratio_when_enabled(
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{threshold_path} must be numeric") from exc
     if not math.isfinite(threshold) or threshold <= 0.0:
-        raise ValueError(f"{threshold_path} must be finite and > 0.0 when {enabled_path}=true")
+        raise ValueError(
+            f"{threshold_path} must be finite and > 0.0 when {enabled_path}=true"
+        )
 
 
 def normalize_twel_enforcer_policy(value, *, path: str) -> str:
@@ -117,13 +118,17 @@ def validate_bot_config(result: dict) -> None:
         bot_side = result["bot"][pside]
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_enabled"),
-            threshold_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_threshold"),
+            threshold_value=get_grouped_bot_value(
+                bot_side, "risk_wel_enforcer_threshold"
+            ),
             enabled_path=f"bot.{pside}.risk.position_exposure_enforcer_enabled",
             threshold_path=f"bot.{pside}.risk.position_exposure_enforcer_threshold",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"),
-            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
+            threshold_value=get_grouped_bot_value(
+                bot_side, "risk_twel_enforcer_threshold"
+            ),
             enabled_path=f"bot.{pside}.risk.total_exposure_enforcer_enabled",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
         )
@@ -134,7 +139,9 @@ def validate_bot_config(result: dict) -> None:
         if entry_gate_enabled:
             _validate_positive_ratio_when_enabled(
                 enabled_value=True,
-                threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
+                threshold_value=get_grouped_bot_value(
+                    bot_side, "risk_twel_enforcer_threshold"
+                ),
                 enabled_path=f"bot.{pside}.risk.total_exposure_entry_gate_enabled",
                 threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
             )
@@ -152,7 +159,9 @@ def validate_bot_config(result: dict) -> None:
             raise ValueError(f"bot.{pside}.risk.n_positions must be finite and >= 0")
         n_positions = int(round(n_positions_value))
         if twel < 0.0 or not math.isfinite(twel):
-            raise ValueError(f"bot.{pside}.risk.total_wallet_exposure_limit must be finite and >= 0.0")
+            raise ValueError(
+                f"bot.{pside}.risk.total_wallet_exposure_limit must be finite and >= 0.0"
+            )
         if twel > 0.0 and n_positions <= 0:
             raise ValueError(
                 f"bot.{pside}.risk.n_positions must be > 0 when "
@@ -276,41 +285,6 @@ def _bot_side_enabled(bot_cfg: dict, *, pside: str) -> bool:
     return total_wallet_exposure_limit > 0.0
 
 
-def _hydrate_hsl_tier_ratios(
-    result: dict,
-    *,
-    pside: str,
-    verbose: bool,
-    tracker: Optional[object],
-) -> None:
-    bot_cfg = result["bot"][pside]
-    if "hsl_tier_ratios" not in bot_cfg or bot_cfg["hsl_tier_ratios"] is None:
-        _set_hydrated_bot_value(
-            result,
-            pside=pside,
-            key="hsl_tier_ratios",
-            value=DEFAULT_HSL_TIER_RATIOS,
-            reason="disabled HSL compatibility default",
-            verbose=verbose,
-            tracker=tracker,
-        )
-        return
-    if not isinstance(bot_cfg["hsl_tier_ratios"], dict):
-        return
-    for child, default_value in DEFAULT_HSL_TIER_RATIOS.items():
-        if child not in bot_cfg["hsl_tier_ratios"]:
-            _set_hydrated_bot_nested_value(
-                result,
-                pside=pside,
-                key="hsl_tier_ratios",
-                child=child,
-                value=default_value,
-                reason="disabled HSL compatibility default",
-                verbose=verbose,
-                tracker=tracker,
-            )
-
-
 def _hydrate_forager_score_weights(
     result: dict,
     *,
@@ -319,7 +293,10 @@ def _hydrate_forager_score_weights(
     tracker: Optional[object],
 ) -> None:
     bot_cfg = result["bot"][pside]
-    if "forager_score_weights" not in bot_cfg or bot_cfg["forager_score_weights"] is None:
+    if (
+        "forager_score_weights" not in bot_cfg
+        or bot_cfg["forager_score_weights"] is None
+    ):
         _set_hydrated_bot_value(
             result,
             pside=pside,
@@ -487,7 +464,6 @@ def normalize_hsl_risk_unstuck_numerics(
                 raise ValueError(f"{unstuck_path}.{key} must be positive and finite")
             bot_side["unstuck"][key] = value
 
-
         _validate_ratio(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),
             path=f"{risk_path}.we_excess_allowance_pct",
@@ -562,7 +538,10 @@ def ensure_required_bot_params_present(result: dict) -> None:
         unhandled = sorted(set(flat_template_cfg) - set(flat_bot_cfg))
         if unhandled:
             joined = ", ".join(_bot_path(pside, key) for key in unhandled)
-            raise ValueError(f"Missing explicit hydration policy for bot parameter(s): {joined}")
+            raise ValueError(
+                f"Missing explicit hydration policy for bot parameter(s): {joined}"
+            )
+
 
 def ensure_bot_defaults(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
@@ -589,7 +568,9 @@ def ensure_optimize_bounds_for_bot(
 ) -> None:
     del verbose
     bounds = result["optimize"]["bounds"]
-    defaults = normalization_template(get_template_config(), result)["optimize"]["bounds"]
+    defaults = normalization_template(get_template_config(), result)["optimize"][
+        "bounds"
+    ]
     add_missing_keys_recursively(
         defaults,
         bounds,
@@ -632,7 +613,10 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
     if total <= 0.0:
         return {"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0}
 
-    return {key: normalized[key] / total for key in ("volume", "ema_readiness", "volatility")}
+    return {
+        key: normalized[key] / total
+        for key in ("volume", "ema_readiness", "volatility")
+    }
 
 
 def forager_score_weights_are_normalized(
@@ -661,11 +645,17 @@ def normalize_bot_forager_config(
         try:
             drop_pct = float(raw_drop_pct)
         except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.forager.volume_drop_pct must be numeric") from exc
+            raise TypeError(
+                f"bot.{pside}.forager.volume_drop_pct must be numeric"
+            ) from exc
         if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
-            raise ValueError(f"bot.{pside}.forager.volume_drop_pct must be within [0.0, 1.0]")
+            raise ValueError(
+                f"bot.{pside}.forager.volume_drop_pct must be within [0.0, 1.0]"
+            )
         if raw_drop_pct != drop_pct and tracker is not None:
-            tracker.update(["bot", pside, "forager", "volume_drop_pct"], raw_drop_pct, drop_pct)
+            tracker.update(
+                ["bot", pside, "forager", "volume_drop_pct"], raw_drop_pct, drop_pct
+            )
         forager_cfg["volume_drop_pct"] = drop_pct
 
         weights = forager_cfg["score_weights"]
@@ -705,11 +695,15 @@ def normalize_bot_forager_config(
                     normalized,
                 )
             if tracker is not None:
-                tracker.update(["bot", pside, "forager", "score_weights"], weights, normalized)
+                tracker.update(
+                    ["bot", pside, "forager", "score_weights"], weights, normalized
+                )
         forager_cfg["score_weights"] = normalized
 
 
-def normalize_position_counts(result: dict, *, tracker: Optional[object] = None) -> None:
+def normalize_position_counts(
+    result: dict, *, tracker: Optional[object] = None
+) -> None:
     for pside in BOT_POSITION_SIDES:
         canonicalize_shared_bot_side(
             result["bot"][pside],
@@ -866,11 +860,15 @@ def strip_deprecated_coin_override_entry_grid_inflation_flags(
             continue
         for pside in BOT_POSITION_SIDES:
             bot_cfg = override_bot.get(pside, {})
-            if not isinstance(bot_cfg, dict) or "entry_grid_inflation_enabled" not in bot_cfg:
+            if (
+                not isinstance(bot_cfg, dict)
+                or "entry_grid_inflation_enabled" not in bot_cfg
+            ):
                 continue
             raw_value = bot_cfg["entry_grid_inflation_enabled"]
             normalized = _parse_entry_grid_inflation_flag(
-                raw_value, path=f"coin_overrides.{coin}.bot.{pside}.entry_grid_inflation_enabled"
+                raw_value,
+                path=f"coin_overrides.{coin}.bot.{pside}.entry_grid_inflation_enabled",
             )
             if normalized:
                 log_config_message(
@@ -884,7 +882,13 @@ def strip_deprecated_coin_override_entry_grid_inflation_flags(
             removed = bot_cfg.pop("entry_grid_inflation_enabled")
             if tracker is not None:
                 tracker.remove(
-                    ["coin_overrides", coin, "bot", pside, "entry_grid_inflation_enabled"],
+                    [
+                        "coin_overrides",
+                        coin,
+                        "bot",
+                        pside,
+                        "entry_grid_inflation_enabled",
+                    ],
                     removed,
                 )
 
@@ -904,9 +908,13 @@ def validate_forager_config(
         try:
             drop_pct = float(drop_pct)
         except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.forager.volume_drop_pct must be numeric") from exc
+            raise TypeError(
+                f"bot.{pside}.forager.volume_drop_pct must be numeric"
+            ) from exc
         if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
-            raise ValueError(f"bot.{pside}.forager.volume_drop_pct must be within [0.0, 1.0]")
+            raise ValueError(
+                f"bot.{pside}.forager.volume_drop_pct must be within [0.0, 1.0]"
+            )
         pside_enabled = (
             float(risk_cfg["total_wallet_exposure_limit"]) > 0.0
             and int(round(float(risk_cfg["n_positions"]))) > 0
@@ -958,7 +966,11 @@ def format_bot_config(
     template = normalization_template(get_template_config(), {"live": live_cfg or {}})
     result = {
         "bot": deepcopy(bot_cfg),
-        "live": deepcopy(live_cfg) if isinstance(live_cfg, dict) else deepcopy(template["live"]),
+        "live": (
+            deepcopy(live_cfg)
+            if isinstance(live_cfg, dict)
+            else deepcopy(template["live"])
+        ),
         "optimize": {"bounds": {}},
     }
     for pside in BOT_POSITION_SIDES:
@@ -980,7 +992,7 @@ def format_bot_config(
     migrate_entry_ema_spans(result, tracker=tracker)
 
     migrate_unstuck_ema_spans(result, verbose=verbose, tracker=tracker)
-    normalize_revised(result, template, verbose=verbose)
+    normalize_hsl(result, template, verbose=verbose)
     ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
     ensure_required_bot_params_present(result)
     normalize_hsl_risk_unstuck_numerics(result, verbose=verbose, tracker=tracker)
@@ -999,7 +1011,10 @@ def format_bot_config(
 def apply_forager_internal_aliases(result: dict) -> None:
     def _alias_bot_cfg(bot_cfg: dict) -> None:
         inject_flattened_shared_bot_side(bot_cfg)
-        for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
+        for (
+            canonical_key,
+            internal_key,
+        ) in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
             if canonical_key in bot_cfg and internal_key not in bot_cfg:
                 bot_cfg[internal_key] = deepcopy(bot_cfg[canonical_key])
         bot_cfg.setdefault("filter_volatility_drop_pct", 0.0)

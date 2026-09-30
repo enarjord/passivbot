@@ -17,15 +17,6 @@ two separate PRs. Keep both PRs reviewed, tested, and live-smoked separately.
 
 Observed during repeated restarts of the five VPS5 bots:
 
-- Binance and Hyperliquid often stopped quickly.
-- Kucoin sometimes took over two minutes after Ctrl-C while it was in candle
-  warmup/fetch-lock work.
-- Gateio sometimes waited for in-flight fills/account refresh work before exit.
-- OKX usually exited promptly, but can still be inside exchange/websocket work.
-- Gateio startup with HSL coin history replay reached READY only after HSL
-  reconstruction applied `880111` rows in about `114.9s`, despite the bot having
-  been restarted after a short downtime.
-
 These are not trading-logic bugs by themselves. They are operational latency and
 developer-feedback-loop problems that also increase VPS load.
 
@@ -56,38 +47,7 @@ slow I/O, flush monitor/event output on a short bounded deadline, and exit.
 
 ### Target Contract
 
-- A single shutdown intent is observable by all long-running loops.
-- Long candle warmup/fetch loops, forager refresh, HSL replay, fill refresh,
-  staged account refresh, background maintainers, executor waits, and lock waits
-  check the shutdown intent at bounded intervals.
-- After shutdown starts, do not start new normal planning/execution work.
-- In-flight exchange writes cannot be unsent, but shutdown should not enqueue new
-  writes after the stop intent is visible.
-- In-flight non-critical fetches may be cancelled or interrupted by session close.
-- Cache writes must remain atomic or be safely abandoned; do not leave partially
-  written cache shards that later look valid.
-- Monitor/event pipeline flush has a bounded deadline. Flush failure degrades
-  observability only; it must not hang shutdown indefinitely.
-- A repeated signal may still force immediate exit, preserving the current
-  operator escape hatch.
-
 ### Likely Code Areas
-
-- `src/passivbot.py`
-  - signal handling around `_handle_shutdown_signal`
-  - `_shutdown_requested`, `_raise_if_shutdown_requested`,
-    `_sleep_unless_shutdown`
-  - `shutdown_gracefully`
-  - startup and warmup calls around `start_bot`
-  - HSL replay paths
-- `src/live/state_refresh.py`
-  - staged account refresh and routine fill prefetch
-- candle/warmup paths in `Passivbot`
-  - `warmup_trading_ready_candles`
-  - `start_background_candle_warmup`
-  - active/forager candle refresh loops
-  - candlestick manager stop callback/lock waits
-- websocket/order maintainer tasks
 
 ### Implementation Notes
 
@@ -106,18 +66,6 @@ slow I/O, flush monitor/event output on a short bounded deadline, and exit.
 ### Tests
 
 Add focused async tests with fake tasks/exchanges:
-
-- Ctrl-C during candle warmup cancels/returns promptly and closes sessions.
-- Ctrl-C during forager refresh does not continue refreshing the remaining
-  candidate universe.
-- Ctrl-C during HSL replay stops row/symbol processing before replay completion.
-- Ctrl-C while a lock wait is active exits the wait promptly.
-- Ctrl-C while staged account/fill refresh is sleeping or awaiting a fake fetch
-  does not wait for the full fake fetch duration when session/task cancellation
-  is possible.
-- Shutdown still flushes monitor/events before publisher close when possible.
-- Repeated signal still forces immediate exit.
-- No new order creates are started after shutdown is requested.
 
 ### VPS Smoke Acceptance
 
@@ -141,11 +89,6 @@ Expected target:
 
 ### Goal
 
-A short-downtime restart should not repeat cold-start candle warmup, broad
-forager warmup, or full HSL replay when local caches can prove coverage and a
-delta refresh is sufficient. Startup should explain which surfaces were reused,
-which were refreshed, and why cold-start work was required.
-
 ### Target Contract
 
 - Always fetch fresh account-critical state on startup.
@@ -163,38 +106,10 @@ which were refreshed, and why cold-start work was required.
   `docs/ai/error_contract.md`: stale-but-within-policy candidates are not
   arbitrarily excluded, and volume/log-range ranking features carry forward only
   when their age/provenance is valid.
-- For HSL:
-  - `hsl_signal_mode=coin` can often avoid candle-equity replay and should use
-    fill/PnL cache proof plus bounded delta where valid.
-  - `pside` and `unified` modes that require equity replay may use a persisted
-    replay checkpoint only if it is keyed by config, fills coverage, candle
-    coverage, exchange/user, and replay code version. Otherwise cold replay.
-  - A checkpoint must never change the red/current-drawdown contract. Current
-    state still determines whether to panic now.
 
 ### Likely Code Areas
 
-- startup flow in `src/passivbot.py`
-- candle index/cache coverage functions
-- `CandlestickManager` cache metadata and gap policy
-- fill/PnL cache coverage and HSL replay code
-- startup timing diagnostics
-- event bus emitters for cache reuse/degraded startup evidence
-
 ### Implementation Notes
-
-- First add measurement if needed: startup events should separate account fetch,
-  active candle warmup, forager/background warmup, HSL replay load, HSL replay
-  apply, and market-ready timing.
-- Add a cache-coverage decision object rather than scattering booleans:
-  `accepted`, `reason_code`, `covered_start_ms`, `covered_end_ms`,
-  `latest_required_ms`, `delta_ranges`, `source_fingerprint`, and
-  `cold_path_required`.
-- Cache proof should be strict and boring. The fast path is allowed only after
-  the proof object says it is equivalent to cold reconstruction plus delta.
-- Persist HSL replay checkpoints only after successful replay completion. Use a
-  code/config/input fingerprint and invalidate aggressively.
-- Keep the existing cold path intact and easy to force for debugging.
 
 ### Tests
 
@@ -208,11 +123,6 @@ Add tests around cache proof and startup routing:
 - Forager candidates inside allowed staleness retain valid carried
   volume/log-range features; candidates beyond the cap become unavailable with a
   reason.
-- HSL coin mode uses fill/PnL proof and delta without candle-equity replay when
-  valid.
-- HSL pside/unified checkpoint is accepted only when all fingerprints match.
-- HSL checkpoint mismatch, missing fills coverage, or candle coverage gap falls
-  back to cold replay.
 - Fast path and cold path produce equivalent HSL current drawdown/red status for
   controlled fixtures.
 
@@ -220,24 +130,7 @@ Add tests around cache proof and startup routing:
 
 On VPS5:
 
-1. Start all configured bots from a cold-ish state and record startup timings.
-2. Stop all bots.
-3. Restart within a few minutes and record startup timings again.
-4. Confirm account-critical fetches still occur on every startup.
-5. Confirm logs/events explicitly say which cache surfaces were reused and which
-   deltas were fetched.
-6. Confirm Gateio HSL startup no longer re-applies the full historical replay
-   when a valid checkpoint/delta path exists.
-7. Confirm no hard errors, no missing EMA regressions, and no order/risk
-   behavior changes.
-
 Expected target:
-
-- Short-downtime restarts should be materially faster than cold starts.
-- Gateio HSL replay should avoid multi-minute full replay when cache/checkpoint
-  proof is valid.
-- If fast-path proof is invalid, startup may remain slow, but the reason should
-  be explicit and searchable.
 
 ## Suggested Review Prompt
 

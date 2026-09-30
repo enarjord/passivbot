@@ -27,7 +27,6 @@ from live.event_query import (
 )
 from live.problem_events import is_hard_problem_event, is_problem_event
 
-
 PYTHON_TRACEBACK_HEADER_PATTERN = r"\bTraceback\s+\(most recent call last\):"
 HARD_LOG_PATTERN = re.compile(
     rf"{PYTHON_TRACEBACK_HEADER_PATTERN}|"
@@ -92,7 +91,6 @@ EXECUTION_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
 SMOKE_REPORT_BRIEF_LOG_SAMPLE_LIMIT = 3
 SMOKE_REPORT_BRIEF_REMOTE_CALL_SLOWEST_LIMIT = 3
-SMOKE_REPORT_BRIEF_HSL_REPLAY_ACTIVE_LIMIT = 5
 MAX_PROCESS_SAMPLES = 12
 MAX_PROCESS_SAMPLE_INTERVAL_S = 30.0
 PROCESS_SAMPLE_GROUP_LIMIT = 20
@@ -185,9 +183,6 @@ RESOURCE_PRESSURE_FIELDS = (
     "loadavg_15m",
     "health_summary_lag_ms",
 )
-HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
-HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS = 5 * 60 * 1000
-HSL_REPLAY_LONG_RUNNING_ACTIVE_MS = 10 * 60 * 1000
 EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT = 20
 DATA_PACKET_HEALTH_GROUP_LIMIT = 20
 PLANNING_SNAPSHOT_HEALTH_GROUP_LIMIT = 20
@@ -219,12 +214,6 @@ SHUTDOWN_EVENT_TYPES = {
     EventTypes.BOT_STOPPING,
     EventTypes.BOT_SHUTDOWN_STAGE,
     EventTypes.BOT_STOPPED,
-}
-HSL_REPLAY_EVENT_TYPES = {
-    EventTypes.HSL_REPLAY_STARTED,
-    EventTypes.HSL_REPLAY_PROGRESS,
-    EventTypes.HSL_REPLAY_COMPLETED,
-    EventTypes.HSL_REPLAY_FAILED,
 }
 CACHE_HEALTH_EVENT_TYPES = {
     EventTypes.CACHE_LOAD_COMPLETED,
@@ -533,9 +522,11 @@ def _remote_call_failure_group(
         "latest_path": str(path),
         "latest_line": int(line_no),
         "latest_elapsed_ms": _non_negative_int(payload.get("elapsed_ms")),
-        "latest_error": _redact_log_text(str(latest_error))
-        if latest_error not in (None, "")
-        else None,
+        "latest_error": (
+            _redact_log_text(str(latest_error))
+            if latest_error not in (None, "")
+            else None
+        ),
         "latest_ids": {
             key: ids.get(key)
             for key in ("cycle_id", "remote_call_id", "remote_call_group_id")
@@ -586,7 +577,7 @@ def _merge_remote_call_failure_group(
 
 
 def _summarize_remote_call_failures(
-    groups: dict[tuple[Any, ...], dict[str, Any]]
+    groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
     ordered = sorted(
         groups.values(),
@@ -663,31 +654,43 @@ def _remote_call_health_group(
         "count": 1,
         "elapsed_values": [elapsed_ms] if elapsed_ms is not None else [],
         "statuses": Counter([status]) if status else Counter(),
-        "raw_statuses": Counter([raw_status])
-        if raw_status and raw_status != status
-        else Counter(),
-        "reason_codes": Counter([str(reason_code)]) if reason_code not in (None, "") else Counter(),
-        "error_types": Counter([str(error_type)]) if error_type not in (None, "") else Counter(),
+        "raw_statuses": (
+            Counter([raw_status]) if raw_status and raw_status != status else Counter()
+        ),
+        "reason_codes": (
+            Counter([str(reason_code)]) if reason_code not in (None, "") else Counter()
+        ),
+        "error_types": (
+            Counter([str(error_type)]) if error_type not in (None, "") else Counter()
+        ),
         "symbols": Counter([str(symbol)]) if symbol not in (None, "") else Counter(),
-        "failed_reason_codes": Counter([str(reason_code)])
-        if failed and reason_code not in (None, "")
-        else Counter(),
-        "failed_error_types": Counter([str(error_type)])
-        if failed and error_type not in (None, "")
-        else Counter(),
-        "failed_kinds": Counter([str(kind)])
-        if failed and kind not in (None, "")
-        else Counter(),
-        "failed_surfaces": Counter([str(surface)])
-        if failed and surface not in (None, "")
-        else Counter(),
+        "failed_reason_codes": (
+            Counter([str(reason_code)])
+            if failed and reason_code not in (None, "")
+            else Counter()
+        ),
+        "failed_error_types": (
+            Counter([str(error_type)])
+            if failed and error_type not in (None, "")
+            else Counter()
+        ),
+        "failed_kinds": (
+            Counter([str(kind)]) if failed and kind not in (None, "") else Counter()
+        ),
+        "failed_surfaces": (
+            Counter([str(surface)])
+            if failed and surface not in (None, "")
+            else Counter()
+        ),
         "latest_ts": row.get("ts"),
         "latest_seq": row.get("seq"),
         "latest_path": str(path),
         "latest_line": int(line_no),
         "latest_event_type": live_event.get("event_type") or row.get("kind"),
         "latest_status": status,
-        "latest_raw_status": raw_status if raw_status and raw_status != status else None,
+        "latest_raw_status": (
+            raw_status if raw_status and raw_status != status else None
+        ),
         "latest_elapsed_ms": elapsed_ms,
         "latest_symbol": symbol,
         "latest_error_type": error_type,
@@ -779,7 +782,11 @@ def _symbol_sample(counter: Counter[str], *, limit: int) -> dict[str, Any]:
 def _remote_call_health_sort_key(
     group: dict[str, Any],
 ) -> tuple[int, int, int, int, int, str, str]:
-    statuses = group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+    statuses = (
+        group.get("statuses")
+        if isinstance(group.get("statuses"), Counter)
+        else Counter()
+    )
     elapsed = _ms_summary(
         [
             int(value)
@@ -799,7 +806,7 @@ def _remote_call_health_sort_key(
 
 
 def _summarize_remote_call_health(
-    groups: dict[tuple[Any, ...], dict[str, Any]]
+    groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
     ordered = sorted(groups.values(), key=_remote_call_health_sort_key)
     status_totals: Counter[str] = Counter()
@@ -808,7 +815,11 @@ def _summarize_remote_call_health(
     failed_kinds: Counter[str] = Counter()
     failed_surfaces: Counter[str] = Counter()
     for group in groups.values():
-        statuses = group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+        statuses = (
+            group.get("statuses")
+            if isinstance(group.get("statuses"), Counter)
+            else Counter()
+        )
         status_totals.update(statuses)
         for source, target in (
             ("failed_reason_codes", failed_reason_codes),
@@ -825,7 +836,11 @@ def _summarize_remote_call_health(
     total_throttled_count = int(status_totals.get("throttled", 0))
     compact_groups = []
     for group in ordered[:REMOTE_CALL_HEALTH_GROUP_LIMIT]:
-        statuses = group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+        statuses = (
+            group.get("statuses")
+            if isinstance(group.get("statuses"), Counter)
+            else Counter()
+        )
         reason_codes = (
             group.get("reason_codes")
             if isinstance(group.get("reason_codes"), Counter)
@@ -837,9 +852,15 @@ def _summarize_remote_call_health(
             else Counter()
         )
         error_types = (
-            group.get("error_types") if isinstance(group.get("error_types"), Counter) else Counter()
+            group.get("error_types")
+            if isinstance(group.get("error_types"), Counter)
+            else Counter()
         )
-        symbols = group.get("symbols") if isinstance(group.get("symbols"), Counter) else Counter()
+        symbols = (
+            group.get("symbols")
+            if isinstance(group.get("symbols"), Counter)
+            else Counter()
+        )
         count = int(group.get("count", 0))
         group_failed_count = int(statuses.get("failed", 0))
         group_throttled_count = int(statuses.get("throttled", 0))
@@ -1066,8 +1087,12 @@ def _execution_health_group(
         "event_types": Counter([event_type]) if event_type else Counter(),
         "statuses": Counter([status]) if status else Counter(),
         "outcomes": Counter([outcome]) if outcome else Counter(),
-        "reason_codes": Counter([str(reason_code)]) if reason_code not in (None, "") else Counter(),
-        "error_types": Counter([str(error_type)]) if error_type not in (None, "") else Counter(),
+        "reason_codes": (
+            Counter([str(reason_code)]) if reason_code not in (None, "") else Counter()
+        ),
+        "error_types": (
+            Counter([str(error_type)]) if error_type not in (None, "") else Counter()
+        ),
         "symbols": Counter([str(symbol)]) if symbol not in (None, "") else Counter(),
         "psides": Counter([str(pside)]) if pside not in (None, "") else Counter(),
         "sides": Counter([str(side)]) if side not in (None, "") else Counter(),
@@ -1148,7 +1173,11 @@ def _merge_execution_health_group(
 def _execution_health_sort_key(
     group: dict[str, Any],
 ) -> tuple[int, int, int, int, int, int, str, str]:
-    outcomes = group.get("outcomes") if isinstance(group.get("outcomes"), Counter) else Counter()
+    outcomes = (
+        group.get("outcomes")
+        if isinstance(group.get("outcomes"), Counter)
+        else Counter()
+    )
     elapsed = _ms_summary(
         [
             int(value)
@@ -1172,7 +1201,7 @@ def _execution_health_sort_key(
 
 
 def _summarize_execution_health(
-    groups: dict[tuple[Any, ...], dict[str, Any]]
+    groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
     ordered = sorted(groups.values(), key=_execution_health_sort_key)
     event_types: Counter[str] = Counter()
@@ -1198,10 +1227,14 @@ def _summarize_execution_health(
     compact_groups = []
     for group in ordered[:EXECUTION_HEALTH_GROUP_LIMIT]:
         statuses_counter = (
-            group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+            group.get("statuses")
+            if isinstance(group.get("statuses"), Counter)
+            else Counter()
         )
         outcomes_counter = (
-            group.get("outcomes") if isinstance(group.get("outcomes"), Counter) else Counter()
+            group.get("outcomes")
+            if isinstance(group.get("outcomes"), Counter)
+            else Counter()
         )
         reason_codes = (
             group.get("reason_codes")
@@ -1209,11 +1242,23 @@ def _summarize_execution_health(
             else Counter()
         )
         error_types = (
-            group.get("error_types") if isinstance(group.get("error_types"), Counter) else Counter()
+            group.get("error_types")
+            if isinstance(group.get("error_types"), Counter)
+            else Counter()
         )
-        symbols = group.get("symbols") if isinstance(group.get("symbols"), Counter) else Counter()
-        psides = group.get("psides") if isinstance(group.get("psides"), Counter) else Counter()
-        sides = group.get("sides") if isinstance(group.get("sides"), Counter) else Counter()
+        symbols = (
+            group.get("symbols")
+            if isinstance(group.get("symbols"), Counter)
+            else Counter()
+        )
+        psides = (
+            group.get("psides")
+            if isinstance(group.get("psides"), Counter)
+            else Counter()
+        )
+        sides = (
+            group.get("sides") if isinstance(group.get("sides"), Counter) else Counter()
+        )
         compact = {
             "bot": group.get("bot"),
             "event_type": group.get("event_type"),
@@ -1359,12 +1404,12 @@ def _cache_health_group(
         "count": 1,
         "event_types": Counter([event_type]) if event_type else Counter(),
         "symbols": Counter([str(symbol)]) if symbol not in (None, "") else Counter(),
-        "timeframes": Counter([str(timeframe)])
-        if timeframe not in (None, "")
-        else Counter(),
-        "warmup_contexts": Counter([str(context)])
-        if context not in (None, "")
-        else Counter(),
+        "timeframes": (
+            Counter([str(timeframe)]) if timeframe not in (None, "") else Counter()
+        ),
+        "warmup_contexts": (
+            Counter([str(context)]) if context not in (None, "") else Counter()
+        ),
         "reason_counts": Counter(latest_data.get("reason_counts") or {}),
         "source_days": Counter(latest_data.get("source_days") or {}),
         "elapsed_values": [elapsed_ms] if elapsed_ms is not None else [],
@@ -1398,9 +1443,7 @@ def _cache_health_group(
         "latest_elapsed_ms": elapsed_ms,
         "latest_data": latest_data,
         "latest_ids": {
-            key: ids.get(key)
-            for key in ("cycle_id",)
-            if ids.get(key) is not None
+            key: ids.get(key) for key in ("cycle_id",) if ids.get(key) is not None
         },
     }
 
@@ -1485,7 +1528,7 @@ def _cache_health_sort_key(group: dict[str, Any]) -> tuple[int, int, str]:
 
 
 def _summarize_cache_health(
-    groups: dict[tuple[Any, ...], dict[str, Any]]
+    groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
     ordered = sorted(groups.values(), key=_cache_health_sort_key)
     event_types: Counter[str] = Counter()
@@ -1612,12 +1655,12 @@ def _fill_refresh_health_group(
         "count": 1,
         "elapsed_values": [elapsed_ms] if elapsed_ms is not None else [],
         "statuses": Counter([status_value]) if status_value else Counter(),
-        "reason_codes": Counter([str(reason_code)])
-        if reason_code not in (None, "")
-        else Counter(),
-        "error_types": Counter([str(error_type)])
-        if error_type not in (None, "")
-        else Counter(),
+        "reason_codes": (
+            Counter([str(reason_code)]) if reason_code not in (None, "") else Counter()
+        ),
+        "error_types": (
+            Counter([str(error_type)]) if error_type not in (None, "") else Counter()
+        ),
         "latest_ts": row.get("ts"),
         "latest_seq": row.get("seq"),
         "latest_path": str(path),
@@ -1639,9 +1682,7 @@ def _fill_refresh_health_group(
             payload.get("degraded_events_after")
         ),
         "latest_ids": {
-            key: ids.get(key)
-            for key in ("cycle_id",)
-            if ids.get(key) is not None
+            key: ids.get(key) for key in ("cycle_id",) if ids.get(key) is not None
         },
     }
 
@@ -1706,7 +1747,9 @@ def _fill_refresh_health_sort_key(
     group: dict[str, Any],
 ) -> tuple[int, int, int, int, int, str, str]:
     statuses = (
-        group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+        group.get("statuses")
+        if isinstance(group.get("statuses"), Counter)
+        else Counter()
     )
     elapsed = _ms_summary(
         [
@@ -1728,7 +1771,7 @@ def _fill_refresh_health_sort_key(
 
 
 def _summarize_fill_refresh_health(
-    groups: dict[tuple[Any, ...], dict[str, Any]]
+    groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
     ordered = sorted(groups.values(), key=_fill_refresh_health_sort_key)
     status_totals: Counter[str] = Counter()
@@ -1815,9 +1858,7 @@ def _summarize_fill_refresh_health(
             "latest_retry_count": group.get("latest_retry_count"),
             "latest_next_retry_in_ms": group.get("latest_next_retry_in_ms"),
             "latest_error_type": group.get("latest_error_type"),
-            "latest_degraded_events_after": group.get(
-                "latest_degraded_events_after"
-            ),
+            "latest_degraded_events_after": group.get("latest_degraded_events_after"),
             "recovered": bool(failed_count and group.get("latest_status") != "failed"),
             "latest_ids": group.get("latest_ids"),
         }
@@ -1847,7 +1888,7 @@ def _summarize_fill_refresh_health(
 
 
 def _account_critical_remote_call_health_groups(
-    groups: dict[tuple[Any, ...], dict[str, Any]]
+    groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[tuple[Any, ...], dict[str, Any]]:
     return {
         key: group
@@ -1962,7 +2003,7 @@ def _remote_call_timing_sort_key(
 
 
 def _summarize_remote_call_timings(
-    groups: dict[tuple[Any, ...], dict[str, Any]]
+    groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
     ordered = sorted(groups.values(), key=_remote_call_timing_sort_key)
     compact_groups = []
@@ -2216,7 +2257,9 @@ def _sum_reason_symbol_summaries(values: Iterable[Any]) -> dict[str, dict[str, A
             samples.get(reason, Counter()),
             limit=EMA_READINESS_REASON_SYMBOL_SAMPLE_LIMIT,
         )
-        sample = sample_summary.get("sample") if isinstance(sample_summary, dict) else []
+        sample = (
+            sample_summary.get("sample") if isinstance(sample_summary, dict) else []
+        )
         merged[reason] = {
             "count": int(count),
             "sample": sample or [],
@@ -2386,8 +2429,7 @@ def _summarize_ema_readiness_health(
             for group in groups.values()
         ),
         "latest_unavailable_total": sum(
-            int(group.get("latest_unavailable_count") or 0)
-            for group in groups.values()
+            int(group.get("latest_unavailable_count") or 0) for group in groups.values()
         ),
         "latest_optional_drop_total": sum(
             int(group.get("latest_optional_drop_count") or 0)
@@ -2964,9 +3006,7 @@ def _data_packet_health_group(
         "latest_quality": _data_packet_safe_text(payload.get("quality")),
         "latest_freshness_status": _data_packet_safe_text(freshness.get("status")),
         "latest_freshness_age_ms": _non_negative_int(freshness.get("age_ms")),
-        "latest_freshness_max_age_ms": _non_negative_int(
-            freshness.get("max_age_ms")
-        ),
+        "latest_freshness_max_age_ms": _non_negative_int(freshness.get("max_age_ms")),
         "latest_freshness_reason": _data_packet_safe_text(freshness.get("reason")),
         "latest_coverage": _data_packet_coverage(payload.get("coverage")),
         "latest_warning_count": len(warnings) if isinstance(warnings, list) else 0,
@@ -3034,9 +3074,7 @@ def _summarize_data_packet_health(
         latest_sources[str(group.get("latest_source") or "unknown")] += 1
         coverage = group.get("latest_coverage")
         coverage = coverage if isinstance(coverage, dict) else {}
-        latest_row_count_total += int(
-            _non_negative_int(coverage.get("row_count")) or 0
-        )
+        latest_row_count_total += int(_non_negative_int(coverage.get("row_count")) or 0)
         if coverage.get("value_present") is True:
             latest_value_present_packets += 1
         elif coverage.get("value_present") is False:
@@ -3060,7 +3098,9 @@ def _summarize_data_packet_health(
         "latest_freshness_statuses": dict(latest_freshness_statuses.most_common()),
         "latest_sources": dict(latest_sources.most_common()),
         "latest_warning_packets": sum(
-            1 for group in groups.values() if int(group.get("latest_warning_count") or 0)
+            1
+            for group in groups.values()
+            if int(group.get("latest_warning_count") or 0)
         ),
         "latest_error_packets": sum(
             1 for group in groups.values() if int(group.get("latest_error_count") or 0)
@@ -3443,9 +3483,7 @@ def _summarize_cycle_health(
                         )
         if degraded is not None:
             latest_degraded_observed_bots += 1
-            latest_degraded_reasons[
-                str(degraded.get("reason_code") or "unknown")
-            ] += 1
+            latest_degraded_reasons[str(degraded.get("reason_code") or "unknown")] += 1
         if completed_after_degraded:
             completed_after_degraded_bots += 1
         if degraded is not None and (
@@ -3672,9 +3710,7 @@ def _planning_output_group(
     rust_returned = event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED
     action_planned = event_type == EventTypes.ACTION_PLANNED
     orders_truncated = payload.get("orders_truncated")
-    orders_truncated = (
-        orders_truncated if isinstance(orders_truncated, bool) else None
-    )
+    orders_truncated = orders_truncated if isinstance(orders_truncated, bool) else None
     return {
         "bot": bot_key,
         "event_type": event_type,
@@ -3927,8 +3963,7 @@ def _summarize_planning_output_health(
         ),
         "latest_action_by_execution_type": _planning_output_count_map(
             _sum_counter_maps(
-                group.get("latest_action_by_execution_type")
-                for group in latest_groups
+                group.get("latest_action_by_execution_type") for group in latest_groups
             )
         ),
         "latest_action_symbols": (
@@ -3960,7 +3995,9 @@ def _max_counter_maps(values: Iterable[Any]) -> dict[str, int]:
                 continue
             safe_key = str(key)
             current = out.get(safe_key)
-            out[safe_key] = int(parsed) if current is None else max(int(parsed), current)
+            out[safe_key] = (
+                int(parsed) if current is None else max(int(parsed), current)
+            )
     return dict(
         sorted(out.items(), key=lambda item: (-int(item[1]), str(item[0])))[
             :STAGED_READINESS_VALUE_LIMIT
@@ -3995,9 +4032,7 @@ def _staged_readiness_group(
         if defer_summary
         else _invalid_surface_counts(invalid)
     )
-    required_surfaces = (
-        _string_counts(payload.get("required")) if defer_summary else {}
-    )
+    required_surfaces = _string_counts(payload.get("required")) if defer_summary else {}
     reason_code = _staged_readiness_text(live_event.get("reason_code"))
     latest_context = _staged_readiness_text(detail_payload.get("context"))
     latest_defer_reason = _staged_readiness_text(detail_payload.get("defer_reason"))
@@ -4238,9 +4273,7 @@ def _summarize_staged_readiness_health(
             symbol_summary = group.get("latest_defer_symbols")
             if not isinstance(symbol_summary, dict):
                 continue
-            symbol_count += int(
-                _non_negative_int(symbol_summary.get("count")) or 0
-            )
+            symbol_count += int(_non_negative_int(symbol_summary.get("count")) or 0)
             for symbol in symbol_summary.get("sample") or []:
                 symbols[str(symbol)] += 1
         summary.update(
@@ -4251,10 +4284,7 @@ def _summarize_staged_readiness_health(
                 ),
                 "latest_defer_window_s_max": max(
                     (
-                        int(
-                            _non_negative_int(group.get("latest_defer_window_s"))
-                            or 0
-                        )
+                        int(_non_negative_int(group.get("latest_defer_window_s")) or 0)
                         for group in defer_groups
                     ),
                     default=0,
@@ -4705,8 +4735,7 @@ def _summarize_event_pipeline_health(
             int(group.get("latest_dropped_total") or 0) for group in groups.values()
         ),
         "sink_errors": sum(
-            int(group.get("latest_sink_error_total") or 0)
-            for group in groups.values()
+            int(group.get("latest_sink_error_total") or 0) for group in groups.values()
         ),
         "unexpectedly_dead_workers": sum(
             1
@@ -4733,8 +4762,7 @@ def _summarize_event_pipeline_health(
             int(group.get("latest_dropped_total") or 0) for group in groups.values()
         ),
         "latest_sink_error_total": sum(
-            int(group.get("latest_sink_error_total") or 0)
-            for group in groups.values()
+            int(group.get("latest_sink_error_total") or 0) for group in groups.values()
         ),
         "latest_degraded_total": sum(
             int(group.get("latest_degraded_count") or 0) for group in groups.values()
@@ -4743,7 +4771,9 @@ def _summarize_event_pipeline_health(
             1 for group in groups.values() if group.get("latest_worker_alive") is False
         ),
         "latest_stopping_count": sum(
-            1 for group in groups.values() if group.get("latest_pipeline_stopping") is True
+            1
+            for group in groups.values()
+            if group.get("latest_pipeline_stopping") is True
         ),
         "integrity": {
             "ok": integrity_attention_count == 0,
@@ -4756,8 +4786,7 @@ def _summarize_event_pipeline_health(
     processed_counts = [
         int(value)
         for group in groups.values()
-        if (value := _non_negative_int(group.get("latest_processed_count")))
-        is not None
+        if (value := _non_negative_int(group.get("latest_processed_count"))) is not None
     ]
     timing_fields = {
         "latest_timing_window_ms_max": _max_optional_numbers(
@@ -4794,8 +4823,7 @@ def _summarize_event_pipeline_health(
             for group in groups.values()
         ),
         "latest_monitor_sink_service_ms_max": _max_optional_numbers(
-            group.get("latest_monitor_sink_service_ms_max")
-            for group in groups.values()
+            group.get("latest_monitor_sink_service_ms_max") for group in groups.values()
         ),
         "latest_monitor_prepare_ms_total_sum": _sum_optional_numbers(
             group.get("latest_monitor_prepare_ms_total") for group in groups.values()
@@ -4934,7 +4962,9 @@ def _summarize_event_pipeline_health(
     }
     if processed_counts:
         out["latest_processed_total"] = sum(processed_counts)
-    out.update({key: value for key, value in timing_fields.items() if value is not None})
+    out.update(
+        {key: value for key, value in timing_fields.items() if value is not None}
+    )
     return out
 
 
@@ -5167,9 +5197,7 @@ def _summarize_resource_pressure(
             "latest_swap_reporting_bots": _latest_numeric_reporting_bots(
                 groups.values(), "swap_percent"
             ),
-            "latest_rss_bytes_total": _latest_numeric_sum(
-                groups.values(), "rss_bytes"
-            ),
+            "latest_rss_bytes_total": _latest_numeric_sum(groups.values(), "rss_bytes"),
             "latest_rss_reporting_bots": _latest_numeric_reporting_bots(
                 groups.values(), "rss_bytes"
             ),
@@ -5486,9 +5514,9 @@ def _summarize_hsl_status(
                 "symbol": symbol,
                 "pside": group.get("pside"),
                 "tier": str(tier) if tier not in (None, "") else None,
-                "signal_mode": str(signal_mode)
-                if signal_mode not in (None, "")
-                else None,
+                "signal_mode": (
+                    str(signal_mode) if signal_mode not in (None, "") else None
+                ),
                 "dist_to_red": dist_to_red,
                 "red_threshold": red_threshold,
                 "red_proximity_pct": red_proximity_pct,
@@ -5565,9 +5593,7 @@ def _summarize_hsl_raw_red_pending(
         data = (
             raw_pending_data
             if isinstance(raw_pending_data, dict) and raw_pending_data
-            else latest_data
-            if isinstance(latest_data, dict)
-            else {}
+            else latest_data if isinstance(latest_data, dict) else {}
         )
         signal_mode = data.get("signal_mode")
         if signal_mode not in (None, ""):
@@ -5576,11 +5602,19 @@ def _summarize_hsl_raw_red_pending(
         red_threshold = _numeric_value(data.get("red_threshold"))
         drawdown_score = _numeric_value(data.get("drawdown_score"))
         red_proximity_pct = None
-        if red_threshold is not None and red_threshold > 0 and drawdown_score is not None:
+        if (
+            red_threshold is not None
+            and red_threshold > 0
+            and drawdown_score is not None
+        ):
             red_proximity_pct = round((drawdown_score / red_threshold) * 100.0, 3)
         ema_gap_to_red = _numeric_value(data.get("ema_gap_to_red"))
         ema_gap_to_red_pct = None
-        if red_threshold is not None and red_threshold > 0 and ema_gap_to_red is not None:
+        if (
+            red_threshold is not None
+            and red_threshold > 0
+            and ema_gap_to_red is not None
+        ):
             ema_gap_to_red_pct = round((ema_gap_to_red / red_threshold) * 100.0, 3)
         pending.append(
             {
@@ -5590,9 +5624,9 @@ def _summarize_hsl_raw_red_pending(
                     "symbol": symbol,
                     "pside": group.get("pside"),
                     "tier": str(tier) if tier not in (None, "") else None,
-                    "signal_mode": str(signal_mode)
-                    if signal_mode not in (None, "")
-                    else None,
+                    "signal_mode": (
+                        str(signal_mode) if signal_mode not in (None, "") else None
+                    ),
                     "red_proximity_pct": red_proximity_pct,
                     "ema_gap_to_red_pct": ema_gap_to_red_pct,
                     "elapsed_minutes": _non_negative_int(data.get("elapsed_minutes")),
@@ -5872,7 +5906,8 @@ def _summarize_risk_events(
         ),
     )
     attention_groups = [
-        _compact_risk_group(group) for group in attention_ordered[:RISK_EVENT_GROUP_LIMIT]
+        _compact_risk_group(group)
+        for group in attention_ordered[:RISK_EVENT_GROUP_LIMIT]
     ]
     out = {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
@@ -5886,7 +5921,9 @@ def _summarize_risk_events(
     }
     if attention_groups:
         out["attention_groups"] = attention_groups
-        out["attention_groups_truncated"] = len(attention_ordered) > RISK_EVENT_GROUP_LIMIT
+        out["attention_groups_truncated"] = (
+            len(attention_ordered) > RISK_EVENT_GROUP_LIMIT
+        )
     hsl_raw_red_pending = _summarize_hsl_raw_red_pending(groups)
     if int(hsl_raw_red_pending.get("total") or 0) > 0:
         out["hsl_raw_red_pending"] = hsl_raw_red_pending
@@ -6093,9 +6130,9 @@ def _summarize_shutdown_lifecycle(
         bot = str(group.get("bot") or "unknown")
         boundaries = boundaries_by_bot.setdefault(bot, {})
         previous = boundaries.get(str(event_type))
-        if previous is None or _shutdown_event_position(group) > _shutdown_event_position(
-            previous
-        ):
+        if previous is None or _shutdown_event_position(
+            group
+        ) > _shutdown_event_position(previous):
             boundaries[str(event_type)] = group
 
     rows: list[dict[str, Any]] = []
@@ -6175,9 +6212,7 @@ def _non_negative_number(value: Any) -> int | float | None:
 
 def _sum_optional_numbers(values: Iterable[Any]) -> int | float | None:
     parsed = [
-        value
-        for item in values
-        if (value := _non_negative_number(item)) is not None
+        value for item in values if (value := _non_negative_number(item)) is not None
     ]
     if not parsed:
         return None
@@ -6187,78 +6222,12 @@ def _sum_optional_numbers(values: Iterable[Any]) -> int | float | None:
 
 def _max_optional_numbers(values: Iterable[Any]) -> int | float | None:
     parsed = [
-        value
-        for item in values
-        if (value := _non_negative_number(item)) is not None
+        value for item in values if (value := _non_negative_number(item)) is not None
     ]
     if not parsed:
         return None
     maximum = max(float(value) for value in parsed)
     return int(maximum) if maximum.is_integer() else round(maximum, 6)
-
-
-def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
-    data = live_event.get("data")
-    if not isinstance(data, dict):
-        return {}
-    out: dict[str, Any] = {}
-    for key in ("error_type", "signal_mode", "stage", "timeframe"):
-        value = data.get(key)
-        if isinstance(value, str) and value:
-            out[key] = _redact_log_text(value, max_len=80)
-    for key in ("is_held_pair", "is_cooldown_pair"):
-        value = data.get(key)
-        if isinstance(value, bool):
-            out[key] = value
-    for key in (
-        "lookback_days",
-        "symbols",
-        "pairs",
-        "held_pairs",
-        "ready_pairs",
-        "pending_pairs",
-        "cooldown_pairs",
-        "required_pairs",
-        "timeline_rows",
-        "fill_events",
-        "panic_events",
-        "skipped_unsupported_symbols",
-        "events",
-        "current_position_pairs",
-        "price_replay_symbols",
-        "priced_symbols",
-        "empty_price_symbols",
-        "approximate_price_symbols",
-        "skipped_price_symbols",
-        "missing_price_symbols",
-        "history_minutes",
-        "replay_concurrency",
-        "start_ts",
-        "end_ts",
-        "record_start_ts",
-        "pair_idx",
-        "applied_rows",
-        "scanned_rows",
-        "candidate_rows",
-        "total_applied_rows",
-        "total_scanned_rows",
-        "rows",
-        "skipped_pairs",
-        "rows_per_second",
-        "scanned_rows_per_second",
-        "pair_elapsed_s",
-        "elapsed_s",
-        "history_build_elapsed_s",
-        "price_history_fetch_elapsed_s",
-        "timeline_replay_elapsed_s",
-        "full_elapsed_s",
-        "protective_elapsed_s",
-        "startup_blocking_elapsed_s",
-    ):
-        value = _numeric_value(data.get(key))
-        if value is not None:
-            out[key] = value
-    return out
 
 
 def _hsl_observed_applied_rows(data: dict[str, Any]) -> int | None:
@@ -6267,473 +6236,6 @@ def _hsl_observed_applied_rows(data: dict[str, Any]) -> int | None:
         if value is not None:
             return value
     return None
-
-
-def _hsl_replay_work_observation(
-    data: dict[str, Any],
-) -> tuple[int | None, Any, str | None]:
-    scanned_rows = _non_negative_int(data.get("total_scanned_rows"))
-    if scanned_rows is not None:
-        return scanned_rows, data.get("scanned_rows_per_second"), "scanned_rows"
-    applied_rows = _hsl_observed_applied_rows(data)
-    return (
-        applied_rows,
-        data.get("rows_per_second"),
-        "applied_rows_legacy" if applied_rows is not None else None,
-    )
-
-
-def _hsl_replay_remaining_rows(
-    *,
-    estimated_work: int | None,
-    observed_rows: int | None,
-) -> int | None:
-    if estimated_work is None or observed_rows is None:
-        return None
-    return max(0, int(estimated_work) - int(observed_rows))
-
-
-def _hsl_replay_eta_ms(
-    *,
-    remaining_rows: int | None,
-    rows_per_second: Any,
-) -> int | None:
-    if remaining_rows is None:
-        return None
-    try:
-        rate = float(rows_per_second)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(rate) or rate <= 0.0:
-        return None
-    return int(round(1000.0 * float(remaining_rows) / rate))
-
-
-def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
-    timeline_rows = _non_negative_int(data.get("timeline_rows"))
-    pairs = _non_negative_int(data.get("pairs"))
-    required_pairs = _non_negative_int(data.get("required_pairs"))
-    held_pairs = _non_negative_int(data.get("held_pairs"))
-    cooldown_pairs = _non_negative_int(data.get("cooldown_pairs"))
-    observed_applied_rows = _hsl_observed_applied_rows(data)
-    observed_rows, throughput_rate, throughput_source = _hsl_replay_work_observation(
-        data
-    )
-    out: dict[str, Any] = {}
-    dense_work: int | None = None
-    required_work: int | None = None
-    candidate_work: int | None = None
-    if timeline_rows is not None and pairs is not None:
-        dense_work = int(timeline_rows) * int(pairs)
-        out["estimated_dense_pair_row_work"] = dense_work
-        if observed_rows is not None and dense_work > 0:
-            out["observed_work_pct"] = round(
-                min(100.0, max(0.0, 100.0 * float(observed_rows) / float(dense_work))),
-                3,
-            )
-    if timeline_rows is not None and required_pairs is not None:
-        required_work = int(timeline_rows) * int(required_pairs)
-        out["estimated_required_pair_row_work"] = required_work
-        if observed_rows is not None and required_work > 0:
-            out["observed_required_work_pct"] = round(
-                min(100.0, max(0.0, 100.0 * float(observed_rows) / float(required_work))),
-                3,
-            )
-    if timeline_rows is not None and held_pairs is not None:
-        out["estimated_held_pair_row_work"] = int(timeline_rows) * int(held_pairs)
-    if timeline_rows is not None and cooldown_pairs is not None:
-        out["estimated_cooldown_pair_row_work"] = int(timeline_rows) * int(cooldown_pairs)
-    if data.get("stage") == "full_replay":
-        candidate_work = _non_negative_int(data.get("candidate_rows"))
-        if candidate_work is not None:
-            out["estimated_candidate_pair_row_work"] = candidate_work
-            if observed_rows is not None and candidate_work > 0:
-                out["observed_candidate_work_pct"] = round(
-                    min(
-                        100.0,
-                        max(0.0, 100.0 * float(observed_rows) / float(candidate_work)),
-                    ),
-                    3,
-                )
-    if observed_applied_rows is not None:
-        out["observed_applied_rows"] = int(observed_applied_rows)
-    observed_scanned_rows = _non_negative_int(data.get("total_scanned_rows"))
-    if observed_scanned_rows is not None:
-        out["observed_scanned_rows"] = observed_scanned_rows
-    if throughput_source is not None:
-        out["throughput_source"] = throughput_source
-    dense_remaining_rows = _hsl_replay_remaining_rows(
-        estimated_work=dense_work,
-        observed_rows=observed_rows,
-    )
-    if dense_remaining_rows is not None:
-        out["estimated_dense_remaining_rows"] = dense_remaining_rows
-        dense_remaining_ms = _hsl_replay_eta_ms(
-            remaining_rows=dense_remaining_rows,
-            rows_per_second=throughput_rate,
-        )
-        if dense_remaining_ms is not None:
-            out["estimated_dense_remaining_ms"] = dense_remaining_ms
-    required_remaining_rows = _hsl_replay_remaining_rows(
-        estimated_work=required_work,
-        observed_rows=observed_rows,
-    )
-    if required_remaining_rows is not None:
-        out["estimated_required_remaining_rows"] = required_remaining_rows
-        required_remaining_ms = _hsl_replay_eta_ms(
-            remaining_rows=required_remaining_rows,
-            rows_per_second=throughput_rate,
-        )
-        if required_remaining_ms is not None:
-            out["estimated_required_remaining_ms"] = required_remaining_ms
-    candidate_remaining_rows = _hsl_replay_remaining_rows(
-        estimated_work=candidate_work,
-        observed_rows=observed_rows,
-    )
-    if candidate_remaining_rows is not None:
-        out["estimated_candidate_remaining_rows"] = candidate_remaining_rows
-        candidate_remaining_ms = _hsl_replay_eta_ms(
-            remaining_rows=candidate_remaining_rows,
-            rows_per_second=throughput_rate,
-        )
-        if candidate_remaining_ms is not None:
-            out["estimated_candidate_remaining_ms"] = candidate_remaining_ms
-    is_terminal = data.get("stage") == "full_replay"
-    primary_remaining_rows = (
-        candidate_remaining_rows
-        if candidate_remaining_rows is not None
-        else (0 if is_terminal else dense_remaining_rows)
-    )
-    if candidate_remaining_rows is not None:
-        out["work_estimate_source"] = "candidate_rows_terminal"
-    elif is_terminal:
-        out["work_estimate_source"] = "legacy_terminal_no_candidate_rows"
-    elif dense_remaining_rows is not None:
-        out["work_estimate_source"] = "dense_rows_upper_bound"
-    if primary_remaining_rows is not None:
-        out["estimated_remaining_rows"] = primary_remaining_rows
-        primary_remaining_ms = _hsl_replay_eta_ms(
-            remaining_rows=primary_remaining_rows,
-            rows_per_second=throughput_rate,
-        )
-        if primary_remaining_ms is not None:
-            out["estimated_remaining_ms"] = primary_remaining_ms
-    for source_key, target_key in (
-        ("elapsed_s", "latest_elapsed_ms"),
-        ("history_build_elapsed_s", "history_build_elapsed_ms"),
-        ("price_history_fetch_elapsed_s", "price_history_fetch_elapsed_ms"),
-        ("timeline_replay_elapsed_s", "timeline_replay_elapsed_ms"),
-        ("full_elapsed_s", "full_elapsed_ms"),
-        ("protective_elapsed_s", "protective_elapsed_ms"),
-        ("startup_blocking_elapsed_s", "startup_blocking_elapsed_ms"),
-    ):
-        value = data.get(source_key)
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            continue
-        if parsed == parsed and parsed >= 0.0:
-            out[target_key] = int(round(parsed * 1000.0))
-            if source_key == "history_build_elapsed_s" and "latest_elapsed_ms" not in out:
-                out["latest_elapsed_ms"] = out[target_key]
-    return out
-
-
-def _hsl_replay_record(
-    *,
-    row: dict[str, Any],
-    live_event: dict[str, Any],
-    path: Path,
-    line_no: int,
-) -> dict[str, Any]:
-    data = _compact_hsl_replay_data(live_event)
-    ids = _event_ids(live_event)
-    return {
-        key: value
-        for key, value in {
-            "event_type": live_event.get("event_type") or row.get("kind"),
-            "reason_code": live_event.get("reason_code"),
-            "status": live_event.get("status"),
-            "level": live_event.get("level"),
-            "component": live_event.get("component"),
-            "ts": row.get("ts"),
-            "seq": row.get("seq"),
-            "path": str(path),
-            "line": int(line_no),
-            "symbol": live_event.get("symbol") or row.get("symbol"),
-            "pside": live_event.get("pside") or row.get("pside"),
-            "data": data,
-            "derived": _hsl_replay_derived(data),
-            "ids": {
-                key: ids.get(key)
-                for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
-                if ids.get(key) is not None
-            },
-        }.items()
-        if value not in (None, {}, [])
-    }
-
-
-def _merge_hsl_replay_group(
-    groups: dict[str, dict[str, Any]],
-    *,
-    bot_key: str,
-    row: dict[str, Any],
-    live_event: dict[str, Any],
-    path: Path,
-    line_no: int,
-) -> None:
-    event_type = str(live_event.get("event_type") or row.get("kind") or "")
-    record = _hsl_replay_record(
-        row=row,
-        live_event=live_event,
-        path=path,
-        line_no=line_no,
-    )
-    group = groups.get(bot_key)
-    if group is None:
-        group = {
-            "bot": bot_key,
-            "count": 0,
-            "event_types": Counter(),
-            "latest": None,
-            "started": None,
-            "loaded": None,
-            "protective_ready": None,
-            "progress": None,
-            "completed": None,
-        }
-        groups[bot_key] = group
-    group["count"] = int(group.get("count", 0)) + 1
-    group["event_types"][event_type] += 1
-
-    def is_newer(candidate: dict[str, Any], existing: dict[str, Any] | None) -> bool:
-        if existing is None:
-            return True
-        return _sort_event_position_key(
-            ts=candidate.get("ts"),
-            seq=candidate.get("seq"),
-            path=candidate.get("path") or "",
-            line_no=int(candidate.get("line") or 0),
-        ) > _sort_event_position_key(
-            ts=existing.get("ts"),
-            seq=existing.get("seq"),
-            path=existing.get("path") or "",
-            line_no=int(existing.get("line") or 0),
-        )
-
-    if is_newer(record, group.get("latest")):
-        group["latest"] = record
-    data = record.get("data") if isinstance(record.get("data"), dict) else {}
-    if event_type == EventTypes.HSL_REPLAY_STARTED and is_newer(
-        record, group.get("started")
-    ):
-        group["started"] = record
-    elif (
-        event_type == EventTypes.HSL_REPLAY_PROGRESS
-        and data.get("stage") == "loaded"
-        and is_newer(record, group.get("loaded"))
-    ):
-        group["loaded"] = record
-    elif (
-        event_type == EventTypes.HSL_REPLAY_PROGRESS
-        and data.get("stage") == "held_protective_ready"
-        and is_newer(record, group.get("protective_ready"))
-    ):
-        group["protective_ready"] = record
-    elif event_type == EventTypes.HSL_REPLAY_PROGRESS and is_newer(
-        record, group.get("progress")
-    ):
-        group["progress"] = record
-    elif event_type == EventTypes.HSL_REPLAY_COMPLETED and is_newer(
-        record, group.get("completed")
-    ):
-        group["completed"] = record
-    elif event_type == EventTypes.HSL_REPLAY_FAILED and is_newer(
-        record, group.get("failed")
-    ):
-        group["failed"] = record
-
-
-def _public_hsl_replay_record(record: Any) -> dict[str, Any]:
-    if not isinstance(record, dict):
-        return {}
-    return {
-        key: value
-        for key, value in record.items()
-        if key not in {"path", "line", "seq"} and value not in (None, {}, [])
-    }
-
-
-def _hsl_replay_group_active(group: dict[str, Any]) -> bool:
-    latest = group.get("latest")
-    if not isinstance(latest, dict):
-        return False
-    return latest.get("event_type") not in {
-        EventTypes.HSL_REPLAY_COMPLETED,
-        EventTypes.HSL_REPLAY_FAILED,
-    }
-
-
-def _hsl_replay_latest_event_age_ms(
-    record: dict[str, Any],
-    *,
-    report_ts_ms: int,
-) -> int | None:
-    ts = _non_negative_int(record.get("ts"))
-    if ts is None:
-        return None
-    return int(max(0, int(report_ts_ms) - int(ts)))
-
-
-def _hsl_replay_record_elapsed_ms(record: Any) -> int | None:
-    if not isinstance(record, dict):
-        return None
-    derived = record.get("derived") if isinstance(record.get("derived"), dict) else {}
-    elapsed_candidates = [
-        _non_negative_int(derived.get(key))
-        for key in (
-            "latest_elapsed_ms",
-            "startup_blocking_elapsed_ms",
-            "full_elapsed_ms",
-            "protective_elapsed_ms",
-            "history_build_elapsed_ms",
-            "price_history_fetch_elapsed_ms",
-            "timeline_replay_elapsed_ms",
-        )
-    ]
-    elapsed_values = [int(value) for value in elapsed_candidates if value is not None]
-    return max(elapsed_values) if elapsed_values else None
-
-
-def _with_hsl_replay_active_age(
-    group: dict[str, Any],
-    *,
-    report_ts_ms: int,
-) -> dict[str, Any]:
-    latest = group.get("latest")
-    if not _hsl_replay_group_active(group) or not isinstance(latest, dict):
-        return group
-    age_ms = _hsl_replay_latest_event_age_ms(latest, report_ts_ms=report_ts_ms)
-    if age_ms is None:
-        return group
-    out = dict(group)
-    latest_out = dict(latest)
-    derived = latest_out.get("derived")
-    derived_out = dict(derived) if isinstance(derived, dict) else {}
-    derived_out["latest_event_age_ms"] = int(age_ms)
-    latest_out["derived"] = derived_out
-    out["latest"] = latest_out
-    out["active_latest_event_age_ms"] = int(age_ms)
-    elapsed_ms = _hsl_replay_record_elapsed_ms(latest_out)
-    stale = int(age_ms) >= HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS
-    long_running = (
-        elapsed_ms is not None
-        and int(elapsed_ms) >= HSL_REPLAY_LONG_RUNNING_ACTIVE_MS
-    )
-    if stale:
-        out["active_stale"] = True
-        out["active_stale_threshold_ms"] = HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS
-    if long_running:
-        out["active_long_running"] = True
-        out["active_long_running_threshold_ms"] = HSL_REPLAY_LONG_RUNNING_ACTIVE_MS
-    return out
-
-
-def _summarize_hsl_replay_health(
-    groups: dict[str, dict[str, Any]],
-    event_type_counts: Counter[str],
-    *,
-    report_ts_ms: int | None = None,
-) -> dict[str, Any]:
-    if report_ts_ms is None:
-        report_ts_ms = utc_ms()
-    ordered = sorted(
-        groups.values(),
-        key=lambda item: (
-            0 if _hsl_replay_group_active(item) else 1,
-            -int(
-                (((item.get("latest") or {}).get("derived") or {}).get(
-                    "startup_blocking_elapsed_ms"
-                ))
-                or 0
-            ),
-            -int(((item.get("latest") or {}).get("ts")) or 0),
-            str(item.get("bot") or ""),
-        ),
-    )
-    compact_groups: list[dict[str, Any]] = []
-    active_bots = 0
-    stale_active_bots = 0
-    long_running_active_bots = 0
-    completed_bots = 0
-    failed_bots = 0
-    failed_attention_bots = 0
-    for group in ordered:
-        active = _hsl_replay_group_active(group)
-        latest = _public_hsl_replay_record(group.get("latest"))
-        completed = _public_hsl_replay_record(group.get("completed"))
-        failed = _public_hsl_replay_record(group.get("failed"))
-        if active:
-            active_bots += 1
-        elif latest.get("event_type") == EventTypes.HSL_REPLAY_FAILED:
-            failed_bots += 1
-            if latest.get("reason_code") != "shutdown_cancelled":
-                failed_attention_bots += 1
-        elif latest.get("event_type") == EventTypes.HSL_REPLAY_COMPLETED:
-            if completed.get("status") == "succeeded":
-                completed_bots += 1
-            elif completed.get("status") == "failed":
-                failed_bots += 1
-        elif failed:
-            failed_bots += 1
-            if failed.get("reason_code") != "shutdown_cancelled":
-                failed_attention_bots += 1
-        public_group = {
-            "bot": group.get("bot"),
-            "active": active,
-            "count": int(group.get("count") or 0),
-            "event_types": dict(group.get("event_types").most_common())
-            if isinstance(group.get("event_types"), Counter)
-            else {},
-            "latest": latest,
-            "started": _public_hsl_replay_record(group.get("started")),
-            "loaded": _public_hsl_replay_record(group.get("loaded")),
-            "protective_ready": _public_hsl_replay_record(
-                group.get("protective_ready")
-            ),
-            "progress": _public_hsl_replay_record(group.get("progress")),
-            "completed": completed,
-            "failed": failed,
-        }
-        public_group = _with_hsl_replay_active_age(
-            public_group,
-            report_ts_ms=int(report_ts_ms),
-        )
-        if active and bool(public_group.get("active_stale")):
-            stale_active_bots += 1
-        if active and bool(public_group.get("active_long_running")):
-            long_running_active_bots += 1
-        compact_groups.append(
-            {
-                key: value
-                for key, value in public_group.items()
-                if value not in (None, {}, [])
-            }
-        )
-    return {
-        "total": sum(int(group.get("count", 0)) for group in groups.values()),
-        "groups_truncated": len(ordered) > HSL_REPLAY_HEALTH_GROUP_LIMIT,
-        "event_types": dict(event_type_counts.most_common()),
-        "bots": len(groups),
-        "active_bots": int(active_bots),
-        "stale_active_bots": int(stale_active_bots),
-        "long_running_active_bots": int(long_running_active_bots),
-        "completed_bots": int(completed_bots),
-        "failed_bots": int(failed_bots),
-        "failed_attention_bots": int(failed_attention_bots),
-        "groups": compact_groups[:HSL_REPLAY_HEALTH_GROUP_LIMIT],
-    }
 
 
 def _shell_tokens(value: str) -> list[str]:
@@ -6894,7 +6396,9 @@ def _parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]
             {
                 "name": current_window,
                 "command": _redact_live_command_for_report(command, max_len=400),
-                "command_key": _redact_live_command_for_report(command_key, max_len=400),
+                "command_key": _redact_live_command_for_report(
+                    command_key, max_len=400
+                ),
                 "_launch_command": command,
                 "_match_key": command_key,
                 **context,
@@ -6976,7 +6480,9 @@ def _find_repository_root(
 
     starts: list[Path] = []
     monitor_path = _resolve_path(monitor_root)
-    starts.append(monitor_path.parent if monitor_path.name == "monitor" else monitor_path)
+    starts.append(
+        monitor_path.parent if monitor_path.name == "monitor" else monitor_path
+    )
     starts.append(_resolve_path(Path.cwd()))
 
     seen: set[Path] = set()
@@ -7008,7 +6514,9 @@ def _git_output(
     except (OSError, subprocess.SubprocessError) as exc:
         return None, f"git_failed:{exc.__class__.__name__}"
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or f"git_exit_{result.returncode}").strip()
+        detail = (
+            result.stderr or result.stdout or f"git_exit_{result.returncode}"
+        ).strip()
         return None, _redact_log_text(detail, max_len=300)
     return result.stdout.strip(), None
 
@@ -7197,8 +6705,7 @@ def _summarize_process_sampling(
         latest_state = row.get("latest_state")
         latest_process = row["latest_process"]
         present_in_final_sample = bool(
-            completed_samples > 0
-            and completed_samples - 1 in row["sample_indexes"]
+            completed_samples > 0 and completed_samples - 1 in row["sample_indexes"]
         )
         group = {
             "pid": pid,
@@ -7223,18 +6730,14 @@ def _summarize_process_sampling(
                 and latest_state not in (None, "D")
             ),
         }
-        groups.append(
-            {key: value for key, value in group.items() if value is not None}
-        )
+        groups.append({key: value for key, value in group.items() if value is not None})
 
     return {
         "enabled": requested_samples > 1,
         "requested_samples": requested_samples,
         "completed_samples": completed_samples,
         "interval_s": round(float(interval_s), 3),
-        "scheduled_span_s": round(
-            max(0, completed_samples - 1) * float(interval_s), 3
-        ),
+        "scheduled_span_s": round(max(0, completed_samples - 1) * float(interval_s), 3),
         "scan_error_count": sum(
             1 for scan in scan_rows if scan.get("scan_error") is not None
         ),
@@ -7420,9 +6923,11 @@ def _smoke_config_check_records(
                     "code": str(error or "config_unavailable"),
                     "account": record.get("account"),
                     "config_path": config_path,
-                    "command_key": _redact_live_command_for_report(str(command_key))
-                    if command_key is not None
-                    else None,
+                    "command_key": (
+                        _redact_live_command_for_report(str(command_key))
+                        if command_key is not None
+                        else None
+                    ),
                 }
             )
             continue
@@ -7451,9 +6956,11 @@ def _smoke_config_check_records(
                     ),
                     "account": record.get("account"),
                     "config_path": config_path,
-                    "command_key": _redact_live_command_for_report(str(command_key))
-                    if command_key is not None
-                    else None,
+                    "command_key": (
+                        _redact_live_command_for_report(str(command_key))
+                        if command_key is not None
+                        else None
+                    ),
                     "hsl_signal_mode": signal_mode,
                     "enabled_psides": enabled_psides,
                     "balance_override_active": True,
@@ -7496,9 +7003,11 @@ def parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]:
     """Return sanitized passivbot live commands from a tmuxp-style config."""
     config = _parse_tmuxp_live_commands(config_path)
     return {
-        "path": _user_safe_display_path(config["path"])
-        if config.get("path") is not None
-        else None,
+        "path": (
+            _user_safe_display_path(config["path"])
+            if config.get("path") is not None
+            else None
+        ),
         "exists": bool(config.get("exists")),
         "error": config.get("error"),
         "expected": [
@@ -7519,9 +7028,7 @@ def _build_process_report(
     process_samples = int(process_samples)
     process_sample_interval_s = float(process_sample_interval_s)
     if process_samples < 1 or process_samples > MAX_PROCESS_SAMPLES:
-        raise ValueError(
-            f"process_samples must be between 1 and {MAX_PROCESS_SAMPLES}"
-        )
+        raise ValueError(f"process_samples must be between 1 and {MAX_PROCESS_SAMPLES}")
     if (
         not math.isfinite(process_sample_interval_s)
         or process_sample_interval_s < 0.0
@@ -7708,9 +7215,7 @@ def summarize_live_process_report(processes: dict[str, Any]) -> dict[str, Any]:
             "extra_passivbot_live_processes_count": len(
                 processes.get("extra_passivbot_live_processes") or []
             ),
-            "unexpected_running_count": len(
-                processes.get("unexpected_running") or []
-            ),
+            "unexpected_running_count": len(processes.get("unexpected_running") or []),
             "config_checks": {
                 key: config_checks.get(key)
                 for key in (
@@ -7728,9 +7233,7 @@ def summarize_live_process_report(processes: dict[str, Any]) -> dict[str, Any]:
     sampling = processes.get("sampling")
     if isinstance(sampling, dict):
         summary["sampling"] = {
-            key: sampling.get(key)
-            for key in PROCESS_SAMPLING_FIELDS
-            if key in sampling
+            key: sampling.get(key) for key in PROCESS_SAMPLING_FIELDS if key in sampling
         }
     return summary
 
@@ -7808,9 +7311,7 @@ def _startup_budget_projection(
             "status": (
                 "unavailable"
                 if latest_ms is None
-                else "over_budget"
-                if over_budget_by_ms
-                else "within_budget"
+                else "over_budget" if over_budget_by_ms else "within_budget"
             ),
             "latest_ms": latest_ms,
             "budget_ms": explicit_budget_ms,
@@ -8302,9 +7803,11 @@ def _select_event_segments_for_window(
             continue
         if len(current_files) != 1:
             issue_counts[
-                "current_event_segment_missing"
-                if not current_files
-                else "current_event_segment_duplicated"
+                (
+                    "current_event_segment_missing"
+                    if not current_files
+                    else "current_event_segment_duplicated"
+                )
             ] += 1
             continue
 
@@ -8428,15 +7931,13 @@ def _scan_events(
             raise ValueError(
                 "window-aware event segment selection requires exact since_ms and until_ms"
             )
-        files, segment_selection, selection_issues = (
-            _select_event_segments_for_window(
-                files,
-                since_ms=since_ms,
-                until_ms=until_ms,
-                max_files_per_bot=max_window_event_files_per_bot,
-                max_total_files=max_window_event_files_total,
-                max_total_bytes=max_window_event_bytes_total,
-            )
+        files, segment_selection, selection_issues = _select_event_segments_for_window(
+            files,
+            since_ms=since_ms,
+            until_ms=until_ms,
+            max_files_per_bot=max_window_event_files_per_bot,
+            max_total_files=max_window_event_files_total,
+            max_total_bytes=max_window_event_bytes_total,
         )
         issues.extend(
             _monitor_issue(
@@ -8479,9 +7980,7 @@ def _scan_events(
     )
     problem_event_limit = max(0, int(max_problem_events))
     problem_events: deque[dict[str, Any]] = deque(maxlen=problem_event_limit)
-    hard_problem_events: deque[dict[str, Any]] = deque(
-        maxlen=problem_event_limit
-    )
+    hard_problem_events: deque[dict[str, Any]] = deque(maxlen=problem_event_limit)
     problem_records: list[dict[str, Any]] = []
     time_sync_recoveries: list[dict[str, Any]] = []
     invalid_rows = 0
@@ -8538,8 +8037,6 @@ def _scan_events(
     event_pipeline_health_event_type_counts: Counter[str] = Counter()
     resource_pressure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     resource_pressure_event_type_counts: Counter[str] = Counter()
-    hsl_replay_health_groups: dict[str, dict[str, Any]] = {}
-    hsl_replay_health_event_type_counts: Counter[str] = Counter()
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -8682,7 +8179,10 @@ def _scan_events(
                                 "reason_code": live_event.get("reason_code"),
                                 "status": live_event.get("status"),
                                 "error_type": (
-                                    str(live_event.get("data", {}).get("error_type") or "")
+                                    str(
+                                        live_event.get("data", {}).get("error_type")
+                                        or ""
+                                    )
                                     if isinstance(live_event.get("data"), dict)
                                     else ""
                                 ),
@@ -8818,9 +8318,7 @@ def _scan_events(
                             ),
                         )
                     if event_type == EventTypes.SNAPSHOT_BUILT:
-                        planning_snapshot_health_event_type_counts[
-                            str(event_type)
-                        ] += 1
+                        planning_snapshot_health_event_type_counts[str(event_type)] += 1
                         _merge_planning_snapshot_health_group(
                             planning_snapshot_health_groups,
                             _planning_snapshot_health_group(
@@ -8879,7 +8377,9 @@ def _scan_events(
                             line_no=line_no,
                         )
                         if event_pipeline_health_group is not None:
-                            event_pipeline_health_event_type_counts[str(event_type)] += 1
+                            event_pipeline_health_event_type_counts[
+                                str(event_type)
+                            ] += 1
                             _merge_event_pipeline_health_group(
                                 event_pipeline_health_groups,
                                 event_pipeline_health_group,
@@ -8897,16 +8397,6 @@ def _scan_events(
                                 resource_pressure_groups,
                                 resource_pressure_group,
                             )
-                    if event_type in HSL_REPLAY_EVENT_TYPES:
-                        hsl_replay_health_event_type_counts[str(event_type)] += 1
-                        _merge_hsl_replay_group(
-                            hsl_replay_health_groups,
-                            bot_key=bot_key,
-                            row=row,
-                            live_event=live_event,
-                            path=path,
-                            line_no=line_no,
-                        )
                     if event_type in RISK_EVENT_TYPES:
                         risk_event_type_counts[str(event_type)] += 1
                         _merge_risk_event_group(
@@ -8989,9 +8479,7 @@ def _scan_events(
         except OSError as exc:
             scan_physical_bytes_known = False
             scan_decoded_bytes_known = False
-            issues.append(
-                _monitor_issue(path, None, "error", "read_failed", str(exc))
-            )
+            issues.append(_monitor_issue(path, None, "error", "read_failed", str(exc)))
             invalid_rows += 1
 
     scan_elapsed_ms = round((time.perf_counter() - scan_started_at) * 1000, 3)
@@ -9092,7 +8580,9 @@ def _scan_events(
         },
         "problem_event_groups": _summarize_problem_event_groups(problem_event_groups),
         "recovered_problem_events": recovered_problem_events,
-        "problem_event_count": sum(int(value["problem_events"]) for value in bots.values()),
+        "problem_event_count": sum(
+            int(value["problem_events"]) for value in bots.values()
+        ),
         "hard_problem_event_count": hard_problem_event_count,
         "startup_timings": _summarize_startup_timings(
             _startup_records_after_latest_started(
@@ -9108,7 +8598,9 @@ def _scan_events(
         "account_critical_remote_call_health": _summarize_remote_call_health(
             _account_critical_remote_call_health_groups(remote_call_health_groups)
         ),
-        "remote_call_timings": _summarize_remote_call_timings(remote_call_timing_groups),
+        "remote_call_timings": _summarize_remote_call_timings(
+            remote_call_timing_groups
+        ),
         "execution_health": _summarize_execution_health(execution_health_groups),
         "cache_health": _summarize_cache_health(cache_health_groups),
         "fill_refresh_health": _summarize_fill_refresh_health(
@@ -9157,11 +8649,6 @@ def _scan_events(
         "resource_pressure": _summarize_resource_pressure(
             resource_pressure_groups,
             resource_pressure_event_type_counts,
-            report_ts_ms=report_ts_ms,
-        ),
-        "hsl_replay_health": _summarize_hsl_replay_health(
-            hsl_replay_health_groups,
-            hsl_replay_health_event_type_counts,
             report_ts_ms=report_ts_ms,
         ),
         "risk_events": _summarize_risk_events(
@@ -9275,9 +8762,7 @@ def _log_window_report(
         "unparsed_ts": int(unparsed_ts),
         "unparsed_policy": _normalize_log_window_unparsed_policy(unparsed_policy),
         "lines_skipped_unparsed": int(lines_skipped_unparsed),
-        "dropped_unparsed_attention_matches": int(
-            dropped_unparsed_attention_matches
-        ),
+        "dropped_unparsed_attention_matches": int(dropped_unparsed_attention_matches),
         "dropped_unparsed_hard_matches": int(dropped_unparsed_hard_matches),
     }
 
@@ -9429,9 +8914,11 @@ def _scan_logs(
                                         "path": str(path),
                                         "line": int(line_no),
                                         "hard": hard_dropped,
-                                        "category": "risk"
-                                        if RISK_LOG_PATTERN.search(line)
-                                        else "general",
+                                        "category": (
+                                            "risk"
+                                            if RISK_LOG_PATTERN.search(line)
+                                            else "general"
+                                        ),
                                         "text": _redact_log_text(line, max_len=500),
                                     }
                                 )
@@ -9582,7 +9069,9 @@ def build_live_smoke_report(
         process_sample_interval_s=process_sample_interval_s,
         config_base_dir=repository_root,
     )
-    repository_report = _build_repository_report(monitor_root, repo_root=repository_root)
+    repository_report = _build_repository_report(
+        monitor_root, repo_root=repository_root
+    )
     hard_failures = (
         int(event_report["error_count"])
         + int(event_scan["invalid_rows"])
@@ -9590,18 +9079,10 @@ def build_live_smoke_report(
         + int(log_scan["hard_matches"])
         + int(process_report["hard_failures"])
     )
-    hsl_replay_active_bots = int(
-        event_scan["hsl_replay_health"].get("active_bots") or 0
-    )
-    hsl_replay_failed_attention_bots = int(
-        event_scan["hsl_replay_health"].get("failed_attention_bots") or 0
-    )
     attention_count = (
         int(event_scan["problem_event_count"])
         + int(log_scan["attention_matches"])
         + int(log_scan.get("dropped_unparsed_attention_matches", 0))
-        + hsl_replay_active_bots
-        + hsl_replay_failed_attention_bots
     )
     hard_failure_sources = {
         "monitor_errors": int(event_report["error_count"]),
@@ -9619,10 +9100,6 @@ def build_live_smoke_report(
         ),
         "total": int(attention_count),
     }
-    if hsl_replay_active_bots:
-        attention_sources["hsl_replay_active_bots"] = hsl_replay_active_bots
-    if hsl_replay_failed_attention_bots:
-        attention_sources["hsl_replay_failed_bots"] = hsl_replay_failed_attention_bots
     return {
         "ok": hard_failures == 0,
         "attention": attention_count > 0,
@@ -9663,17 +9140,11 @@ def build_live_smoke_report(
             else {}
         ),
         **(
-            {
-                "forager_eligibility_health": event_scan[
-                    "forager_eligibility_health"
-                ]
-            }
+            {"forager_eligibility_health": event_scan["forager_eligibility_health"]}
             if int(event_scan["forager_eligibility_health"].get("total") or 0)
             else {}
         ),
-        "exchange_config_refresh_health": event_scan[
-            "exchange_config_refresh_health"
-        ],
+        "exchange_config_refresh_health": event_scan["exchange_config_refresh_health"],
         "data_packet_health": event_scan["data_packet_health"],
         "planning_snapshot_health": event_scan["planning_snapshot_health"],
         "cycle_health": event_scan["cycle_health"],
@@ -9681,7 +9152,6 @@ def build_live_smoke_report(
         "planning_output_health": event_scan["planning_output_health"],
         "event_pipeline_health": event_scan["event_pipeline_health"],
         "resource_pressure": event_scan["resource_pressure"],
-        "hsl_replay_health": event_scan["hsl_replay_health"],
         "risk_events": event_scan["risk_events"],
         "shutdown_events": event_scan["shutdown_events"],
         "event_window": event_scan["event_window"],
@@ -9751,18 +9221,12 @@ def _summary_limited_groups(
             ),
             "latest_unavailable_total": summary.get("latest_unavailable_total"),
             "latest_optional_drop_total": summary.get("latest_optional_drop_total"),
-            "latest_candidate_count_total": summary.get(
-                "latest_candidate_count_total"
-            ),
+            "latest_candidate_count_total": summary.get("latest_candidate_count_total"),
             "latest_volume_count_total": summary.get("latest_volume_count_total"),
-            "latest_log_range_count_total": summary.get(
-                "latest_log_range_count_total"
-            ),
+            "latest_log_range_count_total": summary.get("latest_log_range_count_total"),
             "latest_fetch_budget_total": summary.get("latest_fetch_budget_total"),
             "latest_max_age_ms_max": summary.get("latest_max_age_ms_max"),
-            "latest_unavailable_symbols": summary.get(
-                "latest_unavailable_symbols"
-            )
+            "latest_unavailable_symbols": summary.get("latest_unavailable_symbols")
             or None,
             "latest_candidate_reason_counts": summary.get(
                 "latest_candidate_reason_counts"
@@ -9792,9 +9256,7 @@ def _summary_limited_groups(
             "latest_sink_error_total": summary.get("latest_sink_error_total"),
             "latest_degraded_total": summary.get("latest_degraded_total"),
             "latest_processed_total": summary.get("latest_processed_total"),
-            "latest_timing_window_ms_max": summary.get(
-                "latest_timing_window_ms_max"
-            ),
+            "latest_timing_window_ms_max": summary.get("latest_timing_window_ms_max"),
             "latest_queue_wait_ms_total_sum": summary.get(
                 "latest_queue_wait_ms_total_sum"
             ),
@@ -9802,9 +9264,7 @@ def _summary_limited_groups(
             "latest_worker_service_ms_total_sum": summary.get(
                 "latest_worker_service_ms_total_sum"
             ),
-            "latest_worker_service_ms_max": summary.get(
-                "latest_worker_service_ms_max"
-            ),
+            "latest_worker_service_ms_max": summary.get("latest_worker_service_ms_max"),
             "latest_structured_sink_write_count_sum": summary.get(
                 "latest_structured_sink_write_count_sum"
             ),
@@ -9933,9 +9393,7 @@ def _summary_limited_groups(
             "latest_cpu_percent_max": summary.get("latest_cpu_percent_max"),
             "latest_cpu_reporting_bots": summary.get("latest_cpu_reporting_bots"),
             "latest_memory_percent_max": summary.get("latest_memory_percent_max"),
-            "latest_memory_reporting_bots": summary.get(
-                "latest_memory_reporting_bots"
-            ),
+            "latest_memory_reporting_bots": summary.get("latest_memory_reporting_bots"),
             "latest_system_memory_percent_max": summary.get(
                 "latest_system_memory_percent_max"
             ),
@@ -10152,9 +9610,11 @@ def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
                     startup_phase_bots += 1
                     max_startup_elapsed_ms = max(
                         latest_elapsed,
-                        max_startup_elapsed_ms
-                        if max_startup_elapsed_ms is not None
-                        else 0,
+                        (
+                            max_startup_elapsed_ms
+                            if max_startup_elapsed_ms is not None
+                            else 0
+                        ),
                     )
                 readiness_scope = phase_data.get("readiness_scope")
                 if readiness_scope is not None:
@@ -10171,8 +9631,8 @@ def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
                 )
             elapsed_budget = phase_data.get("elapsed_budget")
             phase_budget = phase_data.get("phase_budget")
-            elapsed_budget_status, elapsed_budget_invalid = _brief_startup_budget_status(
-                elapsed_budget
+            elapsed_budget_status, elapsed_budget_invalid = (
+                _brief_startup_budget_status(elapsed_budget)
             )
             phase_budget_status, phase_budget_invalid = _brief_startup_budget_status(
                 phase_budget
@@ -10202,8 +9662,12 @@ def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
             "over_budget_phases": over_budget_phases,
             "incomplete_budget_phases": incomplete_budget_phases,
             "invalid_or_missing_budget_assessments": invalid_or_missing_budget_assessments,
-            "elapsed_budget_status_counts": dict(sorted(elapsed_budget_status_counts.items())),
-            "phase_budget_status_counts": dict(sorted(phase_budget_status_counts.items())),
+            "elapsed_budget_status_counts": dict(
+                sorted(elapsed_budget_status_counts.items())
+            ),
+            "phase_budget_status_counts": dict(
+                sorted(phase_budget_status_counts.items())
+            ),
             "startup_phase_bots": startup_phase_bots,
             "max_latest_elapsed_ms": max_latest_elapsed_ms,
             "max_latest_phase_ms": max_latest_phase_ms,
@@ -10273,7 +9737,9 @@ def summarize_live_smoke_report(
         else {}
     )
     cache_health = (
-        report.get("cache_health") if isinstance(report.get("cache_health"), dict) else {}
+        report.get("cache_health")
+        if isinstance(report.get("cache_health"), dict)
+        else {}
     )
     execution_health = (
         report.get("execution_health")
@@ -10281,7 +9747,9 @@ def summarize_live_smoke_report(
         else {}
     )
     cache_health = (
-        report.get("cache_health") if isinstance(report.get("cache_health"), dict) else {}
+        report.get("cache_health")
+        if isinstance(report.get("cache_health"), dict)
+        else {}
     )
     exchange_config_refresh_health = (
         report.get("exchange_config_refresh_health")
@@ -10321,11 +9789,6 @@ def summarize_live_smoke_report(
     resource_pressure = (
         report.get("resource_pressure")
         if isinstance(report.get("resource_pressure"), dict)
-        else {}
-    )
-    hsl_replay_health = (
-        report.get("hsl_replay_health")
-        if isinstance(report.get("hsl_replay_health"), dict)
         else {}
     )
     shutdown_events = (
@@ -10395,13 +9858,10 @@ def summarize_live_smoke_report(
                     if key in processes["sampling"]
                 }
                 | {
-                    "groups": (processes["sampling"].get("groups") or [])[
-                        :max_groups
-                    ],
+                    "groups": (processes["sampling"].get("groups") or [])[:max_groups],
                     "groups_truncated": bool(
                         processes["sampling"].get("groups_truncated")
-                        or len(processes["sampling"].get("groups") or [])
-                        > max_groups
+                        or len(processes["sampling"].get("groups") or []) > max_groups
                     ),
                 }
             }
@@ -10424,7 +9884,9 @@ def summarize_live_smoke_report(
             "extra_passivbot_live_processes": (
                 processes.get("extra_passivbot_live_processes") or []
             )[:max_groups],
-            "unexpected_running": (processes.get("unexpected_running") or [])[:max_groups],
+            "unexpected_running": (processes.get("unexpected_running") or [])[
+                :max_groups
+            ],
             "config_checks": {
                 key: process_config_checks.get(key)
                 for key in (
@@ -10469,9 +9931,9 @@ def summarize_live_smoke_report(
                 logs.get("dropped_unparsed_matches") or []
             )
             > max_groups,
-            "dropped_unparsed_matches": (
-                logs.get("dropped_unparsed_matches") or []
-            )[:max_groups],
+            "dropped_unparsed_matches": (logs.get("dropped_unparsed_matches") or [])[
+                :max_groups
+            ],
             "window": logs.get("window"),
         },
         "problem_events": {
@@ -10570,10 +10032,6 @@ def summarize_live_smoke_report(
             resource_pressure,
             limit=max_groups,
         ),
-        "hsl_replay_health": _summary_limited_groups(
-            hsl_replay_health,
-            limit=max_groups,
-        ),
         "risk_events": _summary_limited_groups(
             risk_events,
             limit=max_groups,
@@ -10615,9 +10073,7 @@ def summarize_live_smoke_report(
                     (shutdown_events.get("lifecycle") or {}).get("rows") or []
                 )
                 > max_groups
-                or bool(
-                    (shutdown_events.get("lifecycle") or {}).get("rows_truncated")
-                ),
+                or bool((shutdown_events.get("lifecycle") or {}).get("rows_truncated")),
             }
         },
     }
@@ -10708,24 +10164,32 @@ def _brief_remote_call_slowest(summary: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         latest_symbol = group.get("latest_symbol")
         row = {
-            "bot": _redact_log_text(str(group.get("bot")), max_len=120)
-            if group.get("bot") not in (None, "")
-            else None,
-            "kind": _redact_log_text(str(group.get("kind")), max_len=80)
-            if group.get("kind") not in (None, "")
-            else None,
-            "surface": _redact_log_text(str(group.get("surface")), max_len=80)
-            if group.get("surface") not in (None, "")
-            else None,
+            "bot": (
+                _redact_log_text(str(group.get("bot")), max_len=120)
+                if group.get("bot") not in (None, "")
+                else None
+            ),
+            "kind": (
+                _redact_log_text(str(group.get("kind")), max_len=80)
+                if group.get("kind") not in (None, "")
+                else None
+            ),
+            "surface": (
+                _redact_log_text(str(group.get("surface")), max_len=80)
+                if group.get("surface") not in (None, "")
+                else None
+            ),
             "count": _count_value(group.get("count")),
             "failed": _count_value(group.get("failed")),
             "throttled": _count_value(group.get("throttled")),
             "max_ms": int(max_ms or 0),
             "p95_ms": int(p95_ms or 0),
             "latest_elapsed_ms": int(latest_elapsed_ms or 0),
-            "latest_symbol": _redact_log_text(str(latest_symbol), max_len=120)
-            if latest_symbol not in (None, "")
-            else None,
+            "latest_symbol": (
+                _redact_log_text(str(latest_symbol), max_len=120)
+                if latest_symbol not in (None, "")
+                else None
+            ),
         }
         rows.append(
             {
@@ -10777,96 +10241,6 @@ def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
     return out
 
 
-def _brief_hsl_replay_active_groups(groups: Any) -> list[dict[str, Any]]:
-    if not isinstance(groups, list):
-        return []
-    rows: list[dict[str, Any]] = []
-    for group in groups:
-        if not isinstance(group, dict) or not bool(group.get("active")):
-            continue
-        latest = group.get("latest") if isinstance(group.get("latest"), dict) else {}
-        data = latest.get("data") if isinstance(latest.get("data"), dict) else {}
-        derived = latest.get("derived") if isinstance(latest.get("derived"), dict) else {}
-        row = {
-            "bot": _redact_log_text(str(group.get("bot")), max_len=120)
-            if group.get("bot") not in (None, "")
-            else None,
-            "stage": _redact_log_text(str(data.get("stage")), max_len=80)
-            if data.get("stage") not in (None, "")
-            else None,
-            "signal_mode": _redact_log_text(str(data.get("signal_mode")), max_len=80)
-            if data.get("signal_mode") not in (None, "")
-            else None,
-            "symbol": _redact_log_text(str(latest.get("symbol")), max_len=120)
-            if latest.get("symbol") not in (None, "")
-            else None,
-            "pside": _redact_log_text(str(latest.get("pside")), max_len=40)
-            if latest.get("pside") not in (None, "")
-            else None,
-            "latest_elapsed_ms": _hsl_replay_record_elapsed_ms(latest),
-            "latest_event_age_ms": _non_negative_int(
-                group.get("active_latest_event_age_ms")
-            ),
-            "active_stale": True if bool(group.get("active_stale")) else None,
-            "active_long_running": True
-            if bool(group.get("active_long_running"))
-            else None,
-            "pair_idx": _non_negative_int(data.get("pair_idx")),
-            "pairs": _non_negative_int(data.get("pairs")),
-            "required_pairs": _non_negative_int(data.get("required_pairs")),
-            "held_pairs": _non_negative_int(data.get("held_pairs")),
-            "cooldown_pairs": _non_negative_int(data.get("cooldown_pairs")),
-            "total_applied_rows": _non_negative_int(data.get("total_applied_rows")),
-            "total_scanned_rows": _non_negative_int(data.get("total_scanned_rows")),
-            "rows_per_second": _numeric_value(data.get("rows_per_second")),
-            "scanned_rows_per_second": _numeric_value(
-                data.get("scanned_rows_per_second")
-            ),
-            "throughput_source": derived.get("throughput_source"),
-            "work_estimate_source": derived.get("work_estimate_source"),
-            "observed_scanned_rows": _non_negative_int(
-                derived.get("observed_scanned_rows")
-            ),
-            "observed_required_work_pct": derived.get("observed_required_work_pct"),
-            "observed_work_pct": derived.get("observed_work_pct"),
-            "estimated_dense_remaining_rows": _non_negative_int(
-                derived.get("estimated_dense_remaining_rows")
-            ),
-            "estimated_dense_remaining_ms": _non_negative_int(
-                derived.get("estimated_dense_remaining_ms")
-            ),
-            "estimated_required_remaining_rows": _non_negative_int(
-                derived.get("estimated_required_remaining_rows")
-            ),
-            "estimated_required_remaining_ms": _non_negative_int(
-                derived.get("estimated_required_remaining_ms")
-            ),
-            "estimated_remaining_rows": _non_negative_int(
-                derived.get("estimated_remaining_rows")
-            ),
-            "estimated_remaining_ms": _non_negative_int(
-                derived.get("estimated_remaining_ms")
-            ),
-        }
-        rows.append(
-            {
-                key: value
-                for key, value in row.items()
-                if value not in (None, "", {}, [])
-            }
-        )
-    rows.sort(
-        key=lambda item: (
-            0 if item.get("active_long_running") else 1,
-            0 if item.get("active_stale") else 1,
-            -int(item.get("latest_elapsed_ms") or 0),
-            -int(item.get("latest_event_age_ms") or 0),
-            str(item.get("bot") or ""),
-        )
-    )
-    return rows[:SMOKE_REPORT_BRIEF_HSL_REPLAY_ACTIVE_LIMIT]
-
-
 def _brief_fill_refresh_health(summary: Any) -> dict[str, Any]:
     if not isinstance(summary, dict):
         summary = {}
@@ -10897,9 +10271,7 @@ def _brief_execution_health(summary: Any) -> dict[str, Any]:
             "failed": _count_value(summary.get("failed")),
             "rejected": _count_value(summary.get("rejected")),
             "ambiguous": _count_value(summary.get("ambiguous")),
-            "confirmation_timeout": _count_value(
-                summary.get("confirmation_timeout")
-            ),
+            "confirmation_timeout": _count_value(summary.get("confirmation_timeout")),
             "event_types": summary.get("event_types") or {},
             "statuses": summary.get("statuses") or {},
             "outcomes": summary.get("outcomes") or {},
@@ -10952,9 +10324,10 @@ def _brief_cache_health(summary: Any) -> dict[str, Any]:
             compact_groups.append(compact)
     if compact_groups:
         out["groups"] = compact_groups
-        out["groups_truncated"] = bool(summary.get("groups_truncated")) or len(
-            groups
-        ) > SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT
+        out["groups_truncated"] = (
+            bool(summary.get("groups_truncated"))
+            or len(groups) > SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT
+        )
     return out
 
 
@@ -10989,6 +10362,7 @@ def _brief_problem_event_groups(summary: Any) -> dict[str, Any]:
         }
         if compact:
             compact_groups.append(compact)
+
     def _brief_event_types(value: Any) -> tuple[dict[str, int], bool]:
         if not isinstance(value, dict):
             value = {}
@@ -11013,7 +10387,8 @@ def _brief_problem_event_groups(summary: Any) -> dict[str, Any]:
         summary.get("non_hard_event_types")
     )
     return {
-        "groups_truncated": bool(summary.get("groups_truncated")) or len(groups) > limit,
+        "groups_truncated": bool(summary.get("groups_truncated"))
+        or len(groups) > limit,
         "event_types_truncated": event_types_truncated,
         "hard_event_types_truncated": hard_event_types_truncated,
         "non_hard_event_types_truncated": non_hard_event_types_truncated,
@@ -11156,160 +10531,6 @@ def _brief_dropped_unparsed_log_match_samples(logs: dict[str, Any]) -> dict[str,
     return out
 
 
-def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "total": _count_value(hsl_replay_health.get("total")),
-        "bots": _count_value(hsl_replay_health.get("bots")),
-        "active_bots": _count_value(hsl_replay_health.get("active_bots")),
-        "stale_active_bots": _count_value(
-            hsl_replay_health.get("stale_active_bots")
-        ),
-        "long_running_active_bots": _count_value(
-            hsl_replay_health.get("long_running_active_bots")
-        ),
-        "completed_bots": _count_value(hsl_replay_health.get("completed_bots")),
-        "failed_bots": _count_value(hsl_replay_health.get("failed_bots")),
-        "failed_attention_bots": _count_value(
-            hsl_replay_health.get("failed_attention_bots")
-        ),
-        "event_types": hsl_replay_health.get("event_types") or {},
-    }
-    groups = hsl_replay_health.get("groups")
-    if not isinstance(groups, list):
-        return out
-
-    def update_max(current: int | None, raw: Any) -> int | None:
-        value = _non_negative_int(raw)
-        if value is None:
-            return current
-        return int(value) if current is None else max(int(current), int(value))
-
-    max_active_latest_elapsed_ms: int | None = None
-    max_active_latest_event_age_ms: int | None = None
-    max_active_estimated_remaining_rows: int | None = None
-    max_active_estimated_remaining_ms: int | None = None
-    max_active_estimated_dense_remaining_rows: int | None = None
-    max_active_estimated_dense_remaining_ms: int | None = None
-    max_active_estimated_required_remaining_rows: int | None = None
-    max_active_estimated_required_remaining_ms: int | None = None
-    max_completed_elapsed_ms: int | None = None
-    active_stage_counts: Counter[str] = Counter()
-
-    for group in groups:
-        if not isinstance(group, dict):
-            continue
-        completed_elapsed_ms = _hsl_replay_record_elapsed_ms(group.get("completed"))
-        if completed_elapsed_ms is not None:
-            if max_completed_elapsed_ms is None:
-                max_completed_elapsed_ms = int(completed_elapsed_ms)
-            else:
-                max_completed_elapsed_ms = max(
-                    max_completed_elapsed_ms,
-                    int(completed_elapsed_ms),
-                )
-        if not bool(group.get("active")):
-            continue
-        event_age_ms = _non_negative_int(group.get("active_latest_event_age_ms"))
-        if event_age_ms is not None:
-            if max_active_latest_event_age_ms is None:
-                max_active_latest_event_age_ms = int(event_age_ms)
-            else:
-                max_active_latest_event_age_ms = max(
-                    max_active_latest_event_age_ms,
-                    int(event_age_ms),
-                )
-        latest = group.get("latest") if isinstance(group.get("latest"), dict) else {}
-        elapsed_ms = _hsl_replay_record_elapsed_ms(latest)
-        if elapsed_ms is not None:
-            if max_active_latest_elapsed_ms is None:
-                max_active_latest_elapsed_ms = int(elapsed_ms)
-            else:
-                max_active_latest_elapsed_ms = max(
-                    max_active_latest_elapsed_ms,
-                    int(elapsed_ms),
-                )
-        derived = latest.get("derived") if isinstance(latest.get("derived"), dict) else {}
-        max_active_estimated_dense_remaining_rows = update_max(
-            max_active_estimated_dense_remaining_rows,
-            derived.get("estimated_dense_remaining_rows"),
-        )
-        max_active_estimated_dense_remaining_ms = update_max(
-            max_active_estimated_dense_remaining_ms,
-            derived.get("estimated_dense_remaining_ms"),
-        )
-        max_active_estimated_required_remaining_rows = update_max(
-            max_active_estimated_required_remaining_rows,
-            derived.get("estimated_required_remaining_rows"),
-        )
-        max_active_estimated_required_remaining_ms = update_max(
-            max_active_estimated_required_remaining_ms,
-            derived.get("estimated_required_remaining_ms"),
-        )
-        estimated_remaining_rows = _non_negative_int(
-            derived.get("estimated_remaining_rows")
-        )
-        if estimated_remaining_rows is not None:
-            if max_active_estimated_remaining_rows is None:
-                max_active_estimated_remaining_rows = int(estimated_remaining_rows)
-            else:
-                max_active_estimated_remaining_rows = max(
-                    max_active_estimated_remaining_rows,
-                    int(estimated_remaining_rows),
-                )
-        estimated_remaining_ms = _non_negative_int(
-            derived.get("estimated_remaining_ms")
-        )
-        if estimated_remaining_ms is not None:
-            if max_active_estimated_remaining_ms is None:
-                max_active_estimated_remaining_ms = int(estimated_remaining_ms)
-            else:
-                max_active_estimated_remaining_ms = max(
-                    max_active_estimated_remaining_ms,
-                    int(estimated_remaining_ms),
-                )
-        data = latest.get("data") if isinstance(latest.get("data"), dict) else {}
-        stage = data.get("stage")
-        if isinstance(stage, str) and stage:
-            active_stage_counts[_redact_log_text(stage, max_len=80)] += 1
-
-    if max_active_latest_elapsed_ms is not None:
-        out["max_active_latest_elapsed_ms"] = int(max_active_latest_elapsed_ms)
-    if max_active_latest_event_age_ms is not None:
-        out["max_active_latest_event_age_ms"] = int(max_active_latest_event_age_ms)
-    if max_active_estimated_remaining_rows is not None:
-        out["max_active_estimated_remaining_rows"] = int(
-            max_active_estimated_remaining_rows
-        )
-    if max_active_estimated_remaining_ms is not None:
-        out["max_active_estimated_remaining_ms"] = int(
-            max_active_estimated_remaining_ms
-        )
-    if max_active_estimated_dense_remaining_rows is not None:
-        out["max_active_estimated_dense_remaining_rows"] = int(
-            max_active_estimated_dense_remaining_rows
-        )
-    if max_active_estimated_dense_remaining_ms is not None:
-        out["max_active_estimated_dense_remaining_ms"] = int(
-            max_active_estimated_dense_remaining_ms
-        )
-    if max_active_estimated_required_remaining_rows is not None:
-        out["max_active_estimated_required_remaining_rows"] = int(
-            max_active_estimated_required_remaining_rows
-        )
-    if max_active_estimated_required_remaining_ms is not None:
-        out["max_active_estimated_required_remaining_ms"] = int(
-            max_active_estimated_required_remaining_ms
-        )
-    if max_completed_elapsed_ms is not None:
-        out["max_completed_elapsed_ms"] = int(max_completed_elapsed_ms)
-    if active_stage_counts:
-        out["active_stage_counts"] = dict(active_stage_counts.most_common())
-    active = _brief_hsl_replay_active_groups(groups)
-    if active:
-        out["active"] = active
-    return out
-
-
 def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     """Project a full smoke report into top-level smoke-loop counters."""
 
@@ -11350,7 +10571,9 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         else {}
     )
     cache_health = (
-        report.get("cache_health") if isinstance(report.get("cache_health"), dict) else {}
+        report.get("cache_health")
+        if isinstance(report.get("cache_health"), dict)
+        else {}
     )
     exchange_config_refresh_health = (
         report.get("exchange_config_refresh_health")
@@ -11392,18 +10615,15 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("resource_pressure"), dict)
         else {}
     )
-    hsl_replay_health = (
-        report.get("hsl_replay_health")
-        if isinstance(report.get("hsl_replay_health"), dict)
-        else {}
-    )
     shutdown_events = (
         report.get("shutdown_events")
         if isinstance(report.get("shutdown_events"), dict)
         else {}
     )
     event_window = (
-        report.get("event_window") if isinstance(report.get("event_window"), dict) else {}
+        report.get("event_window")
+        if isinstance(report.get("event_window"), dict)
+        else {}
     )
     problem_event_count = _count_value(report.get("problem_event_count"))
     hard_problem_event_count = _count_value(report.get("hard_problem_event_count"))
@@ -11510,11 +10730,14 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             for key, value in (report.get("attention_sources") or {}).items()
         },
         "recovered_problem_events": {
-            "total": _count_value((report.get("recovered_problem_events") or {}).get("total")),
-            "hard": _count_value((report.get("recovered_problem_events") or {}).get("hard")),
+            "total": _count_value(
+                (report.get("recovered_problem_events") or {}).get("total")
+            ),
+            "hard": _count_value(
+                (report.get("recovered_problem_events") or {}).get("hard")
+            ),
             "event_types": (
-                (report.get("recovered_problem_events") or {}).get("event_types")
-                or {}
+                (report.get("recovered_problem_events") or {}).get("event_types") or {}
             ),
         },
         "repository": {
@@ -11570,16 +10793,12 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "files_scanned": _count_value(logs.get("files_scanned")),
             "hard_matches": _count_value(logs.get("hard_matches")),
             "attention_matches": _count_value(logs.get("attention_matches")),
-            "risk_attention_matches": _count_value(
-                logs.get("risk_attention_matches")
-            ),
+            "risk_attention_matches": _count_value(logs.get("risk_attention_matches")),
             "risk_hard_matches": _count_value(logs.get("risk_hard_matches")),
             "non_risk_attention_matches": _count_value(
                 logs.get("non_risk_attention_matches")
             ),
-            "non_risk_hard_matches": _count_value(
-                logs.get("non_risk_hard_matches")
-            ),
+            "non_risk_hard_matches": _count_value(logs.get("non_risk_hard_matches")),
             "dropped_unparsed_attention_matches": _count_value(
                 logs.get("dropped_unparsed_attention_matches")
             ),
@@ -11636,9 +10855,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "exchange_config_refresh": {
             "total": _count_value(exchange_config_refresh_health.get("total")),
             "bots": _count_value(exchange_config_refresh_health.get("bots")),
-            "succeeded": _count_value(
-                exchange_config_refresh_health.get("succeeded")
-            ),
+            "succeeded": _count_value(exchange_config_refresh_health.get("succeeded")),
             "failed": _count_value(exchange_config_refresh_health.get("failed")),
             "failure_pct": exchange_config_refresh_health.get("failure_pct"),
             "failed_bots": _count_value(
@@ -11890,15 +11107,12 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "latest_health_summary_lag_reporting_bots": _count_value(
                 resource_pressure.get("latest_health_summary_lag_reporting_bots")
             ),
-            "latest_event_age_ms_max": resource_pressure.get(
-                "latest_event_age_ms_max"
-            ),
+            "latest_event_age_ms_max": resource_pressure.get("latest_event_age_ms_max"),
             "latest_event_age_reporting_bots": _count_value(
                 resource_pressure.get("latest_event_age_reporting_bots")
             ),
             "event_types": resource_pressure.get("event_types") or {},
         },
-        "hsl_replay": _brief_hsl_replay_health(hsl_replay_health),
         "risk_events": risk_events_brief,
         "shutdown_events": {
             "total": _count_value(shutdown_events.get("total")),
@@ -11939,7 +11153,6 @@ SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "fill_refresh": ("fill_refresh_health",),
     "forager_eligibility": ("forager_eligibility_health",),
     "forager_features": ("forager_feature_health",),
-    "hsl_replay": ("hsl_replay_health",),
     "planning_output": ("planning_output_health",),
     "planning_snapshots": ("planning_snapshot_health",),
     "remote_calls": ("remote_call_health", "remote_call_timings"),
@@ -11997,7 +11210,9 @@ def project_live_smoke_report_sections(
             + "; use all for the full report"
         )
 
-    projected = {key: report[key] for key in _SMOKE_REPORT_SECTION_BASE_KEYS if key in report}
+    projected = {
+        key: report[key] for key in _SMOKE_REPORT_SECTION_BASE_KEYS if key in report
+    }
     if resolved_base:
         selected_base = {
             "ok",

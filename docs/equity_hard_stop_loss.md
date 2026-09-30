@@ -1,10 +1,8 @@
 # Equity Hard Stop Loss
 
 HSL has one implementation across live execution, the offline fake runner, backtests,
-CPU optimization and GPU optimization. The optional compatibility selector
-`live.hsl_engine=revised` names that implementation; explicit `legacy` selection is
-rejected. Use `passivbot tool migrate-hsl` to prepare older configurations and
-re-backtest their thresholds before use.
+CPU optimization and GPU optimization. Use `passivbot tool migrate-hsl` to prepare
+older configurations and re-backtest their thresholds before use.
 
 ## Signals and scopes
 
@@ -44,8 +42,8 @@ The first raw drawdown seeds the EMA. Fractional spans are preserved. Repeated u
 within a minute replace that minute's sample rather than repeatedly advancing the EMA.
 Known fill boundaries are evaluated before an episode reset or reopening. Nonpositive
 historical peaks and extreme numeric histories use explicit, reported approximations.
-Thresholds are not numerically interchangeable with legacy coin HSL, which uses a
-realized-PnL peak and a different denominator. Reevaluate configurations and optimizer fitness.
+Thresholds and saved fitness from older HSL versions are not interchangeable.
+Migrate and re-backtest configurations before upgrading.
 
 ## Best-effort history
 
@@ -94,8 +92,7 @@ the anchor and restore remaining cooldown. No retained fills means no historical
 Aggregate flatness requires every selected position to be zero, not zero net exposure.
 
 Any renewed exposure clears the preceding cooldown and begins normal evaluation of the
-new episode. There is no revised `hsl_position_during_cooldown_policy` or forced re-panic.
-Fresh losses in that new episode can independently produce current RED.
+new episode. Fresh losses in that new episode can independently produce current RED.
 
 Cooldown is reconstructed each evaluation. A balance/budget change or corrected history
 can remove or restore terminal RED; any remaining duration is measured from the original
@@ -105,7 +102,7 @@ to the lookback-bounded `never` restriction.
 All history and lifecycle anchors outside the lookback are forgotten, including `never`
 halts. Equal exchange evidence and configuration reconstruct
 equal decisions after restart. A previous RED decision that produced no recoverable
-exchange evidence has no separate local authority. There is no revised emergency journal.
+exchange evidence has no separate local authority. No local journal supplies trading authority.
 Repeated stops under `always` have no second, terminal accumulated-loss threshold.
 
 ## Configuration and live validation
@@ -116,9 +113,11 @@ an explicit portfolio policy. Removed tier fields, intervention values, optimize
 and cached fitness must not silently become different policies.
 
 Offline reference, unit, native parity and fake-exchange tests do not establish actual
-exchange execution correctness. Use the [live validation and rollback checklist](hsl_revised_live_validation.md)
+exchange execution correctness. Use the [live validation and rollback checklist](hsl_live_validation.md)
 for an operator-approved trial. Upgrading source does not restart running processes; deployment remains an operator decision.
 
+
+See the [validation matrix](hsl_testing.md) for reproducible checks and their limits.
 
 ## Simulator replay performance
 
@@ -137,7 +136,7 @@ These disposable caches do not authorize trading independently and are not persi
 
 ## Offline GPU optimization
 
-Single- and multi-coin GPU optimization support revised HSL for both supported strategy families
+Single- and multi-coin GPU optimization support HSL for both supported strategy families
 and all three signal modes. Unified mode uses the explicit `bot.hsl` policy and portfolio
 HSL bounds; coin and pside modes use their directional policies. They use bounded per-candidate history, recompute drawdown when its equity anchor
 changes, and derive current panic and terminal cooldown without latching past decisions.
@@ -149,14 +148,14 @@ partial boundary blocks are evaluated directly, including same-minute replacemen
 Select `optimize.backend=gpu` with 1m candles. Multi-coin scenarios support one or both position sides, effective coin overrides,
 and one shared portfolio controller in unified mode. Existing GPU metric and execution
 restrictions still apply. Saved
-checkpoints include the selected engine and effective policies; incompatible resume is
+checkpoints include the calculation contract and effective policies; incompatible resume is
 rejected. GPU float32 results are screening estimates; exact Rust backtests remain
 authoritative for retained candidates. This offline path does not execute live orders.
 Run the reproducible timing fixtures with:
 
 ```sh
-PYTHONPATH=src python tests/hsl_revised_gpu_benchmark.py --minutes 4000 --candidates 16
-PYTHONPATH=src python tests/hsl_revised_gpu_benchmark.py --coins 2 --mode unified --minutes 4000 --candidates 16
+PYTHONPATH=src python tests/hsl_gpu_benchmark.py --minutes 4000 --candidates 16
+PYTHONPATH=src python tests/hsl_gpu_benchmark.py --coins 2 --mode unified --minutes 4000 --candidates 16
 ```
 
 Hardware parity tests cover changing budgets, sliding windows, fractional EMA spans,

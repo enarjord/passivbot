@@ -8,7 +8,6 @@ from exchanges.ccxt_bot import CCXTBot
 from passivbot_exceptions import FatalBotException
 from runtime_identity import RuntimeIdentity
 
-
 TEST_RUNTIME_IDENTITY = RuntimeIdentity(
     schema_version=1,
     run_id="a" * 32,
@@ -27,7 +26,14 @@ class OrchestrationBot(Passivbot):
     """Minimal bot wrapper exposing high-level orchestration helpers for testing."""
 
     def __init__(self, market_prices: dict[str, float]):
+        from config.schema import get_template_config
+
+        self.config = get_template_config()
         self.balance = 1_000.0
+        from live.hsl_live import Wave
+
+        self._hsl_planning_wave = Wave(0, 0, (), (), (), "", (), self.balance, 0)
+        self._current_planning_snapshot = None
         self.active_symbols: list[str] = []
         self.open_orders: dict[str, list[dict]] = {}
         self.positions: dict[str, dict[str, dict[str, float]]] = {}
@@ -202,48 +208,6 @@ def test_finalize_reduce_only_orders_caps_tiny_aggregate_without_absolute_slack(
     assert sum(order["qty"] for order in finalized[symbol]) <= 1.1e-12
 
 
-def test_coin_hsl_pending_replay_mode_override_is_pair_scoped():
-    bot = Passivbot.__new__(Passivbot)
-    bot.hsl = {
-        "long": {"orange_tier_mode": "graceful_stop"},
-        "short": {"orange_tier_mode": "graceful_stop"},
-    }
-    bot._runtime_forced_modes = {
-        "long": {"BTC/USDT:USDT": "panic", "ETH/USDT:USDT": "panic"},
-        "short": {},
-    }
-    bot._equity_hard_stop_coin_replay_pending_pairs = {
-        ("long", "BTC/USDT:USDT"),
-        ("long", "MANUAL/USDT:USDT"),
-    }
-    bot._equity_hard_stop_enabled = lambda pside=None: True
-    bot._equity_hard_stop_signal_mode = lambda: "coin"
-    bot._hsl_state = lambda pside: {"halted": False}
-    bot._equity_hard_stop_runtime_red_latched = lambda pside: False
-    bot._equity_hard_stop_runtime_tier = lambda pside: "green"
-    bot.config_get = lambda path, symbol=None: (
-        "manual" if symbol == "MANUAL/USDT:USDT" else None
-    )
-    bot.markets_dict = {
-        "BTC/USDT:USDT": {"active": True},
-        "ETH/USDT:USDT": {"active": True},
-        "MANUAL/USDT:USDT": {"active": True},
-    }
-    bot.ineligible_symbols = {}
-    bot._apply_entry_eligibility_mode = lambda pside, symbol, mode=None: mode
-
-    assert (
-        bot._orchestrator_mode_override("long", "BTC/USDT:USDT")
-        == "graceful_stop"
-    )
-    assert bot.get_forced_PB_mode("long", "BTC/USDT:USDT") == "graceful_stop"
-    assert bot._orchestrator_mode_override("short", "BTC/USDT:USDT") is None
-    assert bot._orchestrator_mode_override("long", "ETH/USDT:USDT") == "panic"
-    assert bot.get_forced_PB_mode("long", "ETH/USDT:USDT") == "panic"
-    assert bot._orchestrator_mode_override("long", "MANUAL/USDT:USDT") == "manual"
-    assert bot.get_forced_PB_mode("long", "MANUAL/USDT:USDT") == "manual"
-
-
 @pytest.mark.parametrize(
     ("order_type", "qty", "position_side", "position_size"),
     [
@@ -348,7 +312,9 @@ def test_market_execution_notice_is_not_suppressed(caplog):
         bot._log_market_execution_notice(order, context="plan_sync")
         bot._log_market_execution_notice(order, context="plan_sync")
 
-    records = [rec for rec in caplog.records if "MARKET order submission" in rec.message]
+    records = [
+        rec for rec in caplog.records if "MARKET order submission" in rec.message
+    ]
     assert len(records) == 2
     assert all("pb_type=close_grid_long" in rec.message for rec in records)
 
@@ -360,7 +326,9 @@ def test_base_did_create_order_rejects_terminal_statuses():
     assert not bot.did_create_order({"id": "", "status": "open"})
     assert not bot.did_create_order({"id": "reject-1", "status": "rejected"})
     assert not bot.did_create_order({"id": "cancel-1", "info": {"status": "canceled"}})
-    assert not bot.did_create_order({"id": "expire-1", "info": {"ordStatus": "EXPIRED"}})
+    assert not bot.did_create_order(
+        {"id": "expire-1", "info": {"ordStatus": "EXPIRED"}}
+    )
 
 
 @pytest.mark.asyncio
@@ -496,9 +464,7 @@ async def test_calc_orders_allows_panic_close_when_trailing_unavailable(
     bot = OrchestrationBot({symbol: 100.0})
     bot.register_symbol(symbol)
     bot._orchestrator_trailing_unavailable_symbols = {symbol}
-    bot._orchestrator_trailing_unavailable_reasons = {
-        symbol: [unavailable_reason]
-    }
+    bot._orchestrator_trailing_unavailable_reasons = {symbol: [unavailable_reason]}
 
     bot.open_orders[symbol] = [
         _make_order(
@@ -542,7 +508,9 @@ async def test_calc_orders_allows_panic_close_when_trailing_unavailable(
 
     to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
 
-    assert [(order["side"], order["position_side"], order["price"]) for order in to_cancel] == [
+    assert [
+        (order["side"], order["position_side"], order["price"]) for order in to_cancel
+    ] == [
         ("buy", "long", 99.0),
         ("sell", "long", 101.0),
     ]
@@ -674,9 +642,9 @@ async def test_protective_panic_reconciliation_preserves_healthy_pside_orders():
 
     to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create()
 
-    assert [(order["position_side"], order["side"], order["price"]) for order in to_cancel] == [
-        ("long", "buy", 99.0)
-    ]
+    assert [
+        (order["position_side"], order["side"], order["price"]) for order in to_cancel
+    ] == [("long", "buy", 99.0)]
     assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
 
 
@@ -724,9 +692,9 @@ async def test_protective_panic_reconciliation_ignores_stale_normal_mode_filter(
 
     to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create()
 
-    assert [(order["position_side"], order["side"], order["price"]) for order in to_cancel] == [
-        ("long", "buy", 99.0)
-    ]
+    assert [
+        (order["position_side"], order["side"], order["price"]) for order in to_cancel
+    ] == [("long", "buy", 99.0)]
     assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
 
 
@@ -755,499 +723,19 @@ async def test_protective_panic_ideal_does_not_fetch_ticker_for_cancel_only_symb
     }
 
     async def fail_market_snapshot_fetch(symbols):
-        raise AssertionError(f"cancel-only symbols must not require market snapshots: {symbols}")
+        raise AssertionError(
+            f"cancel-only symbols must not require market snapshots: {symbols}"
+        )
 
     bot._get_orchestrator_market_snapshots = fail_market_snapshot_fetch
-    bot._orchestrator_mode_override = lambda pside, sym: "panic" if pside == "long" else None
+    bot._orchestrator_mode_override = lambda pside, sym: (
+        "panic" if pside == "long" else None
+    )
 
     ideal = await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot)
 
     assert ideal == {}
     assert bot._protective_panic_reconcile_symbols == [symbol]
-
-
-@pytest.mark.asyncio
-async def test_red_supervisor_uses_protective_refresh_and_order_plan():
-    calls = []
-
-    class FakeBot:
-        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
-        get_raw_balance = staticmethod(lambda: 100.0)
-
-        _equity_hard_stop_supervisor_running = False
-        stop_signal_received = False
-
-        def __init__(self):
-            self.state = {
-                "red_flat_confirmations": 0,
-                "last_red_progress": None,
-                "halted": False,
-            }
-
-        def _hsl_psides(self):
-            return ("long",)
-
-        def _hsl_state(self, pside):
-            assert pside == "long"
-            return self.state
-
-        def _equity_hard_stop_enabled(self, pside=None):
-            return True
-
-        def _equity_hard_stop_runtime_red_latched(self, pside):
-            return True
-
-        async def refresh_protective_authoritative_state(self, *, require_balance=True):
-            calls.append(("protective_refresh", require_balance))
-            return True
-
-        async def update_pos_oos_pnls_ohlcvs(self):
-            raise AssertionError("RED supervisor must not require normal market refresh")
-
-        def _equity_hard_stop_count_open_positions(self, pside):
-            return 1
-
-        def _equity_hard_stop_count_blocking_open_orders(self, pside):
-            return 1, 0
-
-        def _equity_hard_stop_log_red_progress(self, *args):
-            calls.append("log_progress")
-
-        def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
-            calls.append("force_panic")
-
-        def _equity_hard_stop_refresh_halted_runtime_forced_modes(self):
-            calls.append("refresh_halted")
-
-        async def calc_protective_panic_orders_to_cancel_and_create(self):
-            calls.append("protective_plan")
-            return [{"symbol": "BTC/USDT:USDT"}], [{"symbol": "BTC/USDT:USDT"}]
-
-        async def execute_order_plan_to_exchange(
-            self,
-            to_cancel,
-            to_create,
-            *,
-            configure_creations=True,
-        ):
-            calls.append(
-                (
-                    "execute_plan",
-                    list(to_cancel),
-                    list(to_create),
-                    configure_creations,
-                )
-            )
-            self.stop_signal_received = True
-
-        async def execute_to_exchange(self, *args, **kwargs):
-            raise AssertionError("RED supervisor must not use normal execution cycle")
-
-        def live_value(self, key):
-            assert key == "execution_delay_seconds"
-            return 0.0
-
-    bot = FakeBot()
-    await Passivbot._equity_hard_stop_run_red_supervisor(bot)
-
-    assert calls[0] == ("protective_refresh", False)
-    assert calls[1] == "protective_plan"
-    assert calls[2][0] == "execute_plan"
-    assert calls[2][3] is False
-    assert calls[3:] == [("protective_refresh", True), "log_progress", "force_panic", "refresh_halted"]
-    assert bot._equity_hard_stop_supervisor_running is False
-
-
-@pytest.mark.asyncio
-async def test_red_supervisor_propagates_fatal_protective_plan_failure():
-    class FakeBot:
-        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
-        get_raw_balance = staticmethod(lambda: 100.0)
-
-        _equity_hard_stop_supervisor_running = False
-        stop_signal_received = False
-
-        def __init__(self):
-            self.state = {
-                "red_flat_confirmations": 0,
-                "last_red_progress": None,
-                "halted": False,
-            }
-
-        def _hsl_psides(self):
-            return ("long",)
-
-        def _hsl_state(self, pside):
-            return self.state
-
-        def _equity_hard_stop_enabled(self, pside=None):
-            return True
-
-        def _equity_hard_stop_runtime_red_latched(self, pside):
-            return True
-
-        async def refresh_protective_authoritative_state(self, *, require_balance=True):
-            return True
-
-        def _equity_hard_stop_count_open_positions(self, pside):
-            return 1
-
-        def _equity_hard_stop_count_blocking_open_orders(self, pside):
-            return 0, 0
-
-        def _equity_hard_stop_log_red_progress(self, *args):
-            pass
-
-        def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
-            pass
-
-        def _equity_hard_stop_refresh_halted_runtime_forced_modes(self):
-            pass
-
-        async def calc_protective_panic_orders_to_cancel_and_create(self):
-            raise FatalBotException("malformed Rust output")
-
-        async def execute_order_plan_to_exchange(self, *args, **kwargs):
-            raise AssertionError("fatal plan failure must prevent execution")
-
-        def live_value(self, key):
-            return 0.0
-
-    bot = FakeBot()
-    with pytest.raises(FatalBotException, match="malformed Rust output"):
-        await Passivbot._equity_hard_stop_run_red_supervisor(bot)
-
-    assert bot._equity_hard_stop_supervisor_running is False
-
-
-@pytest.mark.asyncio
-async def test_red_supervisor_refreshes_late_flatten_fill_and_exits():
-    events = [
-        {"timestamp": 90_000, "pside": "long", "symbol": "OLD"},
-    ]
-
-    class FakeBot:
-        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
-
-        _equity_hard_stop_supervisor_running = False
-        _equity_hard_stop_cooldown_log_interval_ms = 60_000
-        stop_signal_received = False
-        _equity_hard_stop_latest_flatten_fill_timestamp_optional_ms = (
-            Passivbot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms
-        )
-        _equity_hard_stop_defer_missing_flatten_fill = (
-            Passivbot._equity_hard_stop_defer_missing_flatten_fill
-        )
-        _equity_hard_stop_flatten_fill_timestamp_with_refresh = (
-            Passivbot._equity_hard_stop_flatten_fill_timestamp_with_refresh
-        )
-
-        def __init__(self):
-            self.state = {
-                "red_flat_confirmations": 0,
-                "last_red_progress": None,
-                "halted": False,
-                "pending_red_since_ms": 120_000,
-                "pending_stop_event": None,
-                "last_missing_flatten_fill_log_ms": 0,
-                "last_missing_flatten_fill_refresh_ms": 0,
-            }
-            self._pnls_manager = types.SimpleNamespace(get_events=lambda: events)
-            self.refresh_sources = []
-
-        def _hsl_psides(self):
-            return ("long",)
-
-        def _hsl_state(self, pside):
-            return self.state
-
-        def _equity_hard_stop_enabled(self, pside=None):
-            return True
-
-        def _equity_hard_stop_runtime_red_latched(self, pside):
-            return True
-
-        async def refresh_protective_authoritative_state(self, *, require_balance=True):
-            return True
-
-        async def update_pnls(self, *, source, since_ms=None):
-            self.refresh_sources.append(source)
-            assert since_ms == 120_000
-            events.append(
-                {"timestamp": 170_000, "pside": "long", "symbol": "BTC/USDT:USDT"}
-            )
-            return True
-
-        def get_exchange_time(self):
-            return 180_000
-
-        def _equity_hard_stop_count_open_positions(self, pside):
-            return 0
-
-        def _equity_hard_stop_count_blocking_open_orders(self, pside):
-            return 0, 0
-
-        async def _equity_hard_stop_compute_stop_event(self, pside, stop_ts_ms):
-            return {"stop_event_timestamp_ms": stop_ts_ms}
-
-        async def _equity_hard_stop_finalize_red_stop(self, pside, stop_event, **kwargs):
-            assert stop_event["stop_event_timestamp_ms"] == 170_000
-            self.state["halted"] = True
-
-        def _equity_hard_stop_log_red_progress(self, *args):
-            pass
-
-        def _equity_hard_stop_signal_mode(self):
-            return "pside"
-
-        async def _calc_upnl_sum_strict(self, pside=None):
-            return 0.0
-
-        def get_raw_balance(self):
-            return 100.0
-
-        def _equity_hard_stop_realized_pnl_now(self, pside=None):
-            return 0.0
-
-        def _equity_hard_stop_apply_sample(self, *args, **kwargs):
-            return {"red_active_now": True}
-
-        def _equity_hard_stop_set_red_paused_runtime_forced_modes(self, pside):
-            pass
-
-        def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
-            pass
-
-        def _equity_hard_stop_refresh_halted_runtime_forced_modes(self):
-            pass
-
-        async def calc_protective_panic_orders_to_cancel_and_create(self):
-            return [], []
-
-        async def execute_order_plan_to_exchange(self, *args, **kwargs):
-            pass
-
-        def live_value(self, key):
-            return 0.0
-
-    bot = FakeBot()
-
-    await Passivbot._equity_hard_stop_run_red_supervisor(bot)
-
-    assert bot.state["halted"] is True
-    assert bot.state["red_flat_confirmations"] == 2
-    assert bot.refresh_sources == ["hsl_flatten_confirmation"]
-    assert bot._equity_hard_stop_supervisor_running is False
-
-
-@pytest.mark.asyncio
-async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
-    symbol = "BTC/USDT:USDT"
-    events = [
-        {"timestamp": 90_000, "pside": "long", "symbol": symbol},
-        {
-            "timestamp": 150_000,
-            "pside": "long",
-            "symbol": symbol,
-            "action": "increase",
-            "qty": 1.0,
-        },
-        {
-            "timestamp": 165_000,
-            "pside": "long",
-            "symbol": symbol,
-            "action": "increase",
-            "qty": 1.0,
-        },
-    ]
-
-    class FakeBot:
-        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
-
-        _equity_hard_stop_supervisor_running = False
-        _equity_hard_stop_cooldown_log_interval_ms = 60_000
-        stop_signal_received = False
-        _equity_hard_stop_latest_flatten_fill_timestamp_optional_ms = (
-            Passivbot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms
-        )
-        _equity_hard_stop_defer_missing_flatten_fill = (
-            Passivbot._equity_hard_stop_defer_missing_flatten_fill
-        )
-        _equity_hard_stop_flatten_fill_timestamp_with_refresh = (
-            Passivbot._equity_hard_stop_flatten_fill_timestamp_with_refresh
-        )
-
-        def __init__(self):
-            self.state = {
-                "red_flat_confirmations": 0,
-                "halted": True,
-                "pending_red_since_ms": None,
-                "pending_stop_event": None,
-                "last_stop_event": {"stop_event_timestamp_ms": 120_000},
-                "cooldown_repanic_reset_pending": True,
-                "cooldown_repanic_since_ms": 160_000,
-                "cooldown_repanic_start_sizes": {symbol: 1.0},
-                "last_missing_flatten_fill_log_ms": 0,
-                "last_missing_flatten_fill_refresh_ms": 0,
-            }
-            self._equity_hard_stop_coin = {"long": {symbol: self.state}}
-            self._pnls_manager = types.SimpleNamespace(get_events=lambda: events)
-            self.refresh_sources = []
-
-        def _hsl_psides(self):
-            return ("long",)
-
-        def _hsl_coin_state(self, pside, requested_symbol):
-            assert requested_symbol == symbol
-            return self.state
-
-        def _equity_hard_stop_coin_needs_panic_supervision(
-            self, pside, requested_symbol, state
-        ):
-            return bool(state["cooldown_repanic_reset_pending"])
-
-        async def refresh_protective_authoritative_state(self, *, require_balance=True):
-            return True
-
-        async def update_pnls(self, *, source, since_ms=None):
-            self.refresh_sources.append((source, since_ms))
-            events.append(
-                {
-                    "timestamp": 170_000,
-                    "pside": "long",
-                    "symbol": symbol,
-                    "action": "decrease",
-                    "qty": 2.0,
-                }
-            )
-            return True
-
-        def get_exchange_time(self):
-            return 180_000
-
-        def _equity_hard_stop_has_open_position_symbol(self, pside, requested_symbol):
-            return False
-
-        def _equity_hard_stop_count_blocking_open_orders_symbol(
-            self, pside, requested_symbol
-        ):
-            return 0, 0
-
-        async def _equity_hard_stop_refresh_coin_cooldown_after_repanic(
-            self, pside, requested_symbol, now_ms
-        ):
-            assert (
-                self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
-                    pside,
-                    symbol=requested_symbol,
-                    since_ms=160_000,
-                    replay_start_sizes={symbol: 1.0},
-                )
-                == 170_000
-            )
-            self.state["cooldown_repanic_reset_pending"] = False
-            return True
-
-        def _equity_hard_stop_apply_coin_sample(self, *args, **kwargs):
-            return {"red_active_now": True}
-
-        async def _calc_upnl_sum_strict(self, *args):
-            return 0.0
-
-        def get_raw_balance(self):
-            return 100.0
-
-        def _equity_hard_stop_set_coin_runtime_forced_mode(self, *args):
-            pass
-
-        async def calc_protective_panic_orders_to_cancel_and_create(self):
-            return [], []
-
-        async def execute_order_plan_to_exchange(self, *args, **kwargs):
-            pass
-
-        def live_value(self, key):
-            return 0.0
-
-    bot = FakeBot()
-
-    await Passivbot._equity_hard_stop_run_coin_red_supervisor(bot)
-
-    assert bot.state["cooldown_repanic_reset_pending"] is False
-    assert bot.refresh_sources == [("hsl_flatten_confirmation", 160_000)]
-    assert bot._equity_hard_stop_supervisor_running is False
-
-
-@pytest.mark.asyncio
-async def test_coin_red_supervisor_propagates_fatal_protective_plan_failure():
-    symbol = "BTC/USDT:USDT"
-
-    class FakeBot:
-        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
-
-        _equity_hard_stop_supervisor_running = False
-        stop_signal_received = False
-
-        def __init__(self):
-            self.state = {
-                "halted": False,
-                "cooldown_repanic_reset_pending": False,
-                "red_flat_confirmations": 0,
-                "pending_stop_event": None,
-            }
-            self._equity_hard_stop_coin = {"long": {symbol: self.state}}
-
-        def _hsl_psides(self):
-            return ("long",)
-
-        def _equity_hard_stop_coin_needs_panic_supervision(
-            self, pside, requested_symbol, state
-        ):
-            return True
-
-        async def refresh_protective_authoritative_state(self, *, require_balance=True):
-            return True
-
-        def _hsl_coin_state(self, pside, requested_symbol):
-            return self.state
-
-        def _equity_hard_stop_has_open_position_symbol(self, pside, requested_symbol):
-            return True
-
-        def _equity_hard_stop_count_blocking_open_orders_symbol(
-            self, pside, requested_symbol
-        ):
-            return 0, 0
-
-        def get_exchange_time(self):
-            return 100_000
-
-        def get_raw_balance(self):
-            return 100.0
-
-        async def _calc_upnl_sum_strict(self, *args):
-            return 0.0
-
-        def _equity_hard_stop_apply_coin_sample(self, *args, **kwargs):
-            return {"red_active_now": True}
-
-        def _equity_hard_stop_set_coin_runtime_forced_mode(self, *args):
-            pass
-
-        async def calc_protective_panic_orders_to_cancel_and_create(self):
-            raise FatalBotException("malformed Rust output")
-
-        async def execute_order_plan_to_exchange(self, *args, **kwargs):
-            raise AssertionError("fatal plan failure must prevent execution")
-
-        def live_value(self, key):
-            return 0.0
-
-    bot = FakeBot()
-    with pytest.raises(FatalBotException, match="malformed Rust output"):
-        await Passivbot._equity_hard_stop_run_coin_red_supervisor(bot)
-
-    assert bot._equity_hard_stop_supervisor_running is False
 
 
 @pytest.mark.asyncio
@@ -1304,9 +792,7 @@ async def test_calc_orders_retires_trailing_close_during_fetch_failure():
     bot = OrchestrationBot({symbol: 100.0})
     bot.register_symbol(symbol)
     bot._orchestrator_trailing_unavailable_symbols = {symbol}
-    bot._orchestrator_trailing_unavailable_reasons = {
-        symbol: ["candle_fetch_failed"]
-    }
+    bot._orchestrator_trailing_unavailable_reasons = {symbol: ["candle_fetch_failed"]}
     bot._orchestrator_trailing_unavailable_psides = {symbol: ["long"]}
     bot.open_orders[symbol] = [
         _make_order(
@@ -1340,9 +826,7 @@ async def test_calc_orders_hard_trailing_failure_preserves_unaffected_side_repla
     bot = OrchestrationBot({symbol: 100.0})
     bot.register_symbol(symbol)
     bot._orchestrator_trailing_unavailable_symbols = {symbol}
-    bot._orchestrator_trailing_unavailable_reasons = {
-        symbol: ["bundle_compute_failed"]
-    }
+    bot._orchestrator_trailing_unavailable_reasons = {symbol: ["bundle_compute_failed"]}
     bot._orchestrator_trailing_unavailable_psides = {symbol: ["long"]}
     bot.open_orders[symbol] = [
         _make_order(
@@ -1497,9 +981,9 @@ async def test_calc_orders_allows_same_family_reduce_only_replace_when_trailing_
 
     to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
 
-    assert [(order["side"], order["position_side"], order["price"]) for order in to_cancel] == [
-        ("sell", "long", 101.0)
-    ]
+    assert [
+        (order["side"], order["position_side"], order["price"]) for order in to_cancel
+    ] == [("sell", "long", 101.0)]
     assert [order["pb_order_type"] for order in to_create] == ["close_grid_long"]
 
 
@@ -1512,9 +996,7 @@ def test_to_executable_orders_respects_rust_market_execution_hint():
     order_type = "close_unstuck_long"
     order_type_id = pbr.order_type_snake_to_id(order_type)
     ideal = {
-        symbol: [
-            (-0.5, 100.0, order_type, order_type_id, "market", "risk_critical")
-        ]
+        symbol: [(-0.5, 100.0, order_type, order_type_id, "market", "risk_critical")]
     }
 
     orders, _ = bot._to_executable_orders(ideal, {symbol: 100.0})
@@ -1532,9 +1014,7 @@ def test_to_executable_orders_respects_rust_limit_execution_hint():
     order_type = "close_unstuck_long"
     order_type_id = pbr.order_type_snake_to_id(order_type)
     ideal = {
-        symbol: [
-            (-0.5, 100.0, order_type, order_type_id, "limit", "risk_critical")
-        ]
+        symbol: [(-0.5, 100.0, order_type, order_type_id, "limit", "risk_critical")]
     }
 
     orders, _ = bot._to_executable_orders(ideal, {symbol: 100.0})
@@ -1732,10 +1212,10 @@ async def test_order_sort_fetch_failure_redacts_diagnostic_and_preserves_origina
     second = _make_order(symbol, "buy", "long", 0.5, 101.0, "entry_grid_normal_long")
     orders = [first, second]
     fetch_calls = []
-    hostile_detail = (
-        "hostile-message https://order-sort.invalid/price?api_key=operator-secret&token=token-123"
+    hostile_detail = "hostile-message https://order-sort.invalid/price?api_key=operator-secret&token=token-123"
+    hostile_error = type("ApiTokenCredentialsError", (RuntimeError,), {})(
+        hostile_detail
     )
-    hostile_error = type("ApiTokenCredentialsError", (RuntimeError,), {})(hostile_detail)
 
     async def fail_get_live_last_prices(symbols, **kwargs):
         fetch_calls.append((symbols, kwargs))

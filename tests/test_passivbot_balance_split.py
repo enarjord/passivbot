@@ -58,6 +58,31 @@ from live.data_packets import stable_hash
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 
+def _unit_config(patch):
+    config = get_template_config()
+
+    def merge(target, values):
+        for key, value in values.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                merge(target[key], value)
+            else:
+                target[key] = deepcopy(value)
+
+    merge(config, patch)
+    from config.bot import apply_forager_internal_aliases
+
+    apply_forager_internal_aliases(config)
+    return config
+
+
+def _unit_bot():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = _unit_config({})
+    bot.c_mults = {}
+    bot.coin_overrides = {}
+    return bot
+
+
 TEST_RUNTIME_IDENTITY = RuntimeIdentity(
     schema_version=1,
     run_id="a" * 32,
@@ -88,7 +113,9 @@ def test_parse_balance_override_rejects_invalid_raw_values(raw_value):
     ("raw_value", "expected"),
     [(None, None), ("", None), ("100.5", 100.5), (100.5, 100.5)],
 )
-def test_parse_balance_override_accepts_disabled_and_positive_values(raw_value, expected):
+def test_parse_balance_override_accepts_disabled_and_positive_values(
+    raw_value, expected
+):
     assert _parse_balance_override(raw_value) == expected
 
 
@@ -129,9 +156,7 @@ async def test_staged_balance_override_bypasses_exchange_fetch_and_deferred_stat
         ),
     )
 
-    raw, composition, balance = await state_refresh.capture_balance_staged_snapshot(
-        bot
-    )
+    raw, composition, balance = await state_refresh.capture_balance_staged_snapshot(bot)
 
     assert raw is None
     assert balance == 7.0
@@ -164,8 +189,7 @@ def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -
             )
             symbol_side_eligible = (
                 bool(symbol.get("tradable", False))
-                and float(symbol[pside]["bot_params"]["wallet_exposure_limit"])
-                != 0.0
+                and float(symbol[pside]["bot_params"]["wallet_exposure_limit"]) != 0.0
             )
             active = symbol_side_eligible and (
                 (has_position and selection_effective_mode != "manual")
@@ -262,7 +286,7 @@ def test_passivbot_fill_coverage_status_delegates_to_manager():
         "oldest_event_ts": 200,
     }
     get_coverage_status = MagicMock(return_value=expected)
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._pnls_manager = SimpleNamespace(get_coverage_status=get_coverage_status)
 
     assert bot._fill_history_coverage_status(start_ms=100, end_ms=300) == expected
@@ -270,7 +294,7 @@ def test_passivbot_fill_coverage_status_delegates_to_manager():
 
 
 def test_incomplete_history_override_does_not_accept_contradictory_cache_evidence():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._pnls_manager = SimpleNamespace(
         get_coverage_status=lambda **_kwargs: {
             "ready": False,
@@ -292,8 +316,10 @@ def test_incomplete_history_override_does_not_accept_contradictory_cache_evidenc
 
 
 @pytest.mark.asyncio
-async def test_calc_upnl_sum_redacts_failure_and_returns_zero(caplog, capsys, monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+async def test_calc_upnl_sum_redacts_failure_and_returns_zero(
+    caplog, capsys, monkeypatch
+):
+    bot = _unit_bot()
     symbol = "BTC/USDT:USDT"
     bot.fetched_positions = [
         {
@@ -380,33 +406,33 @@ def test_binance_execute_to_exchange_accepts_staged_prepare_cycle_kwarg():
 
 
 def test_market_snapshot_ticker_strategy_defaults_to_symbols_for_bitget():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "bitget"
-    bot.config = {"live": {}}
+    bot.config = _unit_config({"live": {}})
 
     assert bot._market_snapshot_ticker_strategy() == "symbols"
 
 
 def test_market_snapshot_ticker_strategy_uses_symbols_for_hyperliquid_hip3_labels():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "hyperliquid"
-    bot.config = {"live": {}}
+    bot.config = _unit_config({"live": {}})
 
     assert bot._market_snapshot_ticker_strategy() == "symbols"
 
 
 def test_market_snapshot_ticker_strategy_defaults_to_symbols_for_kucoin():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
-    bot.config = {"live": {}}
+    bot.config = _unit_config({"live": {}})
 
     assert bot._market_snapshot_ticker_strategy() == "symbols"
 
 
 def test_market_snapshot_ticker_strategy_respects_explicit_override():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "bitget"
-    bot.config = {"live": {"market_snapshot_ticker_strategy": "bulk"}}
+    bot.config = _unit_config({"live": {"market_snapshot_ticker_strategy": "bulk"}})
 
     assert bot._market_snapshot_ticker_strategy() == "bulk"
 
@@ -415,7 +441,7 @@ def test_noncritical_market_snapshot_error_emits_skipped_event(caplog):
     sink = ListEventSink()
     console_sink = ListEventSink()
     text_sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_event_current_cycle_id = "cy_market_diag"
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = LiveEventPipeline(
@@ -430,7 +456,9 @@ def test_noncritical_market_snapshot_error_emits_skipped_event(caplog):
     )
 
     with caplog.at_level(logging.WARNING):
-        assert bot._log_noncritical_market_snapshot_error("upnl diagnostics", exc) is True
+        assert (
+            bot._log_noncritical_market_snapshot_error("upnl diagnostics", exc) is True
+        )
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -475,7 +503,7 @@ def test_noncritical_market_snapshot_error_keeps_bounded_legacy_warning_without_
         "raises": raising_emitter,
         "returns_none": lambda **_kwargs: None,
     }
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_event_current_cycle_id = "C" * 1_000
     bot.live_event_console_enabled = emitter_mode != "missing"
     bot._live_event_pipeline = (
@@ -490,9 +518,7 @@ def test_noncritical_market_snapshot_error_keeps_bounded_legacy_warning_without_
     )
 
     with caplog.at_level(logging.WARNING):
-        assert (
-            bot._log_noncritical_market_snapshot_error("X" * 1_000, exc) is True
-        )
+        assert bot._log_noncritical_market_snapshot_error("X" * 1_000, exc) is True
 
     warnings = [record.getMessage() for record in caplog.records]
     assert len(warnings) == 1
@@ -514,7 +540,7 @@ def test_noncritical_market_snapshot_error_redacts_emitter_failure_debug(caplog)
     emitter_failure = _hostile_runtime_error(
         "token=emitter-secret https://example.invalid/emitter-debug"
     )
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = False
     bot._live_event_pipeline = None
 
@@ -578,11 +604,11 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
         def set_history_scope(self, scope: str):
             self.history_scope = scope
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
-    bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
+    bot.config = _unit_config({"live": {"pnls_max_lookback_days": 1.0}})
     bot._pnls_initialized = False
     bot.get_exchange_time = lambda: 1_700_086_400_000
     sink = ListEventSink()
@@ -594,7 +620,9 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
 
     monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
     monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
-    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(
+        passivbot_module, "_build_fetcher_for_bot", lambda *_args: object()
+    )
     monkeypatch.setattr(passivbot_module, "FillEventsManager", _LegacyManager)
 
     await Passivbot.init_pnls(bot)
@@ -672,11 +700,11 @@ async def test_init_pnls_emits_quarantine_event_when_doctor_repairs_legacy_cache
         def set_history_scope(self, scope: str):
             self.history_scope = scope
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
-    bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
+    bot.config = _unit_config({"live": {"pnls_max_lookback_days": 1.0}})
     bot._pnls_initialized = False
     bot.get_exchange_time = lambda: 1_700_086_400_000
     sink = ListEventSink()
@@ -688,7 +716,9 @@ async def test_init_pnls_emits_quarantine_event_when_doctor_repairs_legacy_cache
 
     monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
     monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
-    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(
+        passivbot_module, "_build_fetcher_for_bot", lambda *_args: object()
+    )
     monkeypatch.setattr(passivbot_module, "FillEventsManager", _RepairingManager)
 
     await Passivbot.init_pnls(bot)
@@ -733,12 +763,12 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
             return self.history_scope
 
     sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "binance"
     bot.user = "binance_01"
     bot.bot_id = "bot_1"
-    bot.config = {"live": {"pnls_max_lookback_days": "all"}}
+    bot.config = _unit_config({"live": {"pnls_max_lookback_days": "all"}})
     bot._pnls_initialized = False
     bot._live_event_current_cycle_id = "cy_init_fills"
     bot._live_event_pipeline = LiveEventPipeline(
@@ -748,7 +778,9 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
 
     monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
     monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
-    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(
+        passivbot_module, "_build_fetcher_for_bot", lambda *_args: object()
+    )
     monkeypatch.setattr(passivbot_module, "FillEventsManager", _Manager)
 
     await Passivbot.init_pnls(bot)
@@ -778,7 +810,9 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_init_pnls_failure_logs_bounded_classification_and_reraises(monkeypatch, caplog):
+async def test_init_pnls_failure_logs_bounded_classification_and_reraises(
+    monkeypatch, caplog
+):
     secret = "api_key=startup-fill-secret"
 
     class _StartupFillError(RuntimeError):
@@ -795,16 +829,18 @@ async def test_init_pnls_failure_logs_bounded_classification_and_reraises(monkey
         async def ensure_loaded(self):
             raise failure
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "binance"
     bot.user = "binance_01"
-    bot.config = {"live": {"pnls_max_lookback_days": "all"}}
+    bot.config = _unit_config({"live": {"pnls_max_lookback_days": "all"}})
     bot._pnls_initialized = False
 
     monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
     monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
-    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(
+        passivbot_module, "_build_fetcher_for_bot", lambda *_args: object()
+    )
     monkeypatch.setattr(passivbot_module, "FillEventsManager", _Manager)
 
     with caplog.at_level(logging.ERROR):
@@ -835,16 +871,18 @@ async def test_init_pnls_history_scope_failure_is_bounded_and_cache_remains_read
         def get_history_scope(self):
             raise RuntimeError(secret)
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "binance"
     bot.user = "binance_01"
-    bot.config = {"live": {"pnls_max_lookback_days": "all"}}
+    bot.config = _unit_config({"live": {"pnls_max_lookback_days": "all"}})
     bot._pnls_initialized = False
 
     monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
     monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
-    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(
+        passivbot_module, "_build_fetcher_for_bot", lambda *_args: object()
+    )
     monkeypatch.setattr(passivbot_module, "FillEventsManager", _Manager)
 
     with caplog.at_level(logging.DEBUG):
@@ -862,8 +900,8 @@ def _counted_staged_account_refresh_bot(
     open_orders: list[dict] | None = None,
     pending_confirmations: dict[str, int] | None = None,
 ) -> tuple[Passivbot, dict[str, int]]:
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "fake"
     bot.stop_signal_received = False
     bot.balance_override = None
@@ -882,6 +920,7 @@ def _counted_staged_account_refresh_bot(
     bot.execution_scheduled = False
     bot._authoritative_pending_confirmations = dict(pending_confirmations or {})
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot.freshness_ledger.begin_epoch(now_ms=1)
     bot.recent_order_cancellations = []
     bot.recent_order_executions = []
     bot.log_position_changes = AsyncMock()
@@ -933,7 +972,7 @@ def _counted_staged_account_refresh_bot(
         "fills": (),
     }
     for surface, signature in signatures.items():
-        bot.freshness_ledger.stamp(surface, signature, now_ms=1, epoch=0)
+        bot.freshness_ledger.stamp(surface, signature, now_ms=1, epoch=1)
     return bot, counts
 
 
@@ -974,11 +1013,16 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
     events = []
     bot._monitor_record_event = (
         lambda kind, tags, payload=None, **kwargs: events.append(
-            {"kind": kind, "tags": tuple(tags), "payload": dict(payload or {}), **kwargs}
+            {
+                "kind": kind,
+                "tags": tuple(tags),
+                "payload": dict(payload or {}),
+                **kwargs,
+            }
         )
     )
 
-    assert await bot.refresh_authoritative_state() is True
+    assert await bot._refresh_authoritative_state_staged() is True
 
     packet_events = [
         event for event in events if event["kind"] == "data_packet.updated"
@@ -994,9 +1038,10 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
     assert by_kind["balance"]["freshness"]["status"] == "fresh"
     assert by_kind["balance"]["quality"] == "ok"
     assert by_kind["balance"]["raw_hash"] == stable_hash(raw_balance)
-    assert by_kind["balance"]["response_received_ts_ms"] >= by_kind["balance"][
-        "call_started_ts_ms"
-    ]
+    assert (
+        by_kind["balance"]["response_received_ts_ms"]
+        >= by_kind["balance"]["call_started_ts_ms"]
+    )
     assert "raw_hash" in by_kind["positions"]
     assert "raw" not in by_kind["positions"]
     assert by_kind["open_orders"]["coverage"]["row_count"] == 1
@@ -1029,7 +1074,7 @@ async def test_data_packet_capture_failure_does_not_block_authoritative_fetch(ca
 
 
 def test_balance_data_packet_capture_accepts_legacy_raw_normalized_pair():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "legacy"
     _set_authoritative_epoch_state(bot, epoch=7)
     raw_balance = {"total": {"USDT": 123.45}, "raw_revision": "legacy-pair"}
@@ -1063,7 +1108,7 @@ def test_diagnostic_event_emit_failure_is_noncritical():
 
 
 def test_authoritative_surface_record_survives_data_packet_finalize_failure():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     _set_authoritative_epoch_state(bot)
 
     def failing_finalize(*_args, **_kwargs):
@@ -1077,7 +1122,7 @@ def test_authoritative_surface_record_survives_data_packet_finalize_failure():
 
 
 def test_freshness_ledger_is_only_authoritative_epoch_owner():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     ledger = _set_authoritative_epoch_state(bot, epoch=7)
 
     bot._begin_authoritative_refresh_epoch()
@@ -1088,9 +1133,9 @@ def test_freshness_ledger_is_only_authoritative_epoch_owner():
 
 @pytest.mark.asyncio
 async def test_staged_orchestrator_market_snapshot_fetch_uses_headroom_ttl():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "bitget"
-    bot.config = {"live": {}}
+    bot.config = _unit_config({"live": {}})
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
     symbol = "BTC/USDT:USDT"
@@ -1125,7 +1170,7 @@ async def test_staged_orchestrator_market_snapshot_fetch_uses_headroom_ttl():
 
 @pytest.mark.asyncio
 async def test_hyperliquid_live_market_snapshot_uses_symbol_fallback_for_hip3():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "hyperliquid"
     bot.symbol_ids = {}
     bot.market_snapshot_provider = SimpleNamespace(
@@ -1154,12 +1199,13 @@ async def test_hyperliquid_live_market_snapshot_uses_symbol_fallback_for_hip3():
 
 def _hostile_market_unavailable(detail):
     from live.market_snapshot import MarketSnapshotUnavailable
+
     return type("ApiKeySecretError", (MarketSnapshotUnavailable,), {})(detail)
 
 
 @pytest.mark.asyncio
 async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "hyperliquid"
     bot.symbol_ids = {}
 
@@ -1200,7 +1246,7 @@ async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplo
 
 @pytest.mark.asyncio
 async def test_hyperliquid_symbol_ticker_failure_log_is_redacted(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "hyperliquid"
     bot.symbol_ids = {}
     bot.market_snapshot_provider = SimpleNamespace(
@@ -1217,9 +1263,7 @@ async def test_hyperliquid_symbol_ticker_failure_log_is_redacted(caplog):
 
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(RuntimeError, match="missing live market snapshots"):
-            await bot._get_live_market_snapshots(
-                ["BTC/USDC:USDC"], context="test"
-            )
+            await bot._get_live_market_snapshots(["BTC/USDC:USDC"], context="test")
 
     messages = "\n".join(record.getMessage() for record in caplog.records)
     assert "error_type=MarketSnapshotUnavailable action=fail_if_incomplete" in messages
@@ -1229,7 +1273,7 @@ async def test_hyperliquid_symbol_ticker_failure_log_is_redacted(caplog):
 
 @pytest.mark.asyncio
 async def test_hyperliquid_orchestrator_fallback_preserves_redacted_cause(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "hyperliquid"
     bot._live_market_snapshot_fetch_max_age_ms = lambda: 5_000
     bot._log_symbols = lambda symbols, limit=12: ",".join(symbols[:limit])
@@ -1254,7 +1298,9 @@ async def test_hyperliquid_orchestrator_fallback_preserves_redacted_cause(caplog
     rendered = f"{raised.value}\n" + "\n".join(
         record.getMessage() for record in caplog.records
     )
-    assert "error_type=MarketSnapshotUnavailable action=try_explicit_fallback" in rendered
+    assert (
+        "error_type=MarketSnapshotUnavailable action=try_explicit_fallback" in rendered
+    )
     assert "ApiKeySecretError" not in rendered
     assert "secret-primary" not in rendered
     assert "secret-fallback" not in rendered
@@ -1264,10 +1310,12 @@ async def test_hyperliquid_orchestrator_fallback_preserves_redacted_cause(caplog
 @pytest.mark.parametrize("stage", ["all_mids", "symbol_tickers"])
 @pytest.mark.parametrize("error_type", [ValueError, TypeError, RuntimeError])
 async def test_hyperliquid_fallback_preserves_deterministic_failures(stage, error_type):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "hyperliquid"
     bot.symbol_ids = {}
-    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=AsyncMock(return_value={}))
+    bot.market_snapshot_provider = SimpleNamespace(
+        get_snapshots=AsyncMock(return_value={})
+    )
     original = error_type("invalid connector metadata")
     bot.cca = SimpleNamespace(fetch=AsyncMock(return_value={}))
     bot.fetch_tickers_for_symbols = AsyncMock(return_value={})
@@ -1281,7 +1329,7 @@ async def test_hyperliquid_fallback_preserves_deterministic_failures(stage, erro
 
 @pytest.mark.asyncio
 async def test_log_position_changes_batches_market_snapshot_request(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.inverse = False
     bot.c_mults = {
         "BTC/USDT:USDT": 1.0,
@@ -1347,7 +1395,7 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
 async def test_log_position_changes_classifies_signed_exposure_changes(
     monkeypatch, caplog, pside, old_size, new_size, expected_action
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.inverse = False
     bot.c_mults = {"XMR/USDT:USDT": 1.0}
     bot.pside_int_map = {"long": 1, "short": -1}
@@ -1367,8 +1415,8 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
         bot, Passivbot
     )
     bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
-    bot._emit_position_changed_event = (
-        Passivbot._emit_position_changed_event.__get__(bot, Passivbot)
+    bot._emit_position_changed_event = Passivbot._emit_position_changed_event.__get__(
+        bot, Passivbot
     )
 
     async def _get_live_last_prices(symbols, **kwargs):
@@ -1404,7 +1452,11 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
             ],
         )
 
-    pos_logs = [record.getMessage() for record in caplog.records if "[pos]" in record.getMessage()]
+    pos_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "[pos]" in record.getMessage()
+    ]
     assert len(pos_logs) == 1
     assert " ".join(pos_logs[0].split()).startswith(f"[pos] {expected_action} ")
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -1424,7 +1476,7 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
 async def test_log_position_changes_suppresses_legacy_table_when_event_console_active(
     monkeypatch, caplog
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.inverse = False
     bot.c_mults = {"XMR/USDT:USDT": 1.0}
     bot.pside_int_map = {"long": 1, "short": -1}
@@ -1445,8 +1497,8 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
         bot, Passivbot
     )
     bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
-    bot._emit_position_changed_event = (
-        Passivbot._emit_position_changed_event.__get__(bot, Passivbot)
+    bot._emit_position_changed_event = Passivbot._emit_position_changed_event.__get__(
+        bot, Passivbot
     )
 
     async def _get_live_last_prices(symbols, **kwargs):
@@ -1494,7 +1546,7 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_awaits_cancelled_maintainers():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._monitor_emit_stop = lambda *args, **kwargs: None
@@ -1536,7 +1588,7 @@ async def test_shutdown_gracefully_awaits_cancelled_maintainers():
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_awaits_cancelled_maintainers():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._monitor_emit_stop = lambda *args, **kwargs: None
@@ -1578,7 +1630,7 @@ async def test_shutdown_gracefully_awaits_cancelled_maintainers():
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_emits_stage_events():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     events = []
@@ -1621,7 +1673,7 @@ async def test_shutdown_gracefully_emits_stage_events():
 
 
 def test_emit_shutdown_stage_redacts_event_delivery_exception_text(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_started_monotonic = None
 
     def fail_event(*args, **kwargs):
@@ -1630,7 +1682,9 @@ def test_emit_shutdown_stage_redacts_event_delivery_exception_text(caplog):
     bot._emit_live_event = fail_event
 
     with caplog.at_level(logging.DEBUG):
-        bot._emit_shutdown_stage("event_delivery_failed", status="failed", level="error")
+        bot._emit_shutdown_stage(
+            "event_delivery_failed", status="failed", level="error"
+        )
 
     messages = [record.getMessage() for record in caplog.records]
     assert any(
@@ -1643,7 +1697,7 @@ def test_emit_shutdown_stage_redacts_event_delivery_exception_text(caplog):
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_redacts_maintainer_and_session_failure_text(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     events = []
@@ -1683,8 +1737,7 @@ async def test_shutdown_gracefully_redacts_maintainer_and_session_failure_text(c
     failed_stages = {
         kwargs["reason_code"]: kwargs["data"]
         for event_type, kwargs in events
-        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
-        and kwargs["status"] == "failed"
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE and kwargs["status"] == "failed"
     }
     assert failed_stages == {
         "maintainers_stop_failed": {
@@ -1703,8 +1756,10 @@ async def test_shutdown_gracefully_redacts_maintainer_and_session_failure_text(c
             "elapsed_s": failed_stages["public_session_close_failed"]["elapsed_s"],
         },
     }
-    retained = repr(events) + "\n" + "\n".join(
-        record.getMessage() for record in caplog.records
+    retained = (
+        repr(events)
+        + "\n"
+        + "\n".join(record.getMessage() for record in caplog.records)
     )
     assert "maintainer-secret" not in retained
     assert "private-secret" not in retained
@@ -1714,7 +1769,7 @@ async def test_shutdown_gracefully_redacts_maintainer_and_session_failure_text(c
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_redacts_await_failure_text(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     events = []
@@ -1762,15 +1817,16 @@ async def test_shutdown_gracefully_redacts_await_failure_text(caplog):
     failed_stages = {
         kwargs["reason_code"]: kwargs["data"]
         for event_type, kwargs in events
-        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
-        and kwargs["status"] == "failed"
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE and kwargs["status"] == "failed"
     }
     assert failed_stages["maintainers_await_failed"]["error_type"] == "TypeError"
     assert failed_stages["maintainers_await_failed"]["task_count"] == 1
     assert failed_stages["execution_loop_wait_failed"]["error_type"] == "RuntimeError"
     assert execution_stopped.was_set is True
-    retained = repr(events) + "\n" + "\n".join(
-        record.getMessage() for record in caplog.records
+    retained = (
+        repr(events)
+        + "\n"
+        + "\n".join(record.getMessage() for record in caplog.records)
     )
     assert "maintainer-await-secret" not in retained
     assert "execution-wait-secret" not in retained
@@ -1782,7 +1838,7 @@ async def test_shutdown_gracefully_redacts_await_failure_text(caplog):
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_emits_slow_stage_after_threshold():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._shutdown_degraded_after_seconds = 0.0
@@ -1821,7 +1877,7 @@ async def test_shutdown_gracefully_emits_slow_stage_after_threshold():
 async def test_shutdown_gracefully_times_out_stuck_maintainer_before_closing_sessions(
     caplog,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._shutdown_maintainer_grace_seconds = 0.01
@@ -1875,7 +1931,7 @@ async def test_shutdown_gracefully_times_out_stuck_maintainer_before_closing_ses
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_waits_for_execution_loop_before_closing_sessions():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._monitor_emit_stop = lambda *args, **kwargs: None
@@ -1914,7 +1970,7 @@ async def test_shutdown_gracefully_waits_for_execution_loop_before_closing_sessi
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_cancels_stuck_execution_loop_before_closing_sessions():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._shutdown_execution_grace_seconds = 0.01
@@ -1957,7 +2013,7 @@ async def test_shutdown_gracefully_cancels_stuck_execution_loop_before_closing_s
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_bounds_execution_loop_cancel_grace_before_closing_sessions():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._shutdown_execution_grace_seconds = 0.0
@@ -2016,7 +2072,7 @@ async def test_shutdown_gracefully_bounds_execution_loop_cancel_grace_before_clo
 
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_does_not_cancel_inline_execution_task_on_timeout():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._shutdown_execution_grace_seconds = 0.01
@@ -2061,7 +2117,7 @@ async def test_shutdown_gracefully_does_not_cancel_inline_execution_task_on_time
 
 
 def test_asyncio_runtime_exception_handler_suppresses_ping_timeout_callback(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
@@ -2094,7 +2150,7 @@ def test_asyncio_runtime_exception_handler_suppresses_ccxt_transport_callback(ca
     class ClientConnectionResetError(Exception):
         pass
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
@@ -2115,11 +2171,13 @@ def test_asyncio_runtime_exception_handler_suppresses_ccxt_transport_callback(ca
     )
 
 
-def test_asyncio_runtime_exception_handler_suppresses_kucoin_token_expiry_callback(caplog):
+def test_asyncio_runtime_exception_handler_suppresses_kucoin_token_expiry_callback(
+    caplog,
+):
     class AuthenticationError(Exception):
         pass
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
@@ -2147,11 +2205,13 @@ def test_asyncio_runtime_exception_handler_suppresses_kucoin_token_expiry_callba
     )
 
 
-def test_asyncio_runtime_exception_handler_suppresses_unretrieved_transport_future(caplog):
+def test_asyncio_runtime_exception_handler_suppresses_unretrieved_transport_future(
+    caplog,
+):
     class RequestTimeout(Exception):
         pass
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "binance"
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
@@ -2179,8 +2239,8 @@ def test_asyncio_runtime_exception_handler_suppresses_unretrieved_transport_futu
 
 
 def test_candle_fetch_concurrency_is_conservative_for_history_replay():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "hyperliquid"
 
     assert bot._candle_fetch_concurrency(context="history_replay") == 1
@@ -2191,657 +2251,21 @@ def test_candle_fetch_concurrency_is_conservative_for_history_replay():
     bot.exchange = "gateio"
     assert bot._candle_fetch_concurrency(context="history_replay") == 1
 
-    bot.config = {"live": {"warmup_concurrency": 7}}
+    bot.config = _unit_config({"live": {"warmup_concurrency": 7}})
     assert bot._candle_fetch_concurrency(context="history_replay") == 7
-
-
-def test_hsl_extract_fill_events_normalization():
-    bot = Passivbot.__new__(Passivbot)
-    bot.c_mults = {"BTC/USDT:USDT": 2.0}
-    bot.get_symbol_id_inv = (
-        lambda sym: "BTC/USDT:USDT" if sym == "BTCUSDT" else ""
-    )
-
-    events = bot._hsl_extract_fill_events(
-        [
-            {
-                "timestamp": 1_800_000_061_000,
-                "symbol": "BTCUSDT",
-                "position_side": "long",
-                "side": "buy",
-                "qty": 1.0,
-                "price": 100.0,
-                "pnl": 0.0,
-            },
-            {
-                "timestamp": 1_800_000_060_000,
-                "symbol": "BTC/USDT:USDT",
-                "pside": "short",
-                "side": "buy",
-                "amount": 2.0,
-                "avgPrice": 50.0,
-                "pnl": -1.0,
-            },
-            {
-                "timestamp": 1_800_000_062_000,
-                "symbol": "BTC/USDT:USDT",
-                "qty_signed": -0.5,
-                "price": 10.0,
-            },
-            # Missing timestamp, missing symbol, zero qty, zero price: skipped.
-            {"symbol": "BTC/USDT:USDT", "qty": 1.0, "price": 1.0},
-            {"timestamp": 1_800_000_063_000, "symbol": "", "qty": 1.0, "price": 1.0},
-            {"timestamp": 1_800_000_064_000, "symbol": "BTC/USDT:USDT", "qty": 0.0, "price": 1.0},
-            {"timestamp": 1_800_000_065_000, "symbol": "BTC/USDT:USDT", "qty": 1.0, "price": 0.0},
-        ]
-    )
-
-    assert [event["timestamp"] for event in events] == [1_800_000_060_000, 1_800_000_061_000, 1_800_000_062_000]
-    by_ts = {event["timestamp"]: event for event in events}
-    # Exchange-id symbols normalize through get_symbol_id_inv.
-    assert by_ts[1_800_000_061_000]["symbol"] == "BTC/USDT:USDT"
-    assert by_ts[1_800_000_061_000]["action"] == "increase"
-    assert by_ts[1_800_000_061_000]["c_mult"] == 2.0
-    # qty/price fallbacks (amount/avgPrice); short buy reduces.
-    assert by_ts[1_800_000_060_000]["qty"] == 2.0
-    assert by_ts[1_800_000_060_000]["price"] == 50.0
-    assert by_ts[1_800_000_060_000]["pside"] == "short"
-    assert by_ts[1_800_000_060_000]["action"] == "decrease"
-    # Signed qty decides the action and qty is stored unsigned.
-    assert by_ts[1_800_000_062_000]["qty"] == 0.5
-    assert by_ts[1_800_000_062_000]["action"] == "decrease"
-    assert all("fee" in event and "pb_order_type" in event for event in events)
-
-
-@pytest.mark.asyncio
-async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "kucoin"
-    bot.user = "test_user"
-    bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
-    base_ts = 1_800_000_000_000
-    bot.get_exchange_time = lambda: base_ts + 120_000
-    bot.get_raw_balance = lambda: 100.0
-    bot.get_symbol_id_inv = lambda symbol: symbol
-    # Coin-mode price replay only fetches candles for held or panic symbols,
-    # so hold a long position in every replayed symbol.
-    bot.positions = {
-        symbol: {
-            "long": {"size": 1.0, "price": 100.0},
-            "short": {"size": 0.0, "price": 0.0},
-        }
-        for symbol in ("BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT")
-    }
-    bot._pnls_manager = None
-    bot.inverse = False
-    bot.cca = SimpleNamespace(timeframes={"1m": "1m"})
-    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
-    bot._get_fetch_delay_seconds = lambda: 0.0
-    sink = ListEventSink()
-    bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[sink],
-        monitor_sinks=[],
-    )
-    bot._live_event_current_cycle_id = "cy_hsl_history_build"
-    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
-    bot.c_mults = {
-        "BTC/USDT:USDT": 1.0,
-        "ETH/USDT:USDT": 1.0,
-        "SOL/USDT:USDT": 1.0,
-    }
-    monkeypatch.setattr(
-        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
-    )
-
-    class _CM:
-        def __init__(self):
-            self.active = 0
-            self.max_active = 0
-            self.calls = []
-
-        async def get_candles(self, symbol, **kwargs):
-            self.calls.append((symbol, kwargs.get("timeframe")))
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
-            try:
-                await asyncio.sleep(0.01)
-                return np.array(
-                    [
-                        (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
-                        (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
-                        (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
-                    ],
-                    dtype=passivbot_module.CANDLE_DTYPE,
-                )
-            finally:
-                self.active -= 1
-
-    cm = _CM()
-    bot.cm = cm
-    fill_events = [
-        {
-            "timestamp": base_ts,
-            "symbol": symbol,
-            "position_side": "long",
-            "side": "buy",
-            "qty": 1.0,
-            "price": 100.0,
-            "pnl": 0.0,
-        }
-        for symbol in bot.c_mults
-    ]
-
-    await bot.get_balance_equity_history(
-        fill_events=fill_events,
-        current_balance=100.0,
-        hsl_replay_signal_mode="coin",
-    )
-
-    assert cm.max_active == 2
-    assert sorted(
-        symbol for symbol, timeframe in cm.calls if timeframe == "1m"
-    ) == sorted(bot.c_mults)
-    assert bot._live_event_pipeline.flush(timeout=2.0) is True
-    events = [event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_PROGRESS]
-    batch_events = [
-        event
-        for event in events
-        if event.reason_code
-        not in {
-            ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_STARTED,
-            ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED,
-        }
-    ]
-    symbol_started_events = [
-        event
-        for event in events
-        if event.reason_code == ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_STARTED
-    ]
-    symbol_completed_events = [
-        event
-        for event in events
-        if event.reason_code == ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED
-    ]
-    assert [event.reason_code for event in batch_events] == [
-        ReasonCodes.HSL_HISTORY_INPUTS_LOADED,
-        ReasonCodes.HSL_PRICE_HISTORY_FETCH_STARTED,
-        ReasonCodes.HSL_PRICE_HISTORY_FETCH_COMPLETED,
-        ReasonCodes.HSL_TIMELINE_REPLAY_STARTED,
-        ReasonCodes.HSL_TIMELINE_REPLAY_COMPLETED,
-    ]
-    assert {event.cycle_id for event in events} == {"cy_hsl_history_build"}
-    assert {event.data["signal_mode"] for event in events} == {"coin"}
-    assert batch_events[0].data["fill_events"] == 3
-    assert batch_events[1].data["price_replay_symbols"] == 3
-    assert batch_events[2].data["priced_symbols"] == 3
-    assert batch_events[3].data["history_minutes"] >= 3
-    assert (
-        batch_events[4].data["timeline_rows"]
-        == batch_events[3].data["history_minutes"]
-    )
-    assert batch_events[4].data["timeline_replay_elapsed_s"] is not None
-    assert {event.symbol for event in symbol_started_events} == set(bot.c_mults)
-    assert {event.symbol for event in symbol_completed_events} == set(bot.c_mults)
-    assert {event.status for event in symbol_started_events} == {"started"}
-    assert {event.status for event in symbol_completed_events} == {"succeeded"}
-    assert {event.data["timeframe"] for event in symbol_completed_events} == {"1m"}
-    assert {event.data["rows"] for event in symbol_completed_events} == {3}
-    assert all(
-        event.data["stage"] == "price_history_symbol_fetch_completed"
-        for event in symbol_completed_events
-    )
-    assert all("elapsed_s" in event.data for event in symbol_completed_events)
-    assert bot._live_event_pipeline.close(timeout=2.0) is True
-
-
-@pytest.mark.asyncio
-async def test_balance_equity_history_redacts_failed_candle_fetch_diagnostics(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "hyperliquid"
-    bot.user = "test_user"
-    bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
-    base_ts = 1_800_000_000_000
-    end_ts = base_ts + 5_001 * 60_000
-    symbol = "ETH/USDT:USDT"
-    bot.get_exchange_time = lambda: end_ts
-    bot.get_raw_balance = lambda: 100.0
-    bot.get_symbol_id_inv = lambda value: value
-    bot.positions = {
-        symbol: {
-            "long": {"size": 1.0, "price": 100.0},
-            "short": {"size": 0.0, "price": 0.0},
-        }
-    }
-    bot._pnls_manager = None
-    bot.inverse = False
-    bot._candle_fetch_concurrency = lambda *, context="runtime": 1
-    bot._get_fetch_delay_seconds = lambda: 0.0
-    sink = ListEventSink()
-    bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[sink],
-        monitor_sinks=[],
-    )
-    bot._live_event_current_cycle_id = "cy_hsl_history_failure"
-    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
-    bot.c_mults = {symbol: 1.0}
-    monkeypatch.setattr(
-        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
-    )
-    hostile = "token=hsl-history-secret https://example.invalid/hsl-history"
-
-    class _CM:
-        async def get_candles(self, sym, **kwargs):
-            raise _hostile_runtime_error(hostile)
-
-    bot.cm = _CM()
-    fill_events = [
-        {
-            "timestamp": base_ts,
-            "symbol": symbol,
-            "position_side": "long",
-            "side": "buy",
-            "qty": 1.0,
-            "price": 100.0,
-            "pnl": 0.0,
-        }
-    ]
-
-    with caplog.at_level(logging.ERROR):
-        history = await bot.get_balance_equity_history(
-            fill_events=fill_events,
-            current_balance=100.0,
-            hsl_replay_signal_mode="coin",
-        )
-
-    assert history["timeline"]
-    assert history["metadata"]["missing_price_symbols"] == [symbol]
-    assert bot._live_event_pipeline.flush(timeout=2.0) is True
-    failed_events = [
-        event
-        for event in sink.events
-        if event.reason_code == ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED
-        and event.status == "failed"
-    ]
-    assert {event.data["timeframe"] for event in failed_events} == {
-        "1m",
-        "5m",
-        "15m",
-        "1h",
-    }
-    assert {event.data["error_type"] for event in failed_events} == {"RuntimeError"}
-    assert all(
-        event.data["stage"] == "price_history_symbol_fetch_completed"
-        for event in failed_events
-    )
-    assert all("elapsed_s" in event.data for event in failed_events)
-    rendered_events = "\n".join(str(event.data) for event in failed_events)
-    assert hostile not in rendered_events
-    assert "ApiKeySecretError" not in rendered_events
-    assert "example.invalid" not in rendered_events
-    assert "error_type=RuntimeError" in caplog.text
-    assert hostile not in caplog.text
-    assert "ApiKeySecretError" not in caplog.text
-    assert "example.invalid" not in caplog.text
-    assert bot._live_event_pipeline.close(timeout=2.0) is True
-
-
-@pytest.mark.asyncio
-async def test_authoritative_pside_timeline_uses_qty_step_flat_epsilon(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "kucoin"
-    bot.user = "test_user"
-    bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
-    base_ts = 1_800_000_000_000
-    ts_now = base_ts + 60_000
-    bot.get_exchange_time = lambda: ts_now
-    bot.get_raw_balance = lambda: 100.0
-    bot.get_symbol_id_inv = lambda symbol: symbol
-    symbol = "BTC/USDT:USDT"
-    bot.positions = {
-        symbol: {
-            "long": {"size": 0.004, "price": 100.0},
-            "short": {"size": 0.0, "price": 0.0},
-        }
-    }
-    bot.qty_steps = {symbol: 0.01}
-    bot._pnls_manager = None
-    bot.inverse = False
-    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
-    bot._get_fetch_delay_seconds = lambda: 0.0
-    bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[ListEventSink()],
-        monitor_sinks=[],
-    )
-    bot._live_event_current_cycle_id = "cy_hsl_authoritative_flat_epsilon"
-    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
-    bot.c_mults = {symbol: 1.0}
-    monkeypatch.setattr(
-        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
-    )
-
-    class _CM:
-        async def get_candles(self, sym, **kwargs):
-            assert sym == symbol
-            return np.array(
-                [
-                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
-                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
-                ],
-                dtype=passivbot_module.CANDLE_DTYPE,
-            )
-
-    bot.cm = _CM()
-    fill_events = [
-        {
-            "timestamp": base_ts,
-            "symbol": symbol,
-            "position_side": "long",
-            "side": "buy",
-            "qty": 0.01,
-            "price": 100.0,
-            "pnl": 0.0,
-        },
-        {
-            "timestamp": base_ts + 1_000,
-            "symbol": symbol,
-            "position_side": "long",
-            "side": "sell",
-            "qty": 0.006,
-            "price": 100.0,
-            "pnl": 0.0,
-        },
-    ]
-
-    history = await bot.get_balance_equity_history(
-        fill_events=fill_events,
-        current_balance=100.0,
-        hsl_replay_signal_mode="unified",
-    )
-
-    first = history["timeline"][0]
-    assert first["is_flat"] is True
-    assert first["is_flat_long"] is True
-    assert first["is_flat_short"] is True
-    assert bot._live_event_pipeline.close(timeout=2.0) is True
-
-
-@pytest.mark.asyncio
-async def test_balance_equity_history_clamps_finite_replay_to_lookback_after_state_seed(
-    monkeypatch,
-):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
-    bot.exchange = "kucoin"
-    bot.user = "test_user"
-    bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: bot.config["live"][key]
-    day_ms = 86_400_000
-    now_ms = 1_800_000_000_000
-    lookback_start_ms = now_ms - day_ms
-    lookback_start_minute = (lookback_start_ms // 60_000) * 60_000
-    old_open_ts = lookback_start_ms - 5 * day_ms
-    symbol = "XLM/USDT:USDT"
-    old_flat_symbol = "AAVE/USDT:USDT"
-    bot.get_exchange_time = lambda: now_ms
-    bot.get_raw_balance = lambda: 1000.0
-    bot.get_symbol_id_inv = lambda symbol: symbol
-    bot.positions = {
-        symbol: {
-            "long": {"size": 1.0, "price": 100.0},
-            "short": {"size": 0.0, "price": 0.0},
-        }
-    }
-    bot._pnls_manager = None
-    bot.inverse = False
-    bot._candle_fetch_concurrency = lambda *, context="runtime": 1
-    bot._get_fetch_delay_seconds = lambda: 0.0
-    bot.c_mults = {symbol: 1.0, old_flat_symbol: 1.0}
-    monkeypatch.setattr(
-        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
-    )
-
-    class _CM:
-        def __init__(self):
-            self.calls = []
-
-        async def get_candles(self, symbol_, **kwargs):
-            self.calls.append((symbol_, dict(kwargs)))
-            assert symbol_ == symbol
-            assert kwargs["start_ts"] == lookback_start_minute
-            assert kwargs["end_ts"] == (now_ms // 60_000) * 60_000
-            return np.array(
-                [
-                    (lookback_start_minute, 109.0, 111.0, 108.0, 110.0, 1.0),
-                    (lookback_start_minute + 60_000, 110.0, 112.0, 109.0, 111.0, 1.0),
-                    ((now_ms // 60_000) * 60_000, 111.0, 113.0, 110.0, 112.0, 1.0),
-                ],
-                dtype=passivbot_module.CANDLE_DTYPE,
-            )
-
-    bot.cm = _CM()
-    history = await bot.get_balance_equity_history(
-        fill_events=[
-            {
-                "timestamp": old_open_ts,
-                "symbol": symbol,
-                "position_side": "long",
-                "side": "buy",
-                "qty": 1.0,
-                "price": 100.0,
-                "pnl": 0.0,
-            },
-            {
-                "timestamp": old_open_ts,
-                "symbol": old_flat_symbol,
-                "position_side": "long",
-                "side": "buy",
-                "qty": 1.0,
-                "price": 50.0,
-                "pnl": 0.0,
-            },
-            {
-                "timestamp": old_open_ts + 60_000,
-                "symbol": old_flat_symbol,
-                "position_side": "long",
-                "side": "sell",
-                "qty": 1.0,
-                "price": 49.0,
-                "pnl": -1.0,
-            },
-        ],
-        current_balance=1000.0,
-        hsl_replay_signal_mode="coin",
-    )
-
-    assert [symbol_ for symbol_, _kwargs in bot.cm.calls] == [symbol]
-    assert history["timeline"]
-    assert history["timeline"][0]["timestamp"] == lookback_start_minute
-    assert len(history["timeline"]) == int(
-        ((now_ms // 60_000) * 60_000 - lookback_start_minute) // 60_000
-    ) + 1
-    assert history["timeline"][0]["unrealized_pnl_by_coin_pside"][symbol][
-        "long"
-    ] == pytest.approx(10.0)
-    assert history["timeline"][-1]["unrealized_pnl_by_coin_pside"][symbol][
-        "long"
-    ] == pytest.approx(12.0)
-    assert old_flat_symbol not in history["metadata"]["symbols_covered"]
-    assert history["metadata"]["events_used"] == 3
-
-
-@pytest.mark.asyncio
-async def test_balance_equity_history_skips_unsupported_closed_historical_symbols(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "gateio"
-    bot.user = "test_user"
-    bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
-    base_ts = 1_800_000_000_000
-    bot.get_exchange_time = lambda: base_ts + 120_000
-    bot.get_raw_balance = lambda: 100.0
-    bot.get_symbol_id_inv = lambda symbol: symbol
-    bot.positions = {}
-    bot._pnls_manager = None
-    bot.inverse = False
-    bot.cca = SimpleNamespace(timeframes={"1m": "1m"})
-    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
-    bot._get_fetch_delay_seconds = lambda: 0.0
-    bot.c_mults = {"BTC/USDT:USDT": 1.0}
-    monkeypatch.setattr(
-        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
-    )
-
-    class _CM:
-        def __init__(self):
-            self.calls = []
-
-        async def get_candles(self, symbol, **kwargs):
-            self.calls.append(symbol)
-            return np.array(
-                [
-                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
-                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
-                    (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
-                ],
-                dtype=passivbot_module.CANDLE_DTYPE,
-            )
-
-    bot.cm = _CM()
-    fill_events = [
-        {
-            "timestamp": base_ts,
-            "symbol": "BTC/USDT:USDT",
-            "position_side": "long",
-            "side": "buy",
-            "qty": 1.0,
-            "price": 100.0,
-            "pnl": 0.0,
-        },
-        {
-            "timestamp": base_ts,
-            "symbol": "TON/USDT:USDT",
-            "position_side": "long",
-            "side": "buy",
-            "qty": 1.0,
-            "price": 5.0,
-            "pnl": 0.0,
-        },
-        {
-            "timestamp": base_ts + 60_000,
-            "symbol": "TON/USDT:USDT",
-            "position_side": "long",
-            "side": "sell",
-            "qty": 1.0,
-            "price": 4.9,
-            "pnl": -0.1,
-        },
-    ]
-
-    history = await bot.get_balance_equity_history(
-        fill_events=fill_events, current_balance=100.0
-    )
-
-    assert bot.cm.calls == ["BTC/USDT:USDT"]
-    assert [event["symbol"] for event in history["fill_events"]] == [
-        "BTC/USDT:USDT",
-        "TON/USDT:USDT",
-        "TON/USDT:USDT",
-    ]
-    assert history["metadata"]["symbols_covered"] == ["BTC/USDT:USDT"]
-    assert history["metadata"]["missing_price_symbols"] == []
-
-
-@pytest.mark.asyncio
-async def test_balance_equity_history_emits_zero_coin_upnl_for_flat_realized_symbol(
-    monkeypatch,
-):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "gateio"
-    bot.user = "test_user"
-    bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
-    base_ts = 1_800_000_000_000
-    bot.get_exchange_time = lambda: base_ts + 120_000
-    bot.get_raw_balance = lambda: 95.0
-    bot.get_symbol_id_inv = lambda symbol: symbol
-    bot.positions = {}
-    bot._pnls_manager = None
-    bot.inverse = False
-    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
-    bot._get_fetch_delay_seconds = lambda: 0.0
-    symbol = "M/USDT:USDT"
-    bot.c_mults = {symbol: 1.0}
-    monkeypatch.setattr(
-        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
-    )
-
-    class _CM:
-        async def get_candles(self, symbol, **kwargs):
-            return np.array(
-                [
-                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
-                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
-                    (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
-                ],
-                dtype=passivbot_module.CANDLE_DTYPE,
-            )
-
-    bot.cm = _CM()
-    fill_events = [
-        {
-            "timestamp": base_ts,
-            "symbol": symbol,
-            "position_side": "long",
-            "side": "buy",
-            "qty": 1.0,
-            "price": 100.0,
-            "pnl": 0.0,
-        },
-        {
-            "timestamp": base_ts + 60_000,
-            "symbol": symbol,
-            "position_side": "long",
-            "side": "sell",
-            "qty": 1.0,
-            "price": 95.0,
-            "pnl": -5.0,
-        },
-    ]
-
-    history = await bot.get_balance_equity_history(
-        fill_events=fill_events, current_balance=95.0
-    )
-
-    flat_rows = [
-        row
-        for row in history["timeline"]
-        if row["timestamp"] >= base_ts + 60_000
-    ]
-    assert flat_rows
-    for row in flat_rows:
-        assert row["realized_pnl_by_coin_pside"][symbol]["long"] == pytest.approx(-5.0)
-        assert row["unrealized_pnl_by_coin_pside"][symbol]["long"] == pytest.approx(0.0)
-        assert row["unrealized_pnl_by_coin_pside"][symbol]["short"] == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
 async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=False)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot._runtime_manifest_written = True
     bot.exchange = "bybit"
     bot.user = "test_user"
     bot.quote = "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {}}
+    bot.config = _unit_config({"live": {}})
     bot.debug_mode = False
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
@@ -2879,7 +2303,8 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
 
 @pytest.mark.asyncio
 async def test_start_bot_bounds_trading_ready_warmup_failure(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=False)
     bot.balance = 100.0
     bot.refresh_authoritative_state = AsyncMock(return_value=True)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
@@ -2888,7 +2313,7 @@ async def test_start_bot_bounds_trading_ready_warmup_failure(monkeypatch, caplog
     bot.user = "test_user"
     bot.quote = "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {}}
+    bot.config = _unit_config({"live": {}})
     bot.debug_mode = False
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
@@ -2907,7 +2332,9 @@ async def test_start_bot_bounds_trading_ready_warmup_failure(monkeypatch, caplog
         return None
 
     async def _warmup():
-        raise RuntimeError(secret)
+        from ccxt.base.errors import NetworkError
+
+        raise NetworkError(secret)
 
     async def _sleep(*args, **kwargs):
         bot.stop_signal_received = True
@@ -2921,16 +2348,15 @@ async def test_start_bot_bounds_trading_ready_warmup_failure(monkeypatch, caplog
 
     assert bot.stop_signal_received is True
     assert "trading-ready candle warmup skipped" in caplog.text
-    assert "error_type=RuntimeError" in caplog.text
+    assert "error_type=NetworkError" in caplog.text
     assert secret not in caplog.text
     assert "Traceback" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
-    monkeypatch, caplog
-):
-    bot = Passivbot.__new__(Passivbot)
+async def test_start_bot_reports_and_propagates_programmer_error(monkeypatch, caplog):
+    bot = _unit_bot()
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=False)
     bot.balance = 100.0
     bot.refresh_authoritative_state = AsyncMock(return_value=True)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
@@ -2939,7 +2365,9 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     bot.user = "test_user"
     bot.quote = "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0, "hsl_unavailable_grace_seconds": 120.0}}
+    bot.config = _unit_config(
+        {"live": {"boot_stagger_seconds": 0, "execution_delay_seconds": 5.0}}
+    )
     bot.debug_mode = False
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
@@ -2956,13 +2384,11 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     bot._monitor_emit_stop = lambda *args, **kwargs: stop_events.append((args, kwargs))
     bot.init_markets = AsyncMock()
     bot.warmup_trading_ready_candles = AsyncMock()
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
-    bot._equity_hard_stop_signal_mode = lambda *args, **kwargs: "coin"
     secret = "api_key=terminal-startup-secret"
     failure = ValueError(secret)
     failure.status = "422"
     failure.code = "10006"
-    bot._equity_hard_stop_start_coin_history_replay = AsyncMock(side_effect=failure)
+    bot.warmup_trading_ready_candles = AsyncMock(side_effect=failure)
 
     async def _format(*args, **kwargs):
         return None
@@ -2970,13 +2396,13 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     monkeypatch.setattr(passivbot_module, "format_approved_ignored_coins", _format)
 
     with caplog.at_level(logging.CRITICAL):
-        with pytest.raises(
-            FatalBotException, match="error_type=ValueError status=422 code=10006"
-        ) as exc_info:
+        with pytest.raises(ValueError) as exc_info:
             await bot.start_bot()
 
     incident_events = [
-        item for item in monitor_events if item[0][0] in {"error.bot", "error.bot.detail"}
+        item
+        for item in monitor_events
+        if item[0][0] in {"error.bot", "error.bot.detail"}
     ]
     assert [item[0][0] for item in incident_events] == [
         "error.bot",
@@ -2984,7 +2410,7 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     ]
     summary = incident_events[0][0][2]
     detail = incident_events[1][0][2]
-    assert summary["stage"] == "equity_hard_stop_initialize_coin_from_history"
+    assert summary["stage"] == "warmup_trading_ready_candles"
     assert summary["incident_id"] == detail["incident_id"]
     assert summary["origin"] != "unknown"
     assert detail["traceback"]["frame_count"] >= 1
@@ -2992,11 +2418,10 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     bot._monitor_record_error.assert_not_called()
     assert stop_events[-1][0][0] == "startup_error"
     assert stop_events[-1][1]["payload"] == {
-        "stage": "equity_hard_stop_initialize_coin_from_history",
+        "stage": "warmup_trading_ready_candles",
         "error_type": "ValueError",
     }
-    assert exc_info.value.__cause__ is failure
-    assert secret not in str(exc_info.value)
+    assert exc_info.value is failure
     assert secret not in caplog.text
     assert "Traceback" not in caplog.text
     # The outer lifecycle handler retains the failing phase even after cleanup
@@ -3007,164 +2432,15 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
         passivbot_module._log_process_failure(
             "passivbot fatal error", exc_info.value, action="stop"
         )
-    assert "stage=equity_hard_stop_initialize_coin_from_history" in caplog.text
+    assert "stage=warmup_trading_ready_candles" in caplog.text
     assert f"incident_id={summary['incident_id']}" in caplog.text
     assert "Traceback" in caplog.text
-    assert "cause: ValueError" in caplog.text
+    assert "ValueError" in caplog.text
     assert secret not in caplog.text
-
-
-def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatch):
-    sink = ListEventSink()
-
-    class FakeBot:
-        _emit_live_event = Passivbot._emit_live_event
-        _equity_hard_stop_emit_coin_status = Passivbot._equity_hard_stop_emit_coin_status
-        _hsl_coin_state = Passivbot._hsl_coin_state
-
-        def __init__(self, *, has_position: bool, debug_profiles=()):
-            self.exchange = "bybit"
-            self.user = "bybit_01"
-            self.bot_id = "bot_coin_hsl"
-            self._live_event_current_cycle_id = "cy_hsl_coin"
-            self.live_event_debug_profiles = tuple(debug_profiles)
-            self._live_event_pipeline = LiveEventPipeline(
-                structured_sinks=[sink],
-                monitor_sinks=[],
-            )
-            self.has_position = has_position
-            self._equity_hard_stop_coin = {
-                "long": {
-                    "NEAR/USDT:USDT": {
-                        "last_status_log_ms": 0,
-                        "cooldown_until_ms": 90_000,
-                        "last_stop_event": {
-                            "stop_event_timestamp_ms": 7_000,
-                        },
-                        "pending_stop_event": {
-                            "stop_event_timestamp_ms": 8_000,
-                        },
-                        "pending_red_since_ms": 6_000,
-                        "red_trigger_event_emitted": True,
-                        "cooldown_intervention_active": True,
-                    }
-                },
-                "short": {},
-            }
-
-        def _equity_hard_stop_has_open_position_symbol(self, pside, symbol):
-            return self.has_position
-
-    metrics = {
-        "timestamp_ms": 10_000,
-        "tier": "yellow",
-        "red_threshold": 0.10,
-        "drawdown_score": 0.06,
-        "drawdown_raw": 0.05,
-        "drawdown_ema": 0.06,
-        "slot_budget": 500.0,
-        "realized_pnl": -10.0,
-        "peak_realized_pnl": 20.0,
-        "unrealized_pnl": -15.0,
-    }
-    bot = FakeBot(has_position=True)
-
-    with caplog.at_level(logging.INFO):
-        bot._equity_hard_stop_emit_coin_status("long", "NEAR/USDT:USDT", metrics)
-
-    messages = [record.message for record in caplog.records]
-    assert any("[risk] HSL[long:NEAR/USDT:USDT] status" in msg for msg in messages)
-    assert any("dist_to_red=0.040000" in msg for msg in messages)
-    assert any("slot_budget=500.000000" in msg for msg in messages)
-    assert bot._live_event_pipeline.flush(timeout=2.0) is True
-    event = sink.events[-1]
-    assert event.event_type == EventTypes.HSL_STATUS
-    assert event.symbol == "NEAR/USDT:USDT"
-    assert event.pside == "long"
-    assert event.data["dist_to_red"] == pytest.approx(0.04)
-    assert "debug_profile" not in event.data
-    assert "debug" not in event.data
-
-    sink.events.clear()
-    debug_bot = FakeBot(has_position=True, debug_profiles=("hsl",))
-    debug_bot._equity_hard_stop_emit_coin_status(
-        "long",
-        "NEAR/USDT:USDT",
-        metrics | {"timestamp_ms": 40_000},
-    )
-
-    assert debug_bot._live_event_pipeline.flush(timeout=2.0) is True
-    event = sink.events[-1]
-    assert event.event_type == EventTypes.HSL_STATUS
-    assert event.data["debug_profile"] == "hsl"
-    debug = event.data["debug"]
-    assert debug["event_type"] == EventTypes.HSL_STATUS
-    assert debug["reason_code"] == "yellow"
-    assert debug["status"] == "succeeded"
-    assert debug["tier"] == "yellow"
-    assert "dist_to_red" in debug["data_keys"]
-    assert debug["state"] == {
-        "halted": False,
-        "no_restart_latched": False,
-        "cooldown_until_present": True,
-        "pending_red": True,
-        "has_pending_stop_event": True,
-        "has_last_stop_event": True,
-        "red_trigger_event_emitted": True,
-        "cooldown_intervention_active": True,
-        "cooldown_repanic_reset_pending": False,
-        "cooldown_unresolved_residue": False,
-        "pnl_reset_timestamp_present": False,
-    }
-
-    caplog.clear()
-    sink.events.clear()
-    flat_bot = FakeBot(has_position=False)
-    with caplog.at_level(logging.INFO):
-        flat_bot._equity_hard_stop_emit_coin_status(
-            "long",
-            "NEAR/USDT:USDT",
-            metrics | {"timestamp_ms": 20_000},
-        )
-
-    assert not [
-        record
-        for record in caplog.records
-        if "[risk] HSL[long:NEAR/USDT:USDT] status" in record.message
-    ]
-    assert flat_bot._live_event_pipeline.flush(timeout=2.0) is True
-    assert sink.events[-1].event_type == EventTypes.HSL_STATUS
-
-    import passivbot_hsl as hsl_mod
-
-    secret = "api_key=hsl-log-projection-secret"
-    url = "https://private.example.invalid/v1/hsl?token=hsl-log-token"
-
-    def fail_info(*args, **kwargs):
-        raise RuntimeError(f"logging failed {secret} {url}")
-
-    caplog.clear()
-    sink.events.clear()
-    monkeypatch.setattr(hsl_mod.logging, "info", fail_info)
-    failing_log_bot = FakeBot(has_position=True)
-    with caplog.at_level(logging.DEBUG):
-        failing_log_bot._equity_hard_stop_emit_coin_status(
-            "long",
-            "NEAR/USDT:USDT",
-            metrics | {"timestamp_ms": 30_000},
-        )
-
-    assert failing_log_bot._live_event_pipeline.flush(timeout=2.0) is True
-    assert sink.events[-1].event_type == EventTypes.HSL_STATUS
-    assert sink.events[-1].data["dist_to_red"] == pytest.approx(0.04)
-    assert "failed to log HSL coin status" in caplog.text
-    assert "RuntimeError" in caplog.text
-    assert secret not in caplog.text
-    assert url not in caplog.text
 
 
 def test_startup_timing_marks_log_once(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     now_ms = [1_000]
 
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms[0])
@@ -3190,8 +2466,8 @@ def test_startup_timing_marks_log_once(monkeypatch, caplog):
 
 
 def test_background_warmup_uses_low_priority_candle_concurrency():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "bitget"
     bot.max_n_concurrent_ohlcvs_1m_updates = 8
 
@@ -3200,7 +2476,7 @@ def test_background_warmup_uses_low_priority_candle_concurrency():
 
 
 def test_ws_reconnect_warning_logs_are_throttled(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     now_ms = [1_000]
 
@@ -3232,7 +2508,7 @@ def test_ws_reconnect_warning_logs_are_throttled(monkeypatch, caplog):
 
 def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
     sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot._live_event_current_cycle_id = "cy_ws"
     bot._live_event_pipeline = LiveEventPipeline(
@@ -3334,13 +2610,14 @@ def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
 
 def test_ws_reconnect_redacts_sensitive_traceback_frame_components(monkeypatch, caplog):
     sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[sink],
         monitor_sinks=[],
     )
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+
     def raise_timeout():
         raise TimeoutError("safe")
 
@@ -3378,7 +2655,7 @@ def test_ws_reconnect_bounds_stack_depth_without_extracting_traceback(
     monkeypatch, caplog
 ):
     sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[sink],
@@ -3418,7 +2695,7 @@ def test_ws_reconnect_does_not_consume_traceback_cadence_when_debug_disabled(
     monkeypatch, caplog
 ):
     sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[sink],
@@ -3461,7 +2738,7 @@ def test_ws_reconnect_does_not_consume_traceback_cadence_when_debug_disabled(
 
 @pytest.mark.asyncio
 async def test_background_candle_warmup_marks_full_warmup_ready(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     now_ms = [10_000]
     calls = []
 
@@ -3483,7 +2760,7 @@ async def test_background_candle_warmup_marks_full_warmup_ready(monkeypatch, cap
 
 @pytest.mark.asyncio
 async def test_background_candle_warmup_bounds_failure_diagnostic(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     secret = "wss://private.example.test/?token=BACKGROUND_SECRET"
 
     async def warmup_candles_staggered(**kwargs):
@@ -3501,12 +2778,14 @@ async def test_background_candle_warmup_bounds_failure_diagnostic(caplog):
 
 
 def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
-    bot.config = {"live": {"pnls_max_lookback_days": float(lookback_days)}}
+    bot.config = _unit_config(
+        {"live": {"pnls_max_lookback_days": float(lookback_days)}}
+    )
     bot.get_exchange_time = lambda: now_ms
 
 
 def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.execution_scheduled = False
     _set_authoritative_epoch_state(bot, epoch=0)
     now = [1000.0]
@@ -3539,7 +2818,7 @@ def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
 
 
 def test_handle_order_update_ignores_empty_batches(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.execution_scheduled = False
 
     with caplog.at_level(logging.INFO):
@@ -3550,7 +2829,7 @@ def test_handle_order_update_ignores_empty_batches(caplog):
 
 
 def test_handle_order_update_suppresses_recent_self_echoes(caplog, monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.execution_scheduled = False
     bot._authoritative_pending_confirmations = {}
     now_ms = 1_000_000
@@ -3605,7 +2884,7 @@ def test_handle_order_update_suppresses_recent_self_echoes(caplog, monkeypatch):
 def test_handle_order_update_cancel_hint_requests_full_confirmation(
     caplog, monkeypatch
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.execution_scheduled = False
     _set_authoritative_epoch_state(bot, epoch=7)
     bot.state_change_detected_by_symbol = set()
@@ -3642,7 +2921,7 @@ def test_handle_order_update_cancel_hint_requests_full_confirmation(
 
 
 def test_handle_order_update_fill_hint_requests_full_confirmation(caplog, monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.execution_scheduled = False
     bot._authoritative_pending_confirmations = {"open_orders": 1}
     _set_authoritative_epoch_state(bot, epoch=4)
@@ -3666,7 +2945,7 @@ def test_handle_order_update_fill_hint_requests_full_confirmation(caplog, monkey
 
 
 def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._authoritative_pending_confirmations = {}
     _set_authoritative_epoch_state(bot)
 
@@ -3731,9 +3010,11 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
 
 def test_log_staged_refresh_timings_keeps_meaningful_change_structured_at_info(caplog):
     sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_event_current_cycle_id = "cy_refresh"
-    bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink], monitor_sinks=[]
+    )
     bot._authoritative_pending_confirmations = {}
     _set_authoritative_epoch_state(bot, changed={"positions"})
 
@@ -3778,9 +3059,11 @@ def test_log_staged_refresh_timings_keeps_meaningful_change_structured_at_info(c
 
 def test_log_staged_refresh_timings_skips_structured_debug_sample():
     sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_event_current_cycle_id = "cy_refresh_debug"
-    bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink], monitor_sinks=[]
+    )
     bot._authoritative_pending_confirmations = {}
     _set_authoritative_epoch_state(bot)
 
@@ -3796,7 +3079,7 @@ def test_log_staged_refresh_timings_skips_structured_debug_sample():
 
 
 def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     assert (
         bot._order_plan_summary_is_interesting(
@@ -3831,7 +3114,7 @@ def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
 
 
 def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._order_wave_seq = 0
     bot._order_wave_last_summary_key = None
     clock = iter([1_000_000, 1_002_500])
@@ -3858,7 +3141,7 @@ def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):
 
 
 def test_order_wave_summary_uses_event_console_when_available(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._order_wave_seq = 0
     bot._order_wave_last_summary_key = None
     bot.live_event_console_enabled = True
@@ -3883,11 +3166,13 @@ def test_order_wave_summary_uses_event_console_when_available(monkeypatch, caplo
     assert emitted
     assert emitted[0][1]["elapsed_ms"] == 2500
     assert emitted[0][1]["level"] == "info"
-    assert not any("[order] wave complete" in record.message for record in caplog.records)
+    assert not any(
+        "[order] wave complete" in record.message for record in caplog.records
+    )
 
 
 def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._order_wave_seq = 0
     bot._pending_order_waves = []
     times = iter([1_000_000, 1_000_500, 1_003_000, 1_003_000])
@@ -3931,14 +3216,14 @@ def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, capl
 
 
 def test_order_wave_settlement_uses_event_console_when_available(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._order_wave_seq = 0
     bot._pending_order_waves = []
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = object()
     emitted = []
-    bot._emit_execution_confirmation_satisfied_event = (
-        lambda **kwargs: emitted.append(kwargs)
+    bot._emit_execution_confirmation_satisfied_event = lambda **kwargs: emitted.append(
+        kwargs
     )
     times = iter([1_000_000, 1_000_500, 1_003_000, 1_003_000])
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times))
@@ -3968,13 +3253,15 @@ def test_order_wave_settlement_uses_event_console_when_available(monkeypatch, ca
     assert emitted[0]["confirm_ms"] == 2500
     assert emitted[0]["level"] == "info"
     assert bot._pending_order_waves == []
-    assert not any("[order] wave settled" in record.message for record in caplog.records)
+    assert not any(
+        "[order] wave settled" in record.message for record in caplog.records
+    )
 
 
 def test_order_wave_settlement_demotes_quick_open_orders_confirmation(
     monkeypatch, caplog
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._pending_order_waves = [
         {
             "id": 7,
@@ -4007,7 +3294,7 @@ def test_order_wave_settlement_demotes_quick_open_orders_confirmation(
 async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
     monkeypatch, caplog
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
@@ -4032,12 +3319,14 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
     times = iter([1_000_000, 1_030_000])
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_030_000))
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
@@ -4054,7 +3343,9 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
 
     assert result is True
     fill_timing_records = [
-        record for record in caplog.records if "[fills] refresh timing" in record.message
+        record
+        for record in caplog.records
+        if "[fills] refresh timing" in record.message
     ]
     assert len(fill_timing_records) == 1
     assert fill_timing_records[0].levelno == logging.DEBUG
@@ -4073,7 +3364,7 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
 async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     monkeypatch, caplog, source, add_new_fill
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_event = SimpleNamespace(
         timestamp=1_700_000_000_000,
@@ -4110,12 +3401,14 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     times = iter([1_000_000, 1_001_000])
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_001_000))
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
@@ -4137,7 +3430,9 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
 
     assert result is True
     fill_timing_records = [
-        record for record in caplog.records if "[fills] refresh timing" in record.message
+        record
+        for record in caplog.records
+        if "[fills] refresh timing" in record.message
     ]
     assert len(fill_timing_records) == 1
     assert fill_timing_records[0].levelno == logging.DEBUG
@@ -4178,7 +3473,7 @@ async def test_update_pnls_confirms_only_structural_enrichment(
     current_fee_paid,
     expect_confirmation,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     previous = SimpleNamespace(
         timestamp=1_700_000_000_000,
@@ -4194,9 +3489,15 @@ async def test_update_pnls_confirms_only_structural_enrichment(
         client_order_id="pb-close",
         pnl=0.0,
         pnl_status="pending" if previous_status == "pending" else "complete",
-        pnl_source=(fem.PNL_SOURCE_PENDING if previous_status == "pending" else
-                    "synthetic_fill_reconstruction_degraded" if previous_status == "two_phase" else
-                    fem.PNL_SOURCE_AUTHORITATIVE),
+        pnl_source=(
+            fem.PNL_SOURCE_PENDING
+            if previous_status == "pending"
+            else (
+                "synthetic_fill_reconstruction_degraded"
+                if previous_status == "two_phase"
+                else fem.PNL_SOURCE_AUTHORITATIVE
+            )
+        ),
     )
     current = SimpleNamespace(
         **{
@@ -4216,7 +3517,11 @@ async def test_update_pnls_confirms_only_structural_enrichment(
             self._events = [previous]
 
         async def refresh_degraded_pnl_events(self, **_kwargs):
-            self._events = [SimpleNamespace(**{**vars(previous), "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE})]
+            self._events = [
+                SimpleNamespace(
+                    **{**vars(previous), "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE}
+                )
+            ]
 
         async def refresh_latest(self, **_kwargs):
             self._events = [current]
@@ -4231,12 +3536,14 @@ async def test_update_pnls_confirms_only_structural_enrichment(
             pass
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
@@ -4256,7 +3563,9 @@ async def test_update_pnls_confirms_only_structural_enrichment(
     ledger.stamp("positions", now_ms=bot.get_exchange_time())
     observation = (ledger.epoch, ledger.surfaces["positions"].revision)
     assert await bot.update_pnls(source="staged_blocking") is True
-    assert bot._hsl_fill_tail_observation == (None if expect_confirmation else observation)
+    assert bot._hsl_fill_tail_observation == (
+        None if expect_confirmation else observation
+    )
 
     if previous_status == "pending":
         bot._log_enriched_fill_events.assert_called_once_with([(previous, current)])
@@ -4276,7 +3585,7 @@ async def test_update_pnls_confirms_only_structural_enrichment(
 
 
 def test_min_effective_cost_blocks_are_aggregated(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._min_effective_cost_last_log_ms = {}
     bot._min_effective_cost_log_interval_ms = 60 * 60 * 1000
     bot._min_effective_cost_summary_last_log_ms = 0
@@ -4303,11 +3612,16 @@ def test_min_effective_cost_blocks_are_aggregated(caplog):
     with caplog.at_level(logging.INFO):
         bot._log_min_effective_cost_blocks(out, idx_to_symbol)
 
-    infos = [record.message for record in caplog.records if record.levelno == logging.INFO]
+    infos = [
+        record.message for record in caplog.records if record.levelno == logging.INFO
+    ]
     warnings = [
         record.message for record in caplog.records if record.levelno == logging.WARNING
     ]
-    assert sum("initial entry blocked by min effective cost | SYM" in msg for msg in infos) == 3
+    assert (
+        sum("initial entry blocked by min effective cost | SYM" in msg for msg in infos)
+        == 3
+    )
     assert not warnings
     assert any("blocked=5 detailed=3 suppressed=0" in msg for msg in infos)
 
@@ -4365,8 +3679,10 @@ def test_forager_selection_summary_formatter_bounds_hostile_tokens_for_live_cons
     assert len(rendered) <= 240
 
 
-def test_forager_selection_diagnostics_preserves_transition_and_cadence(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+def test_forager_selection_diagnostics_preserves_transition_and_cadence(
+    monkeypatch, caplog
+):
+    bot = _unit_bot()
     bot._forager_selection_info_interval_ms = 1_000
     bot._forager_selection_debug_interval_ms = 1_000
     now = [1_000]
@@ -4413,14 +3729,18 @@ def test_forager_selection_diagnostics_preserves_transition_and_cadence(monkeypa
     info_messages = [
         record.message
         for record in caplog.records
-        if record.levelno == logging.INFO and "[forager] long selection" in record.message
+        if record.levelno == logging.INFO
+        and "[forager] long selection" in record.message
     ]
     debug_messages = [
         record.message
         for record in caplog.records
-        if record.levelno == logging.DEBUG and "[forager] long score detail" in record.message
+        if record.levelno == logging.DEBUG
+        and "[forager] long score detail" in record.message
     ]
-    assert [message.split("reason=", 1)[1].split(" ", 1)[0] for message in info_messages] == [
+    assert [
+        message.split("reason=", 1)[1].split(" ", 1)[0] for message in info_messages
+    ] == [
         "selection_changed",
         "hysteresis_replacement",
         "periodic",
@@ -4430,7 +3750,7 @@ def test_forager_selection_diagnostics_preserves_transition_and_cadence(monkeypa
 
 
 def test_forager_selection_compact_info_preserves_structured_and_debug_detail(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     sink = ListEventSink()
     bot.exchange = "binance"
     bot.user = "binance_01"
@@ -4485,19 +3805,23 @@ def test_forager_selection_compact_info_preserves_structured_and_debug_detail(ca
     info_message = next(
         record.message
         for record in caplog.records
-        if record.levelno == logging.INFO and "[forager] long selection" in record.message
+        if record.levelno == logging.INFO
+        and "[forager] long selection" in record.message
     )
     debug_message = next(
         record.message
         for record in caplog.records
-        if record.levelno == logging.DEBUG and "[forager] long score detail" in record.message
+        if record.levelno == logging.DEBUG
+        and "[forager] long score detail" in record.message
     )
     assert long_coin not in info_message
     assert long_coin in debug_message
     assert "vol=0.400" in debug_message
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     event = next(
-        event for event in sink.events if event.event_type == EventTypes.FORAGER_SELECTION
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.FORAGER_SELECTION
     )
     assert event.data["selected_symbols"] == [symbol]
     assert event.data["incumbent_symbols"] == [symbol]
@@ -4517,7 +3841,7 @@ def test_forager_selection_compact_info_preserves_structured_and_debug_detail(ca
 
 
 def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     sink = ListEventSink()
     bot.exchange = "binance"
     bot.user = "binance_01"
@@ -4609,7 +3933,7 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
 
 
 def test_forager_selection_diagnostics_demotes_rank_only_changes(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     base = {
         "diagnostics": {
             "forager_selections": [
@@ -4629,9 +3953,10 @@ def test_forager_selection_diagnostics_demotes_rank_only_changes(caplog):
         }
     }
     rank_changed = deepcopy(base)
-    rank_changed["diagnostics"]["forager_selections"][0][
-        "selected_symbol_indices"
-    ] = [1, 0]
+    rank_changed["diagnostics"]["forager_selections"][0]["selected_symbol_indices"] = [
+        1,
+        0,
+    ]
     rank_changed["diagnostics"]["forager_selections"][0]["top_scores"] = [
         {"symbol_idx": 1, "rank": 1, "score": 0.626, "selected": True},
         {"symbol_idx": 0, "rank": 2, "score": 0.624, "selected": True},
@@ -4659,7 +3984,7 @@ def test_forager_selection_diagnostics_demotes_rank_only_changes(caplog):
 
 
 def test_forager_selection_diagnostics_demotes_no_incumbent_selection_churn(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     base = {
         "diagnostics": {
             "forager_selections": [
@@ -4705,7 +4030,7 @@ def test_forager_selection_diagnostics_demotes_no_incumbent_selection_churn(capl
 
 
 def test_active_candle_incomplete_publish_lag_is_info_throttled(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._active_candle_incomplete_last_log_ms = {}
     times = iter([1_000_000, 1_060_000, 1_400_001])
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times))
@@ -4733,7 +4058,7 @@ def test_active_candle_incomplete_publish_lag_is_info_throttled(monkeypatch, cap
 
 
 def test_active_candle_incomplete_actionable_gap_still_warns(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._active_candle_incomplete_last_log_ms = {}
     times = iter([1_000_000, 1_060_000, 1_400_001])
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times))
@@ -4760,8 +4085,8 @@ def test_active_candle_incomplete_actionable_gap_still_warns(monkeypatch, caplog
 
 
 def test_candle_health_missing_trailing_1m_gap_is_not_actionable_during_grace():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"candle_health_trailing_grace_ms": 60_000}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {"candle_health_trailing_grace_ms": 60_000}})
 
     assert (
         bot._candle_health_missing_is_actionable(
@@ -4851,12 +4176,14 @@ def test_candle_health_summary_formatter_bounds_hostile_labels_for_live_console(
     assert len(rendered) <= 240
 
 
-def test_candle_health_summary_projection_preserves_debug_payload_and_transition(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+def test_candle_health_summary_projection_preserves_debug_payload_and_transition(
+    monkeypatch, caplog
+):
+    bot = _unit_bot()
     bot.active_symbols = ["BTC/USDT:USDT"]
     bot.open_orders = {}
     bot.positions = {}
-    bot.config = {"live": {}}
+    bot.config = _unit_config({"live": {}})
     report = {
         "symbols": {
             "BTC/USDT:USDT": {
@@ -4890,7 +4217,8 @@ def test_candle_health_summary_projection_preserves_debug_payload_and_transition
     info_messages = [
         record.message
         for record in caplog.records
-        if record.levelno == logging.INFO and record.message.startswith("[candle] health:")
+        if record.levelno == logging.INFO
+        and record.message.startswith("[candle] health:")
     ]
     debug_records = [
         record
@@ -4920,7 +4248,7 @@ def test_candle_health_summary_projection_preserves_debug_payload_and_transition
 
 def test_candle_health_summary_failure_is_bounded(monkeypatch, caplog):
     secret = "api_secret=health-summary-secret\nTraceback (most recent call last)"
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.active_symbols = ["BTC/USDT:USDT"]
     bot.open_orders = {}
     bot.positions = {}
@@ -4945,7 +4273,7 @@ def test_candle_health_summary_failure_is_bounded(monkeypatch, caplog):
 
 
 def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     assert bot._memory_snapshot_is_interesting(prev=None, pct_change=None) is True
     assert (
@@ -4956,12 +4284,10 @@ def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
         is False
     )
     assert (
-        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=25.0)
-        is True
+        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=25.0) is True
     )
     assert (
-        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=-25.0)
-        is True
+        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=-25.0) is True
     )
     assert (
         bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=30.0) is True
@@ -4969,7 +4295,7 @@ def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
 
 
 def _memory_snapshot_bot():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.cm = SimpleNamespace(
         _cache={
             "BTC/USDT:USDT": np.zeros((3, 6), dtype=np.float64),
@@ -5007,9 +4333,7 @@ def test_memory_snapshot_event_falls_back_to_compact_info_and_keeps_debug_detail
         for record in caplog.records
         if record.levelno == logging.INFO and record.message.startswith("[memory]")
     ]
-    assert info_messages == [
-        "[memory] rss=198.0MiB cache=0.0MiB/2sym tf=0.0MiB/1rng"
-    ]
+    assert info_messages == ["[memory] rss=198.0MiB cache=0.0MiB/2sym tf=0.0MiB/1rng"]
     assert all(len(message) <= 240 for message in info_messages)
     assert any("cm_top=BTC" in record.message for record in caplog.records)
     assert bot._mem_log_prev == {
@@ -5063,7 +4387,9 @@ def test_memory_snapshot_structured_console_owns_info_and_routine_stays_debug(
     )
 
 
-def test_memory_snapshot_event_failure_isolated_from_snapshot_state(monkeypatch, caplog):
+def test_memory_snapshot_event_failure_isolated_from_snapshot_state(
+    monkeypatch, caplog
+):
     bot = _memory_snapshot_bot()
 
     def fail_emit(**kwargs):
@@ -5087,7 +4413,7 @@ def test_memory_snapshot_event_failure_isolated_from_snapshot_state(monkeypatch,
 
 
 def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._unstuck_last_log_ms = 0
     bot._unstuck_log_interval_ms = 5 * 60 * 1000
     bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
@@ -5165,16 +4491,16 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     )
     assert captured_events[0]["side_statuses"]["long"]["next_symbol"] == "BTC/USDT:USDT"
     assert captured_events[1]["side_statuses"]["long"]["next_symbol"] == "ETH/USDT:USDT"
-    assert captured_events[1]["side_statuses"]["long"]["next_target_distance_ratio"] == pytest.approx(
-        -0.01
-    )
+    assert captured_events[1]["side_statuses"]["long"][
+        "next_target_distance_ratio"
+    ] == pytest.approx(-0.01)
     assert captured_events[0]["side_statuses"]["short"]["status"] == "disabled"
 
 
 def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
     monkeypatch, caplog
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = object()
     bot._unstuck_last_log_ms = 0
@@ -5211,7 +4537,7 @@ def test_unstuck_allowance_materiality_uses_five_percent_boundary():
     assert not Passivbot._unstuck_allowance_materially_changed(baseline, -43.049)
     assert Passivbot._unstuck_allowance_materially_changed(baseline, -43.05)
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
     bot._unstuck_operator_visible_baseline_by_pside = {}
     bot._unstuck_operator_visible_ms_by_pside = {}
@@ -5231,7 +4557,7 @@ def test_unstuck_allowance_materiality_uses_five_percent_boundary():
 
 
 def test_unstuck_status_reports_coin_override_loss_allowance_pct():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._pnls_manager = object()
     bot.coin_overrides = {
         "HYPE/USDT:USDT": {"bot": {"long": {"unstuck_loss_allowance_pct": 0.005}}},
@@ -5264,14 +4590,16 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     parts, signature = bot._get_unstuck_status_parts_and_signature()
 
     assert info["allowance"] == pytest.approx(60.0)
-    assert info["override_loss_allowance_pcts"] == {"HYPE/USDT:USDT": pytest.approx(0.005)}
+    assert info["override_loss_allowance_pcts"] == {
+        "HYPE/USDT:USDT": pytest.approx(0.005)
+    }
     assert info["override_allowances"]["HYPE/USDT:USDT"] == pytest.approx(15.0)
     assert "HYPE/USDT:USDT=0.0050" in parts[0]
     assert signature[0][3] == (("HYPE/USDT:USDT", pytest.approx(0.005)),)
 
 
 def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
     bot._unstuck_last_selection_signature = None
     bot._unstuck_last_selection_info_ms = 0
@@ -5328,7 +4656,7 @@ def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
 def test_unstuck_selection_suppresses_legacy_log_when_event_console_active(
     monkeypatch, caplog
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = object()
     bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
@@ -5352,7 +4680,7 @@ def test_unstuck_selection_suppresses_legacy_log_when_event_console_active(
 
 
 def test_trailing_status_emits_on_change_then_hourly(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._trailing_last_status_check_ms = 0
     bot._trailing_status_check_interval_ms = 5 * 60 * 1000
     bot._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
@@ -5394,7 +4722,13 @@ def test_trailing_status_emits_on_change_then_hourly(monkeypatch):
     bot._maybe_log_trailing_status()
 
     assert len(captured_events) == 5
-    assert [event["changed"] for event in captured_events] == [True, False, True, False, False]
+    assert [event["changed"] for event in captured_events] == [
+        True,
+        False,
+        True,
+        False,
+        False,
+    ]
     assert [event["operator_visible"] for event in captured_events] == [
         True,
         False,
@@ -5425,7 +4759,7 @@ def test_trailing_status_materiality_boundaries_and_per_item_visibility(monkeypa
         100.0, 100.5, relative=True
     )
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._trailing_last_status_check_ms = 0
     bot._trailing_status_check_interval_ms = 5 * 60 * 1000
     bot._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
@@ -5466,7 +4800,7 @@ def test_trailing_status_materiality_boundaries_and_per_item_visibility(monkeypa
 
 
 def test_trailing_status_reappearing_item_is_operator_visible(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._trailing_last_status_check_ms = 0
     bot._trailing_status_check_interval_ms = 5 * 60 * 1000
     bot._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
@@ -5499,7 +4833,7 @@ def test_trailing_status_reappearing_item_is_operator_visible(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
@@ -5544,7 +4878,7 @@ async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower()
 
 @pytest.mark.asyncio
 async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_full_history():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
@@ -5567,12 +4901,14 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._pnls_manager = _with_fill_coverage_api(
         _Manager(cached_events, history_scope="all")
     )
@@ -5603,9 +4939,13 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('observation_change', ['unchanged', 'epoch', 'position', 'concurrent'])
-async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation(observation_change):
-    bot = Passivbot.__new__(Passivbot)
+@pytest.mark.parametrize(
+    "observation_change", ["unchanged", "epoch", "position", "concurrent"]
+)
+async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation(
+    observation_change,
+):
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(
@@ -5632,12 +4972,14 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
             pass
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -5652,16 +4994,23 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     bot._trailing_fill_refresh_generation = 4
     ledger = bot._ensure_freshness_ledger()
     ledger.begin_epoch()
-    if observation_change != 'concurrent':
-        ledger.stamp('positions', now_ms=1_700_000_060_000)
-    started_observation = ((ledger.epoch, ledger.surfaces['positions'].revision)
-                           if observation_change != 'concurrent' else None)
-    if observation_change == 'epoch':
-        bot._pnls_manager.refresh_latest.side_effect = lambda **kwargs: ledger.begin_epoch()
-    elif observation_change in {'position', 'concurrent'}:
+    if observation_change != "concurrent":
+        ledger.stamp("positions", now_ms=1_700_000_060_000)
+    started_observation = (
+        (ledger.epoch, ledger.surfaces["positions"].revision)
+        if observation_change != "concurrent"
+        else None
+    )
+    if observation_change == "epoch":
+        bot._pnls_manager.refresh_latest.side_effect = (
+            lambda **kwargs: ledger.begin_epoch()
+        )
+    elif observation_change in {"position", "concurrent"}:
+
         def observe_positions(**kwargs):
-            ledger.stamp('positions', now_ms=1_700_000_060_000)
+            ledger.stamp("positions", now_ms=1_700_000_060_000)
             # A completed refresh returns None, not stamp's unchanged=False.
+
         bot._pnls_manager.refresh_latest.side_effect = observe_positions
 
     result = await bot.update_pnls()
@@ -5674,7 +5023,10 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     assert bot._trailing_fill_fetch_generation == 5
     assert bot._trailing_fill_refresh_generation == 4
     assert bot._hsl_fill_tail_observation == started_observation
-    assert (bot._hsl_fill_tail_observation == (ledger.epoch, ledger.surfaces['positions'].revision)) is (observation_change == 'unchanged')
+    assert (
+        bot._hsl_fill_tail_observation
+        == (ledger.epoch, ledger.surfaces["positions"].revision)
+    ) is (observation_change == "unchanged")
 
 
 @pytest.mark.asyncio
@@ -5689,7 +5041,7 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
 async def test_update_pnls_bootstraps_required_consumer_lookback(
     pnl_required, cooldown_minutes, expected_lookback_minutes
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: pnl_required
     bot._max_configured_entry_cooldown_minutes = lambda: cooldown_minutes
     now_ms = 1_800_000_000_000
@@ -5738,7 +5090,9 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
             self.cache = _Cache()
             self.refresh = AsyncMock()
             self.refresh_latest = AsyncMock()
-            self.refresh_for_lookback = AsyncMock(side_effect=self._refresh_for_lookback)
+            self.refresh_for_lookback = AsyncMock(
+                side_effect=self._refresh_for_lookback
+            )
             self.history_scope = "window"
 
         async def _refresh_for_lookback(self, *, start_ms):
@@ -5757,12 +5111,14 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": lookback_days,
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": lookback_days,
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
@@ -5786,7 +5142,7 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
 
 @pytest.mark.asyncio
 async def test_update_pnls_empty_cache_uses_bounded_recent_fetch_without_history_consumer():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: False
     bot._max_configured_entry_cooldown_minutes = lambda: 0.0
     now_ms = 1_800_000_000_000
@@ -5816,12 +5172,14 @@ async def test_update_pnls_empty_cache_uses_bounded_recent_fetch_without_history
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
@@ -5848,7 +5206,7 @@ async def test_update_pnls_empty_cache_uses_bounded_recent_fetch_without_history
 
 @pytest.mark.asyncio
 async def test_update_pnls_rechecks_hsl_requirement_after_delayed_flat_fill():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     now_ms = 1_800_000_000_000
     full_start_ms = now_ms - 30 * 86_400_000
     bounded_start_ms = now_ms - 5 * 60_000
@@ -5907,24 +5265,22 @@ async def test_update_pnls_rechecks_hsl_requirement_after_delayed_flat_fill():
 
     manager = _with_fill_coverage_api(_Manager())
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": 30.0,
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": 30.0,
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = manager
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
     bot._live_risk_uses_authoritative_pnl = lambda: True
-    bot._required_fill_history_start_ms = (
-        lambda _now_ms, *, pnl_start_ms: (
-            (True, full_start_ms)
-            if manager.get_events()
-            else (True, bounded_start_ms)
-        )
+    bot._required_fill_history_start_ms = lambda _now_ms, *, pnl_start_ms: (
+        (True, full_start_ms) if manager.get_events() else (True, bounded_start_ms)
     )
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -5937,17 +5293,20 @@ async def test_update_pnls_rechecks_hsl_requirement_after_delayed_flat_fill():
     assert result is False
     manager.refresh_latest.assert_awaited_once()
     assert bot._last_fill_refresh_block_reason == "fill_history_coverage"
-    assert manager.get_coverage_status(
-        start_ms=full_start_ms,
-        end_ms=now_ms,
-    )["ready"] is False
+    assert (
+        manager.get_coverage_status(
+            start_ms=full_start_ms,
+            end_ms=now_ms,
+        )["ready"]
+        is False
+    )
 
 
 @pytest.mark.asyncio
 async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists(
     monkeypatch,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
@@ -6002,7 +5361,9 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
             self.cache = _Cache()
             self.refresh = AsyncMock()
             self.refresh_latest = AsyncMock()
-            self.refresh_for_lookback = AsyncMock(side_effect=self._refresh_for_lookback)
+            self.refresh_for_lookback = AsyncMock(
+                side_effect=self._refresh_for_lookback
+            )
             self.history_scope = "window"
 
         async def _refresh_for_lookback(self, *, start_ms):
@@ -6021,12 +5382,14 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": lookback_days,
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": lookback_days,
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._trailing_fill_fetch_generation = 7
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
@@ -6045,7 +5408,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     bot._pnls_manager.refresh_for_lookback.assert_awaited_once_with(start_ms=start_ms)
     bot._pnls_manager.refresh.assert_not_awaited()
     bot._pnls_manager.refresh_latest.assert_not_awaited()
-    assert bot._hsl_revised_fill_capture_interval is None
+    assert bot._hsl_fill_capture_interval is None
     assert bot._last_fill_refresh_block_reason == "fill_refresh_skipped"
     ledger = getattr(bot, "freshness_ledger", None)
     assert ledger is None or ledger.surface_signature("fills") is None
@@ -6056,13 +5419,13 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     assert result is False
     assert bot._pnls_manager.refresh_for_lookback.await_count == 2
     assert bot._trailing_fill_fetch_generation == 7
-    assert getattr(bot, '_hsl_fill_tail_observation', None) is None
-    assert bot._hsl_revised_fill_capture_interval is None  # Cache-only repair did not fetch.
+    assert getattr(bot, "_hsl_fill_tail_observation", None) is None
+    assert bot._hsl_fill_capture_interval is None  # Cache-only repair did not fetch.
 
 
 @pytest.mark.asyncio
 async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
@@ -6118,7 +5481,9 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
             self.cache = _Cache()
             self.refresh = AsyncMock()
             self.refresh_latest = AsyncMock()
-            self.refresh_for_lookback = AsyncMock(side_effect=self._refresh_for_lookback)
+            self.refresh_for_lookback = AsyncMock(
+                side_effect=self._refresh_for_lookback
+            )
             self.history_scope = "window"
 
         async def _refresh_for_lookback(self, *, start_ms):
@@ -6138,12 +5503,14 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": lookback_days,
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": lookback_days,
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
@@ -6167,7 +5534,7 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
 
 @pytest.mark.asyncio
 async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
@@ -6224,12 +5591,14 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": lookback_days,
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": lookback_days,
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     sink = ListEventSink()
     bot.exchange = "bybit"
@@ -6287,7 +5656,7 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
 async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authoritative(
     failure_stage,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
@@ -6373,12 +5742,14 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
             pass
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": lookback_days,
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": lookback_days,
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     if failure_stage == "routine":
@@ -6455,7 +5826,7 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
 async def test_update_pnls_ignores_pnl_without_an_active_consumer(
     pnl_status, pnl_source, consumer_scope, coverage_ready
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
     start_ms = now_ms - int(lookback_days * 86_400_000)
@@ -6511,22 +5882,26 @@ async def test_update_pnls_ignores_pnl_without_an_active_consumer(
             pass
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": lookback_days,
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": lookback_days,
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot._live_risk_uses_authoritative_pnl = lambda: consumer_scope != "disabled"
     if consumer_scope == "after_event":
         required_start_ms = event.timestamp + 1
-        bot._required_pnl_history_start_ms = (
-            lambda now_ms, *, pnl_start_ms: (True, required_start_ms)
+        bot._required_pnl_history_start_ms = lambda now_ms, *, pnl_start_ms: (
+            True,
+            required_start_ms,
         )
-        bot._required_fill_history_start_ms = (
-            lambda now_ms, *, pnl_start_ms: (True, required_start_ms)
+        bot._required_fill_history_start_ms = lambda now_ms, *, pnl_start_ms: (
+            True,
+            required_start_ms,
         )
     bot._max_configured_entry_cooldown_minutes = lambda: 0.0
     bot.init_pnls = AsyncMock()
@@ -6560,7 +5935,7 @@ async def test_update_pnls_ignores_pnl_without_an_active_consumer(
 
 @pytest.mark.asyncio
 async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
@@ -6583,13 +5958,15 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_confirmation_overlap_minutes": 60.0,
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_confirmation_overlap_minutes": 60.0,
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._authoritative_pending_confirmations = {"fills": 2}
     bot._pnls_manager = _with_fill_coverage_api(
         _Manager(cached_events, history_scope="all")
@@ -6617,7 +5994,7 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
 async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
     monkeypatch,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     position_anchor_ms = now_ms - 2 * 60 * 60 * 1000
@@ -6647,13 +6024,15 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
             pass
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_confirmation_overlap_minutes": 60.0,
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_confirmation_overlap_minutes": 60.0,
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot.positions = {
         symbol: {
             "long": {
@@ -6680,9 +6059,7 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
     bot.logging_level = 0
     bot._health_rate_limits = 0
 
-    result = await bot.update_pnls(
-        source="routine_prefetch:trailing_recovery"
-    )
+    result = await bot.update_pnls(source="routine_prefetch:trailing_recovery")
 
     assert result is True
     bot._pnls_manager.refresh.assert_awaited_once_with(
@@ -6699,7 +6076,7 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
 async def test_mandatory_fill_confirmation_does_not_widen_trailing_recovery(
     monkeypatch,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     position_anchor_ms = now_ms - 180 * 24 * 60 * 60 * 1000
@@ -6729,13 +6106,15 @@ async def test_mandatory_fill_confirmation_does_not_widen_trailing_recovery(
             pass
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_confirmation_overlap_minutes": 60.0,
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_confirmation_overlap_minutes": 60.0,
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot.positions = {
         symbol: {
             "long": {
@@ -6779,7 +6158,7 @@ async def test_mandatory_fill_confirmation_does_not_widen_trailing_recovery(
 async def test_update_pnls_propagates_unexpected_refresh_errors_without_retaining_text(
     caplog, capsys, shutdown_requested
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     secret = "api_key=fill-refresh-secret https://private.example.invalid/fills"
 
@@ -6815,12 +6194,14 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     sink = ListEventSink()
     bot.exchange = "bybit"
     bot.user = "bybit_01"
@@ -6912,7 +6293,7 @@ async def test_routine_fill_prefetch_failure_logs_only_exception_type(
 
 @pytest.mark.asyncio
 async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
@@ -6942,12 +6323,14 @@ async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
@@ -6972,7 +6355,7 @@ async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
 
 @pytest.mark.asyncio
 async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
@@ -6996,12 +6379,14 @@ async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation
             pass
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -7027,7 +6412,7 @@ async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation
 
 @pytest.mark.asyncio
 async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
@@ -7052,12 +6437,14 @@ async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     sink = ListEventSink()
     bot.exchange = "binance"
     bot.user = "binance_01"
@@ -7104,7 +6491,7 @@ async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error
 
 @pytest.mark.asyncio
 async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
@@ -7132,12 +6519,14 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
 
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
-    bot.config = {
-        "live": {
-            "fills_recent_overlap_minutes": 10.0,
-            "pnls_max_lookback_days": "all",
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
         }
-    }
+    )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
@@ -7174,8 +6563,8 @@ def _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot) -> None:
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
     bot.exchange = "fake"
     bot.stop_signal_received = False
@@ -7236,7 +6625,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot._reconcile_balance_after_positions_and_balance_refresh = lambda: False
     bot._reconcile_balance_after_open_orders_refresh = lambda: False
 
-    result = await bot.refresh_authoritative_state()
+    result = await bot._refresh_authoritative_state_staged()
 
     assert result is True
     bot.fetch_balance.assert_awaited_once()
@@ -7374,8 +6763,8 @@ async def test_staged_refresh_progress_logger_propagates_cancellation():
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
     bot.exchange = "bybit"
     bot.stop_signal_received = False
@@ -7444,7 +6833,7 @@ async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot._reconcile_balance_after_positions_and_balance_refresh = lambda: False
     bot._reconcile_balance_after_open_orders_refresh = lambda: False
 
-    result = await bot.refresh_authoritative_state()
+    result = await bot._refresh_authoritative_state_staged()
 
     assert result is True
     assert bot.balance_raw == pytest.approx(456.78)
@@ -7456,7 +6845,7 @@ async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
 
 @pytest.mark.asyncio
 async def test_fetch_authoritative_state_staged_snapshot_uses_exchange_cohort_hook():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     seen = {}
 
     async def fake_capture(plan, timings_ms):
@@ -7478,8 +6867,8 @@ async def test_fetch_authoritative_state_staged_snapshot_uses_exchange_cohort_ho
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_any_exchange():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
     bot.exchange = "binance"
     bot.stop_signal_received = False
@@ -7503,7 +6892,7 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
         set(plan)
     )
 
-    result = await bot.refresh_authoritative_state()
+    result = await bot._refresh_authoritative_state_staged()
 
     assert result is True
     bot.fetch_balance.assert_awaited_once()
@@ -7515,9 +6904,11 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("require_balance", [True, False])
-async def test_refresh_protective_authoritative_state_uses_account_critical_surfaces(require_balance):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+async def test_refresh_protective_authoritative_state_uses_account_critical_surfaces(
+    require_balance,
+):
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
     bot.exchange = "binance"
     bot.stop_signal_received = False
@@ -7587,9 +6978,15 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     bot.update_pnls = AsyncMock(side_effect=AssertionError("fills not required"))
 
     if not require_balance:
-        bot._prepare_balance_snapshot = lambda *_: pytest.fail("exit must not consume balance")
-    ok = await bot.refresh_protective_authoritative_state(require_balance=require_balance)
-    expected_plan = {"positions", "open_orders"} | ({"balance"} if require_balance else set())
+        bot._prepare_balance_snapshot = lambda *_: pytest.fail(
+            "exit must not consume balance"
+        )
+    ok = await bot.refresh_protective_authoritative_state(
+        require_balance=require_balance
+    )
+    expected_plan = {"positions", "open_orders"} | (
+        {"balance"} if require_balance else set()
+    )
 
     assert ok is True
     bot._fetch_authoritative_state_staged_snapshot.assert_awaited_once_with(
@@ -7615,7 +7012,7 @@ def test_protective_planning_snapshot_requires_positions_orders_and_prices_only(
     import passivbot as pb_mod
 
     symbol = "BTC/USDT:USDT"
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "binance"
     bot.config_get = lambda keys: None
     _set_authoritative_epoch_state(bot, epoch=1)
@@ -7628,8 +7025,8 @@ def test_protective_planning_snapshot_requires_positions_orders_and_prices_only(
     bot._staged_planner_surface_min_epochs = (
         pb_mod.Passivbot._staged_planner_surface_min_epochs.__get__(bot, Passivbot)
     )
-    bot._ensure_freshness_ledger = (
-        pb_mod.Passivbot._ensure_freshness_ledger.__get__(bot, Passivbot)
+    bot._ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger.__get__(
+        bot, Passivbot
     )
     bot._live_market_snapshot_max_age_ms = lambda: 10_000
     bot._market_snapshot_signature_invalid = lambda symbols: []
@@ -7726,8 +7123,10 @@ async def test_fetch_authoritative_state_staged_snapshot_cleans_up_on_cancelled_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("degraded", [0, 1])
-async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail(degraded):
-    bot = Passivbot.__new__(Passivbot)
+async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail(
+    degraded,
+):
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     plan = {"balance", "positions", "open_orders", "fills"}
     bot._authoritative_staged_refresh_plan = lambda: set(plan)
@@ -7755,14 +7154,16 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fa
     bot._apply_open_orders_snapshot.assert_not_awaited()
     bot.handle_balance_update.assert_not_awaited()
     bot._finalize_authoritative_refresh_consistency.assert_not_called()
-    assert bot._last_authoritative_block_reason == ("degraded_pnl" if degraded else "fills_unavailable")
+    assert bot._last_authoritative_block_reason == (
+        "degraded_pnl" if degraded else "fills_unavailable"
+    )
     assert bot._last_authoritative_pending_pnl_count == 0
     assert bot._last_authoritative_degraded_pnl_count == degraded
 
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_does_not_blame_nonblocking_pnl():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: False
     bot._authoritative_staged_refresh_plan = lambda: {
         "positions",
@@ -7790,7 +7191,7 @@ async def test_refresh_authoritative_state_staged_does_not_blame_nonblocking_pnl
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_classifies_unproven_fill_coverage():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: False
     bot._last_fill_refresh_block_reason = "fill_history_coverage"
     bot._authoritative_staged_refresh_plan = lambda: {
@@ -7819,7 +7220,7 @@ async def test_refresh_authoritative_state_staged_classifies_unproven_fill_cover
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_does_not_publish_when_open_orders_apply_fails():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     plan = {"balance", "positions", "open_orders", "fills"}
     bot._authoritative_staged_refresh_plan = lambda: set(plan)
     bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
@@ -7852,7 +7253,7 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_open_ord
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_invalid_exchange_balance_raises_without_commit():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     plan = {"balance", "positions", "open_orders", "fills"}
     bot._authoritative_staged_refresh_plan = lambda: set(plan)
     bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
@@ -7889,7 +7290,7 @@ async def test_refresh_authoritative_state_staged_invalid_exchange_balance_raise
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_does_not_partially_commit_on_invalid_balance():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     plan = {"balance", "positions", "open_orders", "fills"}
     bot._authoritative_staged_refresh_plan = lambda: set(plan)
     bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
@@ -7948,7 +7349,7 @@ async def test_refresh_authoritative_state_staged_does_not_partially_commit_on_i
 def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
     import passivbot as pb_mod
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     monkeypatch.setattr(pb_mod, "utc_ms", lambda: 123_456.0)
 
     assert bot.get_exchange_time() == pytest.approx(123_456.0)
@@ -7956,7 +7357,7 @@ def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_update_positions_only_updates_positions(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.positions = {}
     bot.active_symbols = []
     bot.fetched_positions = []
@@ -7996,7 +7397,7 @@ async def test_handle_balance_update_redacts_equity_observer_failure_and_preserv
 ):
     secret = "token=observer-secret https://example.invalid/equity"
     observer_error = _hostile_runtime_error(secret)
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.balance_raw = 120.0
     bot.balance = 120.0
     bot._previous_balance_raw = 100.0
@@ -8024,10 +7425,12 @@ async def test_handle_balance_update_redacts_equity_observer_failure_and_preserv
 
 
 @pytest.mark.asyncio
-async def test_update_positions_redacts_observer_failure_and_returns_updated_positions(caplog):
+async def test_update_positions_redacts_observer_failure_and_returns_updated_positions(
+    caplog,
+):
     secret = "token=observer-secret https://example.invalid/positions"
     observer_error = _hostile_runtime_error(secret)
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._fetch_and_apply_positions = AsyncMock(return_value=(True, [], []))
     bot._log_noncritical_market_snapshot_error = lambda *_args: False
 
@@ -8048,10 +7451,12 @@ async def test_update_positions_redacts_observer_failure_and_returns_updated_pos
 
 
 @pytest.mark.asyncio
-async def test_combined_refresh_redacts_observer_failure_and_continues_reconciliation(caplog):
+async def test_combined_refresh_redacts_observer_failure_and_continues_reconciliation(
+    caplog,
+):
     secret = "token=observer-secret https://example.invalid/combined-refresh"
     observer_error = _hostile_runtime_error(secret)
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.update_balance = AsyncMock(return_value=True)
     bot._fetch_and_apply_positions = AsyncMock(return_value=(True, [], []))
     bot._log_noncritical_market_snapshot_error = lambda *_args: False
@@ -8073,7 +7478,9 @@ async def test_combined_refresh_redacts_observer_failure_and_continues_reconcili
 
     bot._reconcile_balance_after_positions_and_balance_refresh.assert_called_once()
     bot.handle_balance_update.assert_awaited_once_with(source="REST")
-    assert [call.args[0] for call in bot._record_authoritative_surface.call_args_list] == [
+    assert [
+        call.args[0] for call in bot._record_authoritative_surface.call_args_list
+    ] == [
         "positions",
         "balance",
     ]
@@ -8086,7 +7493,7 @@ async def test_combined_refresh_redacts_observer_failure_and_continues_reconcili
 
 @pytest.mark.asyncio
 async def test_update_balance_uses_fetch_balance_when_no_cache():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
     calls = {"balance": 0}
 
@@ -8116,7 +7523,7 @@ async def test_update_balance_failure_keeps_previous():
     Per CLAUDE.md: exchange fetch methods should raise exceptions on failure,
     not return False. The exception propagates to the caller who handles it.
     """
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
     bot.balance = 50.0
     bot.previous_hysteresis_balance = 50.0
@@ -8135,7 +7542,7 @@ async def test_update_balance_failure_keeps_previous():
 
 @pytest.mark.asyncio
 async def test_update_balance_defers_explicitly_unavailable_surface_without_mutation():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
     bot.balance = 50.0
     bot.balance_raw = 50.0
@@ -8143,24 +7550,19 @@ async def test_update_balance_defers_explicitly_unavailable_surface_without_muta
     bot.previous_hysteresis_balance = 50.0
 
     async def fake_fetch_balance():
-        raise AuthoritativeSurfaceUnavailable(
-            "balance", "balance_consistency_check"
-        )
+        raise AuthoritativeSurfaceUnavailable("balance", "balance_consistency_check")
 
     bot.fetch_balance = fake_fetch_balance
 
     assert await bot.update_balance() is False
     assert bot.balance == 50.0
     assert bot.balance_raw == 50.0
-    assert (
-        bot._last_authoritative_block_reason
-        == "balance_consistency_check"
-    )
+    assert bot._last_authoritative_block_reason == "balance_consistency_check"
 
 
 @pytest.mark.asyncio
 async def test_update_balance_override_does_not_reset_hysteresis_anchor():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
     bot.balance = 100.0
     bot.balance_raw = 100.0
@@ -8178,7 +7580,7 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
 
 
 def test_apply_balance_snapshot_honors_override_and_retains_exchange_raw(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
     bot.balance = 100.0
     bot.balance_raw = 100.0
@@ -8212,7 +7614,7 @@ def test_apply_balance_snapshot_honors_override_and_retains_exchange_raw(caplog)
 async def test_update_balance_invalid_exchange_payload_raises_without_mutating(
     fetched_balance, reason
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
     bot.balance = 50.0
     bot.balance_raw = 50.0
@@ -8223,7 +7625,9 @@ async def test_update_balance_invalid_exchange_payload_raises_without_mutating(
 
     bot.fetch_balance = fake_fetch_balance
 
-    with pytest.raises(RuntimeError, match=rf"invalid exchange balance fetch result \({reason}\)"):
+    with pytest.raises(
+        RuntimeError, match=rf"invalid exchange balance fetch result \({reason}\)"
+    ):
         await bot.update_balance()
     assert bot.balance == pytest.approx(50.0)
     assert bot.balance_raw == pytest.approx(50.0)
@@ -8232,7 +7636,7 @@ async def test_update_balance_invalid_exchange_payload_raises_without_mutating(
 
 def test_accessor_fallback_when_balance_raw_absent():
     """get_raw_balance() falls back to snapped balance when balance_raw is absent."""
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.balance = 500.0
     # Intentionally do NOT set balance_raw
     if hasattr(bot, "balance_raw"):
@@ -8242,7 +7646,7 @@ def test_accessor_fallback_when_balance_raw_absent():
 
 def test_accessor_returns_raw_when_present():
     """get_raw_balance() returns balance_raw when it exists."""
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.balance = 1000.0
     bot.balance_raw = 1010.0
     assert bot.get_raw_balance() == pytest.approx(1010.0)
@@ -8250,7 +7654,7 @@ def test_accessor_returns_raw_when_present():
 
 
 def test_get_wallet_exposure_limit_uses_configured_n_positions_only():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.coin_overrides = {}
 
     def bot_value(pside, key):
@@ -8286,7 +7690,7 @@ def test_balance_peak_uses_raw_not_snapped():
 
     import numpy as np
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.balance = 1000.0  # snapped (stale)
     bot.balance_raw = 1010.0  # raw (advanced after profit fill)
     bot._pnls_manager = MagicMock()
@@ -8315,13 +7719,17 @@ def test_balance_peak_uses_raw_not_snapped():
 
 
 def test_effective_min_cost_filter_uses_snapped_balance():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
+    bot.config["live"]["strategy_kind"] = "ema_anchor"
+    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
     bot.balance = 100.0
     bot.balance_raw = 10.0
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
     bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
-    bot.bot_value = lambda pside, key: 1.0 if key == "total_wallet_exposure_limit" else 0.0
+    bot.bot_value = lambda pside, key: (
+        1.0 if key == "total_wallet_exposure_limit" else 0.0
+    )
     bot.bp = lambda pside, key, symbol=None: (
         0.5 if key == "entry_initial_qty_pct" else 0.0
     )
@@ -8332,22 +7740,30 @@ def test_effective_min_cost_filter_uses_snapped_balance():
 
 
 def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.balance = 100.0
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
-    bot.config = {"live": {"strategy_kind": "ema_anchor"}, "bot": {"long": {}}}
+    bot.config = _unit_config(
+        {"live": {"strategy_kind": "ema_anchor"}, "bot": {"long": {}}}
+    )
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
     bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
     bot.bp = lambda pside, key, symbol=None: (
         0.0
         if key == "risk_we_excess_allowance_pct"
-        else "bounded"
-        if key == "risk_we_excess_allowance_mode"
-        else (_ for _ in ()).throw(KeyError(key))
+        else (
+            "bounded"
+            if key == "risk_we_excess_allowance_mode"
+            else (_ for _ in ()).throw(KeyError(key))
+        )
     )
-    bot.bot_value = lambda pside, key: 1.0 if key == "total_wallet_exposure_limit" else 0.0
+    bot.bot_value = lambda pside, key: (
+        1.0 if key == "total_wallet_exposure_limit" else 0.0
+    )
     bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
-    monkeypatch.setattr(passivbot_module, "normalize_strategy_kind", lambda value: "ema_anchor")
+    monkeypatch.setattr(
+        passivbot_module, "normalize_strategy_kind", lambda value: "ema_anchor"
+    )
 
     assert bot.effective_min_cost_is_low_enough("long", "BTC/USDT:USDT") is True
 
@@ -8355,7 +7771,7 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
 @pytest.mark.asyncio
 async def test_update_effective_min_cost_uses_executable_min_qty():
     symbol = "SOL/USDT:USDT"
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.effective_min_cost = {}
     bot.min_qtys = {symbol: 0.0}
     bot.qty_steps = {symbol: 1.0}
@@ -8377,7 +7793,7 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_configuration():
     # Rust owns auto-unstuck emission from the realized-PnL cumsum facts. A
     # resting unstuck order must not add a Python-only suppression path; any
     # duplicate-order risk rides normal order reconciliation.
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._pnls_manager = object()
     bot._unstuck_uses_realized_pnl = lambda: True
     # An unstuck order is live on the exchange.
@@ -8394,7 +7810,7 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_configuration():
 def _make_unstuck_custom_id() -> str:
     import passivbot as pb_mod
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.broker_code = ""
     bot.custom_id_max_length = 36
     return bot.format_custom_id_single(
@@ -8402,9 +7818,10 @@ def _make_unstuck_custom_id() -> str:
     )
 
 
-
 @pytest.mark.asyncio
-async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monkeypatch):
+async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
+    monkeypatch,
+):
     import passivbot as pb_mod
 
     symbol = "BTC/USDT:USDT"
@@ -8433,7 +7850,8 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
         active_symbols = []
         _config_hedge_mode = True
         hedge_mode = True
-        config = {"live": {"strategy_kind": "trailing_martingale"}}
+        config = _unit_config({"live": {"strategy_kind": "trailing_martingale"}})
+        coin_overrides = {}
         markets_dict = {symbol: {"active": True, "maker": 0.0002, "taker": 0.0004}}
         qty_steps = {symbol: 0.001}
         price_steps = {symbol: 0.1}
@@ -8527,35 +7945,36 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
         "build_protective_planning_snapshot",
         fake_build_snapshot,
     )
-    monkeypatch.setattr(pb_mod.Passivbot, "_monitor_record_price_ticks", lambda *a, **k: None)
     monkeypatch.setattr(
-        pb_mod.Passivbot, "_build_orchestrator_runtime_hints", lambda self, symbol_to_idx: {}
+        pb_mod.Passivbot, "_monitor_record_price_ticks", lambda *a, **k: None
     )
     monkeypatch.setattr(
         pb_mod.Passivbot,
-        "_equity_hard_stop_enabled",
-        lambda self, pside=None, symbol=None: True,
+        "_build_orchestrator_runtime_hints",
+        lambda self, symbol_to_idx: {},
     )
     monkeypatch.setattr(
-        pb_mod.Passivbot,
-        "_equity_hard_stop_panic_close_order_type",
-        lambda self, pside, symbol=None: "limit",
+        pb_mod.pbr, "compute_protective_closes_json", fake_compute, raising=False
     )
-    monkeypatch.setattr(pb_mod.pbr, "compute_protective_closes_json", fake_compute, raising=False)
 
     out = await pb_mod.Passivbot.calc_protective_panic_ideal_orders_orchestrator(
-        FakeBot()
+        FakeBot(), execution_types={(symbol, "long"): "limit"}
     )
 
     assert set(out) == {symbol}
     assert len(out[symbol]) == 1
     assert out[symbol][0][:3] == (-1.0, 100.4, "close_panic_long")
     assert out[symbol][0][4:] == ("limit", "risk_critical")
-    assert captured["input"] == [{
-        "symbol_idx": 0, "pside": "long", "position_size": 1.0,
-        "order_book": {"bid": 99.5, "ask": 100.5}, "price_step": 0.1,
-        "execution_type": "limit",
-    }]
+    assert captured["input"] == [
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "position_size": 1.0,
+            "order_book": {"bid": 99.5, "ask": 100.5},
+            "price_step": 0.1,
+            "execution_type": "limit",
+        }
+    ]
     assert pb_mod.Passivbot._protective_panic_target_psides_by_symbol(FakeBot()) == {
         symbol: {"long"}
     }
@@ -8577,13 +7996,9 @@ def test_live_max_realized_loss_pct_preserves_zero_and_defaults_none():
     assert helper(FakeBot(None)) == pytest.approx(1.0)
 
 
-
-
-
-
 def test_orchestrator_exchange_params_require_live_fee_metadata():
     symbol = "BTC/USDT:USDT"
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.markets_dict = {symbol: {"maker": 0.0001}}
     bot.qty_steps = {symbol: 0.001}
     bot.price_steps = {symbol: 0.1}
@@ -8597,7 +8012,7 @@ def test_orchestrator_exchange_params_require_live_fee_metadata():
 
 def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_pnl():
     """Regression for peak drift: peak must not decay when profits increase pnl_last and balance_raw."""
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.balance = 100.0  # stale snapped value to simulate hysteresis lag
 
     def bot_value(pside, key):
@@ -8612,7 +8027,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
     # State A: peak = 100 + (100 - 0) = 200
     bot.balance_raw = 100.0
     bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda: [
+        get_events=lambda **kwargs: [
             types.SimpleNamespace(pnl=100.0),
             types.SimpleNamespace(pnl=-100.0),
         ]
@@ -8623,7 +8038,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
     # If snapped balance were incorrectly used here, peak would drift down to 150.
     bot.balance_raw = 150.0
     bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda: [
+        get_events=lambda **kwargs: [
             types.SimpleNamespace(pnl=100.0),
             types.SimpleNamespace(pnl=-50.0),
         ]
@@ -8638,7 +8053,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
 
 def test_unstuck_logging_uses_only_configured_pnl_lookback():
     now_ms = 10 * 86_400_000
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.balance = 1000.0
     bot.balance_raw = 1000.0
     _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
@@ -8674,7 +8089,7 @@ def test_unstuck_logging_uses_only_configured_pnl_lookback():
 @pytest.mark.asyncio
 async def test_update_balance_hysteresis_divergence():
     """Calls update_balance() twice with values within snap threshold, verifies balance_raw != balance."""
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
 
     call_count = [0]
@@ -8706,7 +8121,7 @@ async def test_update_balance_divergence_routes_to_orchestrator_input():
     """After creating divergence, builds orchestrator input dict and asserts both values pass through."""
     import passivbot as pb_mod
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
 
     call_count = [0]
@@ -8732,7 +8147,7 @@ async def test_update_balance_divergence_routes_to_orchestrator_input():
 @pytest.mark.asyncio
 async def test_ws_balance_update_sets_balance_raw_correctly():
     """Simulate a WS-triggered balance update and verify balance_raw is set."""
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.quote = "USDT"
 
     # First establish a baseline via REST update_balance
@@ -8771,7 +8186,7 @@ async def test_ws_balance_update_sets_balance_raw_correctly():
 
 
 def test_authoritative_barrier_allows_coherent_changed_cycle():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     bot._begin_authoritative_refresh_epoch()
     bot._record_authoritative_surface("balance", ("b", 1))
@@ -8795,7 +8210,7 @@ def test_authoritative_barrier_allows_coherent_changed_cycle():
 
 
 def test_authoritative_barrier_waits_for_next_epoch_confirmation():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
 
     bot._begin_authoritative_refresh_epoch()
@@ -8835,7 +8250,7 @@ def test_authoritative_barrier_waits_for_next_epoch_confirmation():
 def test_required_fill_history_start_follows_enabled_consumer(
     pnl_required, cooldown_minutes, pnl_start_ms, expected
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._orchestrator_uses_realized_pnl = lambda: pnl_required
     bot._equity_hard_stop_required_fill_history_start_ms = (
         lambda now_ms, *, pnl_start_ms: (False, None)
@@ -8851,39 +8266,27 @@ def test_required_fill_history_start_follows_enabled_consumer(
     )
 
 
+@pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize(
-    ("hsl_required", "hsl_start_ms", "cooldown_minutes", "expected"),
-    [
-        (False, None, 0.0, (False, None)),
-        (True, 9_800_000, 0.0, (True, 9_800_000)),
-        (True, 9_800_000, 5.0, (True, 9_640_000)),
-        (True, None, 5.0, (True, None)),
-    ],
-    ids=["none", "hsl_only", "hsl_and_cooldown", "full_hsl"],
+    "cooldown_minutes,expected", [(0.0, (False, None)), (5.0, (True, 9_640_000))]
 )
-def test_required_fill_history_start_composes_hsl_and_entry_cooldown(
-    hsl_required, hsl_start_ms, cooldown_minutes, expected
+def test_hsl_estimation_does_not_add_a_strict_fill_history_requirement(
+    enabled, cooldown_minutes, expected
 ):
-    bot = Passivbot.__new__(Passivbot)
-    bot.hsl = {
-        "long": {"enabled": True},
-        "short": {"enabled": False},
-    }
-    bot._equity_hard_stop_enabled = lambda: True
-    bot._orchestrator_uses_realized_pnl = lambda: False
-    bot._equity_hard_stop_required_fill_history_start_ms = (
-        lambda now_ms, *, pnl_start_ms: (hsl_required, hsl_start_ms)
+    bot = _unit_bot()
+    bot.config["bot"]["long"]["hsl"].update(
+        enabled=enabled, restart_after_red_policy="always"
     )
+    bot._orchestrator_uses_realized_pnl = lambda: False
     bot._max_configured_entry_cooldown_minutes = lambda: cooldown_minutes
-
-    assert bot._required_fill_history_start_ms(
-        10_000_000,
-        pnl_start_ms=1_000_000,
-    ) == expected
+    assert (
+        bot._required_fill_history_start_ms(10_000_000, pnl_start_ms=1_000_000)
+        == expected
+    )
 
 
 def test_staged_refresh_plan_defers_fills_until_next_minute(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
     bot._fill_history_coverage_ready = lambda: True
@@ -8904,7 +8307,7 @@ def test_staged_refresh_plan_defers_fills_until_next_minute(monkeypatch):
 def test_staged_refresh_plan_schedules_trailing_recovery_without_barrier(
     monkeypatch,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
     bot._fill_history_coverage_ready = lambda: True
@@ -8913,9 +8316,7 @@ def test_staged_refresh_plan_schedules_trailing_recovery_without_barrier(
     bot._schedule_routine_fill_refresh_prefetch = (
         lambda *, reason: scheduled.append(reason) or True
     )
-    bot.freshness_ledger.stamp(
-        "fills", ("fills", "fresh"), now_ms=120_010, epoch=1
-    )
+    bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
 
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
     plan = bot._authoritative_staged_refresh_plan()
@@ -8928,7 +8329,7 @@ def test_staged_refresh_plan_schedules_trailing_recovery_without_barrier(
 def test_staged_refresh_plan_keeps_stale_fills_during_trailing_recovery(
     monkeypatch,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
     bot._fill_history_coverage_ready = lambda: True
@@ -8937,9 +8338,7 @@ def test_staged_refresh_plan_keeps_stale_fills_during_trailing_recovery(
     bot._schedule_routine_fill_refresh_prefetch = (
         lambda *, reason: scheduled.append(reason) or True
     )
-    bot.freshness_ledger.stamp(
-        "fills", ("fills", "stale"), now_ms=120_010, epoch=1
-    )
+    bot.freshness_ledger.stamp("fills", ("fills", "stale"), now_ms=120_010, epoch=1)
 
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 360_500)
     plan = bot._authoritative_staged_refresh_plan()
@@ -8949,7 +8348,7 @@ def test_staged_refresh_plan_keeps_stale_fills_during_trailing_recovery(
 
 
 def test_staged_refresh_plan_keeps_fills_when_risk_coverage_unproven(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
     bot._fill_history_coverage_ready = lambda: False
@@ -8993,7 +8392,7 @@ def test_staged_refresh_plan_keeps_fills_when_known_gap_overlaps_lookback(monkey
             return start_ms
 
     cache = _Cache()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(
@@ -9003,7 +8402,7 @@ def test_staged_refresh_plan_keeps_fills_when_known_gap_overlaps_lookback(monkey
             get_history_scope=lambda: "window",
         )
     )
-    bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
+    bot.config = _unit_config({"live": {"pnls_max_lookback_days": 1.0}})
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
     bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
@@ -9020,7 +8419,7 @@ def test_staged_refresh_plan_keeps_fills_when_known_gap_overlaps_lookback(monkey
 
 
 def test_staged_refresh_plan_keeps_pending_fills_even_with_recent_fills(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {"fills": 2}
     bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
@@ -9036,7 +8435,7 @@ def test_staged_refresh_plan_keeps_pending_fills_even_with_recent_fills(monkeypa
 
 
 def test_authoritative_barrier_uses_current_staged_plan_when_no_pending():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
 
@@ -9052,7 +8451,7 @@ def test_authoritative_barrier_uses_current_staged_plan_when_no_pending():
 
 
 def test_positions_change_without_fills_requests_full_confirmation():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
 
@@ -9074,8 +8473,8 @@ def test_positions_change_without_fills_requests_full_confirmation():
 
 
 def test_staged_planner_preconditions_require_current_epoch_surfaces():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
 
@@ -9103,8 +8502,8 @@ def test_staged_planner_preconditions_require_current_epoch_surfaces():
 
 
 def test_staged_planner_preconditions_allow_open_orders_only_confirmation_epoch():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
@@ -9146,8 +8545,8 @@ def test_staged_planner_preconditions_allow_open_orders_only_confirmation_epoch(
 
 
 def test_staged_planner_preconditions_raise_before_rust_planning():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
 
@@ -9160,7 +8559,7 @@ def test_staged_planner_preconditions_raise_before_rust_planning():
 
 
 def test_staged_planner_preconditions_ignore_completed_candle_surface():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.freshness_ledger.stamp(
         "completed_candles",
@@ -9181,8 +8580,8 @@ def test_staged_planner_preconditions_ignore_completed_candle_surface():
 
 
 def test_build_staged_planning_snapshot_captures_exact_surface_contract():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"user": "tester"}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {"user": "tester"}})
     bot.exchange = "bybit"
     bot.coin_overrides = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -9283,8 +8682,8 @@ def _planning_test_snapshot(
 
 
 def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 2}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {"max_active_candle_tail_gap_minutes": 2}})
     bot.cm = SimpleNamespace(
         get_completed_candle_health=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("snapshot summary must not read candles")
@@ -9333,7 +8732,11 @@ def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
         "tail_gap_fallback_symbol_samples": fallback_symbols[:8],
         "tail_gap_fallback_symbols_truncated": True,
         "expected_close_age": {"min_ms": 60_000, "mean_ms": 60_000, "max_ms": 60_000},
-        "last_real_close_age": {"min_ms": 60_000, "mean_ms": 169_091, "max_ms": 180_000},
+        "last_real_close_age": {
+            "min_ms": 60_000,
+            "mean_ms": 169_091,
+            "max_ms": 180_000,
+        },
         "max_tail_gap_age_ms": 120_000,
         "configured_max_tail_gap_ms": 120_000,
     }
@@ -9346,8 +8749,8 @@ def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
 
 
 def test_completed_candle_snapshot_summary_is_omitted_when_not_required():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     snapshot = _planning_test_snapshot(
         now_ms=300_000,
         symbols=("BTC/USDT:USDT",),
@@ -9359,8 +8762,8 @@ def test_completed_candle_snapshot_summary_is_omitted_when_not_required():
 
 
 def test_snapshot_built_omits_completed_candle_summary_when_not_required():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot._current_live_event_cycle_id = lambda: "cy_protective"
     events = []
     bot._monitor_record_event = (
@@ -9381,8 +8784,8 @@ def test_snapshot_built_omits_completed_candle_summary_when_not_required():
 
 
 def test_completed_candle_snapshot_summary_rejects_coerced_timestamps():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     snapshot = _planning_test_snapshot(
         now_ms="300000",
         symbols=("BTC/USDT:USDT",),
@@ -9403,7 +8806,9 @@ def test_completed_candle_snapshot_summary_rejects_coerced_timestamps():
 
 
 @pytest.mark.asyncio
-async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(monkeypatch):
+async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(
+    monkeypatch,
+):
     symbol = "BTC/USDT:USDT"
     positions = [
         {
@@ -9419,7 +8824,7 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(mon
         positions=positions,
         open_orders=[],
     )
-    bot.config = {"live": {"user": "tester"}}
+    bot.config = _unit_config({"live": {"user": "tester"}})
     bot.exchange = "fake"
     bot.coin_overrides = {}
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
@@ -9443,11 +8848,17 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(mon
     events = []
     bot._monitor_record_event = (
         lambda kind, tags, payload=None, **kwargs: events.append(
-            {"kind": kind, "tags": tuple(tags), "payload": dict(payload or {}), **kwargs}
+            {
+                "kind": kind,
+                "tags": tuple(tags),
+                "payload": dict(payload or {}),
+                **kwargs,
+            }
         )
     )
 
     assert await bot.refresh_authoritative_state() is True
+    await bot.update_pnls()
     candle_signature = ((symbol, 120_000),)
     bot._record_authoritative_surface("completed_candles", candle_signature)
     snapshots = {
@@ -9490,15 +8901,18 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(mon
         "positions": 1,
         "open_orders": 1,
     }
-    snapshot_events = [
-        event for event in events if event["kind"] == "snapshot.built"
-    ]
+    snapshot_events = [event for event in events if event["kind"] == "snapshot.built"]
     snapshot_payload = snapshot_events[-1]["payload"]
     assert snapshot_payload["snapshot_id"] == planning_snapshot.snapshot_id
     assert diagnostic_build_calls[-1][1]["cycle_id"] == "cy_snapshot"
     assert diagnostic_build_calls[-1][1]["snapshot_id"] == planning_snapshot.snapshot_id
     surface_age_names = {item["name"] for item in snapshot_payload["surface_ages"]}
-    assert {"balance", "positions", "open_orders", "market_snapshot"} <= surface_age_names
+    assert {
+        "balance",
+        "positions",
+        "open_orders",
+        "market_snapshot",
+    } <= surface_age_names
     assert "completed_candles" not in surface_age_names
     market_summary = snapshot_payload["market_snapshot_summary"]
     assert market_summary["count"] == 1
@@ -9507,23 +8921,26 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(mon
     assert market_summary["configured_max_age_ms"] == 10_000
     assert market_summary["sources"] == ["test"]
     rendered_snapshot = json.dumps(snapshot_payload, sort_keys=True)
-    assert "\"last\"" not in rendered_snapshot
-    assert "\"bid\"" not in rendered_snapshot
-    assert "\"ask\"" not in rendered_snapshot
+    assert '"last"' not in rendered_snapshot
+    assert '"bid"' not in rendered_snapshot
+    assert '"ask"' not in rendered_snapshot
     assert "planning_availability" not in snapshot_payload
 
     positions[0]["size"] = 0.2
     assert await bot.refresh_authoritative_state() is True
+    await bot.update_pnls()
     assert bot._live_data_packets["positions"].revision == 2
     assert {
         packet.kind: packet.revision for packet in planning_snapshot.data_packets
     } == frozen_revisions
-    assert planning_snapshot.snapshot_id == snapshot_events[-1]["payload"]["snapshot_id"]
+    assert (
+        planning_snapshot.snapshot_id == snapshot_events[-1]["payload"]["snapshot_id"]
+    )
 
 
 def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"user": "tester"}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {"user": "tester"}})
     bot.exchange = "bybit"
     bot.coin_overrides = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -9551,8 +8968,8 @@ def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
 
 
 def test_build_staged_planning_snapshot_survives_diagnostic_failures():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"user": "tester"}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {"user": "tester"}})
     bot.exchange = "bybit"
     bot.coin_overrides = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -9591,11 +9008,16 @@ def test_build_staged_planning_snapshot_survives_diagnostic_failures():
 
 
 def test_staged_execution_defer_emits_planning_unavailable_diagnostic():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     events = []
     bot._monitor_record_event = (
         lambda kind, tags, payload=None, **kwargs: events.append(
-            {"kind": kind, "tags": tuple(tags), "payload": dict(payload or {}), **kwargs}
+            {
+                "kind": kind,
+                "tags": tuple(tags),
+                "payload": dict(payload or {}),
+                **kwargs,
+            }
         )
     )
     details = {
@@ -9626,7 +9048,7 @@ def test_staged_execution_defer_emits_planning_unavailable_diagnostic():
 
 
 def test_staged_execution_defer_survives_planning_unavailable_emit_failure():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     def failing_emitter(_details):
         raise RuntimeError("monitor unavailable")
@@ -9647,8 +9069,8 @@ def test_staged_execution_defer_survives_planning_unavailable_emit_failure():
 
 @pytest.mark.asyncio
 async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots(caplog):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.freshness_ledger.epoch = 1
@@ -9750,8 +9172,8 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots(caplog):
 
 @pytest.mark.asyncio
 async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.freshness_ledger.epoch = 1
@@ -9847,8 +9269,8 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog
 
 @pytest.mark.asyncio
 async def test_pre_create_snapshot_filter_refreshes_stale_planning_market_snapshot():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.freshness_ledger.epoch = 1
@@ -9909,8 +9331,10 @@ def _make_pre_create_distance_guard_bot(
     threshold: float = 0.8,
     market_price: float = 100.0,
 ):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"limit_order_create_max_market_dist_pct": threshold}}
+    bot = _unit_bot()
+    bot.config = _unit_config(
+        {"live": {"limit_order_create_max_market_dist_pct": threshold}}
+    )
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.freshness_ledger.epoch = 1
@@ -10121,8 +9545,8 @@ async def test_pre_create_snapshot_filter_disables_limit_order_distance_guard(
 async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidation(
     caplog,
 ):
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "bybit"
     sink = ListEventSink()
     monitor_sink = ListEventSink()
@@ -10268,7 +9692,9 @@ async def test_pre_create_snapshot_filter_keeps_legacy_warning_without_event_own
     ]
 
     with caplog.at_level(logging.WARNING):
-        assert await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+        assert (
+            await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+        )
 
     legacy_messages = [
         record.getMessage()
@@ -10305,7 +9731,9 @@ async def test_pre_create_snapshot_refresh_legacy_fallback_excludes_raw_error(ca
     ]
 
     with caplog.at_level(logging.WARNING):
-        assert await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+        assert (
+            await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+        )
 
     messages = [record.getMessage() for record in caplog.records]
     assert messages == [
@@ -10361,7 +9789,9 @@ async def test_pre_create_snapshot_diagnostic_failures_are_redacted(caplog):
     ]
 
     with caplog.at_level(logging.DEBUG):
-        assert await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+        assert (
+            await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+        )
 
     assert bot._fresh_entry_eligibility_trace is None
     messages = "\n".join(record.getMessage() for record in caplog.records)
@@ -10373,7 +9803,7 @@ async def test_pre_create_snapshot_diagnostic_failures_are_redacted(caplog):
 
 
 def _make_open_order_snapshot_bot(*, epoch: int = 3):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.freshness_ledger.epoch = epoch
     bot._authoritative_pending_confirmations = {}
@@ -10529,7 +9959,9 @@ async def test_open_orders_snapshot_delta_uses_strictly_greater_than_twenty_thre
     assert len(logged_orders) == 20
 
 
-def test_open_orders_snapshot_delta_emitter_failure_is_bounded_and_keeps_fallback(caplog):
+def test_open_orders_snapshot_delta_emitter_failure_is_bounded_and_keeps_fallback(
+    caplog,
+):
     bot = _make_open_order_snapshot_bot()
 
     def fail_emit_delta(**_kwargs):
@@ -10594,7 +10026,9 @@ async def test_open_orders_snapshot_delta_console_sink_failure_does_not_change_r
 
 
 @pytest.mark.asyncio
-async def test_large_open_orders_snapshot_delta_keeps_legacy_console_without_pipeline(caplog):
+async def test_large_open_orders_snapshot_delta_keeps_legacy_console_without_pipeline(
+    caplog,
+):
     bot = _make_open_order_snapshot_bot()
     bot.live_event_console_enabled = False
     bot._live_event_pipeline = None
@@ -10754,6 +10188,9 @@ async def test_restarted_inherited_order_disappearance_uses_confirmation():
 @pytest.mark.asyncio
 async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
     bot = _make_open_order_snapshot_bot(epoch=11)
+    bot._hsl_planning_wave = object()
+    bot._hsl_live = SimpleNamespace(bind=lambda *args, **kwargs: None)
+    bot._current_planning_snapshot = None
     bot._last_plan_detail = {}
     bot._order_plan_summary_is_interesting = lambda **kwargs: False
     bot.PB_modes = {"long": {}, "short": {}}
@@ -10838,7 +10275,7 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
 
 @pytest.mark.asyncio
 async def test_ambiguous_cancel_forces_full_authoritative_confirmation():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.debug_mode = False
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
@@ -10893,7 +10330,7 @@ async def test_ambiguous_cancel_structured_console_owns_confirmation_message(
         def write(self, _event):
             raise OSError("console unavailable")
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.debug_mode = False
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
@@ -10955,7 +10392,8 @@ async def test_ambiguous_cancel_structured_console_owns_confirmation_message(
     assert not [
         record
         for record in caplog.records
-        if "ambiguous cancel terminal state; forcing full account confirmation" in record.message
+        if "ambiguous cancel terminal state; forcing full account confirmation"
+        in record.message
     ]
     if console_sink_fails:
         assert bot._live_event_pipeline.sink_error_counters["console"] >= 1
@@ -10968,7 +10406,7 @@ async def test_ambiguous_cancel_structured_console_owns_confirmation_message(
 async def test_ambiguous_cancel_uses_legacy_confirmation_message_without_structured_console(
     caplog,
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.debug_mode = False
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
@@ -11024,7 +10462,8 @@ async def test_ambiguous_cancel_uses_legacy_confirmation_message_without_structu
     legacy_messages = [
         record.message
         for record in caplog.records
-        if "ambiguous cancel terminal state; forcing full account confirmation" in record.message
+        if "ambiguous cancel terminal state; forcing full account confirmation"
+        in record.message
     ]
     assert legacy_messages == [
         "[order] ambiguous cancel terminal state; forcing full account confirmation "
@@ -11034,7 +10473,7 @@ async def test_ambiguous_cancel_uses_legacy_confirmation_message_without_structu
 
 
 def test_positions_signature_ignores_margin_used_and_margin_mode_noise():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     positions_a = [
         {
             "symbol": "BTC/USDT:USDT",
@@ -11062,7 +10501,7 @@ def test_positions_signature_ignores_margin_used_and_margin_mode_noise():
 
 
 def test_authoritative_barrier_does_not_block_on_balance_only_change():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     bot._begin_authoritative_refresh_epoch()
     for surface, sig in (
@@ -11086,690 +10525,8 @@ def test_authoritative_barrier_does_not_block_on_balance_only_change():
 
 
 @pytest.mark.asyncio
-async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_execute():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    cycle = {"n": 0}
-    executes = []
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        cycle["n"] += 1
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", 1)),
-            ("positions", ("p", 1)),
-            ("open_orders", ("o", 1)),
-            ("fills", ("f", 1)),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        bot._record_authoritative_surface("completed_candles", tuple())
-        return True
-
-    async def fake_refresh_market_state_if_needed():
-        executes.append("market")
-        return True
-
-    async def fake_prepare_planning_universe():
-        executes.append("universe")
-
-    async def fake_execute_to_exchange(*, prepare_cycle=True):
-        executes.append(("execute", prepare_cycle, cycle["n"]))
-        return {"executed_cycle": cycle["n"]}
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
-    bot.prepare_planning_universe = fake_prepare_planning_universe
-    bot.execute_to_exchange = fake_execute_to_exchange
-
-    result = await bot.run_execution_loop()
-
-    assert result == {"executed_cycle": 1}
-    assert executes == ["universe", "market", ("execute", False, 1)]
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_does_not_reinitialize_coin_hsl_after_startup():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    calls = []
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_coin_initialized = True
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
-    bot._equity_hard_stop_signal_mode = lambda: "coin"
-    bot._equity_hard_stop_check = AsyncMock(return_value=None)
-    bot._equity_hard_stop_coin_red_active = lambda: False
-    bot._equity_hard_stop_initialize_coin_from_history = AsyncMock()
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", 1)),
-            ("positions", ("p", 1)),
-            ("open_orders", ("o", 1)),
-            ("fills", ("f", 1)),
-            ("completed_candles", tuple()),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        return True
-
-    async def fake_prepare_planning_universe():
-        calls.append("universe")
-
-    async def fake_refresh_market_state_if_needed():
-        calls.append("market")
-        return True
-
-    async def fake_execute_to_exchange(*, prepare_cycle=True):
-        calls.append(("execute", prepare_cycle))
-        return {"ok": True}
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.prepare_planning_universe = fake_prepare_planning_universe
-    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
-    bot.execute_to_exchange = fake_execute_to_exchange
-
-    result = await bot.run_execution_loop()
-
-    assert result == {"ok": True}
-    bot._equity_hard_stop_initialize_coin_from_history.assert_not_awaited()
-    assert calls == ["universe", "market", ("execute", False)]
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_does_not_defer_for_completed_candles():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    cycle = {"n": 0}
-    executes = []
-
-    bot.config = {"live": {}}
-    bot.exchange = "bybit"
-    bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot.active_symbols = []
-    bot.positions = {}
-    bot.open_orders = {}
-    bot.PB_modes = {"long": {}, "short": {}}
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        cycle["n"] += 1
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", cycle["n"])),
-            ("positions", ("p", cycle["n"])),
-            ("open_orders", ("o", cycle["n"])),
-            ("fills", ("f", cycle["n"])),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        if cycle["n"] > 1:
-            bot._record_authoritative_surface("completed_candles", tuple())
-        return True
-
-    async def fake_prepare_planning_universe():
-        executes.append(("universe", cycle["n"]))
-
-    async def fake_refresh_market_state_if_needed():
-        executes.append(("market", cycle["n"]))
-        return True
-
-    async def fake_execute_to_exchange(*, prepare_cycle=True):
-        executes.append(("execute", prepare_cycle, cycle["n"]))
-        return {"executed_cycle": cycle["n"]}
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.prepare_planning_universe = fake_prepare_planning_universe
-    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
-    bot.execute_to_exchange = fake_execute_to_exchange
-
-    result = await bot.run_execution_loop()
-
-    assert result == {"executed_cycle": 1}
-    assert executes == [
-        ("universe", 1),
-        ("market", 1),
-        ("execute", False, 1),
-    ]
-    bot.restart_bot_on_too_many_errors.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    cycle = {"n": 0}
-    executes = []
-    sleeps = []
-
-    async def fake_sleep_unless_shutdown(seconds, *, stage):
-        sleeps.append((seconds, stage))
-        return None
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        cycle["n"] += 1
-        if cycle["n"] <= 12:
-            bot._last_authoritative_block_reason = "pending_pnl"
-            bot._last_authoritative_pending_pnl_count = 2
-            return False
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", 1)),
-            ("positions", ("p", 1)),
-            ("open_orders", ("o", 1)),
-            ("fills", ("f", 1)),
-            ("completed_candles", tuple()),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        return True
-
-    async def fake_refresh_market_state_if_needed():
-        executes.append("market")
-        return True
-
-    async def fake_prepare_planning_universe():
-        executes.append("universe")
-
-    async def fake_execute_to_exchange(*, prepare_cycle=True):
-        executes.append(("execute", prepare_cycle, cycle["n"]))
-        return {"executed_cycle": cycle["n"]}
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
-    bot.prepare_planning_universe = fake_prepare_planning_universe
-    bot.execute_to_exchange = fake_execute_to_exchange
-
-    result = await bot.run_execution_loop()
-
-    assert result == {"executed_cycle": 13}
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    assert executes == ["universe", "market", ("execute", False, 13)]
-    sleep_seconds = [seconds for seconds, _stage in sleeps]
-    assert sleep_seconds[:7] == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
-    assert sleep_seconds[7:12] == [60.0] * 5
-    assert {stage for _seconds, stage in sleeps} == {"pending_pnl_authoritative_retry"}
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_waits_on_bitunix_balance_confirmation_without_restart():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    cycle = {"n": 0}
-    sleeps = []
-
-    async def fake_sleep_unless_shutdown(seconds, *, stage):
-        sleeps.append((seconds, stage))
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
-    bot._emit_live_cycle_degraded = MagicMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        cycle["n"] += 1
-        if cycle["n"] <= 12:
-            bot._last_authoritative_block_reason = (
-                "balance_consistency_check"
-            )
-            return False
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", 1)),
-            ("positions", ("p", 1)),
-            ("open_orders", ("o", 1)),
-            ("fills", ("f", 1)),
-            ("completed_candles", tuple()),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        return True
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.prepare_planning_universe = AsyncMock()
-    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
-    bot.execute_to_exchange = AsyncMock(return_value={"executed_cycle": 13})
-
-    assert await bot.run_execution_loop() == {"executed_cycle": 13}
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    assert sleeps == [
-        (5.0, "balance_consistency_check")
-    ] * 12
-    balance_events = [
-        call.kwargs
-        for call in bot._emit_live_cycle_degraded.call_args_list
-        if call.kwargs["reason_code"]
-        == "balance_consistency_check"
-    ]
-    assert len(balance_events) == 12
-    assert balance_events[0]["level"] == "warning"
-    assert all(event["level"] == "debug" for event in balance_events[1:])
-    assert [event["data"]["retry_count"] for event in balance_events] == list(
-        range(1, 13)
-    )
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_waits_on_degraded_pnl_without_restart():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    cycle = {"n": 0}
-    sleeps = []
-
-    async def fake_sleep_unless_shutdown(seconds, *, stage):
-        sleeps.append((seconds, stage))
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
-    bot._emit_live_cycle_degraded = MagicMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        cycle["n"] += 1
-        if cycle["n"] <= 3:
-            bot._last_authoritative_block_reason = "degraded_pnl"
-            bot._last_authoritative_pending_pnl_count = 0
-            bot._last_authoritative_degraded_pnl_count = 1
-            return False
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", 1)),
-            ("positions", ("p", 1)),
-            ("open_orders", ("o", 1)),
-            ("fills", ("f", 1)),
-            ("completed_candles", tuple()),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        return True
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.prepare_planning_universe = AsyncMock()
-    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
-    bot.execute_to_exchange = AsyncMock(return_value={"executed_cycle": 4})
-
-    result = await bot.run_execution_loop()
-
-    assert result == {"executed_cycle": 4}
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    assert sleeps == [
-        (1.0, "degraded_pnl_authoritative_retry"),
-        (2.0, "degraded_pnl_authoritative_retry"),
-        (4.0, "degraded_pnl_authoritative_retry"),
-    ]
-    degraded_events = [
-        call.kwargs
-        for call in bot._emit_live_cycle_degraded.call_args_list
-        if call.kwargs["reason_code"] == "degraded_pnl_authoritative_refresh"
-    ]
-    assert len(degraded_events) == 3
-    assert all(event["data"]["degraded_pnl_count"] == 1 for event in degraded_events)
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_waits_on_fill_coverage_without_restart():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    cycle = {"n": 0}
-    sleeps = []
-
-    async def fake_sleep_unless_shutdown(seconds, *, stage):
-        sleeps.append((seconds, stage))
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
-    bot._emit_live_cycle_degraded = MagicMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        cycle["n"] += 1
-        if cycle["n"] <= 12:
-            bot._last_authoritative_block_reason = "fill_history_coverage"
-            bot._last_authoritative_pending_pnl_count = 0
-            bot._last_authoritative_degraded_pnl_count = 0
-            return False
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", 1)),
-            ("positions", ("p", 1)),
-            ("open_orders", ("o", 1)),
-            ("fills", ("f", 1)),
-            ("completed_candles", tuple()),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        return True
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.prepare_planning_universe = AsyncMock()
-    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
-    bot.execute_to_exchange = AsyncMock(return_value={"executed_cycle": 13})
-
-    result = await bot.run_execution_loop()
-
-    assert result == {"executed_cycle": 13}
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    assert [seconds for seconds, _stage in sleeps] == [
-        30.0,
-        60.0,
-        120.0,
-        240.0,
-        300.0,
-        300.0,
-        300.0,
-        300.0,
-        300.0,
-        300.0,
-        300.0,
-        300.0,
-    ]
-    assert {stage for _seconds, stage in sleeps} == {"fill_history_coverage_retry"}
-    coverage_events = [
-        call.kwargs
-        for call in bot._emit_live_cycle_degraded.call_args_list
-        if call.kwargs["reason_code"] == "fill_history_coverage_unavailable"
-    ]
-    assert len(coverage_events) == 12
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_resets_fill_retry_backoff_when_reason_changes():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    reasons = iter(
-        [
-            "fill_history_coverage",
-            "fill_history_coverage",
-            "pending_pnl",
-            "pending_pnl",
-            None,
-        ]
-    )
-    sleeps = []
-    cycle = {"n": 0}
-
-    async def fake_sleep_unless_shutdown(seconds, *, stage):
-        sleeps.append((seconds, stage))
-
-    async def fake_refresh_authoritative_state():
-        cycle["n"] += 1
-        reason = next(reasons)
-        if reason is not None:
-            bot._last_authoritative_block_reason = reason
-            bot._last_authoritative_pending_pnl_count = int(reason == "pending_pnl")
-            bot._last_authoritative_degraded_pnl_count = 0
-            return False
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", 1)),
-            ("positions", ("p", 1)),
-            ("open_orders", ("o", 1)),
-            ("fills", ("f", 1)),
-            ("completed_candles", tuple()),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        return True
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
-    bot._emit_live_cycle_degraded = MagicMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.prepare_planning_universe = AsyncMock()
-    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
-    bot.execute_to_exchange = AsyncMock(return_value={"executed_cycle": 5})
-
-    assert await bot.run_execution_loop() == {"executed_cycle": 5}
-    assert sleeps == [
-        (30.0, "fill_history_coverage_retry"),
-        (60.0, "fill_history_coverage_retry"),
-        (1.0, "pending_pnl_authoritative_retry"),
-        (2.0, "pending_pnl_authoritative_retry"),
-    ]
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("signal_mode", ["unified", "coin"])
-async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_retry(
-    signal_mode,
-):
-    bot = Passivbot.__new__(Passivbot)
-    bot.positions = {}
-    bot.open_orders = {}
-    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
-    bot.config = {"live": {"risk_input_max_attempts": 10, "hsl_unavailable_grace_seconds": 120.0}}
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
-    bot.balance = 100.0
-
-    async def stop_after_supervision(**kwargs):
-        bot.stop_signal_received = True
-
-    async def fake_refresh_authoritative_state():
-        bot._last_authoritative_block_reason = "fill_history_coverage"
-        bot._last_authoritative_pending_pnl_count = 0
-        bot._last_authoritative_degraded_pnl_count = 0
-        return False
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_coin_initialized = True
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
-    bot._equity_hard_stop_signal_mode = lambda: signal_mode
-    bot._equity_hard_stop_runtime_initialized = lambda _pside: True
-    bot._hsl_psides = lambda: ["long"]
-    bot._equity_hard_stop_runtime_red_latched = (
-        lambda _pside: signal_mode == "unified"
-    )
-    bot._hsl_state = lambda _pside: {"halted": False}
-    bot._equity_hard_stop_coin_red_active = lambda: signal_mode == "coin"
-    bot._equity_hard_stop_run_red_supervisor = AsyncMock(
-        side_effect=stop_after_supervision
-    )
-    bot._equity_hard_stop_run_coin_red_supervisor = AsyncMock(
-        side_effect=stop_after_supervision
-    )
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._emit_live_cycle_degraded = MagicMock()
-    bot._sleep_unless_shutdown = AsyncMock()
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-
-    assert await bot.run_execution_loop() is None
-    selected = (
-        bot._equity_hard_stop_run_coin_red_supervisor
-        if signal_mode == "coin"
-        else bot._equity_hard_stop_run_red_supervisor
-    )
-    unselected = (
-        bot._equity_hard_stop_run_red_supervisor
-        if signal_mode == "coin"
-        else bot._equity_hard_stop_run_coin_red_supervisor
-    )
-    selected.assert_awaited_once()
-    assert selected.await_args.kwargs["single_pass"]
-    assert callable(selected.await_args.kwargs["after_close"])
-    unselected.assert_not_awaited()
-    bot._sleep_unless_shutdown.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
-    monkeypatch, caplog
-):
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    cycle = {"n": 0}
-    executes = []
-    sleeps = []
-
-    async def fake_sleep_unless_shutdown(seconds, *, stage):
-        sleeps.append((seconds, stage))
-        return None
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot.active_symbols = []
-    bot.positions = {}
-    bot.open_orders = {}
-    bot.PB_modes = {"long": {}, "short": {}}
-    bot._authoritative_pending_confirmations = {}
-    bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot._emit_live_cycle_degraded = MagicMock()
-    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
-    bot._log_settled_order_waves = lambda *args, **kwargs: None
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        cycle["n"] += 1
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", cycle["n"])),
-            ("positions", ("p", cycle["n"])),
-            ("open_orders", ("o", cycle["n"])),
-            ("fills", ("f", cycle["n"])),
-            ("completed_candles", tuple()),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        return True
-
-    async def fake_refresh_market_state_if_needed():
-        executes.append(("market", cycle["n"]))
-        return True
-
-    async def fake_prepare_planning_universe():
-        executes.append(("universe", cycle["n"]))
-
-    async def fake_execute_to_exchange(*, prepare_cycle=True):
-        executes.append(("execute", prepare_cycle, cycle["n"]))
-        if cycle["n"] == 1:
-            raise passivbot_module.FillHistoryCoverageUnavailable(
-                "fill history coverage unknown api_key=coverage-secret"
-            )
-        return {"executed_cycle": cycle["n"]}
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
-    bot.prepare_planning_universe = fake_prepare_planning_universe
-    bot.execute_to_exchange = fake_execute_to_exchange
-
-    with caplog.at_level(logging.WARNING):
-        result = await bot.run_execution_loop()
-
-    assert result == {"executed_cycle": 2}
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    assert sleeps == [(1.0, "fill_history_coverage_retry")]
-    assert executes == [
-        ("universe", 1),
-        ("market", 1),
-        ("execute", False, 1),
-        ("universe", 2),
-        ("market", 2),
-        ("execute", False, 2),
-    ]
-    coverage_event = next(
-        call.kwargs
-        for call in bot._emit_live_cycle_degraded.call_args_list
-        if call.kwargs["reason_code"] == "fill_history_coverage_unavailable"
-    )
-    assert coverage_event["level"] == "warning"
-    assert (
-        coverage_event["data"]["error_type"]
-        == "FillHistoryCoverageUnavailable"
-    )
-    assert "error" not in coverage_event["data"]
-    assert "error_type=FillHistoryCoverageUnavailable" in caplog.text
-    assert "coverage-secret" not in caplog.text
-
-
-@pytest.mark.asyncio
 async def test_refresh_market_state_updates_trailing_after_candles():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.stop_signal_received = False
     events = []
 
@@ -11788,216 +10545,8 @@ async def test_refresh_market_state_updates_trailing_after_candles():
 
 
 @pytest.mark.asyncio
-async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after_refresh():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    executes = []
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = False
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        bot._begin_authoritative_refresh_epoch()
-        for surface, sig in (
-            ("balance", ("b", 1)),
-            ("positions", ("p", 1)),
-            ("open_orders", ("o", 1)),
-            ("fills", ("f", 1)),
-        ):
-            bot._record_authoritative_surface(surface, sig)
-        bot.stop_signal_received = True
-        return True
-
-    async def fake_refresh_market_state_if_needed():
-        return True
-
-    async def fake_execute_to_exchange():
-        executes.append(True)
-        return {"unexpected": True}
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
-    bot.execute_to_exchange = fake_execute_to_exchange
-
-    result = await bot.run_execution_loop()
-
-    assert result is None
-    assert executes == []
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(caplog):
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = False
-    bot._health_errors = 0
-    bot._health_rate_limits = 0
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot._monitor_record_error = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("shutdown errors should not be recorded as runtime errors")
-    )
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        bot.stop_signal_received = True
-        raise RuntimeError("api_key=shutdown-refresh-secret")
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.execute_to_exchange = AsyncMock()
-
-    with caplog.at_level(logging.DEBUG):
-        result = await bot.run_execution_loop()
-
-    assert result is None
-    assert bot._health_errors == 0
-    assert bot._health_rate_limits == 0
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    bot.execute_to_exchange.assert_not_awaited()
-    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
-    assert any(
-        "execution loop stopped during in-flight refresh" in r.message
-        for r in caplog.records
-    )
-    assert "error_type=RuntimeError" in caplog.text
-    assert "shutdown-refresh-secret" not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_records_nonshutdown_cancelled_error(
-    caplog, monkeypatch
-):
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-
-    bot.exchange = "gateio"
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = False
-    bot._health_errors = 0
-    bot._health_rate_limits = 0
-    bot.error_counts = []
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    monitor_events = []
-    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
-        (args, kwargs)
-    )
-    bot._monitor_record_error = MagicMock()
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_sleep(_seconds):
-        return None
-
-    async def fake_refresh_authoritative_state():
-        raise asyncio.CancelledError("ccxt load_markets cancelled")
-
-    async def fake_restart():
-        bot.stop_signal_received = True
-
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.restart_bot_on_too_many_errors.side_effect = fake_restart
-    bot.execute_to_exchange = AsyncMock()
-
-    with caplog.at_level(logging.ERROR):
-        result = await bot.run_execution_loop()
-
-    assert result is None
-    assert bot._health_errors == 1
-    bot._monitor_record_error.assert_not_called()
-    assert [event[0][0] for event in monitor_events] == [
-        "error.bot",
-        "error.bot.detail",
-    ]
-    summary = monitor_events[0][0][2]
-    detail = monitor_events[1][0][2]
-    assert summary["error_type"] == "CancelledError"
-    assert summary["incident_id"] == detail["incident_id"]
-    assert summary["origin"].startswith(
-        "test_passivbot_balance_split.py:fake_refresh_authoritative_state:"
-    )
-    assert detail["traceback"]["frame_count"] >= 1
-    assert detail["traceback"]["includes_exception_text"] is False
-    bot.restart_bot_on_too_many_errors.assert_awaited_once()
-    bot.execute_to_exchange.assert_not_awaited()
-    messages = [record.message for record in caplog.records]
-    assert any(
-        "[error] operation=run_execution_loop" in message
-        and "error_type=CancelledError" in message
-        and "endpoint=unknown" in message
-        and "action=record_error_restart_backoff" in message
-        for message in messages
-    )
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_treats_shutdown_cancelled_error_as_clean_stop(caplog):
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = False
-    bot._health_errors = 0
-    bot._health_rate_limits = 0
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._monitor_record_error = MagicMock(
-        side_effect=AssertionError("shutdown cancellation should not be recorded")
-    )
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        bot.stop_signal_received = True
-        raise asyncio.CancelledError("shutdown")
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.execute_to_exchange = AsyncMock()
-
-    with caplog.at_level(logging.DEBUG):
-        result = await bot.run_execution_loop()
-
-    assert result is None
-    assert bot._health_errors == 0
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    bot.execute_to_exchange.assert_not_awaited()
-    assert any(
-        "authoritative refresh cancelled during shutdown" in r.message
-        for r in caplog.records
-    )
-
-
-@pytest.mark.asyncio
 async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "binance"
     bot.user = "binance_01"
     bot.bot_id = "bot_1"
@@ -12025,16 +10574,16 @@ async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
     )
     exc = RuntimeError(raw_error)
     with caplog.at_level(logging.WARNING):
-        recovered = await bot._maybe_recover_exchange_time_sync(
-            exc, source="test"
-        )
+        recovered = await bot._maybe_recover_exchange_time_sync(exc, source="test")
 
     assert recovered is True
     bot.cca.load_time_difference.assert_awaited_once()
     bot.ccp.load_time_difference.assert_awaited_once()
     assert bot.cca.options["timeDifference"] == 25
     assert bot.ccp.options["timeDifference"] == 30
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    warnings = [
+        record.message for record in caplog.records if record.levelno == logging.WARNING
+    ]
     assert warnings == [
         "[time] clock offset | action=offset_refreshed source=test status=succeeded "
         "recovered=true synced=2[cca:10->25,+1] failed=0[-] error_type=RuntimeError"
@@ -12062,7 +10611,7 @@ async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
 
 
 def test_exchange_time_sync_detection_traverses_cause_without_rendering_wrapper():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     inner = RuntimeError("timestamp outside recvWindow code=-1021")
     try:
         raise RuntimeError("error_type=RuntimeError") from inner
@@ -12071,7 +10620,7 @@ def test_exchange_time_sync_detection_traverses_cause_without_rendering_wrapper(
 
 
 def test_exchange_time_sync_detection_traverses_cause_and_context_branches():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     outer = RuntimeError("classification-only wrapper")
     outer.__cause__ = RuntimeError("unrelated explicit cause")
     outer.__context__ = RuntimeError("timestamp outside recvWindow code=-1021")
@@ -12080,14 +10629,14 @@ def test_exchange_time_sync_detection_traverses_cause_and_context_branches():
 
 
 def test_exchange_time_sync_detection_scans_late_marker():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     error = RuntimeError(("x" * 5000) + " timestamp outside recvWindow")
 
     assert bot._is_exchange_time_sync_error(error) is True
 
 
 def test_exchange_time_sync_detection_preserves_class_name_marker():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     class WrappedInvalidNonceFailure(RuntimeError):
         pass
@@ -12096,7 +10645,7 @@ def test_exchange_time_sync_detection_preserves_class_name_marker():
 
 
 def test_exchange_time_sync_detection_rejects_forged_class_name_descriptor():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     class ForgedNameMeta(type):
         @property
@@ -12110,7 +10659,7 @@ def test_exchange_time_sync_detection_rejects_forged_class_name_descriptor():
 
 
 def test_exchange_time_sync_detection_normalizes_stored_name_subclass():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     class HostileName(str):
         def lower(self):
@@ -12125,7 +10674,7 @@ def test_exchange_time_sync_detection_normalizes_stored_name_subclass():
 
 
 def test_exchange_time_sync_detection_contains_hostile_exception_text():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     secret = "api_key=time-sync-hostile-string"
 
     class HostileError(RuntimeError):
@@ -12139,7 +10688,7 @@ def test_exchange_time_sync_detection_contains_hostile_exception_text():
 
 @pytest.mark.asyncio
 async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot.user = "kucoin_01"
     bot.bot_id = "bot_1"
@@ -12158,7 +10707,9 @@ async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
         )
 
     assert recovered is False
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    warnings = [
+        record.message for record in caplog.records if record.levelno == logging.WARNING
+    ]
     assert warnings == [
         "[time] clock offset | action=no_hook source=fetch_balance status=skipped "
         "recovered=false synced=0[-] failed=0[-] error_type=RuntimeError"
@@ -12183,7 +10734,7 @@ async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
 
 @pytest.mark.asyncio
 async def test_exchange_time_sync_redacts_forged_original_exception_type(caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot.user = "kucoin_01"
     bot.bot_id = "bot_1"
@@ -12224,7 +10775,7 @@ async def test_exchange_time_sync_contains_hostile_hook_type_metadata(caplog):
     class HostileHookError(RuntimeError, metaclass=HostileMeta):
         pass
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "binance"
     bot.user = "binance_01"
     bot.bot_id = "bot_1"
@@ -12285,163 +10836,10 @@ def test_exchange_time_sync_warning_stays_within_full_console_line_budget():
 
 
 @pytest.mark.asyncio
-async def test_run_execution_loop_recovers_timestamp_error_without_traceback(caplog):
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    bot.exchange = "binance"
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = False
-    bot._health_errors = 0
-    bot._health_rate_limits = 0
-    bot.error_counts = []
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._monitor_record_error = MagicMock()
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-    bot.cca = SimpleNamespace(
-        options={"timeDifference": 0},
-        load_time_difference=AsyncMock(),
-    )
-    bot.ccp = None
-    calls = 0
-
-    async def fake_refresh_authoritative_state():
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("Timestamp for this request is outside of the recvWindow")
-        bot.stop_signal_received = True
-        return False
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.execute_to_exchange = AsyncMock()
-
-    with caplog.at_level(logging.WARNING):
-        result = await bot.run_execution_loop()
-
-    assert result is None
-    assert calls == 2
-    assert bot._health_errors == 1
-    bot.cca.load_time_difference.assert_awaited_once()
-    bot.restart_bot_on_too_many_errors.assert_awaited_once()
-    bot.execute_to_exchange.assert_not_awaited()
-    assert any(
-        "[time] clock offset | action=offset_refreshed "
-        "source=run_execution_loop status=succeeded" in r.message
-        for r in caplog.records
-    )
-    assert not [r for r in caplog.records if "error with run_execution_loop" in r.message]
-
-
-@pytest.mark.asyncio
-async def test_run_execution_loop_error_log_includes_type_status_and_action(caplog, monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    bot.exchange = "kucoin"
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = False
-    bot._health_errors = 0
-    bot._health_rate_limits = 0
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    monitor_events = []
-    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
-        (args, kwargs)
-    )
-    bot._monitor_record_error = MagicMock()
-    bot._emit_live_cycle_degraded = MagicMock()
-    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    class FakeExchangeError(RuntimeError):
-        pass
-
-    raw_error = (
-        "kucoinfutures GET https://example.invalid/account-overview?api_key=SECRET "
-        "connector said raw-message"
-    )
-    exc = FakeExchangeError(raw_error)
-    exc.http_status = 500
-    exc.code = "500000"
-
-    async def fake_sleep(_seconds):
-        return None
-
-    async def fake_refresh_authoritative_state():
-        raise exc
-
-    async def fake_restart():
-        bot.stop_signal_received = True
-
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.restart_bot_on_too_many_errors.side_effect = fake_restart
-
-    with caplog.at_level(logging.DEBUG):
-        result = await bot.run_execution_loop()
-
-    assert result is None
-    assert bot._health_errors == 1
-    bot.restart_bot_on_too_many_errors.assert_awaited_once()
-    bot._monitor_record_error.assert_not_called()
-    assert [event[0][0] for event in monitor_events] == [
-        "error.bot",
-        "error.bot.detail",
-    ]
-    summary = monitor_events[0][0][2]
-    detail = monitor_events[1][0][2]
-    assert summary["status"] == "500"
-    assert summary["code"] == "500000"
-    assert summary["endpoint"] == "account-overview"
-    assert summary["incident_id"] == detail["incident_id"]
-    assert summary["origin"].startswith(
-        "test_passivbot_balance_split.py:fake_refresh_authoritative_state:"
-    )
-    assert detail["traceback"]["frame_count"] >= 1
-    assert raw_error not in str(detail)
-    assert "SECRET" not in str(detail)
-    messages = [record.message for record in caplog.records]
-    assert not any("error with run_execution_loop" in message for message in messages)
-    assert any(
-        "[error] operation=run_execution_loop" in message
-        and "error_type=RuntimeError" in message
-        and "status=500" in message
-        and "code=500000" in message
-        and "endpoint=account-overview" in message
-        and "cycle=abandoned" in message
-        and "action=record_error_restart_backoff" in message
-        for message in messages
-    )
-    assert all(raw_error not in message for message in messages)
-    assert all("SECRET" not in message for message in messages)
-    degraded_event = bot._emit_live_cycle_degraded.call_args.kwargs
-    assert degraded_event["reason_code"] == "RuntimeError"
-    assert degraded_event["level"] == "error"
-    assert degraded_event["data"]["error_type"] == "RuntimeError"
-    assert "error" not in degraded_event["data"]
-    assert raw_error not in str(degraded_event)
-    assert "SECRET" not in str(degraded_event)
-    assert not [
-        record
-        for record in caplog.records
-        if record.levelno == logging.DEBUG and "stack frames" in record.message
-    ]
-
-
-@pytest.mark.asyncio
 async def test_execution_loop_error_normal_info_persists_bounded_traceback_detail(
     caplog, monkeypatch
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.stop_signal_received = False
     bot._health_errors = 0
     bot.error_counts = []
@@ -12462,9 +10860,12 @@ async def test_execution_loop_error_normal_info_persists_bounded_traceback_detai
         raise RuntimeError(raw_error)
     except RuntimeError as exc:
         with caplog.at_level(logging.INFO):
-            assert await bot._handle_execution_loop_failure(
-                exc, allow_time_sync_recovery=False
-            ) is True
+            assert (
+                await bot._handle_execution_loop_failure(
+                    exc, allow_time_sync_recovery=False
+                )
+                is True
+            )
 
     assert bot._health_errors == 1
     assert len(bot.error_counts) == 1
@@ -12484,7 +10885,10 @@ async def test_execution_loop_error_normal_info_persists_bounded_traceback_detai
     normal_messages = [
         record.message for record in caplog.records if record.levelno >= logging.INFO
     ]
-    assert "[health] error_budget count=1 limit=10 window=1h action=continue" in normal_messages
+    assert (
+        "[health] error_budget count=1 limit=10 window=1h action=continue"
+        in normal_messages
+    )
     assert all(raw_error not in message for message in normal_messages)
     assert all("SECRET" not in message for message in normal_messages)
 
@@ -12532,7 +10936,7 @@ async def test_hostile_traceback_projection_does_not_replace_execution_failure(
                 raise KeyboardInterrupt("projection trap")
             return super().__getattribute__(name)
 
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.stop_signal_received = False
     bot._health_errors = 0
     bot.error_counts = []
@@ -12544,9 +10948,12 @@ async def test_hostile_traceback_projection_does_not_replace_execution_failure(
     bot.restart_bot = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    assert await bot._handle_execution_loop_failure(
-        HostileError("token=SECRET"), allow_time_sync_recovery=False
-    ) is True
+    assert (
+        await bot._handle_execution_loop_failure(
+            HostileError("token=SECRET"), allow_time_sync_recovery=False
+        )
+        is True
+    )
 
     assert bot._health_errors == 1
     assert len(bot.error_counts) == 1
@@ -12561,7 +10968,7 @@ async def test_hostile_traceback_projection_does_not_replace_execution_failure(
 
 
 def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
 
     class FakeExchangeError(RuntimeError):
         pass
@@ -12589,7 +10996,7 @@ def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint()
 
 
 def test_execution_loop_error_fields_reject_credential_shaped_endpoint():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     secret = "sk_live_7E4v93kR2mN6pQ8t"
 
     fields = bot._execution_loop_error_fields(
@@ -12601,7 +11008,7 @@ def test_execution_loop_error_fields_reject_credential_shaped_endpoint():
 
 
 def test_execution_loop_error_fields_include_bounded_stage_and_origin():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._log_silence_watchdog_stage = "refresh_authoritative_state"
 
     def fail_in_test():
@@ -12613,14 +11020,12 @@ def test_execution_loop_error_fields_include_bounded_stage_and_origin():
         fields = bot._execution_loop_error_fields(exc)
 
     assert fields["stage"] == "refresh_authoritative_state"
-    assert fields["origin"].startswith(
-        "test_passivbot_balance_split.py:fail_in_test:"
-    )
+    assert fields["origin"].startswith("test_passivbot_balance_split.py:fail_in_test:")
     assert "must-not-be-projected" not in str(fields)
 
 
 def test_execution_loop_error_fields_contain_hostile_exception_metadata():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     secret = "api_key=hostile-execution-metadata"
 
     class HostileError(RuntimeError):
@@ -12668,7 +11073,7 @@ def test_process_failure_log_omits_exception_value_and_traceback(caplog):
 
 
 def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     now = {"value": 1_000_000}
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
 
@@ -12692,10 +11097,12 @@ def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkey
     assert "action=restart_backoff_continues" in messages[0]
 
 
-def test_execution_loop_error_burst_structured_console_owns_warning(caplog, monkeypatch):
+def test_execution_loop_error_burst_structured_console_owns_warning(
+    caplog, monkeypatch
+):
     sink = ListEventSink()
     console_sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.exchange = "kucoin"
     bot.user = "kucoin_01"
     bot.bot_id = "bot_1"
@@ -12747,9 +11154,7 @@ def test_execution_loop_error_burst_structured_console_owns_warning(caplog, monk
     assert event.reason_code == ReasonCodes.EXECUTION_LOOP_ERROR_BURST
     assert event.data["count"] == 3
     assert event.data["window_s"] == 1
-    assert event.data["top_endpoints"] == [
-        {"endpoint": "account-overview", "count": 3}
-    ]
+    assert event.data["top_endpoints"] == [{"endpoint": "account-overview", "count": 3}]
     assert event.data["latest_error_type"] == "RequestTimeout"
     assert event.data["latest_status"] == "-"
     assert event.data["latest_code"] == "-"
@@ -12773,7 +11178,7 @@ def test_execution_loop_error_burst_structured_console_owns_warning(caplog, monk
 def test_execution_loop_error_burst_uses_legacy_fallback_without_structured_console(
     caplog, monkeypatch, console_enabled, has_pipeline
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = console_enabled
     structured_sink = ListEventSink()
     if has_pipeline:
@@ -12810,7 +11215,7 @@ def test_execution_loop_error_burst_uses_legacy_fallback_without_structured_cons
 def test_execution_loop_error_burst_uses_legacy_fallback_when_emitter_unavailable(
     caplog, monkeypatch, emitter_state
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = True
     if emitter_state == "missing":
         monkeypatch.delattr(Passivbot, "_emit_execution_loop_error_burst_event")
@@ -12852,7 +11257,7 @@ def test_execution_loop_error_burst_keeps_structured_console_owner_when_queue_is
         start=False,
     )
     pipeline.emit(LiveEvent(EventTypes.CYCLE_STARTED))
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = pipeline
     now = {"value": 1_000_000}
@@ -12885,8 +11290,10 @@ def test_execution_loop_error_burst_keeps_structured_console_owner_when_queue_is
 
 
 @pytest.mark.asyncio
-async def test_execution_loop_error_budget_keeps_count_and_restart_threshold(caplog, monkeypatch):
-    bot = Passivbot.__new__(Passivbot)
+async def test_execution_loop_error_budget_keeps_count_and_restart_threshold(
+    caplog, monkeypatch
+):
+    bot = _unit_bot()
     now = 1_000_000
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now)
     bot.error_counts = [now - 60 * 60 * 1000] + [now - 1] * 8
@@ -12909,7 +11316,7 @@ async def test_execution_loop_error_budget_keeps_count_and_restart_threshold(cap
 def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
     caplog, monkeypatch
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     now = {"value": 1_000_000}
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
     bot._authoritative_pending_confirmations = {}
@@ -12923,7 +11330,11 @@ def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
                 100 + i,
             )
 
-    messages = [record.message for record in caplog.records if "timing summary" in record.message]
+    messages = [
+        record.message
+        for record in caplog.records
+        if "timing summary" in record.message
+    ]
     assert len(messages) == 1
     assert "[state] staged refresh timing summary" in messages[0]
     assert "plan=open_orders" in messages[0]
@@ -12933,11 +11344,13 @@ def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
 
 def test_staged_refresh_timing_summary_emits_structured_event(monkeypatch):
     sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     now = {"value": 1_000_000}
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
     bot._live_event_current_cycle_id = "cy_refresh_summary"
-    bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink], monitor_sinks=[]
+    )
     bot._authoritative_pending_confirmations = {}
     _set_authoritative_epoch_state(bot)
 
@@ -12980,11 +11393,13 @@ def test_staged_refresh_timing_summary_emits_structured_event(monkeypatch):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_staged_refresh_timing_threshold_uses_structured_console_owner(caplog, monkeypatch):
+def test_staged_refresh_timing_threshold_uses_structured_console_owner(
+    caplog, monkeypatch
+):
     structured_sink = ListEventSink()
     console_sink = ListEventSink()
     text_sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[structured_sink],
@@ -13037,9 +11452,11 @@ def test_staged_refresh_timing_threshold_uses_structured_console_owner(caplog, m
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_staged_refresh_timing_uses_exact_legacy_fallback_without_console(caplog, monkeypatch):
+def test_staged_refresh_timing_uses_exact_legacy_fallback_without_console(
+    caplog, monkeypatch
+):
     structured_sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[structured_sink],
@@ -13068,10 +11485,12 @@ def test_staged_refresh_timing_uses_exact_legacy_fallback_without_console(caplog
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_staged_refresh_timing_summary_uses_structured_console_owner(caplog, monkeypatch):
+def test_staged_refresh_timing_summary_uses_structured_console_owner(
+    caplog, monkeypatch
+):
     structured_sink = ListEventSink()
     console_sink = ListEventSink()
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[structured_sink],
@@ -13106,7 +11525,7 @@ def test_staged_refresh_timing_summary_uses_structured_console_owner(caplog, mon
 def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(
     caplog, monkeypatch
 ):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     now = {"value": 2_000_000}
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
     bot._authoritative_pending_confirmations = {}
@@ -13125,7 +11544,11 @@ def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(
                 1_500,
             )
 
-    messages = [record.message for record in caplog.records if "timing summary" in record.message]
+    messages = [
+        record.message
+        for record in caplog.records
+        if "timing summary" in record.message
+    ]
     assert len(messages) == 1
     assert "[state] staged refresh timing summary" in messages[0]
     assert "plan=balance,fills,open_orders,positions" in messages[0]
@@ -13135,8 +11558,8 @@ def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(
 
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirmation_plan():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot = _unit_bot()
+    bot.config = _unit_config({"live": {}})
     bot.exchange = "fake"
     bot.stop_signal_received = False
     bot.balance_override = None
@@ -13153,8 +11576,8 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    _set_authoritative_epoch_state(bot, epoch=0)
-    bot._authoritative_pending_confirmations = {"open_orders": 1}
+    _set_authoritative_epoch_state(bot, epoch=1)
+    bot._authoritative_pending_confirmations = {"open_orders": 2}
     bot.recent_order_cancellations = []
     bot.recent_order_executions = [
         {
@@ -13195,7 +11618,9 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     bot.log_order_action = lambda *args, **kwargs: None
     bot._reconcile_balance_after_open_orders_refresh = lambda: False
 
-    result = await bot.refresh_authoritative_state()
+    # The public refresh owner starts the cohort epoch before the staged helper.
+    bot._begin_authoritative_refresh_epoch()
+    result = await bot._refresh_authoritative_state_staged()
     blocked, details = bot._authoritative_execution_barrier_state()
 
     assert result is True
@@ -13203,7 +11628,7 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     assert bot.fetch_balance.await_count == 0
     assert bot.fetch_positions.await_count == 0
     assert bot.update_pnls.await_count == 0
-    assert blocked is False
+    assert blocked is False, details
     assert details["missing"] == []
 
 
@@ -13215,7 +11640,8 @@ async def test_staged_account_refresh_request_counts_steady_state_defers_recent_
     bot.freshness_ledger.stamp("fills", (), now_ms=120_010, epoch=0)
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
 
-    result = await bot.refresh_authoritative_state()
+    bot._begin_authoritative_refresh_epoch()
+    result = await bot._refresh_authoritative_state_staged()
 
     assert result is True
     assert counts == {
@@ -13251,7 +11677,7 @@ async def test_staged_account_refresh_prefetches_due_routine_fills_without_block
     bot.freshness_ledger.stamp("fills", (), now_ms=1_000, epoch=1)
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 61_500)
 
-    result = await bot.refresh_authoritative_state()
+    result = await bot._refresh_authoritative_state_staged()
     await asyncio.wait_for(started.wait(), timeout=1.0)
 
     assert result is True
@@ -13279,7 +11705,7 @@ async def test_staged_account_refresh_blocks_on_due_fills_when_prefetch_is_too_s
     bot.freshness_ledger.stamp("fills", (), now_ms=1_000, epoch=1)
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 4 * 60_000 + 1_000)
 
-    result = await bot.refresh_authoritative_state()
+    result = await bot._refresh_authoritative_state_staged()
 
     assert result is True
     assert bot._authoritative_refresh_plan_surfaces == ACCOUNT_SURFACES
@@ -13298,7 +11724,9 @@ async def test_staged_account_refresh_request_counts_open_orders_only_confirmati
         pending_confirmations={"open_orders": 1}
     )
 
-    result = await bot.refresh_authoritative_state()
+    # The public refresh owner starts the cohort epoch before the staged helper.
+    bot._begin_authoritative_refresh_epoch()
+    result = await bot._refresh_authoritative_state_staged()
     blocked, details = bot._authoritative_execution_barrier_state()
 
     assert result is True
@@ -13309,7 +11737,7 @@ async def test_staged_account_refresh_request_counts_open_orders_only_confirmati
         "update_pnls": 0,
     }
     assert bot._authoritative_refresh_plan_surfaces == {"open_orders"}
-    assert blocked is False
+    assert blocked is False, details
     assert details["missing"] == []
 
 
@@ -13338,7 +11766,7 @@ async def test_staged_account_refresh_request_counts_missing_self_order_escalate
         epoch=0,
     )
 
-    result = await bot.refresh_authoritative_state()
+    result = await bot._refresh_authoritative_state_staged()
 
     assert result is True
     assert counts == {
@@ -13349,7 +11777,7 @@ async def test_staged_account_refresh_request_counts_missing_self_order_escalate
     }
     assert set(bot._authoritative_pending_confirmations) == ACCOUNT_SURFACES
 
-    result = await bot.refresh_authoritative_state()
+    result = await bot._refresh_authoritative_state_staged()
 
     assert result is True
     assert counts == {
@@ -13361,33 +11789,6 @@ async def test_staged_account_refresh_request_counts_missing_self_order_escalate
     assert bot._authoritative_refresh_plan_surfaces == ACCOUNT_SURFACES
 
 
-@pytest.mark.asyncio
-async def test_run_execution_loop_propagates_fatal_bot_exception():
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = False
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def fake_refresh_authoritative_state():
-        raise FatalBotException("fatal")
-
-    bot.refresh_authoritative_state = fake_refresh_authoritative_state
-    bot.execute_to_exchange = AsyncMock()
-
-    with pytest.raises(FatalBotException, match="fatal"):
-        await bot.run_execution_loop()
-
-
 def _balance_composition_fixture(amount: str) -> dict:
     return normalize_okx_balance_composition(
         {"info": {"data": [{"details": [{"ccy": "USDT", "cashBal": amount}]}]}}
@@ -13396,7 +11797,7 @@ def _balance_composition_fixture(amount: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_composition_only_balance_change_is_durable_but_does_not_schedule_execution():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.balance_raw = 100.0
     bot.balance = 100.0
     bot._previous_balance_raw = 100.0
@@ -13431,7 +11832,7 @@ async def test_composition_only_balance_change_is_durable_but_does_not_schedule_
 
 
 def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     composition = _balance_composition_fixture("1")
     bot.quote = "USDT"
     bot.balance = 100.0
@@ -13569,214 +11970,129 @@ async def test_hyperliquid_normal_partial_fill_self_echo_invalidates_account(
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("latched", [False, True])
-async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protection(latched):
-    from live.state_refresh import AuthoritativeSurfaceUnavailable
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_missing_history_does_not_block_current_hsl_protection(mode):
+    from test_hsl_runtime import bot as make_bot, run
 
-    bot = Passivbot.__new__(Passivbot)
-    bot.positions = {}
-    bot.open_orders = {}
-    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
-    bot.config = {"live": {"risk_input_max_attempts": 10, "hsl_unavailable_grace_seconds": 120.0}}
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.balance = 100.0
-    bot.stop_signal_received = False
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.debug_mode = True
-    bot._equity_hard_stop_coin_initialized = True
-    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
-    bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
-    bot._equity_hard_stop_signal_mode = lambda: "coin"
-    bot._equity_hard_stop_coin_red_active = lambda: latched
-    bot._equity_hard_stop_check = AsyncMock(
-        side_effect=AuthoritativeSurfaceUnavailable(
-            "hsl_episode_boundaries", "ambiguous fill cohort"
-        )
-    )
-    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
-    bot._emit_live_cycle_degraded = MagicMock()
-    bot.refresh_authoritative_state = AsyncMock(return_value=True)
-    bot.prepare_planning_universe = AsyncMock()
-    bot.execute_to_exchange = AsyncMock(return_value=None)
-    bot._authoritative_execution_barrier_state = lambda: (False, {})
-    bot._staged_execution_ready_state = lambda **kwargs: (True, {})
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-
-    async def stop(*args, **kwargs):
-        bot.stop_signal_received = True
-
-    bot._sleep_unless_shutdown = AsyncMock(side_effect=stop)
-    bot._equity_hard_stop_run_coin_red_supervisor = AsyncMock(side_effect=stop)
-    assert await bot.run_execution_loop() is None
-    assert bot.prepare_planning_universe.await_count == int(not latched)
-    assert bot.execute_to_exchange.await_count == int(not latched)
-    assert bot._equity_hard_stop_run_coin_red_supervisor.await_count == int(latched)
-    bot._sleep_unless_shutdown.assert_not_awaited()
+    bot = make_bot(mode)
+    bot._pnls_manager = None
+    for _ in range(12):
+        decisions, unavailable = run(bot)
+        assert not unavailable
+        assert decisions[0].action == "panic"
+        assert "fill_capture_unknown" in decisions[0].reasons
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["current_balance", "history", "late_balance"])
-@pytest.mark.parametrize("permanent", [False, True])
-async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monkeypatch, failure, permanent):
-    from live import risk_input_recovery as recovery
-    bot = Passivbot.__new__(Passivbot)
-    bot.positions = {}
-    bot.open_orders = {}
-    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
-    bot.config = {"live": {"risk_input_max_attempts": 3, "hsl_signal_mode": "coin", "hsl_unavailable_grace_seconds": 120.0}}
-    bot.balance = bot.balance_raw = 100.0
-    bot.stop_signal_received = False
-    bot.debug_mode = True
-    bot._equity_hard_stop_enabled = lambda *a, **k: failure == "history"
-    bot._equity_hard_stop_check = AsyncMock()
-    bot._set_log_silence_watchdog_context = lambda **k: None
-    bot._maybe_log_health_summary = lambda: None
-    bot._maybe_log_unstuck_status = lambda: None
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.restart_bot_on_too_many_errors = AsyncMock()
-    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
-    bot._run_latched_hsl_supervisor_if_active = AsyncMock(return_value=False)
-    bot._authoritative_execution_barrier_state = lambda: (False, {})
-    bot._staged_execution_ready_state = lambda **kwargs: (True, {})
-    bot._handle_execution_loop_failure = AsyncMock(side_effect=AssertionError("unexpected failure"))
-    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
-    clock = [1000.0]
-    cycle = [0]
-    monkeypatch.setattr(recovery, "monotonic", lambda: clock[0])
+@pytest.mark.parametrize(
+    "failure", ["current_balance", "stale_balance", "stale_positions"]
+)
+def test_current_fact_outage_revokes_hsl_and_recovery_does_not_retain_panic(failure):
+    from test_hsl_runtime import bot as make_bot, run, NOW, SYMBOL
 
-    async def refresh():
-        cycle[0] += 1
-        bot.balance = bot.balance_raw = 0.0 if failure == "current_balance" and (permanent or cycle[0] < 4) else 100.0
-        return True
-
-    async def check():
-        if permanent or cycle[0] < 4:
-            recovery.validate_history_balances([60_000], [-1.0], current_balance=100.0)
-
-    async def sleep(seconds, *, stage):
-        clock[0] += seconds
-        if permanent and failure == "history" and cycle[0] >= 6:
-            bot.stop_signal_received = True
+    bot = make_bot()
+    assert run(bot)[0][0].action == "panic"
+    for _ in range(12):
+        if failure == "current_balance":
+            bot.get_raw_balance = lambda: 0.0
         else:
-            assert cycle[0] < 6
-
-    async def execute(*, prepare_cycle):
-        if failure == "late_balance" and (permanent or cycle[0] == 1):
-            # Models a refreshed account losing its positive balance during planning.
-            recovery.validate_balances(0.0, 0.0)
-        assert cycle[0] >= (1 if failure == "history" else 2 if failure == "late_balance" else 4)
-        return {"executed_cycle": cycle[0]}
-
-    bot.refresh_authoritative_state = refresh
-    bot._equity_hard_stop_check.side_effect = check
-    bot._sleep_unless_shutdown = AsyncMock(side_effect=sleep)
-    bot.prepare_planning_universe = AsyncMock()
-    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
-    bot.execute_to_exchange = AsyncMock(side_effect=execute)
-    if failure == "history":
-        result = await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
-        assert result == {"executed_cycle": 1}
-        assert bot._risk_input_recovery is not None
-        bot.execute_to_exchange.assert_awaited_once()
-        bot.restart_bot_on_too_many_errors.assert_not_awaited()
-        return
-    if permanent:
-        with pytest.raises(FatalBotException, match="3/3"):
-            await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
-        assert bot._risk_input_recovery.attempts == 3
-        bot.restart_bot_on_too_many_errors.assert_not_awaited()
-        return
-    result = await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
-    assert result == {"executed_cycle": 2 if failure == "late_balance" else 4}
-    assert bot.prepare_planning_universe.await_count == (2 if failure == "late_balance" else 1)
-    bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    assert bot._risk_input_recovery is None
+            surface = failure.removeprefix("stale_")
+            bot._ensure_freshness_ledger().surfaces[surface].updated_ms = NOW - 10001
+        decisions, unavailable = run(bot)
+        assert not decisions and unavailable
+    bot.get_raw_balance = lambda: 1000.0
+    for surface in ("balance", "positions"):
+        bot._ensure_freshness_ledger().stamp(surface, now_ms=NOW)
+    bot.positions[SYMBOL]["long"]["price"] = 80.0
+    decisions, unavailable = run(bot)
+    assert not unavailable
+    assert decisions[0].action == "normal"
 
 
 @pytest.mark.asyncio
-async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch):
-    from live import risk_input_recovery as recovery
-    bot = Passivbot.__new__(Passivbot)
-    bot.positions = {}
-    bot.open_orders = {}
+async def test_startup_waiting_for_ordinary_work_still_services_current_protection():
+    from live.hsl_live import Owner
+
+    release = asyncio.Event()
+    bot = SimpleNamespace(stop_signal_received=False)
+    instance = Owner(bot)
+    instance.poll_inputs = MagicMock()
+    instance.remember_position = MagicMock()
+    instance.schedule_history = MagicMock()
+    instance.schedule_sources = MagicMock()
     bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
-    bot.runtime_identity = TEST_RUNTIME_IDENTITY
-    bot._runtime_manifest_written = True
-    bot.exchange, bot.user, bot.quote = "fake", "test", "USDT"
-    bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0, "hsl_unavailable_grace_seconds": 120.0}}
-    bot.user_info = {"exchange": "fake"}
-    bot.stop_signal_received = False
-    bot.debug_mode = True
-    bot._log_startup_banner = lambda: None
-    bot._log_memory_snapshot = lambda: None
-    bot._monitor_record_event = MagicMock()
-    bot._monitor_flush_snapshot = AsyncMock()
-    bot.init_markets = AsyncMock()
-    bot.warmup_trading_ready_candles = AsyncMock()
-    bot._equity_hard_stop_enabled = lambda: True
-    bot._equity_hard_stop_signal_mode = lambda: "coin"
-    bot._equity_hard_stop_start_coin_history_replay = AsyncMock()
-    bot._equity_hard_stop_check = AsyncMock()
-    bot.start_data_maintainers = AsyncMock()
-    bot.start_background_candle_warmup = AsyncMock()
-    bot.run_execution_loop = AsyncMock()
-    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
-    bot._run_latched_hsl_supervisor_if_active = AsyncMock(return_value=False)
-    clock, refreshes = [1000.0], [0]
-    monkeypatch.setattr(recovery, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(passivbot_module, "format_approved_ignored_coins", AsyncMock())
 
-    async def refresh():
-        refreshes[0] += 1
-        assert not bot._bot_ready
-        bot.start_data_maintainers.assert_not_awaited()
-        bot.balance = bot.balance_raw = 0.0 if refreshes[0] == 1 else 100.0
-        return True
+    async def protect():
+        assert not release.is_set()
+        release.set()
 
-    async def sleep(seconds, *, stage):
-        clock[0] += seconds
+    instance.protect = AsyncMock(side_effect=protect)
 
-    bot.refresh_authoritative_state = AsyncMock(side_effect=refresh)
-    bot._sleep_unless_shutdown = AsyncMock(side_effect=sleep)
-    await bot.start_bot()
-    assert refreshes[0] == 2
-    assert bot._bot_ready
-    bot.start_data_maintainers.assert_awaited_once()
-    bot._equity_hard_stop_start_coin_history_replay.assert_awaited_once()
-    bot.run_execution_loop.assert_not_awaited()  # debug mode
+    async def preparation():
+        await release.wait()
+        return "prepared"
+
+    assert (
+        await asyncio.wait_for(instance.during_preparation(preparation()), timeout=2.0)
+        == "prepared"
+    )
+    instance.protect.assert_awaited_once()
+    bot.refresh_protective_authoritative_state.assert_awaited_once_with(
+        require_balance=True
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('source', ['direct', 'hsl_emergency'])
-@pytest.mark.parametrize('failure', ['fetched_value', 'config_value', 'runtime', 'type', 'overflow', 'fatal'])
-async def test_optional_fill_refresh_classifies_only_fetched_value_errors(source, failure):
+@pytest.mark.parametrize("source", ["direct", "hsl_emergency"])
+@pytest.mark.parametrize(
+    "failure", ["fetched_value", "config_value", "runtime", "type", "overflow", "fatal"]
+)
+async def test_optional_fill_refresh_classifies_only_fetched_value_errors(
+    source, failure
+):
     from live.state_refresh import AuthoritativeSurfaceUnavailable
     from passivbot_exceptions import FatalBotException
-    error = (FatalBotException('producer failure') if failure == 'fatal' else
-             TypeError('programming error') if failure == 'type' else
-             OverflowError('programming error') if failure == 'overflow' else
-             RuntimeError('unexpected failure') if failure == 'runtime' else
-             ValueError('malformed fetched fill'))
-    event = SimpleNamespace(timestamp=1_700_000_000_000, id='fill-1', source_ids=['fill-1'])
+
+    error = (
+        FatalBotException("producer failure")
+        if failure == "fatal"
+        else (
+            TypeError("programming error")
+            if failure == "type"
+            else (
+                OverflowError("programming error")
+                if failure == "overflow"
+                else (
+                    RuntimeError("unexpected failure")
+                    if failure == "runtime"
+                    else ValueError("malformed fetched fill")
+                )
+            )
+        )
+    )
+    event = SimpleNamespace(
+        timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"]
+    )
     manager = SimpleNamespace(
-        get_events=lambda: [event], get_history_scope=lambda: 'all',
+        get_events=lambda: [event],
+        get_history_scope=lambda: "all",
         refresh_latest=AsyncMock(side_effect=error),
     )
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.stop_signal_received = False
     bot._live_risk_uses_authoritative_pnl = lambda: True
-    bot.config = {'live': {'fills_recent_overlap_minutes': 10.0, 'pnls_max_lookback_days': 'all'}}
-    if failure == 'config_value':
-        bot.config['live']['pnls_max_lookback_days'] = 'invalid'
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": "all",
+            }
+        }
+    )
+    if failure == "config_value":
+        bot.config["live"]["pnls_max_lookback_days"] = "invalid"
     bot._pnls_manager = _with_fill_coverage_api(manager)
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: bot.config['live'][key]
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._monitor_record_event = lambda *args, **kwargs: None
     bot._monitor_record_error = lambda *args, **kwargs: None
@@ -13785,12 +12101,14 @@ async def test_optional_fill_refresh_classifies_only_fetched_value_errors(source
     bot._shutdown_requested = lambda: False
     bot.logging_level = 0
     bot._health_rate_limits = 0
-    classified = failure == 'fetched_value' and source == 'hsl_emergency'
-    with pytest.raises(AuthoritativeSurfaceUnavailable if classified else type(error)) as caught:
+    classified = failure == "fetched_value" and source == "hsl_emergency"
+    with pytest.raises(
+        AuthoritativeSurfaceUnavailable if classified else type(error)
+    ) as caught:
         await bot.update_pnls(source=source)
     if classified:
         assert caught.value.__cause__ is error
-    elif failure != 'config_value':
+    elif failure != "config_value":
         assert caught.value is error
     else:
         manager.refresh_latest.assert_not_awaited()
@@ -13798,31 +12116,56 @@ async def test_optional_fill_refresh_classifies_only_fetched_value_errors(source
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('result_kind', ['complete', 'pending', 'failed'])
-@pytest.mark.parametrize('engine', ['legacy', 'revised'])
-async def test_fill_capture_interval_records_io_even_when_pnl_readiness_is_pending(monkeypatch, result_kind, engine):
-    from test_hsl_revised_inputs import event as make_event
+@pytest.mark.parametrize("result_kind", ["complete", "pending", "failed"])
+async def test_fill_capture_interval_records_io_even_when_pnl_readiness_is_pending(
+    monkeypatch, result_kind
+):
+    from test_hsl_inputs import event as make_event
+
     clock = [1_700_000_060_000]
-    monkeypatch.setattr(passivbot_module, 'utc_ms', lambda: clock[0])
-    event = make_event(timestamp=clock[0]-60_000, id='fill', source_ids=['fill'],
-                       pnl_status='pending' if result_kind == 'pending' else 'complete')
-    bot = Passivbot.__new__(Passivbot)
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: clock[0])
+    event = make_event(
+        timestamp=clock[0] - 60_000,
+        id="fill",
+        source_ids=["fill"],
+        pnl_status="pending" if result_kind == "pending" else "complete",
+    )
+    bot = _unit_bot()
+
     async def remote(**kwargs):
-        assert bot._hsl_revised_fill_capture_interval is None
+        assert bot._hsl_fill_capture_interval is None
         clock[0] += 75
-        if result_kind == 'failed':
-            raise ValueError('synthetic invalid fill payload')
-    manager = SimpleNamespace(get_events=lambda **kwargs: [event], get_history_scope=lambda: 'all',
-                              refresh=AsyncMock(), refresh_latest=AsyncMock(side_effect=remote))
+        if result_kind == "failed":
+            raise ValueError("synthetic invalid fill payload")
+
+    manager = SimpleNamespace(
+        get_events=lambda **kwargs: [event],
+        get_history_scope=lambda: "all",
+        refresh=AsyncMock(),
+        refresh_latest=AsyncMock(side_effect=remote),
+    )
     bot._pnls_manager = _with_fill_coverage_api(manager)
     bot.stop_signal_received = False
-    bot.config = {'live': {'fills_recent_overlap_minutes': 10., 'pnls_max_lookback_days': 1., 'hsl_engine': engine}}
+    bot.config = _unit_config(
+        {
+            "live": {
+                "fills_recent_overlap_minutes": 10.0,
+                "pnls_max_lookback_days": 1.0,
+                "hsl_signal_mode": "coin",
+            }
+        }
+    )
+    bot.config["bot"]["long"]["hsl"].update(
+        enabled=True, restart_after_red_policy="always"
+    )
     bot.c_mults = {event.symbol: event.c_mult}
-    bot.live_value = lambda key: bot.config['live'][key]
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: clock[0]
     bot._live_risk_uses_authoritative_pnl = lambda: True
+
     async def local_initialization():
         clock[0] += 50
+
     bot.init_pnls = AsyncMock(side_effect=local_initialization)
     bot._log_new_fill_events = lambda *a: None
     bot._monitor_record_event = lambda *a, **kw: None
@@ -13830,79 +12173,114 @@ async def test_fill_capture_interval_records_io_even_when_pnl_readiness_is_pendi
     bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
     bot.logging_level = 0
     bot._health_rate_limits = 0
-    bot._hsl_revised_fill_capture_interval = (123, 456)
-    if result_kind == 'failed':
-        with pytest.raises(ValueError, match='synthetic invalid'):
+    bot._hsl_fill_capture_interval = (123, 456)
+    if result_kind == "failed":
+        with pytest.raises(ValueError, match="synthetic invalid"):
             await bot.update_pnls()
-        assert bot._hsl_revised_fill_capture_interval is None
+        assert bot._hsl_fill_capture_interval is None
     else:
-        assert await bot.update_pnls() is (result_kind == 'complete')
-        assert bot._hsl_revised_fill_capture_interval == (1_700_000_060_050, 1_700_000_060_125)
-        if engine == 'revised':
-            observed = bot._hsl_revised_fill_observation
-            assert observed.manager is bot._pnls_manager
-            assert observed.interval == bot._hsl_revised_fill_capture_interval
-            assert observed.tape.pairs[0].fills[0].delta == event.qty
-            from dataclasses import replace
-            event = replace(event, qty=999.)
-            assert observed.tape.pairs[0].fills[0].delta != event.qty
+        assert await bot.update_pnls() is (result_kind == "complete")
+        assert bot._hsl_fill_capture_interval == (1_700_000_060_050, 1_700_000_060_125)
+        observed = bot._hsl_fill_observation
+        assert observed.manager is bot._pnls_manager
+        assert observed.interval == bot._hsl_fill_capture_interval
+        assert observed.tape.pairs[0].fills[0].delta == event.qty
+        from dataclasses import replace
+
+        event = replace(event, qty=999.0)
+        assert observed.tape.pairs[0].fills[0].delta != event.qty
 
 
 def test_empty_forager_selection_is_not_repeated_periodically(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._forager_selection_info_interval_ms = 1000
     bot._forager_selection_debug_interval_ms = 1000
     now = [1000]
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
-    result = {"diagnostics": {"forager_selections": [{
-        "pside": "short", "slots_to_fill": 1, "score_hysteresis_pct": .02,
-        "selected_symbol_indices": [], "incumbent_symbol_indices": [],
-        "top_scores": [], "hysteresis_events": []}]}}
+    result = {
+        "diagnostics": {
+            "forager_selections": [
+                {
+                    "pside": "short",
+                    "slots_to_fill": 1,
+                    "score_hysteresis_pct": 0.02,
+                    "selected_symbol_indices": [],
+                    "incumbent_symbol_indices": [],
+                    "top_scores": [],
+                    "hysteresis_events": [],
+                }
+            ]
+        }
+    }
     with caplog.at_level(logging.INFO):
         bot._log_forager_selection_diagnostics(result, {})
         now[0] += 1001
         bot._log_forager_selection_diagnostics(result, {})
-    assert len([r for r in caplog.records if '[forager] short selection' in r.message]) == 1
+    assert (
+        len([r for r in caplog.records if "[forager] short selection" in r.message])
+        == 1
+    )
 
 
 def test_self_echo_console_demotion_preserves_required_refresh(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot.execution_scheduled = False
     _set_authoritative_epoch_state(bot, epoch=0)
     now_ms = 1_000_000
     import utils
-    monkeypatch.setattr(utils, 'utc_ms', lambda: now_ms)
-    monkeypatch.setattr(passivbot_module, 'utc_ms', lambda: now_ms)
-    order = dict(id='local', symbol='BTC/USDT:USDT', side='buy', position_side='long',
-                 price=100., qty=1., status='open',
-                 _pb_order_update_requires_authoritative_refresh=True)
-    recent = [{**order, 'execution_timestamp': now_ms}]
+
+    monkeypatch.setattr(utils, "utc_ms", lambda: now_ms)
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
+    order = dict(
+        id="local",
+        symbol="BTC/USDT:USDT",
+        side="buy",
+        position_side="long",
+        price=100.0,
+        qty=1.0,
+        status="open",
+        _pb_order_update_requires_authoritative_refresh=True,
+    )
+    recent = [{**order, "execution_timestamp": now_ms}]
     bot.recent_order_executions = recent
     with caplog.at_level(logging.DEBUG):
         bot.handle_order_update([order])
-    lines = [r for r in caplog.records if '[ws]' in r.message]
+    lines = [r for r in caplog.records if "[ws]" in r.message]
     assert len(lines) == 1 and lines[0].levelno == logging.DEBUG
-    assert set(bot._authoritative_pending_confirmations) == {'balance', 'positions', 'open_orders', 'fills'}
+    assert set(bot._authoritative_pending_confirmations) == {
+        "balance",
+        "positions",
+        "open_orders",
+        "fills",
+    }
     assert bot.execution_scheduled is True
     assert bot.recent_order_executions is recent
 
 
 def test_forager_selection_becoming_empty_is_visible_once(monkeypatch, caplog):
-    bot = Passivbot.__new__(Passivbot)
+    bot = _unit_bot()
     bot._forager_selection_info_interval_ms = 1000
     bot._forager_selection_debug_interval_ms = 1000
     now = [1000]
-    monkeypatch.setattr(passivbot_module, 'utc_ms', lambda: now[0])
-    selection = dict(pside='long', slots_to_fill=1, selected_symbol_indices=[0],
-                     incumbent_symbol_indices=[], top_scores=[], hysteresis_events=[])
-    result = {'diagnostics': {'forager_selections': [selection]}}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
+    selection = dict(
+        pside="long",
+        slots_to_fill=1,
+        selected_symbol_indices=[0],
+        incumbent_symbol_indices=[],
+        top_scores=[],
+        hysteresis_events=[],
+    )
+    result = {"diagnostics": {"forager_selections": [selection]}}
     with caplog.at_level(logging.INFO):
-        bot._log_forager_selection_diagnostics(result, {0: 'BTC/USDT:USDT'})
-        selection['selected_symbol_indices'] = []
+        bot._log_forager_selection_diagnostics(result, {0: "BTC/USDT:USDT"})
+        selection["selected_symbol_indices"] = []
         now[0] += 1
         bot._log_forager_selection_diagnostics(result, {})
         now[0] += 1001
         bot._log_forager_selection_diagnostics(result, {})
-    lines = [r.message for r in caplog.records if '[forager] long selection' in r.message]
+    lines = [
+        r.message for r in caplog.records if "[forager] long selection" in r.message
+    ]
     assert len(lines) == 2
-    assert 'selected=-' in lines[1] and 'reason=selection_changed' in lines[1]
+    assert "selected=-" in lines[1] and "reason=selection_changed" in lines[1]

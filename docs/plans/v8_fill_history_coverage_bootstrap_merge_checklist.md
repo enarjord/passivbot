@@ -24,8 +24,6 @@ After pulling the latest hardening branch and restarting bots on vps5:
    not restart on missing close/required EMA.
 5. Explicit normal symbols and held/open-order symbols still fail loudly or use
    their documented fallback path.
-6. HSL startup/replay produces deterministic terminal failures for real contract
-   violations, not restart storms.
 7. Panic/protective actions remain possible when their own account-critical
    surfaces are fresh.
 8. Console is noisy but not dominated by per-span recovery spam at INFO.
@@ -44,8 +42,6 @@ These do not block the merge by themselves:
   fallback.
 - EMA unavailable summaries for flat forager candidates when they mark symbols
   nontradable for the current cycle.
-- Gateio public OHLCV recent-window clipping warnings during HSL replay, if
-  replay completes or fails deterministically according to contract.
 - High CPU on the small VPS, if no new tight restart loop is present. This is a
   logging/observability and deployment-sizing concern for the next branch.
 

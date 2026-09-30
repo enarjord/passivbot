@@ -17,7 +17,6 @@ from .scoring import extract_objective_specs
 from .schema import get_template_config
 from .tree_ops import add_missing_keys_recursively, remove_unused_keys_recursively
 
-
 Path = tuple[str, ...]
 
 PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
@@ -26,7 +25,6 @@ PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
     ("optimize", "fixed_runtime_overrides"),
 }
 BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
-    "hsl_engine",
     "fee_pct_fallback",
     "fee_pct_sanity_abs_max",
     "market_orders_allowed",
@@ -55,6 +53,7 @@ def reject_backtest_inherited_live_fields(result: dict) -> None:
             f"set {'the value' if len(invalid) == 1 else 'these values'} under {live_joined} instead"
         )
 
+
 def hydrate_missing_template_fields(
     template: dict,
     result: dict,
@@ -71,7 +70,9 @@ def hydrate_missing_template_fields(
     )
 
 
-def seed_missing_compatibility_sections(template: dict, result: dict, *, tracker=None) -> None:
+def seed_missing_compatibility_sections(
+    template: dict, result: dict, *, tracker=None
+) -> None:
     for pside in ("long", "short"):
         if pside not in result["bot"]:
             seeded = deepcopy(template["bot"][pside])
@@ -91,7 +92,9 @@ def seed_missing_compatibility_sections(template: dict, result: dict, *, tracker
             if tracker is not None:
                 tracker.add(["live", key], seeded)
             continue
-        if isinstance(result["live"][key], dict) and set(result["live"][key]).issubset({"long", "short"}):
+        if isinstance(result["live"][key], dict) and set(result["live"][key]).issubset(
+            {"long", "short"}
+        ):
             for pside in ("long", "short"):
                 if pside not in result["live"][key]:
                     result["live"][key][pside] = []
@@ -120,10 +123,12 @@ def sync_with_template(
             if not had_key:
                 tracker.add(["live", "base_config_path"], base_config_path)
             elif existing_base != base_config_path:
-                tracker.update(["live", "base_config_path"], existing_base, base_config_path)
+                tracker.update(
+                    ["live", "base_config_path"], existing_base, base_config_path
+                )
     template_with_extras = deepcopy(template)
-    # Keep only explicitly supplied revised portfolio authority and its search bounds.
-    if result["live"].get("hsl_engine") == "revised":
+    # Keep only explicitly supplied hsl portfolio authority and its search bounds.
+    if True:
         for section in (("bot",), ("optimize", "bounds")):
             target, source = template_with_extras, result
             for key in section:
@@ -143,7 +148,9 @@ def sync_with_template(
         preserve=TEMPLATE_SYNC_PRESERVE_PATHS + tuple(preserved_live_optimize_bounds),
         tracker=tracker,
     )
-    remove_unused_keys_recursively(template_with_extras["bot"], result["bot"], verbose=verbose, tracker=tracker)
+    remove_unused_keys_recursively(
+        template_with_extras["bot"], result["bot"], verbose=verbose, tracker=tracker
+    )
     remove_unused_keys_recursively(
         template_with_extras["optimize"]["bounds"],
         result["optimize"]["bounds"],
@@ -186,7 +193,9 @@ def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
     return normalized
 
 
-def preserve_coin_sources(result: dict, *, live_sources_input: Optional[Dict[str, Any]] = None) -> None:
+def preserve_coin_sources(
+    result: dict, *, live_sources_input: Optional[Dict[str, Any]] = None
+) -> None:
     sources = result.setdefault("_coins_sources", {})
     live = result.get("live", {})
     for key in ("approved_coins", "ignored_coins"):
@@ -227,7 +236,9 @@ def apply_non_live_adjustments(
             result["live"].get("filter_by_min_effective_cost", False)
         )
 
-    result["optimize"]["scoring"] = [spec.to_config() for spec in extract_objective_specs(result)]
+    result["optimize"]["scoring"] = [
+        spec.to_config() for spec in extract_objective_specs(result)
+    ]
     backend = str(result["optimize"].get("backend", "pymoo") or "pymoo").strip().lower()
     if backend not in {"deap", "gpu", "pymoo"}:
         raise ValueError(
@@ -287,5 +298,5 @@ def apply_non_live_adjustments(
     sort_optimize_bounds_in_place(
         result["optimize"]["bounds"],
         strategy_kind=result.get("live", {}).get("strategy_kind"),
-        portfolio_hsl=result["live"].get("hsl_engine") == "revised" and result["live"].get("hsl_signal_mode") == "unified",
+        portfolio_hsl=result["live"].get("hsl_signal_mode") == "unified",
     )

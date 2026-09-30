@@ -9,7 +9,7 @@ import msgpack
 import numpy as np
 import pytest
 
-from test_hsl_revised_offline_runtime import deny_network, offline_cli_config, runtime_inputs
+from test_hsl_offline_runtime import deny_network, offline_cli_config, runtime_inputs
 from test_simulation_offline import START, SYMBOL
 
 torch = pytest.importorskip("torch")
@@ -39,7 +39,11 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
         # These different-date scenarios still go through compatibility checks.
         assert kwargs["batch_compatible_scenarios"] is True
         suite_calls.append(
-            (len(candidates), tuple(kwargs["screening_scenarios"]), kwargs["evaluation_stage"])
+            (
+                len(candidates),
+                tuple(kwargs["screening_scenarios"]),
+                kwargs["evaluation_stage"],
+            )
         )
         return original_evaluate(suite, proxies, candidates, **kwargs)
 
@@ -57,8 +61,11 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
         suite_enabled=True,
         limit_order_fill_buffer_pct=0.0001,
         scenarios=[
-            {"label": "recent", "start_date": "2024-01-02",
-             "overrides": {"backtest.limit_order_fill_buffer_pct": 0.0002}},
+            {
+                "label": "recent",
+                "start_date": "2024-01-02",
+                "overrides": {"backtest.limit_order_fill_buffer_pct": 0.0002},
+            },
             {"label": "full", "start_date": "2024-01-01"},
         ],
     )
@@ -66,15 +73,29 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     cfg["bot"]["short"]["risk"].update(n_positions=0, total_wallet_exposure_limit=0.0)
     cfg["live"]["strategy_kind"] = "trailing_martingale"
     cfg["optimize"].update(
-        backend="gpu", iters=32, n_cpus=1, population_size=8,
-        scoring=[{"metric": "adg_usd", "goal": "max"}], limits=[], seed=42,
-        enable_overrides=[], compress_results_file=False, write_all_results=True,
+        backend="gpu",
+        iters=32,
+        n_cpus=1,
+        population_size=8,
+        scoring=[{"metric": "adg_usd", "goal": "max"}],
+        limits=[],
+        seed=42,
+        enable_overrides=[],
+        compress_results_file=False,
+        write_all_results=True,
     )
     cfg["optimize"]["gpu"].update(
-        population_size=8, batch_size=8, exact_workers=1,
-        max_pending_exact=2, validate_per_generation=2, drift_probes=1,
-        screening=dict(scenarios=["recent"] if screening else [],
-                       survival_fraction=0.5, min_survivors=2),
+        population_size=8,
+        batch_size=8,
+        exact_workers=1,
+        max_pending_exact=2,
+        validate_per_generation=2,
+        drift_probes=1,
+        screening=dict(
+            scenarios=["recent"] if screening else [],
+            survival_fraction=0.5,
+            min_survivors=2,
+        ),
         successive_halving={"enabled": False},
     )
     shape = build_optimization_shape(cfg)
@@ -82,7 +103,9 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
         value = cfg
         for part in key_path:
             value = value[part]
-        set_flat_optimize_bound(cfg["optimize"]["bounds"], "trailing_martingale", key, [value, value])
+        set_flat_optimize_bound(
+            cfg["optimize"]["bounds"], "trailing_martingale", key, [value, value]
+        )
     cfg["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.01, 0.2]
 
     # Spawned exact workers deny IP networking as well; local Unix IPC is allowed.
@@ -96,18 +119,27 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
         "    return _connect(self,address)\n"
         "socket.socket.connect=connect\nsocket.getaddrinfo=denied\n"
     )
-    monkeypatch.setenv("PYTHONPATH", str(guard) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    monkeypatch.setenv(
+        "PYTHONPATH", str(guard) + os.pathsep + os.environ.get("PYTHONPATH", "")
+    )
     path = tmp_path / "config.json"
     path.write_text(json.dumps(cfg))
     monkeypatch.setattr(
-        sys, "argv", ["optimize", str(path), "--suite", "y",
-                      "--optimize.gpu.screening.scenarios",
-                      json.dumps(cfg["optimize"]["gpu"]["screening"]["scenarios"])]
+        sys,
+        "argv",
+        [
+            "optimize",
+            str(path),
+            "--suite",
+            "y",
+            "--optimize.gpu.screening.scenarios",
+            json.dumps(cfg["optimize"]["gpu"]["screening"]["scenarios"]),
+        ],
     )
     with pytest.raises(SystemExit) as finished:
         await main()
     assert finished.value.code == 0
-    artifact, = (tmp_path / "optimize_results").rglob("all_results.bin")
+    (artifact,) = (tmp_path / "optimize_results").rglob("all_results.bin")
     with artifact.open("rb") as stream:
         records = list(msgpack.Unpacker(stream, raw=False))
     assert records
@@ -126,15 +158,17 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     assert state["generation"] > 0
     assert state["exact_done"] >= 32
     assert state["halt_reason"] is None
-    assert state["optimizer_evaluation_contract"]["live"]["hsl_engine"] == "revised"
-    assert all(record["live"]["hsl_engine"] == "revised" for record in records)
+    assert "hsl_engine" not in state["optimizer_evaluation_contract"]["live"]
+    assert all("hsl_engine" not in record["live"] for record in records)
     assert "successive_halving" not in records[0]["optimize"]["gpu"]
 
     before = artifact.stat().st_size
     cfg["optimize"]["iters"] = 48
     path.write_text(json.dumps(cfg))
     monkeypatch.setattr(
-        sys, "argv", ["optimize", str(path), "--suite", "y", "--resume", str(artifact.parent)]
+        sys,
+        "argv",
+        ["optimize", str(path), "--suite", "y", "--resume", str(artifact.parent)],
     )
     with pytest.raises(SystemExit) as finished:
         await main()
@@ -142,20 +176,29 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     assert artifact.stat().st_size > before
     resumed = pickle.loads(checkpoint.read_bytes())
     assert resumed["exact_done"] > state["exact_done"]
-    assert resumed["optimizer_evaluation_contract"] == state["optimizer_evaluation_contract"]
+    assert (
+        resumed["optimizer_evaluation_contract"]
+        == state["optimizer_evaluation_contract"]
+    )
 
     # Changed fill assumptions cannot reuse the old search state, either at
     # the base level or inside a suite scenario.
     for changed in [cfg["backtest"], cfg["backtest"]["scenarios"][0]["overrides"]]:
-        key = ("limit_order_fill_buffer_pct" if changed is cfg["backtest"]
-               else "backtest.limit_order_fill_buffer_pct")
+        key = (
+            "limit_order_fill_buffer_pct"
+            if changed is cfg["backtest"]
+            else "backtest.limit_order_fill_buffer_pct"
+        )
         original = changed[key]
         changed[key] = 0.0015
         path.write_text(json.dumps(cfg))
         with pytest.raises(SystemExit) as rejected:
             await main()
         assert rejected.value.code == 1
-        assert "Cannot resume because critical parameters have changed" in capsys.readouterr().err
+        assert (
+            "Cannot resume because critical parameters have changed"
+            in capsys.readouterr().err
+        )
         changed[key] = original
 
     # A different screening set cannot reuse the old search state.
@@ -164,4 +207,7 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     with pytest.raises(SystemExit) as rejected:
         await main()
     assert rejected.value.code == 1
-    assert "Cannot resume because critical parameters have changed" in capsys.readouterr().err
+    assert (
+        "Cannot resume because critical parameters have changed"
+        in capsys.readouterr().err
+    )
