@@ -13,8 +13,10 @@ launch command and intervention scope.
    outside the public repository.
 2. Validate configuration through the canonical loader. Coin/pside policies belong under
    `bot.long.hsl` and `bot.short.hsl`; unified requires an explicitly supplied `bot.hsl` block.
-   Confirm the chosen restart and manual-intervention policies, the 1–90 day lookback, the raw
-   balance/coin-slot budget and fractional EMA span. See [configuration migration](configuration.md#experimental-revised-hsl-configuration).
+   Confirm the chosen restart policy, the 1–90 day lookback, the raw
+   balance/coin-slot budget and fractional EMA span. Renewed exposure clears cooldown; there
+   is no revised manual-intervention policy. The historical curve anchors to the scope
+   budget plus current UPNL, not to balance alone. See [configuration migration](configuration.md#experimental-revised-hsl-configuration).
 3. Run a representative offline backtest and the fake runner using the intended mode, order type
    and scope count. Include both a panic and an ordinary-entry path. Verify the rebuilt extension,
    effective config, native scope diagnostics and resulting orders, not only process exit status.
@@ -77,4 +79,6 @@ resulting engine, exposure, orders and HSL readiness after restart.
 The operator can accept the live trial after the applicable cases show the intended exchange
 behavior, scope scheduling, source freshness, restart reconstruction and diagnostics. A successful
 trial does not switch other bots or remove legacy code. Default replacement and legacy cleanup
-remain a separate reviewed change after live validation.
+follow the [sole-engine migration plan](plans/hsl_sole_engine_migration.md). The rollback
+command above applies only while the installed version still contains legacy HSL; after
+removal, rollback requires the previous reviewed release and a compatible configuration.

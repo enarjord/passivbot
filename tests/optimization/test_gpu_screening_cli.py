@@ -56,8 +56,10 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     cfg["backtest"].update(
         end_date="2024-01-03",
         suite_enabled=True,
+        limit_order_fill_buffer_pct=0.0001,
         scenarios=[
-            {"label": "recent", "start_date": "2024-01-02"},
+            {"label": "recent", "start_date": "2024-01-02",
+             "overrides": {"backtest.limit_order_fill_buffer_pct": 0.0002}},
             {"label": "full", "start_date": "2024-01-01"},
         ],
     )
@@ -151,6 +153,20 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     resumed = pickle.loads(checkpoint.read_bytes())
     assert resumed["exact_done"] > state["exact_done"]
     assert resumed["optimizer_evaluation_contract"] == state["optimizer_evaluation_contract"]
+
+    # Changed fill assumptions cannot reuse the old search state, either at
+    # the base level or inside a suite scenario.
+    for changed in [cfg["backtest"], cfg["backtest"]["scenarios"][0]["overrides"]]:
+        key = ("limit_order_fill_buffer_pct" if changed is cfg["backtest"]
+               else "backtest.limit_order_fill_buffer_pct")
+        original = changed[key]
+        changed[key] = 0.0015
+        path.write_text(json.dumps(cfg))
+        with pytest.raises(SystemExit) as rejected:
+            await main()
+        assert rejected.value.code == 1
+        assert "Cannot resume because critical parameters have changed" in capsys.readouterr().err
+        changed[key] = original
 
     # A different screening set cannot reuse the old search state.
     cfg["optimize"]["gpu"]["screening"]["scenarios"] = ["full"]
