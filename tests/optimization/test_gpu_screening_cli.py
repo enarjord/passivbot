@@ -21,8 +21,9 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("screening", [False, True])
+@pytest.mark.parametrize("auto_batch", [False, True])
 async def test_gpu_suite_cli_dates_exact_validation_and_resume(
-    tmp_path, monkeypatch, capsys, screening
+    tmp_path, monkeypatch, capsys, screening, auto_batch
 ):
     from optimize import main
     from optimization.backends import gpu_backend
@@ -77,6 +78,12 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
                        survival_fraction=0.5, min_survivors=2),
         successive_halving={"enabled": False},
     )
+    if auto_batch:
+        from optimization.gpu import autotune
+        # Exercise in-flight decisions within this bounded integration fixture.
+        monkeypatch.setattr(autotune, "WINDOW", 2)
+        monkeypatch.setattr(autotune, "MIN_SECONDS", 0.0)
+        cfg["optimize"]["gpu"]["batch_size"] = "auto"
     shape = build_optimization_shape(cfg)
     for key, key_path in shape.key_paths:
         value = cfg
@@ -114,6 +121,9 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     checkpoint = artifact.parent / "checkpoint.pkl"
     state = pickle.loads(checkpoint.read_bytes())
     log_output = capsys.readouterr().err
+    if auto_batch:
+        assert "GPU auto-tune enabled" in log_output
+        assert "GPU auto-tune trial" in log_output
     assert "Removed disabled legacy" in log_output
     if screening:
         assert "stages=screening:8,full:4" in log_output

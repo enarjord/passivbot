@@ -2146,6 +2146,11 @@ def add_config_arguments(
     return registered_keys
 
 
+def _gpu_sizing_cli_value(value):
+    """Keep automatic intent when overriding an explicitly numeric input config."""
+    return "auto" if value.strip().lower() == "auto" else float(value)
+
+
 def add_arguments_recursively(
     parser,
     config,
@@ -2247,6 +2252,12 @@ def add_arguments_recursively(
             elif "scoring" in full_name:
                 type_ = comma_separated_values
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
+            elif full_name in {
+                "optimize.gpu.batch_size",
+                "optimize.gpu.population_size",
+                "optimize.gpu.max_dispatch_candidate_bars",
+            }:
+                type_ = _gpu_sizing_cli_value
             elif full_name == "optimize.gpu.screening.scenarios":
                 type_ = parse_screening_scenarios
                 appendix = "Comma-separated labels or JSON array; [] disables screening."
