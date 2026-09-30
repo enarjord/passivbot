@@ -58,8 +58,11 @@ from optimization.problem import (
 )
 from utils import to_standard_exchange_name
 
+from optimization.gpu.autotune import configure_batch_tuning, is_auto
+
 
 GPU_DEFAULTS = {
+    "tuning_mode": "auto",
     "auto_lean_parallelism": True,
     "population_size": 1024,
     "batch_size": 4096,
@@ -1184,10 +1187,17 @@ def _resolve_options(config: dict) -> dict:
     for key, default in GPU_DEFAULTS.items():
         if key in nested_options:
             continue
+        if key in {
+            "population_size", "batch_size", "max_dispatch_candidate_bars"
+        } and is_auto((configured or {}).get(key)):
+            continue
         if key in (configured or {}) and configured[key] is not None:
             options[key] = (float if key == "drift_rank_halt" else type(default))(
                 configured[key]
             )
+    options["tuning_mode"] = options["tuning_mode"].strip().lower()
+    if options["tuning_mode"] not in {"auto", "refresh", "off"}:
+        raise ValueError("optimize.gpu.tuning_mode must be auto, refresh, or off")
     seed_bootstrap = dict(GPU_DEFAULTS["seed_bootstrap"])
     configured_seed_bootstrap = (configured or {}).get("seed_bootstrap")
     if configured_seed_bootstrap is not None and not isinstance(
@@ -1462,7 +1472,7 @@ def _apply_gpu_lean_tm_parallelism_defaults(
     if any(options[key] != GPU_DEFAULTS[key] for key in sizing_keys):
         return False
     configured_gpu = config.get("optimize", {}).get("gpu", {}) or {}
-    if any(configured_gpu.get(key) is not None for key in sizing_keys):
+    if any(not is_auto(configured_gpu.get(key)) for key in sizing_keys):
         return False
     if not _gpu_lean_tm_parallelism_eligible(
         config,
@@ -4945,6 +4955,8 @@ def run_backend(
 
         def evaluate_proxy(candidates, *, screening=False):
             return proxy.evaluate(candidates)
+
+    configure_batch_tuning(profile_proxies, config, options)
 
     def proxy_fitness(metric_rows: list[dict]) -> tuple[np.ndarray, np.ndarray]:
         objectives = np.empty((len(metric_rows), len(specs)), dtype=np.float64)

@@ -514,6 +514,7 @@ def get_template_config():
                     "population_size": None,
                     "seed": None,
                     "gpu": {
+                        "tuning_mode": "auto",
                         "auto_lean_parallelism": True,
                         "batch_size": None,
                         "max_dispatch_candidate_bars": None,

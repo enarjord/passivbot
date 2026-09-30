@@ -776,6 +776,7 @@ GPU-specific settings live under `optimize.gpu`:
   "optimize": {
     "backend": "gpu",
     "gpu": {
+      "tuning_mode": "auto",
       "auto_lean_parallelism": true,
       "batch_size": null,
       "max_dispatch_candidate_bars": null,
@@ -820,6 +821,37 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   Set `auto_lean_parallelism` to `false`, or set any of `population_size`, `batch_size`, or
   `max_dispatch_candidate_bars` to a number (including the ordinary default number), to retain the
   configured sizing unchanged.
+- `tuning_mode` controls continuous GPU candidate-batch tuning: `auto` (default) starts from
+  compatible local measurements when available; `refresh` ignores saved measurements and learns
+  anew; `off` uses the ordinary fixed dispatch sizing without reading or writing tuning evidence.
+  Tuning activates only when `batch_size` is omitted, `null`, or `"auto"`. An explicit numeric
+  batch size retains its existing behavior and safety caps. `population_size` and
+  `max_dispatch_candidate_bars` also accept `"auto"` as an alias for their existing `null`
+  defaults; they do not continuously change in this first implementation.
+  There is no separate calibration run. Initial automatic batches contain at most 128 candidates,
+  further limited by the existing dispatch plan and actual candidate demand. Completed screening
+  work supplies timing evidence, including packing, replay, reductions, and host results, without
+  extra GPU synchronization. Candidate order and evaluation coverage are preserved; proxy metric
+  reductions may differ at floating-point roundoff across batch shapes. Exact Rust validation
+  and all proxy/exact drift checks remain authoritative.
+  Each decision requires a rolling window of 24 full batches and at least 30 seconds of accumulated
+  measured work since the preceding decision. The first batch at each new size and partial final
+  batches are excluded. The controller uses median throughput, trials at most a doubling/halving
+  within the original dispatch ceiling, requires a 5% gain for larger batches, and accepts smaller
+  ones within 2% of previous throughput. It waits one evidence window after acceptance and three
+  after rejection before considering another trial. Available device-memory headroom gates growth.
+  This reduces reactions to short stalls; it does not guarantee an optimal setting or diagnose
+  thermal throttling. Early termination and changing candidate costs can still affect timings.
+  Atomic, bounded local records under `caches/gpu_autotune/` retain stable batch sizes and measured
+  throughput. Identity includes hardware/runtime/kernel implementation, prepared workload shape,
+  fixed parameters, metrics, search bounds, CPU worker setting, and suite/screening context. Equal-
+  length new candle data can reuse evidence; history/coin-count or feature changes start separate
+  classes. Cold compilation and allocations are not cached results. Cache corruption or I/O failure
+  logs a warning and leaves optimization running with conservative/in-memory sizing.
+  Tuning state is advisory and separate from search checkpoints: resume relearns or reuses local
+  measurements without changing population, validation allocation, candidate RNG, or drift policy.
+  CPU worker counts, exact queue limits, validations per generation, and dispatch work envelopes
+  retain their existing resolution in this version. Existing Apple M3 population pre-sizing remains.
 - `batch_size` is the requested upper bound on candidates per MPS dispatch. Because Apple Silicon
   shares the GPU with WindowServer, the backend transparently splits a batch when its
   candidates-by-candles-by-coins-by-enabled-sides workload would make one Metal command buffer too
