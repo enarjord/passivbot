@@ -16,6 +16,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
@@ -30,6 +31,7 @@ from optimization.gpu.model import (
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
@@ -459,6 +461,8 @@ def _scale_directional_minute_parameters(
     *,
     sides: int,
     interval_minutes: float,
+    ranking_coin_counts: tuple[int, ...] | None = None,
+    dynamic_wel_by_tradability: bool = True,
 ) -> np.ndarray:
     """Convert minute-denominated directional inputs to candle periods.
 
@@ -519,9 +523,17 @@ def _scale_directional_minute_parameters(
                 "GPU adaptive cooldown requires finite nonnegative weights/floor and a valid bounded ceiling"
             )
         constant = (ceiling >= 0.0) & (np.maximum(base, floor) >= ceiling)
-        rms = ((adverse > 0.0) & ~constant) | (
-            (score > 0.0) if "n_positions" in keys else False
-        )
+        ranking = np.zeros(len(scaled), dtype=bool)
+        if "n_positions" in keys:
+            ranking = score > 0.0
+            if ranking_coin_counts is not None:
+                count = ranking_coin_counts[side_index]
+                slots = np.rint(scaled[:, offset + keys.index("n_positions")])
+                ranking &= (count > 1) & (dynamic_wel_by_tradability | (count > slots))
+                # Match Rust's dormant scoring policy. Aggregated candles must
+                # never update a one-minute indicator that cannot be consumed.
+                scaled[~ranking, offset + keys.index("forager_score_weights_unilateralness")] = 0.0
+        rms = ((adverse > 0.0) & ~constant) | ranking
         rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit")] > 0.0
         if np.any(rms) and interval_minutes != 1.0:
             raise ValueError("GPU RMS directionality requires one-minute candles")
@@ -2216,6 +2228,10 @@ class MpsEmaAnchorMulticoinRunner:
                 f"({self.n_coins}, {self.coin_override_cols}), "
                 f"got {coin_overrides.shape}"
             )
+        wel_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+                      if self.coin_override_label == "Trailing Martingale"
+                      else EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN)
+        self.rms_ranking_coin_counts = (int(np.count_nonzero(coin_overrides[:, wel_column] != 0.0)),)
         self.coin_hsl_may_enable = True
         if self.coin_override_label == "EMA":
             hsl_overrides = coin_overrides[
@@ -2317,6 +2333,8 @@ class MpsEmaAnchorMulticoinRunner:
                 EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
                 sides=1,
                 interval_minutes=self.interval_minutes,
+                ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+                dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
             ),
             dtype=np.float32,
         )
@@ -2771,6 +2789,9 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 np.isfinite(short_hsl_overrides) & (short_hsl_overrides > 0.5)
             )
         )
+        self.rms_ranking_coin_counts += (int(np.count_nonzero(
+            short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+        )),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
@@ -2820,6 +2841,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
                 sides=2,
                 interval_minutes=self.interval_minutes,
+                ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+                dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
             ),
             dtype=np.float32,
         )
@@ -3023,6 +3046,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
             sides=1,
             interval_minutes=self.interval_minutes,
+            ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+            dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
         )
         return _pack_tm_parameter_matrix(
             scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=1
@@ -3281,6 +3306,9 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
                 "expected fused multicoin Trailing Martingale short override "
                 f"matrix shaped {expected_shape}, got {short_coin_overrides.shape}"
             )
+        self.rms_ranking_coin_counts += (int(np.count_nonzero(
+            short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+        )),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
@@ -3324,6 +3352,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
             sides=2,
             interval_minutes=self.interval_minutes,
+            ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+            dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
         )
         return _pack_tm_parameter_matrix(
             scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=2

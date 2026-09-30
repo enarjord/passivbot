@@ -8233,3 +8233,29 @@ def test_proxy_forager_roundtrip_retains_unsearched_unilateralness_weight():
         path="proxy weights",
     )
     assert actual == pytest.approx(exact["bot"]["long"]["forager"]["score_weights"])
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_gpu_optional_adaptive_parameters_keep_configured_values_without_bounds(strategy):
+    from config.schema import get_template_config
+    from optimization.backends.gpu_backend import (
+        GPU_STRATEGY_BOUND_MAPS, _gpu_fixed_adaptive_parameters,
+    )
+
+    cfg = get_template_config()
+    cfg["bot"]["long"]["entry_cooldown"].update(
+        min_duration_minutes=2.0, max_duration_minutes=90.0,
+        weights_minutes={"exposure_ratio": 4.0, "adverse_directionality": 8.0},
+    )
+    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 3.25
+    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.75
+    mapped = {"long_entry_cooldown_exposure_weight": object()}
+    fixed = _gpu_fixed_adaptive_parameters(cfg, GPU_STRATEGY_BOUND_MAPS[strategy], mapped)
+    assert "long_entry_cooldown_exposure_weight" not in fixed
+    assert fixed["long_entry_cooldown_min_duration_minutes"] == 2.0
+    assert fixed["long_entry_cooldown_max_duration_minutes"] == 90.0
+    assert fixed["long_entry_cooldown_adverse_weight"] == 8.0
+    assert fixed["long_unilateralness_ema_span_1m"] == 3.25
+    assert fixed["long_forager_score_weights_unilateralness"] == 0.75
+    assert fixed["short_entry_cooldown_max_duration_minutes"] == -1.0
+    assert fixed["short_entry_cooldown_adverse_weight"] == 0.0

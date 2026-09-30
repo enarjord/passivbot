@@ -164,7 +164,7 @@ def rms_side_enabled(params, pside, *, bounds=None):
     return all(value > 0.0 for value in searched)
 
 
-def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=False):
+def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=False, ranking_possible=True):
     if not rms_side_enabled(params, pside, bounds=None if for_trade_activation else bounds):
         return 0
     scoring = params.get("forager_score_weights", {}).get("unilateralness", 0.0)
@@ -193,7 +193,7 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
         )
     if constant_duration(duration_params) is not None:
         adverse = 0.0
-    if adverse <= 0.0 and (for_trade_activation or scoring <= 0.0):
+    if adverse <= 0.0 and (for_trade_activation or not ranking_possible or scoring <= 0.0):
         return 0
     n_returns = math.ceil(_to_float(span, context=f"{pside}.unilateralness_ema_span_1m") * 20.0)
     # N returns need N+1 closes, available at offset N from the first valid close.
@@ -292,6 +292,17 @@ def _rms_param_sets(config, bounds, *, param_sets=None):
             by_side[side] = selected or None
     overrides = config.get("coin_overrides", {})
     policies_by_side = {side: _rms_policy_keys(config, eligible, overrides) for side, eligible in by_side.items()}
+    # Count selected side-specific markets, not override-policy rows. Unresolved
+    # market aliases retain the upper bound; exclude only proven zero-WEL pins.
+    eligible_counts = {}
+    for side, eligible in by_side.items():
+        eligible_counts[side] = None if eligible is None else sum(
+            any(
+                overrides.get(key, {}).get("bot", {}).get(side, {}).get("wallet_exposure_limit") != 0.0
+                for key in _rms_policy_keys(config, {coin}, overrides)
+            )
+            for coin in eligible
+        )
     for coin, long, short, *_ in (param_sets if param_sets is not None else _iter_param_sets(config)):
         for side, params in (("long", long), ("short", short)):
             if coin not in policies_by_side[side]:
@@ -310,7 +321,18 @@ def _rms_param_sets(config, bounds, *, param_sets=None):
                 if (name in patch or (name.startswith(weights) and
                         name[len(weights):] in patch.get("entry_cooldown_weights_minutes", {}))):
                     del effective_bounds[key]
-            yield coin, side, params, effective_bounds
+            count = eligible_counts[side]
+            slots = params.get("n_positions", 0.0)
+            slot_bound = effective_bounds.get(f"{side}_n_positions")
+            if slot_bound is not None:
+                slots = min(slots, Bound.from_config(f"{side}_n_positions", slot_bound).low)
+            ranking_possible = count is None or (
+                count > 1 and (
+                    config.get("backtest", {}).get("dynamic_wel_by_tradability", True)
+                    or count > int(round(slots))
+                )
+            )
+            yield coin, side, params, effective_bounds, ranking_possible
 
 
 def _rms_history_configs(config, bounds):
@@ -451,12 +473,13 @@ def compute_backtest_warmup_minutes(
             max(
                 (
                     _rms_warmup_minutes(
-                        params, side, bounds=effective_bounds, for_trade_activation=for_trade_activation
+                        params, side, bounds=effective_bounds, for_trade_activation=for_trade_activation,
+                        ranking_possible=ranking_possible
                     )
                     for rms_config, rms_bounds in (
                         [(config, {})] if for_trade_activation else _rms_history_configs(config, bounds)
                     )
-                    for _, side, params, effective_bounds in _rms_param_sets(rms_config, rms_bounds)
+                    for _, side, params, effective_bounds, ranking_possible in _rms_param_sets(rms_config, rms_bounds)
                 ),
                 default=0,
             ),
@@ -474,7 +497,10 @@ def compute_per_coin_warmup_minutes(
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
     param_sets = list(_iter_param_sets(config))
-    rms_pairs = {(coin, side) for coin, side, *_ in _rms_param_sets(config, {}, param_sets=param_sets)} if include_rms else set()
+    rms_pairs = {
+        (coin, side): ranking_possible
+        for coin, side, _, _, ranking_possible in _rms_param_sets(config, {}, param_sets=param_sets)
+    } if include_rms else {}
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
@@ -521,7 +547,10 @@ def compute_per_coin_warmup_minutes(
                     continue
                 warmup_minutes = max(
                     warmup_minutes,
-                    _rms_warmup_minutes(params, side, for_trade_activation=for_trade_activation),
+                    _rms_warmup_minutes(
+                        params, side, for_trade_activation=for_trade_activation,
+                        ranking_possible=rms_pairs[coin, side],
+                    ),
                 )
         per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
     return per_coin

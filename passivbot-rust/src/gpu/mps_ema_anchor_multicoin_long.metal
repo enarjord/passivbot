@@ -1147,7 +1147,11 @@ inline void update_ema_multicoin_side_selection(
 
     if (config.adaptive.score_weight > 0.0f) {
         for (int c = 0; c < coin_count; ++c) {
-            if (survivor[c] && !isfinite(side.adaptive[c].score)) return;
+            if (survivor[c] && !isfinite(side.adaptive[c].score)) {
+                // Eligibility already changed: retry until all retained scores warm up.
+                side.selection_initialized = false;
+                return;
+            }
         }
     }
     float unilateral_min = INFINITY;

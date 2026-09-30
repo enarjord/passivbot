@@ -793,6 +793,20 @@ def _gpu_fixed_bound_context(
     return fixed_bound_values, fixed_parameters
 
 
+def _gpu_fixed_adaptive_parameters(config: dict, bound_map: dict, mapped: dict) -> dict:
+    """Keep opt-in parameters fixed when they have no optimizer dimension."""
+    from config.shared_bot import flatten_shared_bot_side
+    from optimization.gpu.model import adaptive_params
+
+    supported = set(bound_map.values())
+    return {
+        name: value
+        for side in ("long", "short")
+        for key, value in adaptive_params(flatten_shared_bot_side(config["bot"][side])).items()
+        if (name := f"{side}_{key}") in supported and name not in mapped
+    }
+
+
 def _mirror_short_mapping(mapping: dict) -> None:
     """Mirror effective long values/bounds into existing short-side keys."""
 
@@ -4633,7 +4647,10 @@ def run_backend(
             float(bound.low), float(bound.high), rel_tol=0.0, abs_tol=1.0e-12
         ):
             fixed_parameter_overrides.setdefault(parameter, float(bound.low))
-    missing = sorted(set(bound_map.values()) - set(mapped_all))
+    if anchor_parameter_overrides is None:
+        for name, value in _gpu_fixed_adaptive_parameters(proxy_config, bound_map, mapped_all).items():
+            fixed_parameter_overrides.setdefault(name, value)
+    missing = sorted(set(bound_map.values()) - set(mapped_all) - set(fixed_parameter_overrides))
     if anchor_parameter_overrides is None and missing:
         raise ValueError(
             f"GPU backend could not locate {strategy_kind} bounds for {missing}"

@@ -297,7 +297,9 @@ RMS is scoped to the consuming entry or ranking branch; closes remain independen
 Live `unilateralness_unavailable` carries separate `current` and `forager` span
 lists. RMS transport failures must not set the generic missing-strategy-input
 permission. A valid cached ranking value does not satisfy current cooldown input.
-CPU history requests include RMS, but shared trade activation does not wait for it.
+CPU history requests include RMS only for reachable consumers; scoring alone needs no
+history when a known eligible side universe fits fixed slots with dynamic WEL disabled,
+or has at most one coin. Shared trade activation does not wait for RMS.
 Per-coin `warmup_minutes_source` distinguishes producer-stamped `history` from
 `activation` budgets. Only known history metadata may be replaced by a candidate's
 non-RMS activation budget; optimizer activation stamps and untyped external budgets

@@ -222,7 +222,9 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 10.0]}
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
-    assert compute_optimizer_per_coin_warmup_minutes(cfg)["__default__"] == 1201
+    # Only one selected coin is long-eligible, so score-only history is dormant.
+    expected_history = 3 if consumer == "forager" else 1201
+    assert compute_optimizer_per_coin_warmup_minutes(cfg)["__default__"] == expected_history
     activation = compute_optimizer_per_coin_warmup_minutes(cfg, for_trade_activation=True)
     assert activation["__default__"] == 3
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
@@ -443,3 +445,61 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
     cfg["coin_overrides"] = {override_key: patch}
     monkeypatch.setattr("utils._load_coin_to_symbol_map", lambda exchange: {})
     assert compute_backtest_warmup_minutes(cfg) == 51
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("dynamic", [False, True])
+@pytest.mark.parametrize("slots", [1, 2])
+@pytest.mark.parametrize("searched", [False, True])
+def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots, searched):
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": ["BTC", "ETH"], "short": ["BTC", "ETH"]})
+    cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=dynamic)
+    cfg["optimize"]["bounds"] = {f"{side}_n_positions": [slots]}
+    for s in ("long", "short"):
+        cfg["bot"][s]["risk"].update(n_positions=slots, total_wallet_exposure_limit=float(s == side))
+        cfg["optimize"]["bounds"].update({
+            f"{s}_n_positions": [slots],
+            f"{s}_total_wallet_exposure_limit": [float(s == side)],
+        })
+    cfg["bot"][side]["forager"].update(
+        unilateralness_ema_span_1m=100000,
+        score_weights=dict(volume=0, volatility=0, ema_readiness=0, unilateralness=float(not searched)),
+    )
+    if searched:
+        cfg["optimize"]["bounds"].update({
+            f"{side}_forager_score_weights_unilateralness": [0.0, 1.0],
+            f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0],
+            f"{side}_n_positions": [slots],
+        })
+    expected = 2000001 if dynamic or slots < 2 else 0
+    assert compute_backtest_warmup_minutes(cfg) == expected
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == expected
+    if not searched:
+        assert max(compute_per_coin_warmup_minutes(cfg).values()) == expected
+    # Adverse cooldown independently consumes RMS even when ranking cannot run.
+    cfg["bot"][side]["entry_cooldown"].update(
+        base_duration_minutes=0, max_duration_minutes=60,
+        weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+    )
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+
+
+def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": ["BTC", "ETH"], "short": []})
+    cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=False)
+    cfg["optimize"]["bounds"] = {}
+    cfg["bot"]["long"]["risk"].update(n_positions=2, total_wallet_exposure_limit=1)
+    cfg["bot"]["long"]["forager"].update(unilateralness_ema_span_1m=100000)
+    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1
+    cfg["optimize"]["bounds"]["long_n_positions"] = [1, 2]
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+    cfg["live"]["approved_coins"]["long"] = ["BTC"]
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    cfg["backtest"]["dynamic_wel_by_tradability"] = True
+    assert compute_backtest_warmup_minutes(cfg) == 0

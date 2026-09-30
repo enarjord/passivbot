@@ -424,3 +424,140 @@ def test_multicoin_adaptive_checkpoint_preserves_every_output(side):
             )
         else:
             assert value == expected[key]
+
+
+@GPU
+@pytest.mark.parametrize("strategy,chunked", [("ema_anchor", False), ("trailing_martingale", False), ("trailing_martingale", True)])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, monkeypatch):
+    from test_gpu_entry_sizing_parity import _fixture, _evaluate
+    if chunked:
+        from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
+        original_init = MpsTrailingMartingaleMulticoinRunner.__init__
+        def bounded_init(self, *args, **kwargs):
+            kwargs["max_dispatch_candidate_bars"] = 180
+            original_init(self, *args, **kwargs)
+        monkeypatch.setattr(MpsTrailingMartingaleMulticoinRunner, "__init__", bounded_init)
+
+    cfg, _, mss, _, _ = _fixture(side, 2, "initial")
+    cfg["live"]["strategy_kind"] = strategy
+    coins = ["BTC", "ETH", "SOL"]
+    cfg["live"]["approved_coins"] = {s: coins for s in ("long", "short")}
+    cfg["backtest"]["coins"] = {"bybit": coins}
+    mss["SOL"] = dict(mss["ETH"])
+    cfg["backtest"]["dynamic_wel_by_tradability"] = False
+    count = 101
+    candles = np.full((count, 3, 4), 100.0)
+    candles[:, :, 3] = [1.0, 2.0, 10.0]
+    # Initialize ranking with BTC/ETH; SOL becomes eligible while its RMS is pending.
+    # No price touch/fill changes selection until after SOL's complete window.
+    candles[90:, :, 0] = 110.0
+    candles[90:, :, 1] = 90.0
+    for s in ("long", "short"):
+        bot = cfg["bot"][s]
+        bot["risk"].pop("entry_cooldown_minutes", None)
+        bot["entry_cooldown"]["base_duration_minutes"] = 0.0
+        bot["forager"].update(
+            unilateralness_ema_span_1m=1.0, volume_drop_pct=0,
+            score_weights=dict(volume=1, volatility=0, ema_readiness=0, unilateralness=1),
+        )
+        if strategy == "ema_anchor":
+            bot["strategy"][strategy].update(
+                base_qty_pct=0.1, offset=0.05, ema_span_0=2, ema_span_1=3,
+                entry_double_down_factor=0,
+            )
+        else:
+            bot["strategy"][strategy]["entry"].update(
+                initial_ema_dist=0.05, ema_gate_mode="all",
+            )
+    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1)
+    for coin in coins:
+        mss[coin].update(last_valid_index=count - 1, price_step=0.001)
+    mss["SOL"].update(first_valid_index=60, warmup_minutes=1)
+    ts = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60000
+    out, fills = _evaluate(side, (cfg, candles, mss, np.full(count, 50000.0), ts))
+    assert len(fills) > 0
+    assert fills[0][2] == "SOL"
+    assert int(fills[0][0]) == 90
+    assert out["fill_count"].item() == len(fills)
+
+
+@GPU
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_gpu_dormant_ranking_accepts_five_minute_candles(strategy, side):
+    from test_gpu_entry_sizing_parity import _fixture, _evaluate
+
+    cfg, candles, mss, btc, ts = _fixture(side, 2, "initial")
+    cfg["live"]["strategy_kind"] = strategy
+    cfg["backtest"].update(dynamic_wel_by_tradability=False, candle_interval_minutes=5)
+    ts = (ts[0] // 300000) * 300000 + np.arange(len(ts), dtype=np.int64) * 300000
+    for s in ("long", "short"):
+        cfg["bot"][s]["risk"].pop("entry_cooldown_minutes", None)
+        cfg["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 0.0
+    cfg["bot"][side]["forager"].update(
+        unilateralness_ema_span_1m=100000,
+        score_weights=dict(volume=0, volatility=0, ema_readiness=0, unilateralness=1),
+    )
+    active, fills = _evaluate(side, (cfg, candles, mss, btc, ts))
+    cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 0
+    disabled, baseline = _evaluate(side, (cfg, candles, mss, btc, ts))
+    np.testing.assert_array_equal(fills, baseline)
+    for key, value in active.items():
+        if isinstance(value, torch.Tensor):
+            torch.testing.assert_close(value, disabled[key], rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("count,slots,dynamic,adverse,accept", [
+    (2, 2, False, 0, True), (1, 1, True, 0, True),
+    (2, 1, False, 0, False), (2, 2, True, 0, False),
+    (1, 1, False, 1, False),
+])
+def test_gpu_rms_interval_demand_keeps_real_consumers(count, slots, dynamic, adverse, accept):
+    from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
+    from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS as keys
+    from tools.gpu_proxy_benchmark import _base_parameter_values
+
+    values = _base_parameter_values()
+    values.update(n_positions=slots, forager_score_weights_unilateralness=1,
+                  entry_cooldown_adverse_weight=adverse,
+                  entry_cooldown_max_duration_minutes=30)
+    matrix = np.asarray([[values[key] for key in keys]])
+    kwargs = dict(sides=1, interval_minutes=5, ranking_coin_counts=(count,),
+                  dynamic_wel_by_tradability=dynamic)
+    if accept:
+        packed = _scale_directional_minute_parameters(matrix, keys, **kwargs)
+        assert packed[0, keys.index("forager_score_weights_unilateralness")] == 0
+    else:
+        with pytest.raises(ValueError, match="requires one-minute candles"):
+            _scale_directional_minute_parameters(matrix, keys, **kwargs)
+
+
+@GPU
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_fused_dormant_scoring_respects_each_sides_eligible_count(strategy):
+    from test_gpu_mps import _multicoin_exposure_fixture
+    from optimization.gpu import model, mps_kernel
+
+    _, row, run, data = _multicoin_exposure_fixture(
+        strategy, "long", count=100, interval_minutes=5, return_context=True,
+    )
+    prefix = "EMA_ANCHOR" if strategy == "ema_anchor" else "TRAILING_MARTINGALE"
+    keys = getattr(model, prefix + "_MULTICOIN_PARAM_KEYS")
+    cls = (mps_kernel.MpsEmaAnchorMulticoinFusedRunner if strategy == "ema_anchor"
+           else mps_kernel.MpsTrailingMartingaleMulticoinFusedRunner)
+    short_overrides = np.full((2, getattr(model, prefix + "_COIN_OVERRIDE_COLS")), np.nan)
+    short_overrides[1, getattr(model, prefix + "_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN")] = 0
+    runner = cls(run, data, short_coin_overrides=short_overrides, dynamic_wel_by_tradability=False)
+    assert runner.rms_ranking_coin_counts == (2, 1)
+    row[keys.index("n_positions")] = 2
+    row[keys.index("forager_score_weights_unilateralness")] = 1
+    row[keys.index("unilateralness_ema_span_1m")] = 100000
+    matrix = np.asarray([row + row], dtype=float)
+    active = {key: value.cpu().clone() for key, value in runner.run(matrix).items()
+              if isinstance(value, torch.Tensor)}
+    matrix[0, keys.index("forager_score_weights_unilateralness")] = 0
+    matrix[0, len(keys) + keys.index("forager_score_weights_unilateralness")] = 0
+    disabled = runner.run(matrix)
+    for key, value in active.items():
+        torch.testing.assert_close(value, disabled[key].cpu(), rtol=0, atol=0, equal_nan=True)

@@ -15,6 +15,7 @@ GPU_AVAILABLE = torch.backends.mps.is_available() or torch.cuda.is_available()
 
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
@@ -24,6 +25,7 @@ from optimization.gpu.model import (
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
@@ -3855,7 +3857,6 @@ _ADAPTIVE_DISABLED_VALUES = dict(
 )
 
 _UNSTUCK_DISABLED_VALUES = {
-    **_ADAPTIVE_DISABLED_VALUES,
     "unstuck_enabled": 0.0,
     "unstuck_ema_gating_enabled": 1.0,
     "unstuck_close_pct": 0.1,
@@ -3882,6 +3883,7 @@ _HSL_DISABLED_VALUES = {
 def _single_coin_param_row(values, keys):
     merged = {
         **_UNSTUCK_DISABLED_VALUES,
+        **_ADAPTIVE_DISABLED_VALUES,
         "unstuck_ema_span_0": 2.0,
         "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
@@ -4836,7 +4838,7 @@ def test_mps_single_coin_overrides_shadow_candidates_and_track_exact(
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.9 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
-        risk["entry_cooldown_minutes"] = 0.0
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["total_exposure_entry_gate_enabled"] = False
         risk["position_exposure_enforcer_enabled"] = False
@@ -5053,7 +5055,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.1 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
-        risk["entry_cooldown_minutes"] = 100.0
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["position_exposure_enforcer_enabled"] = False
         risk["total_exposure_enforcer_enabled"] = False
@@ -5258,7 +5260,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.1 if enabled else 0.0
         risk["n_positions"] = 2 if enabled else 0
-        risk["entry_cooldown_minutes"] = 100.0
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["position_exposure_enforcer_enabled"] = False
         risk["total_exposure_enforcer_enabled"] = False
@@ -5600,6 +5602,7 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
+            **_ADAPTIVE_DISABLED_VALUES,
             "unstuck_ema_span_0": 2.0,
             "unstuck_ema_span_1": 3.0,
             **_HSL_DISABLED_VALUES,
@@ -5665,6 +5668,7 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
+            **_ADAPTIVE_DISABLED_VALUES,
             "unstuck_ema_span_0": 2.0,
             "unstuck_ema_span_1": 3.0,
             **_HSL_DISABLED_VALUES,
@@ -6160,7 +6164,7 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.2 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
-        risk["entry_cooldown_minutes"] = 100.0
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["total_exposure_entry_gate_enabled"] = False
         risk["position_exposure_enforcer_enabled"] = False
@@ -8950,7 +8954,7 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
-    assert "constant int SIDE_PARAMS = 37" in source
+    assert "constant int SIDE_PARAMS = 44" in source
     assert "total_exposure_reducer_qty" in source
     assert "secondary_close_qty" in source
     assert "realized_loss_gate_allows" in source
@@ -9289,7 +9293,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     )
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
-    assert "constant int PARAM_COLS = 44" in source
+    assert "constant int PARAM_COLS = 51" in source
     assert f"constant int OVERRIDE_COLS = {EMA_ANCHOR_COIN_OVERRIDE_COLS}" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
@@ -9363,6 +9367,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     row += _single_coin_exposure_fields() + [0.0, 0.0]
     row += list(_UNSTUCK_DISABLED_VALUES.values())
     row += list(_HSL_DISABLED_VALUES.values()) + [2.0, 3.0]
+    row += list(_ADAPTIVE_DISABLED_VALUES.values())
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0],
@@ -11081,7 +11086,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         hsl["hsl_enabled"] = 1.0
         hsl["hsl_red_threshold"] = 0.9
         hsl["hsl_signal_mode"] = float(signal_mode)
-        row = base + list(hsl.values()) + [2.0, 3.0]
+        row = base + list(hsl.values()) + [2.0, 3.0] + list(_ADAPTIVE_DISABLED_VALUES.values())
         assert len(row) == len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         return row
 
@@ -11316,6 +11321,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         metric_rows.append(row)
 
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.batch_size = 3
     proxy._torch = torch
     proxy.profile_enabled = False
@@ -11427,7 +11433,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         for item in service_results
     )
 
-    with pytest.raises(ValueError, match="88 columns"):
+    with pytest.raises(ValueError, match="102 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
     truncated = runner.run(
         np.asarray([rows[0]], dtype=np.float64),
@@ -11677,6 +11683,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
+        **_ADAPTIVE_DISABLED_VALUES,
         "unstuck_ema_span_0": 2.0,
         "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
@@ -12030,7 +12037,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         for item in service_results
     )
 
-    with pytest.raises(ValueError, match="122 columns"):
+    with pytest.raises(ValueError, match="136 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
     with pytest.raises(ValueError, match="short override matrix shaped"):
         MpsTrailingMartingaleMulticoinFusedRunner(
@@ -12099,7 +12106,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin" in source
-    assert "constant int PARAM_COLS = 61" in source
+    assert "constant int PARAM_COLS = 68" in source
     assert "effective_n_positions" in source
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
@@ -12200,6 +12207,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
+        **_ADAPTIVE_DISABLED_VALUES,
         "unstuck_ema_span_0": 2.0,
         "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
@@ -20781,6 +20789,7 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
     row.extend(_UNSTUCK_DISABLED_VALUES.values())
     row.extend(_HSL_DISABLED_VALUES.values())
     row.extend([2.0, 3.0])
+    row.extend(_ADAPTIVE_DISABLED_VALUES.values())
 
     output = MpsTrailingMartingaleMulticoinRunner(runs[0], data, side=side).run(
         np.array([row], dtype=np.float64)
@@ -20809,7 +20818,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 54" in source
+    assert "constant int SIDE_PARAMS = 61" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source
@@ -21981,7 +21990,10 @@ def test_mps_independent_unstuck_horizons_change_reducer_only(
             else TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
         )
         overrides = np.full((2, cols), np.nan)
-        overrides[:, -2:] = 0.5  # Both coin pins override the slow global candidate.
+        ema_start = (EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
+                     if strategy_kind == "ema_anchor"
+                     else TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN)
+        overrides[:, ema_start:ema_start + 2] = 0.5  # Pin both unstuck spans.
         pinned_runner, _ = _multicoin_exposure_fixture(
             strategy_kind,
             side,
