@@ -525,8 +525,8 @@ def get_template_config():
                         "drift_min_samples": 32,
                         "drift_probes": 4,
                         "drift_window": 128,
-                        "exact_workers": 0,
-                        "max_pending_exact": 0,
+                        "exact_workers": None,
+                        "max_pending_exact": None,
                         "population_size": None,
                         "seed_bootstrap": {
                             "max_exact": 128,

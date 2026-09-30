@@ -59,6 +59,7 @@ from optimization.problem import (
 from utils import to_standard_exchange_name
 
 from optimization.gpu.autotune import configure_batch_tuning, is_auto
+from optimization.gpu.exact_autotune import ExactQueueController, initial_workers
 
 
 GPU_DEFAULTS = {
@@ -75,8 +76,8 @@ GPU_DEFAULTS = {
     "drift_halt": 0.60,
     "drift_rank_halt": None,
     "drift_objective_tolerance": 1.0e-6,
-    "exact_workers": 0,
-    "max_pending_exact": 0,
+    "exact_workers": None,
+    "max_pending_exact": None,
     "seed_bootstrap": {
         "mode": "auto",
         "max_exact": 128,
@@ -1167,7 +1168,7 @@ def _suite_limit_metric_value(suite_payload: dict, check: dict):
 def _resolve_max_pending_exact(options: dict, workers: int) -> int:
     # Keep a complete next validation batch in flight while exact workers drain
     # the previous batch. A worker-only default can serialize GPU and CPU work.
-    return int(options["max_pending_exact"]) or 2 * max(
+    return int(options["max_pending_exact"] or 0) or 2 * max(
         int(workers), int(options["validate_per_generation"])
     )
 
@@ -1188,13 +1189,16 @@ def _resolve_options(config: dict) -> dict:
         if key in nested_options:
             continue
         if key in {
-            "population_size", "batch_size", "max_dispatch_candidate_bars"
+            "population_size", "batch_size", "max_dispatch_candidate_bars",
+            "exact_workers", "max_pending_exact",
         } and is_auto((configured or {}).get(key)):
             continue
         if key in (configured or {}) and configured[key] is not None:
-            options[key] = (float if key == "drift_rank_halt" else type(default))(
-                configured[key]
+            value_type = (
+                int if key in {"exact_workers", "max_pending_exact"}
+                else float if key == "drift_rank_halt" else type(default)
             )
+            options[key] = value_type(configured[key])
     options["tuning_mode"] = options["tuning_mode"].strip().lower()
     if options["tuning_mode"] not in {"auto", "refresh", "off"}:
         raise ValueError("optimize.gpu.tuning_mode must be auto, refresh, or off")
@@ -1280,7 +1284,10 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.screening.min_survivors must be at least "
             "optimize.gpu.validate_per_generation"
         )
-    exact_workers = int(options["exact_workers"]) or int(
+    for key in ("exact_workers", "max_pending_exact"):
+        if options[key] is not None and options[key] < 0:
+            raise ValueError(f"optimize.gpu.{key} must be non-negative or auto")
+    exact_workers = int(options["exact_workers"] or 0) or int(
         config.get("optimize", {}).get("n_cpus", 0)
     )
     effective_pending = _resolve_max_pending_exact(options, exact_workers)
@@ -4956,6 +4963,10 @@ def run_backend(
         def evaluate_proxy(candidates, *, screening=False):
             return proxy.evaluate(candidates)
 
+    options["exact_workers"] = initial_workers(
+        options["exact_workers"], config["optimize"]["n_cpus"], evaluator_for_pool,
+        mode=options["tuning_mode"], pending=options["max_pending_exact"],
+    )
     configure_batch_tuning(profile_proxies, config, options)
 
     def proxy_fitness(metric_rows: list[dict]) -> tuple[np.ndarray, np.ndarray]:
@@ -5419,6 +5430,17 @@ def run_backend(
         raise ValueError(
             "optimize.gpu.max_pending_exact must be greater than zero when set"
         )
+    queue_controller = None
+    if options["max_pending_exact"] is None and options["tuning_mode"] != "off":
+        queue_controller = ExactQueueController(
+            workers, int(options["validate_per_generation"]), profile_proxies,
+            mode=options["tuning_mode"],
+            context=dict(bounds=config["optimize"]["bounds"], screening=options["screening"],
+                         batch_size=options["batch_size"],
+                         max_dispatch_candidate_bars=options["max_dispatch_candidate_bars"]),
+        )
+        max_pending = queue_controller.limit
+    exact_timing_enabled = profile_enabled or queue_controller is not None
     initializer = functools.partial(
         initialize_pymoo_worker,
         evaluator_for_pool,
@@ -5653,7 +5675,7 @@ def run_backend(
                         pool,
                         item[3],
                         interrupt_check,
-                        profile=profile_enabled,
+                        profile=exact_timing_enabled,
                     )
                     pending_seed[result] = item
                     cursor += 1
@@ -5674,6 +5696,9 @@ def run_backend(
                         digest,
                     ) = pending_seed.pop(result)
                     payload = result.get()
+                    if exact_timing_enabled and isinstance(payload, dict):
+                        payload.pop("__gpu_profile_worker_seconds__", None)
+                        payload.pop("__gpu_profile_queue_wait_seconds__", None)
                     PymooAsyncRecordingRunner._raise_if_worker_failure(
                         payload, source_index
                     )
@@ -5858,14 +5883,16 @@ def run_backend(
             payload = result.get()
             worker_seconds = (
                 float(payload.pop("__gpu_profile_worker_seconds__", 0.0))
-                if profile_enabled and isinstance(payload, dict)
+                if exact_timing_enabled and isinstance(payload, dict)
                 else 0.0
             )
             queue_wait_seconds = (
                 float(payload.pop("__gpu_profile_queue_wait_seconds__", 0.0))
-                if profile_enabled and isinstance(payload, dict)
+                if exact_timing_enabled and isinstance(payload, dict)
                 else 0.0
             )
+            if queue_controller is not None:
+                queue_controller.record(worker_seconds, queue_wait_seconds)
             if profile_enabled:
                 profile_totals["exact_work"] += worker_seconds
                 profile_totals["exact_queue_wait"] += queue_wait_seconds
@@ -5957,9 +5984,14 @@ def run_backend(
 
     try:
         run_seed_bootstrap()
+        if queue_controller is not None:
+            queue_controller.reset(generation)
         while exact_done < budget:
             interrupt_check()
             consume_ready()
+            if queue_controller is not None:
+                queue_controller.update(generation)
+                max_pending = queue_controller.limit
             if exact_done + len(pending) >= budget:
                 consume_ready(wait_for_one=True)
                 continue
@@ -6142,7 +6174,7 @@ def run_backend(
                     pool,
                     vector,
                     interrupt_check,
-                    profile=profile_enabled,
+                    profile=exact_timing_enabled,
                 )
                 pending[result] = (
                     vector,

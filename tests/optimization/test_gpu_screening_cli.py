@@ -21,9 +21,9 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("screening", [False, True])
-@pytest.mark.parametrize("auto_batch", [False, True])
+@pytest.mark.parametrize("auto_mode", ["fixed", "batch", "exact", "both"])
 async def test_gpu_suite_cli_dates_exact_validation_and_resume(
-    tmp_path, monkeypatch, capsys, screening, auto_batch
+    tmp_path, monkeypatch, capsys, screening, auto_mode
 ):
     from optimize import main
     from optimization.backends import gpu_backend
@@ -78,6 +78,14 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
                        survival_fraction=0.5, min_survivors=2),
         successive_halving={"enabled": False},
     )
+    auto_batch = auto_mode in {"batch", "both"}
+    auto_exact = auto_mode in {"exact", "both"}
+    if auto_exact:
+        from optimization.gpu import exact_autotune
+        monkeypatch.setattr(exact_autotune, "WINDOW", 2)
+        monkeypatch.setattr(exact_autotune, "MIN_SECONDS", 0.0)
+        monkeypatch.setattr(exact_autotune, "MIN_GENERATIONS", 1)
+        cfg["optimize"]["gpu"].update(exact_workers="auto", max_pending_exact=None)
     if auto_batch:
         from optimization.gpu import autotune
         # Exercise in-flight decisions within this bounded integration fixture.
@@ -124,6 +132,12 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     if auto_batch:
         assert "GPU auto-tune enabled" in log_output
         assert "GPU auto-tune trial" in log_output
+    if auto_exact:
+        assert "GPU exact auto-sizing" in log_output
+        assert "GPU exact queue auto-tune starting" in log_output
+        assert "__gpu_profile_" not in json.dumps(records)
+    else:
+        assert "GPU exact queue auto-tune" not in log_output
     assert "Removed disabled legacy" in log_output
     if screening:
         assert "stages=screening:8,full:4" in log_output

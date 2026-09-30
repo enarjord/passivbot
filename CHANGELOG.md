@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- GPU optimization now defaults to hardware/RAM-aware initial exact-validation worker sizing and
+  continuous exact-queue tuning for omitted, null, or `"auto"` worker/queue settings. Queue trials
+  use generous evidence windows, coordinate with GPU batch tuning, and reuse compatible local
+  measurements. Positive numbers remain fixed; explicit zero retains legacy sizing.
+
 - GPU optimization now tunes automatic candidate batch sizes during actual screening, using rolling
   throughput evidence, bounded trials, memory headroom, and reusable local calibration records.
   Numeric batch sizes remain fixed; `optimize.gpu.tuning_mode` supports `auto`, `refresh`, and `off`.
