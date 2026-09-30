@@ -215,29 +215,9 @@ def _serialize_live_event_capture(
 
 
 def _extract_hsl_trace(bot) -> Dict[str, dict]:
-    from live import hsl_revised_live, hsl_revised_diagnostics
-    if hsl_revised_live.selected(bot):
-        from utils import utc_ms
-        return {'revised': hsl_revised_diagnostics.snapshot(bot, now_ms=int(utc_ms()))}
-    trace: Dict[str, dict] = {}
-    for pside in ("long", "short"):
-        if not hasattr(bot, "_hsl_state"):
-            break
-        state = bot._hsl_state(pside)
-        trace[pside] = {
-            "halted": bool(state.get("halted", False)),
-            "no_restart_latched": bool(state.get("no_restart_latched", False)),
-            "cooldown_until_ms": state.get("cooldown_until_ms"),
-            "pending_red_since_ms": state.get("pending_red_since_ms"),
-            "red_flat_confirmations": state.get("red_flat_confirmations"),
-            "cooldown_intervention_active": bool(state.get("cooldown_intervention_active", False)),
-            "cooldown_repanic_reset_pending": bool(
-                state.get("cooldown_repanic_reset_pending", False)
-            ),
-            "last_metrics": state.get("last_metrics"),
-            "last_stop_event": state.get("last_stop_event"),
-        }
-    return trace
+    from live import hsl_revised_diagnostics
+    from utils import utc_ms
+    return {'revised': hsl_revised_diagnostics.snapshot(bot, now_ms=int(utc_ms()))}
 
 
 def _coerce_numeric_assertion(spec: Any) -> Dict[str, float]:
@@ -345,10 +325,7 @@ def _apply_assertions(
             actual = float(actual_positions.get(key, 0.0))
             _assert_numeric(f"final_position[{key}]", actual, expected)
     if "halted_psides" in assertions:
-        for pside, expected in assertions["halted_psides"].items():
-            actual = bool(bot._hsl_state(pside)["halted"])
-            if actual != bool(expected):
-                raise AssertionError(f"halted_psides[{pside}]: expected {expected} got {actual}")
+        raise ValueError("halted_psides is a retired legacy HSL assertion; use hsl_paths with scoped action diagnostics")
     if "state_paths" in assertions:
         _apply_path_assertions("state_paths", state, assertions["state_paths"])
     if "hsl_paths" in assertions:
@@ -509,144 +486,12 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
             bot.cm._now_ms_callback = lambda: int(fake_client.now_ms)
 
 
-def _fake_active_red_psides(bot) -> List[str]:
-    return [
-        pside
-        for pside in bot._hsl_psides()
-        if bot._equity_hard_stop_enabled(pside)
-        and bot._equity_hard_stop_runtime_red_latched(pside)
-        and not bot._hsl_state(pside)["halted"]
-    ]
 
 
-def _fake_all_hsl_psides_terminal_latched(bot) -> bool:
-    enabled_psides = [
-        pside for pside in bot._hsl_psides() if bot._equity_hard_stop_enabled(pside)
-    ]
-    if not enabled_psides:
-        return False
-    return all(
-        bool(bot._hsl_state(pside).get("halted", False))
-        and bool(bot._hsl_state(pside).get("no_restart_latched", False))
-        for pside in enabled_psides
-    )
 
 
-async def _run_fake_red_supervisor_step(bot) -> dict:
-    active_red_psides = _fake_active_red_psides(bot)
-    if not active_red_psides:
-        return {"red_supervisor": False}
-    if not await bot.refresh_authoritative_state():
-        return {"red_supervisor": True, "finalized": False, "refreshed": False}
-    active_red_psides = _fake_active_red_psides(bot)
-    if not active_red_psides:
-        return {"red_supervisor": True, "finalized": True}
-
-    needs_panic_execution = False
-    for pside in list(active_red_psides):
-        state = bot._hsl_state(pside)
-        n_positions = bot._equity_hard_stop_count_open_positions(pside)
-        entry_orders, nonpanic_close_orders = bot._equity_hard_stop_count_blocking_open_orders(pside)
-        if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-            if state["red_flat_confirmations"] == 0 and state["pending_stop_event"] is None:
-                state["pending_stop_event"] = await bot._equity_hard_stop_compute_stop_event(
-                    pside, int(bot.get_exchange_time())
-                )
-            state["red_flat_confirmations"] += 1
-        else:
-            needs_panic_execution = True
-            state["red_flat_confirmations"] = 0
-        bot._equity_hard_stop_log_red_progress(
-            pside,
-            n_positions,
-            entry_orders,
-            nonpanic_close_orders,
-            state["red_flat_confirmations"],
-        )
-        if state["red_flat_confirmations"] >= 2:
-            await bot._equity_hard_stop_finalize_red_stop(pside, state["pending_stop_event"])
-
-    active_red_psides = _fake_active_red_psides(bot)
-    if not active_red_psides:
-        return {"red_supervisor": True, "finalized": True}
-    if not needs_panic_execution:
-        return {"red_supervisor": True, "finalized": False}
-
-    for pside in active_red_psides:
-        bot._equity_hard_stop_set_red_runtime_forced_modes(pside)
-    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
-    if not await bot.refresh_market_state_if_needed():
-        return {"red_supervisor": True, "finalized": False, "market_ready": False}
-    await bot.execute_to_exchange(prepare_cycle=False)
-    finalized_terminal = await _finalize_fake_terminal_red_if_sync_flat(
-        bot, active_red_psides
-    )
-    if finalized_terminal:
-        return {"red_supervisor": True, "finalized": True}
-    return {"red_supervisor": True, "finalized": False}
 
 
-async def _finalize_fake_terminal_red_if_sync_flat(
-    bot, active_red_psides: List[str]
-) -> bool:
-    """Finalize terminal RED in fake mode when synchronous panic execution already flattened."""
-    if not active_red_psides or not isinstance(getattr(bot, "cca", None), FakeCCXTClient):
-        return False
-    try:
-        fetched_positions = await bot.fetch_positions()
-        bot._apply_positions_snapshot(fetched_positions)
-        fetched_open_orders = await bot.fetch_open_orders()
-        await bot._apply_open_orders_snapshot(
-            fetched_open_orders,
-            allow_followup_positions_refresh=False,
-            reconcile_balance=False,
-        )
-        if hasattr(bot, "capture_balance_snapshot"):
-            _, balance_raw = await bot.capture_balance_snapshot()
-        else:
-            balance_raw = await bot.fetch_balance()
-        prepared_balance = bot._prepare_balance_snapshot(balance_raw)
-        if prepared_balance is not None:
-            bot._commit_balance_snapshot(prepared_balance)
-    except Exception as exc:
-        logging.debug("fake RED terminal sync confirmation skipped: %s", exc)
-        return False
-
-    finalized = False
-    for pside in list(active_red_psides):
-        if not (
-            bot._equity_hard_stop_enabled(pside)
-            and bot._equity_hard_stop_runtime_red_latched(pside)
-            and not bot._hsl_state(pside)["halted"]
-        ):
-            continue
-        state = bot._hsl_state(pside)
-        n_positions = bot._equity_hard_stop_count_open_positions(pside)
-        entry_orders, nonpanic_close_orders = (
-            bot._equity_hard_stop_count_blocking_open_orders(pside)
-        )
-        if n_positions != 0 or entry_orders != 0 or nonpanic_close_orders != 0:
-            continue
-        stop_event = state.get("pending_stop_event")
-        if stop_event is None:
-            stop_event = await bot._equity_hard_stop_compute_stop_event(
-                pside, int(bot.get_exchange_time())
-            )
-            state["pending_stop_event"] = stop_event
-        no_restart_threshold = float(bot.hsl[pside]["no_restart_drawdown_threshold"])
-        if float(stop_event["drawdown_raw"]) < no_restart_threshold:
-            continue
-        state["red_flat_confirmations"] = 2
-        bot._equity_hard_stop_log_red_progress(
-            pside,
-            n_positions,
-            entry_orders,
-            nonpanic_close_orders,
-            state["red_flat_confirmations"],
-        )
-        await bot._equity_hard_stop_finalize_red_stop(pside, stop_event)
-        finalized = True
-    return finalized
 
 
 async def _run_fake_bot(

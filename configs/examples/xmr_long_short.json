@@ -82,14 +82,9 @@
                 "cooldown_minutes_after_red": 0,
                 "ema_span_minutes": 60,
                 "enabled": false,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.2,
-                "tier_ratios": {
-                    "orange": 0.75,
-                    "yellow": 0.5
-                }
+                "restart_after_red_policy": "always"
             },
             "risk": {
                 "entry_cooldown_minutes": 0.0,
@@ -157,14 +152,9 @@
                 "cooldown_minutes_after_red": 0,
                 "ema_span_minutes": 60,
                 "enabled": false,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.2,
-                "tier_ratios": {
-                    "orange": 0.75,
-                    "yellow": 0.5
-                }
+                "restart_after_red_policy": "always"
             },
             "risk": {
                 "entry_cooldown_minutes": 0.0,
@@ -216,6 +206,14 @@
                 "loss_allowance_pct": 0.00384,
                 "threshold": 0.706
             }
+        },
+        "hsl": {
+            "cooldown_minutes_after_red": 0,
+            "ema_span_minutes": 60,
+            "enabled": false,
+            "panic_close_order_type": "limit",
+            "red_threshold": 0.2,
+            "restart_after_red_policy": "always"
         }
     },
     "coin_overrides": {},
@@ -239,7 +237,6 @@
         "forced_mode_long": "",
         "forced_mode_short": "",
         "hedge_mode": true,
-        "hsl_position_during_cooldown_policy": "panic",
         "hsl_signal_mode": "unified",
         "ignored_coins": {
             "long": [],
@@ -269,7 +266,8 @@
         "user": "bybit_01",
         "warmup_concurrency": 0,
         "warmup_jitter_seconds": 30,
-        "warmup_ratio": 0.3
+        "warmup_ratio": 0.3,
+        "hsl_engine": "revised"
     },
     "logging": {
         "backup_count": 5,
@@ -332,23 +330,6 @@
                         360,
                         2880,
                         10
-                    ]
-                },
-                "hsl": {
-                    "cooldown_minutes_after_red": [
-                        1,
-                        2880,
-                        10
-                    ],
-                    "ema_span_minutes": [
-                        1,
-                        2880,
-                        10
-                    ],
-                    "red_threshold": [
-                        0.01,
-                        0.12,
-                        0.001
                     ]
                 },
                 "risk": {
@@ -563,23 +544,6 @@
                         10
                     ]
                 },
-                "hsl": {
-                    "cooldown_minutes_after_red": [
-                        1,
-                        2880,
-                        10
-                    ],
-                    "ema_span_minutes": [
-                        1,
-                        2880,
-                        10
-                    ],
-                    "red_threshold": [
-                        0.01,
-                        0.12,
-                        0.001
-                    ]
-                },
                 "risk": {
                     "entry_cooldown_minutes": [
                         0.0,
@@ -758,6 +722,23 @@
                         0.001
                     ]
                 }
+            },
+            "hsl": {
+                "cooldown_minutes_after_red": [
+                    1,
+                    2880,
+                    10
+                ],
+                "ema_span_minutes": [
+                    1,
+                    2880,
+                    10
+                ],
+                "red_threshold": [
+                    0.01,
+                    0.12,
+                    0.001
+                ]
             }
         },
         "compress_results_file": true,
@@ -765,10 +746,7 @@
         "crossover_probability": 0.64,
         "enable_overrides": [],
         "fixed_params": [],
-        "fixed_runtime_overrides": {
-            "bot.long.hsl.no_restart_drawdown_threshold": 1,
-            "bot.short.hsl.no_restart_drawdown_threshold": 1
-        },
+        "fixed_runtime_overrides": {},
         "iters": 500000,
         "limits": [
             {

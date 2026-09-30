@@ -150,14 +150,12 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 
 ### Equity Hard Stop Loss
 
-HSL settings live under `bot.long.hsl` and `bot.short.hsl`. Use grouped names such as
-`enabled`, `red_threshold`, `ema_span_minutes`, `cooldown_minutes_after_red`,
-`restart_after_red_policy`, `no_restart_drawdown_threshold`, `tier_ratios`,
-`orange_tier_mode`, and `panic_close_order_type`; do not prefix these leaves with `hsl_`.
-`live.hsl_engine` defaults to `legacy`. The experimental `revised` selection has
-separate [configuration migration rules](#experimental-revised-hsl-configuration)
-and is available for live execution, backtests and CPU optimization. See the
-[live validation and rollback checklist](hsl_revised_live_validation.md) before an operator-approved trial.
+HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/pside modes,
+and explicit `bot.hsl` for unified mode. Supported leaves are `enabled`,
+`red_threshold`, `ema_span_minutes`, `cooldown_minutes_after_red`,
+`restart_after_red_policy`, and `panic_close_order_type`.
+The sole engine is revised; explicit legacy selection is rejected. See the
+[configuration migration rules](#hsl-configuration) before using older settings.
 
 `live.hsl_signal_mode` selects `coin` (default), `pside`, or `unified` signal construction.
 
@@ -417,12 +415,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **exchange_symbol_unavailable_cooldown_hours**: RAM-only, per-symbol entry cooldown after a connector proves from an exact exchange-specific error code that API trading is temporarily unavailable for that symbol. Default is `6.0` hours; `0` disables the cooldown; the maximum is `876600` hours (100 years). Flat affected symbols are excluded from new planning, while held symbols retain close and panic management with normal entries suppressed. Expiry retries the symbol automatically, a repeated qualifying response starts a fresh cooldown, and restarting the bot deliberately clears all cooldowns so the symbol is tried immediately. WEEX currently classifies only structured error code `-1058`; other exchanges require their own exact, fixture-tested classifier before using this policy.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
-- **hsl_position_during_cooldown_policy**: Live-only policy for a position that appears on a halted `pside` during HSL RED cooldown.
-  - `panic`: panic-close it again and restart the cooldown from the fill that fully flattens the configured HSL scope.
-  - `normal`: treat it as an explicit operator override once a real open position appears during cooldown; while there are no open positions the bot still blocks fresh initials on that `pside`, and only after the position appears does it clear the halt and restart HSL drawdown tracking from the current state.
-  - `manual`: leave that position in `manual` mode while keeping the original cooldown running and blocking fresh initials.
-  - `tp_only`: keep the original cooldown running, block new entries, and allow only close management on that `pside`.
-  - `graceful_stop`: keep the original cooldown running and manage any existing position with `graceful_stop` semantics while still blocking fresh initials.
+
 - **hsl_signal_mode**: Selects whether HSL drawdown is tracked from one combined account-level strategy signal (`"unified"`), independently per side (`"pside"`), or per `coin+pside` slot (`"coin"`, default). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
 - **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default is `200_000`.
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
@@ -473,8 +466,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution. Must be greater than `max_n_creations_per_batch` so the bot can make room before posting replacement orders.
 - **max_n_creations_per_batch**: Creates `n` new orders per execution. Must be lower than `max_n_cancellations_per_batch`.
 - **max_n_restarts_per_day**: If the bot crashes, restart up to `n` times per day before stopping completely.
-- **hsl_unavailable_grace_seconds**: Continuous HSL signal-unavailability delay before emergency loss evaluation. Default `120.0`, finite and nonnegative; fractional seconds are accepted and `0` explicitly enables immediate evaluation. Normal usable/degraded evaluation resets its scope's clock; failed refreshes, partial repairs, changing causes, and process restarts with an intact continuity journal do not. After expiry, current unrealized loss over budget is compared with the configured HSL RED threshold without EMA. Coin mode also includes current-episode realized loss when fill coverage and episode evidence remain coherent; unavailable optional evidence leaves the raw-UPNL fallback intact (coin budget: raw balance / configured positions; pside/unified: raw balance). Exposure with no fills at all triggers an exit after grace even if profitable. HSL-only history failures do not block valid martingale adds; independent ordinary-input requirements remain. See [HSL recovery](ai/features/equity_hard_stop_loss.md#live-risk-input-recovery) for restart, journal-loss, and reopening semantics.
-- **risk_input_max_attempts**: Failed-attempt limit for current-balance and HSL-history/evidence repair. Default `10`, integer `>= 1`. With HSL enabled, the limit escalates diagnostics to errors while capped retries and protection continue. With HSL disabled, exhaustion stops without automatic restart. First and limit-reaching failures include bounded tracebacks. This limit does not replace or restart the HSL grace timer.
+
+
 - **max_active_candle_tail_gap_minutes**: Maximum open-ended 1m candle tail gap tolerated for active symbols before staged live planning blocks that symbol's trading-critical candle surface. Default is `10`. Within this bound, Passivbot projects provisional no-trade EMA inputs for close, quote-volume, and log-range without persisting synthetic candles or normal EMA cache entries. Real candles returned later always replace prior projections on the next read; bounded historical gaps still need real candles before and after before synthetic no-trade candles are replayed.
 - **max_ohlcv_fetches_per_minute**: Live OHLCV/network budget for candle-backed indicators such as forager ranking and warm-up maintenance. Default is `24`. Set lower to reduce REST pressure; set to `0` to disallow new fetches and rely only on what is already cached.
 - **max_forager_candle_staleness_minutes**: Optional cap on acceptable completed-candle staleness for broad forager-candidate ranking and refresh budgeting. `null` lets Passivbot derive the target from `max_ohlcv_fetches_per_minute` and candidate count, with `max_active_candle_tail_gap_minutes` as the minimum grace period so the refresh budget cannot make flat candidates nontradable earlier than active symbols. Setting an explicit positive value is an operator override and may shorten that grace period.
@@ -756,19 +749,16 @@ Passivbot stores a few metadata keys alongside the normalized config:
 Additional reserved keys may appear in future releases; all keys beginning with an underscore are
 ignored by persistence helpers to keep user configs tidy.
 
-## Experimental revised HSL configuration
+## HSL configuration
 
-See [Revised Equity Hard Stop Loss](hsl_revised.md) for signal formulas, estimation and lifecycle behavior.
+See [Equity Hard Stop Loss](equity_hard_stop_loss.md) for formulas and lifecycle behavior.
 
-The startup-only selector `live.hsl_engine` accepts `legacy` (default) or `revised`.
-It applies to live, backtest and optimization together, and cannot be changed by
-scenario or fixed optimizer overrides. Revised `coin`, `pside` and `unified` modes
-are available in live execution, the offline fake runner, backtests and CPU optimization
-(`deap` and `pymoo`), including scenario evaluation and checkpoint resume. The GPU backend
-rejects revised HSL. There is no silent legacy fallback; existing configs continue using legacy
-HSL. Offline validation does not establish exchange-specific live readiness. Follow the
-[live validation and rollback checklist](hsl_revised_live_validation.md) for a separately
-authorized trial; selecting revised does not switch an already-running process.
+Live, offline fake execution, backtesting and CPU/GPU optimization share the sole revised
+HSL implementation. The optional compatibility selector `live.hsl_engine=revised` is
+accepted; `legacy` fails with migration guidance. The selector cannot be changed by
+scenario or fixed optimizer overrides. CPU `deap`/`pymoo` and GPU support all three
+signal modes; the GPU path requires 1m candles and exact Rust candidate validation.
+Changing a source/configuration file does not switch an already-running process.
 Use `backtest.offline=true` with a complete local market-data cache for offline runs;
 selecting the revised engine alone does not disable public market-data downloads.
 
@@ -777,7 +767,7 @@ Set `backtest.hsl_detailed_report=true` (CLI: `--backtest.hsl_detailed_report tr
 to also retain per-minute drawdown, EMA and controller samples and enable HSL drawdown
 plots. This diagnostic option increases runtime and memory use; it does not change fills,
 equity or analysis metrics. Disabling plots does not override an explicit report opt-in.
-Metrics-only optimizer evaluations always omit sample and event lists. Legacy HSL is unaffected.
+Metrics-only optimizer evaluations always omit sample and event lists.
 
 For revised `coin`/`pside`, use `bot.long.hsl` and `bot.short.hsl`. Revised `unified`
 requires an explicitly supplied `bot.hsl` block, even when side settings match or HSL
@@ -796,7 +786,10 @@ Revised HSL removes `tier_ratios`, `orange_tier_mode`, and
 warnings; optimizer bounds, explicit patches, and fixed overrides targeting them are
 rejected. Removed yellow/orange time metrics are rejected as objectives or limits.
 `live.hsl_position_during_cooldown_policy` is also removed from revised configurations
-with a warning; any renewed exposure clears cooldown. Legacy retains its existing policy.
+with a warning; any renewed exposure clears cooldown.
+The legacy recovery settings `hsl_unavailable_grace_seconds`,
+`hsl_accept_incomplete_history` and `risk_input_max_attempts` are also removed
+with a warning; they cannot be used as optimizer or scenario parameters.
 Explicit revised optimizer/scenario overrides targeting the removed parameter are rejected.
 Enabled HSL requires
 `live.pnls_max_lookback_days` in **[1, 90]**, including fractional days; invalid values
@@ -807,5 +800,5 @@ fixed overrides use explicit paths such as `bot.hsl.restart_after_red_policy`.
 Side HSL bounds/overrides and per-coin HSL patches are rejected in unified mode.
 Per-coin HSL patches are supported only in coin mode. Engine selection and effective HSL parameters
 participate in the saved-fitness contract; legacy scores cannot be treated as revised
-results. To return to legacy, use a legacy-compatible config as well as selecting
-`legacy`; revised portfolio config is not silently converted to legacy side settings.
+results. Rolling back the implementation requires an older source version and a
+matching configuration; there is no legacy engine inside this version.

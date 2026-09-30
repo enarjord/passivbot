@@ -2,7 +2,6 @@ from .load import (
     load_input_config,
     load_prepared_config,
     prepare_config,
-    strip_persisted_hsl_incomplete_history_override,
 )
 from .normalize import normalize_config
 from .overrides import parse_overrides
@@ -24,6 +23,5 @@ __all__ = [
     "parse_overrides",
     "prepare_config",
     "project_config",
-    "strip_persisted_hsl_incomplete_history_override",
     "validate_config",
 ]

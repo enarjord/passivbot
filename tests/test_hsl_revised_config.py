@@ -290,3 +290,12 @@ async def test_live_entrypoint_accepts_revised_without_external_setup(monkeypatc
     monkeypatch.setattr(passivbot, "resolve_live_log_file_settings", stop_after_config)
     with pytest.raises(OfflineBoundary):
         await passivbot._run_live({})
+
+
+@pytest.mark.parametrize("field", ["hsl_unavailable_grace_seconds", "hsl_accept_incomplete_history", "risk_input_max_attempts"])
+@pytest.mark.parametrize("section", ["bounds", "fixed_runtime_overrides"])
+def test_retired_recovery_controls_cannot_be_optimizer_parameters(field, section):
+    cfg = source()
+    cfg["optimize"][section][f"live.{field}"] = [0, 1] if section == "bounds" else 1
+    with pytest.raises(ValueError, match="removed HSL recovery control"):
+        prepared(cfg)

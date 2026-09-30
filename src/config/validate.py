@@ -9,7 +9,7 @@ from .bot import (
     validate_bot_config,
     validate_forager_config,
 )
-from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal_mode
+from .coerce import normalize_hsl_signal_mode
 from .param_paths import require_existing_config_path
 from .shared_bot import get_grouped_bot_value
 from .schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
@@ -166,10 +166,6 @@ def validate_config(
                         ),
                     )
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
-    if config["live"].get("hsl_engine", "legacy") != "revised":
-        normalize_hsl_cooldown_position_policy(
-            config["live"]["hsl_position_during_cooldown_policy"]
-        )
     _validate_startup_phase_budgets(config["live"])
     ticker_strategy = str(
         config["live"].get("market_snapshot_ticker_strategy", "auto")
@@ -284,18 +280,6 @@ def validate_config(
         raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
     if fee_conversion_max_age_ms < 0:
         raise ValueError("config.live.fee_conversion_max_age_ms must be >= 0")
-    hsl_grace = config["live"]["hsl_unavailable_grace_seconds"]
-    if isinstance(hsl_grace, bool) or not isinstance(hsl_grace, (int, float)):
-        raise TypeError("config.live.hsl_unavailable_grace_seconds must be numeric")
-    if not math.isfinite(hsl_grace) or hsl_grace < 0.0:
-        raise ValueError("config.live.hsl_unavailable_grace_seconds must be finite and >= 0")
-    if hsl_grace >= 2**64 / 1000:
-        raise ValueError("config.live.hsl_unavailable_grace_seconds must fit unsigned milliseconds")
-    risk_attempts = config["live"]["risk_input_max_attempts"]
-    if isinstance(risk_attempts, bool) or not isinstance(risk_attempts, int):
-        raise TypeError("config.live.risk_input_max_attempts must be an integer")
-    if risk_attempts < 1:
-        raise ValueError("config.live.risk_input_max_attempts must be >= 1")
     exchange_symbol_cooldown_raw = config["live"][
         "exchange_symbol_unavailable_cooldown_hours"
     ]

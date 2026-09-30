@@ -657,8 +657,8 @@ def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
         },
         "bot": {
             "long": {
-                "hsl": {"no_restart_drawdown_threshold": 0.3},
-                "hsl_no_restart_drawdown_threshold": 0.1,
+                "hsl": {"red_threshold": 0.3},
+                "hsl_red_threshold": 0.1,
                 "risk": {"entry_cooldown_minutes": 0.0},
                 "risk_entry_cooldown_minutes": 9.0,
             },
@@ -672,7 +672,7 @@ def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
         coins=["BTC"],
         ignored_coins=[],
         overrides={
-            "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+            "bot.long.hsl_red_threshold": 1.0,
             "bot.long.risk.entry_cooldown_minutes": 2.5,
         },
     )
@@ -687,9 +687,9 @@ def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
         base_coin_sources={"BTC": "binance"},
     )
 
-    assert cfg["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
+    assert cfg["bot"]["long"]["hsl"]["red_threshold"] == pytest.approx(1.0)
     assert cfg["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
-    assert "hsl_no_restart_drawdown_threshold" not in cfg["bot"]["long"]
+    assert "hsl_red_threshold" not in cfg["bot"]["long"]
     assert "risk_entry_cooldown_minutes" not in cfg["bot"]["long"]
 
 

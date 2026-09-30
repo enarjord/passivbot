@@ -238,7 +238,7 @@ async def test_fake_live_persists_events_when_console_pipeline_is_disabled(tmp_p
 
 
 @pytest.mark.fake_live
-def test_apply_assertions_validates_positions_and_halted_psides():
+def test_apply_assertions_validates_positions():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
     scenario = {
@@ -247,7 +247,6 @@ def test_apply_assertions_validates_positions_and_halted_psides():
             "final_balance": {"approx": 1000.0, "tolerance": 1e-9},
             "last_prices": {"BTC/USDT:USDT": 100.0},
             "final_positions": {"BTC/USDT:USDT|long": 0.0},
-            "halted_psides": {"long": False, "short": True},
         }
     }
     _apply_assertions(bot, client, scenario, step_summaries=[], log_text="")
@@ -257,6 +256,8 @@ def test_apply_assertions_validates_positions_and_halted_psides():
 def test_apply_assertions_supports_path_assertions_and_logs():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
+    bot.config = {"live": {"hsl_signal_mode": "coin"}}
+    bot.get_exchange_time = lambda: 0
     step_summaries = [{"step_index": 0, "fills": 0, "positions": []}]
     scenario = {
         "assertions": {
@@ -264,7 +265,7 @@ def test_apply_assertions_supports_path_assertions_and_logs():
                 "current_index": 0,
                 "prices.BTC/USDT:USDT": {"approx": 100.0, "tolerance": 1e-9},
             },
-            "hsl_paths": {"short.halted": True},
+            "hsl_paths": {"revised.engine": "revised", "revised.observation_status": "not_evaluated", "revised.scope_count": 0},
             "summary_paths": {"step_count": 1, "last.step_index": 0},
             "log_contains": ["READY", "fake"],
         }
@@ -2506,3 +2507,10 @@ def test_replay_comparison_retains_nonrevised_and_malformed_results():
         for payload in (left, right):
             payload.update(fake_exchange_state={}, fills=[], positions=[], hsl_trace={})
         assert not _compare_run_artifacts(left, right)["match"]
+
+
+def test_fake_assertions_reject_retired_halt_state_instead_of_reading_legacy_controller():
+    with pytest.raises(ValueError, match="use hsl_paths"):
+        _apply_assertions(_StubBot(), FakeCCXTClient(_scenario(), quote="USDT"),
+                          {"assertions": {"halted_psides": {"long": False}}},
+                          step_summaries=[], log_text="")

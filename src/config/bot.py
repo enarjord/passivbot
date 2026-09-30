@@ -5,7 +5,7 @@ from typing import Optional
 
 from pure_funcs import sort_dict_keys, str2bool
 
-from .hsl_revised import engine, normalization_template, normalize_revised
+from .hsl_revised import normalization_template, normalize_revised
 from .log_output import log_config_message
 from .migrations import apply_backward_compatibility_renames
 from .optimize_bounds import get_optimize_bounds_defaults
@@ -20,7 +20,6 @@ from .shared_bot import (
 )
 from .schema import get_template_config
 from .access import require_config_dict
-from .coerce import normalize_hsl_restart_after_red_policy
 from .tree_ops import add_missing_keys_recursively
 from risk_limits import normalize_we_excess_allowance_mode
 
@@ -33,10 +32,6 @@ CLIFF_EDGE_THRESHOLD_KEYS = (
     "unstuck_threshold",
 )
 TWEL_ENFORCER_POLICIES = frozenset({"reduce_overweight", "reduce_portfolio"})
-HSL_ORANGE_TIER_MODES = frozenset(
-    {"graceful_stop", "tp_only_with_active_entry_cancellation"}
-)
-HSL_PANIC_CLOSE_ORDER_TYPES = frozenset({"limit", "market"})
 CLIFF_EDGE_DUST_EPS = 1e-9
 CLIFF_EDGE_WARNING_THRESHOLD = 0.1
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
@@ -481,7 +476,6 @@ def normalize_hsl_risk_unstuck_numerics(
 ) -> None:
     for pside in BOT_POSITION_SIDES:
         bot_side = result["bot"][pside]
-        hsl_path = f"bot.{pside}.hsl"
         risk_path = f"bot.{pside}.risk"
         unstuck_path = f"bot.{pside}.unstuck"
         for key in ("ema_span_0", "ema_span_1"):
@@ -493,108 +487,6 @@ def normalize_hsl_risk_unstuck_numerics(
                 raise ValueError(f"{unstuck_path}.{key} must be positive and finite")
             bot_side["unstuck"][key] = value
 
-        if engine(result) == "legacy":
-            _normalize_minimum_span(
-                result,
-                pside=pside,
-                flat_key="hsl_ema_span_minutes",
-                path=f"{hsl_path}.ema_span_minutes",
-                verbose=verbose,
-                tracker=tracker,
-            )
-            _validate_bool(
-                get_grouped_bot_value(bot_side, "hsl_enabled"),
-                path=f"{hsl_path}.enabled",
-            )
-            _validate_string_choice(
-                get_grouped_bot_value(bot_side, "hsl_orange_tier_mode"),
-                path=f"{hsl_path}.orange_tier_mode",
-                allowed=HSL_ORANGE_TIER_MODES,
-            )
-            _validate_string_choice(
-                get_grouped_bot_value(bot_side, "hsl_panic_close_order_type"),
-                path=f"{hsl_path}.panic_close_order_type",
-                allowed=HSL_PANIC_CLOSE_ORDER_TYPES,
-            )
-            red_threshold = _validate_ratio(
-                get_grouped_bot_value(bot_side, "hsl_red_threshold"),
-                path=f"{hsl_path}.red_threshold",
-                min_value=0.0,
-                max_value=1.0,
-                min_inclusive=False,
-            )
-            no_restart = _validate_ratio(
-                get_grouped_bot_value(bot_side, "hsl_no_restart_drawdown_threshold"),
-                path=f"{hsl_path}.no_restart_drawdown_threshold",
-                min_value=0.0,
-                max_value=1.0,
-            )
-            if no_restart < red_threshold:
-                log_config_message(
-                    verbose,
-                    logging.WARNING,
-                    "%s.no_restart_drawdown_threshold=%s is below red_threshold=%s; clamping to red_threshold",
-                    hsl_path,
-                    no_restart,
-                    red_threshold,
-                )
-                _set_grouped_bot_value(
-                    result,
-                    pside=pside,
-                    flat_key="hsl_no_restart_drawdown_threshold",
-                    value=red_threshold,
-                    tracker=tracker,
-                )
-                if tracker is not None:
-                    tracker.update(
-                        ["bot", pside, "hsl", "no_restart_drawdown_threshold"],
-                        no_restart,
-                        red_threshold,
-                    )
-            _validate_ratio(
-                get_grouped_bot_value(bot_side, "hsl_cooldown_minutes_after_red"),
-                path=f"{hsl_path}.cooldown_minutes_after_red",
-            )
-            tier_ratios = get_grouped_bot_value(bot_side, "hsl_tier_ratios")
-            if not isinstance(tier_ratios, dict):
-                raise TypeError(f"{hsl_path}.tier_ratios must be a dict")
-            yellow = _validate_ratio(
-                tier_ratios.get("yellow"),
-                path=f"{hsl_path}.tier_ratios.yellow",
-                max_value=1.0,
-                min_inclusive=False,
-            )
-            orange = _validate_ratio(
-                tier_ratios.get("orange"),
-                path=f"{hsl_path}.tier_ratios.orange",
-                max_value=1.0,
-                min_inclusive=False,
-            )
-            if not yellow < orange or orange >= 1.0:
-                raise ValueError(
-                    f"{hsl_path}.tier_ratios must satisfy 0 < yellow < orange < 1"
-                )
-            restart_after_red_policy = normalize_hsl_restart_after_red_policy(
-                get_grouped_bot_value(bot_side, "hsl_restart_after_red_policy"),
-                path=f"{hsl_path}.restart_after_red_policy",
-            )
-            if tracker is not None:
-                current_restart_policy = get_grouped_bot_value(
-                    bot_side, "hsl_restart_after_red_policy"
-                )
-                if current_restart_policy != restart_after_red_policy:
-                    tracker.update(
-                        ["bot", pside, "hsl", "restart_after_red_policy"],
-                        current_restart_policy,
-                        restart_after_red_policy,
-                    )
-            _set_grouped_bot_value(
-                result,
-                pside=pside,
-                flat_key="hsl_restart_after_red_policy",
-                value=restart_after_red_policy,
-                tracker=None,
-            )
 
         _validate_ratio(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),

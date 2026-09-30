@@ -57,7 +57,7 @@ from fill_events_manager import (
 )
 from live import candle_ws, executor, market_data, planning_gates, reconciler, state_refresh
 from live.diagnostic_safety import bounded_traceback_detail as _bounded_traceback_detail
-from live import risk_input_recovery, hsl_protection, hsl_revised_live
+from live import balance_validation, hsl_revised_live
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
@@ -1740,22 +1740,7 @@ class Passivbot:
         self._min_effective_cost_summary_log_interval_ms = 60 * 60 * 1000
         self._orchestrator_prev_close_ema = {}
         self._orchestrator_close_ema_fallback_counts = {}
-        self.hsl = {}
         self._runtime_forced_modes = {"long": {}, "short": {}}
-        self._equity_hard_stop_supervisor_running = False
-        self._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
-        self._equity_hard_stop_cooldown_log_interval_ms = 60 * 1000
-        self._equity_hard_stop = {
-            pside: self._equity_hard_stop_make_state() for pside in ("long", "short")
-        }
-        self._equity_hard_stop_coin = {"long": {}, "short": {}}
-        self._equity_hard_stop_coin_initialized = False
-        self._equity_hard_stop_coin_protective_ready = False
-        self._equity_hard_stop_coin_replay_ready_pairs = set()
-        self._equity_hard_stop_coin_replay_pending_pairs = set()
-        self._equity_hard_stop_coin_replay_failure = None
-        self._equity_hard_stop_coin_replay_ready_event = None
-        self._equity_hard_stop_coin_replay_task = None
 
     _monitor_record_event = pb_monitor._monitor_record_event
     _monitor_record_error = pb_monitor._monitor_record_error
@@ -1965,33 +1950,13 @@ class Passivbot:
         self, now_ms: int, *, pnl_start_ms: Optional[int]
     ) -> tuple[bool, Optional[int]]:
         """Return the earliest fill whose PnL an enabled risk consumer needs."""
-        hsl_enabled = False
-        pnl_required = (
-            self._orchestrator_uses_realized_pnl()
-            if hsl_enabled
-            else self._live_risk_uses_authoritative_pnl()
-        )
-        if pnl_required:
-            return True, pnl_start_ms
-        return (
-            self._equity_hard_stop_required_fill_history_start_ms(
-                int(now_ms),
-                pnl_start_ms=pnl_start_ms,
-            )
-            if hsl_enabled
-            else (False, None)
-        )
+        return (True, pnl_start_ms) if self._live_risk_uses_authoritative_pnl() else (False, None)
 
     def _required_fill_history_start_ms(
         self, now_ms: int, *, pnl_start_ms: Optional[int]
     ) -> tuple[bool, Optional[int]]:
         """Return whether planning needs historical coverage and its earliest timestamp."""
-        hsl_enabled = False
-        orchestrator_pnl_required = (
-            self._orchestrator_uses_realized_pnl()
-            if hsl_enabled
-            else self._live_risk_uses_authoritative_pnl()
-        )
+        orchestrator_pnl_required = self._live_risk_uses_authoritative_pnl()
         if orchestrator_pnl_required:
             return True, pnl_start_ms
         pnl_required, pnl_start_ms = self._required_pnl_history_start_ms(
@@ -2026,18 +1991,6 @@ class Passivbot:
         """Select rows that can block the enabled live PnL consumers."""
         if not required:
             return []
-        hsl_enabled = False
-        orchestrator_pnl_required = (
-            self._orchestrator_uses_realized_pnl()
-            if hsl_enabled
-            else self._live_risk_uses_authoritative_pnl()
-        )
-        if hsl_enabled and not orchestrator_pnl_required:
-            return self._equity_hard_stop_required_pnl_events(
-                events,
-                int(now_ms),
-                pnl_start_ms=pnl_start_ms,
-            )
         if required_start_ms is None:
             return list(events)
         return [
@@ -2166,202 +2119,8 @@ class Passivbot:
             f"oldest_event={metadata_oldest} history_scope={history_scope}"
         )
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    _hsl_psides = pb_hsl._hsl_psides
-    _hsl_state = pb_hsl._hsl_state
-    _parse_hsl_config = pb_hsl._parse_hsl_config
-    _equity_hard_stop_config = pb_hsl._equity_hard_stop_config
-    _equity_hard_stop_enabled = pb_hsl._equity_hard_stop_enabled
-    _equity_hard_stop_signal_mode = pb_hsl._equity_hard_stop_signal_mode
-    _equity_hard_stop_balance_override_active = (
-        pb_hsl._equity_hard_stop_balance_override_active
-    )
-    _equity_hard_stop_validate_balance_source_for_history_replay = (
-        pb_hsl._equity_hard_stop_validate_balance_source_for_history_replay
-    )
-    _equity_hard_stop_cooldown_position_policy = (
-        pb_hsl._equity_hard_stop_cooldown_position_policy
-    )
-    _equity_hard_stop_halted_mode = pb_hsl._equity_hard_stop_halted_mode
-    _equity_hard_stop_panic_close_order_type = (
-        pb_hsl._equity_hard_stop_panic_close_order_type
-    )
-    _equity_hard_stop_signal_values = pb_hsl._equity_hard_stop_signal_values
-    _equity_hard_stop_latch_path = pb_hsl._equity_hard_stop_latch_path
-    _equity_hard_stop_write_latch = pb_hsl._equity_hard_stop_write_latch
-    _equity_hard_stop_remove_latch_file = pb_hsl._equity_hard_stop_remove_latch_file
-    _equity_hard_stop_reset_state = pb_hsl._equity_hard_stop_reset_state
-    _equity_hard_stop_runtime_initialized = pb_hsl._equity_hard_stop_runtime_initialized
-    _equity_hard_stop_runtime_red_latched = pb_hsl._equity_hard_stop_runtime_red_latched
-    _equity_hard_stop_runtime_tier = pb_hsl._equity_hard_stop_runtime_tier
-    _equity_hard_stop_make_state = pb_hsl._equity_hard_stop_make_state
-    _hsl_coin_state = pb_hsl._hsl_coin_state
-    _equity_hard_stop_fill_pside = staticmethod(pb_hsl._equity_hard_stop_fill_pside)
-    _calc_upnl_sum_strict = pb_hsl._calc_upnl_sum_strict
-    _equity_hard_stop_fee_cost = staticmethod(pb_hsl._equity_hard_stop_fee_cost)
-    _equity_hard_stop_fill_symbol = staticmethod(pb_hsl._equity_hard_stop_fill_symbol)
-    _equity_hard_stop_fill_timestamp_ms = staticmethod(
-        pb_hsl._equity_hard_stop_fill_timestamp_ms
-    )
-    _equity_hard_stop_event_value = staticmethod(pb_hsl._equity_hard_stop_event_value)
-    _equity_hard_stop_latest_panic_fill_timestamp_ms = (
-        pb_hsl._equity_hard_stop_latest_panic_fill_timestamp_ms
-    )
-    _equity_hard_stop_latest_panic_fill_timestamp_optional_ms = (
-        pb_hsl._equity_hard_stop_latest_panic_fill_timestamp_optional_ms
-    )
-    _equity_hard_stop_latest_flatten_fill_timestamp_optional_ms = (
-        pb_hsl._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms
-    )
-    _equity_hard_stop_defer_missing_flatten_fill = (
-        pb_hsl._equity_hard_stop_defer_missing_flatten_fill
-    )
-    _equity_hard_stop_flatten_fill_timestamp_with_refresh = (
-        pb_hsl._equity_hard_stop_flatten_fill_timestamp_with_refresh
-    )
     _get_exchange_fee_rates = exchange_params._get_exchange_fee_rates
     _orchestrator_exchange_params = exchange_params._orchestrator_exchange_params
-    _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now
-    _equity_hard_stop_coverage_allow_incomplete = (
-        pb_hsl._equity_hard_stop_coverage_allow_incomplete
-    )
-    _equity_hard_stop_required_fill_history_start_ms = (
-        pb_hsl._equity_hard_stop_required_fill_history_start_ms
-    )
-    _equity_hard_stop_required_pnl_events = (
-        pb_hsl._equity_hard_stop_required_pnl_events
-    )
-    _equity_hard_stop_coin_realized_pnl_peak_last = (
-        pb_hsl._equity_hard_stop_coin_realized_pnl_peak_last
-    )
-    _equity_hard_stop_lookback_ms = pb_hsl._equity_hard_stop_lookback_ms
-    _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
-    _equity_hard_stop_apply_coin_sample = pb_hsl._equity_hard_stop_apply_coin_sample
-    _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
-    _equity_hard_stop_maybe_emit_raw_red_pending = (
-        pb_hsl._equity_hard_stop_maybe_emit_raw_red_pending
-    )
-    _equity_hard_stop_format_remaining_time = staticmethod(
-        pb_hsl._equity_hard_stop_format_remaining_time
-    )
-    _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
-    _equity_hard_stop_red_episode_finalization = (
-        pb_hsl._equity_hard_stop_red_episode_finalization
-    )
-    _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
-    _equity_hard_stop_compute_coin_stop_event = (
-        pb_hsl._equity_hard_stop_compute_coin_stop_event
-    )
-    _equity_hard_stop_infer_replay_contract = (
-        pb_hsl._equity_hard_stop_infer_replay_contract
-    )
-    _equity_hard_stop_infer_coin_replay_contract = (
-        pb_hsl._equity_hard_stop_infer_coin_replay_contract
-    )
-    _equity_hard_stop_log_cooldown_status = pb_hsl._equity_hard_stop_log_cooldown_status
-    _equity_hard_stop_position_symbols = pb_hsl._equity_hard_stop_position_symbols
-    _equity_hard_stop_refresh_cooldown_after_repanic = (
-        pb_hsl._equity_hard_stop_refresh_cooldown_after_repanic
-    )
-    _equity_hard_stop_handle_position_during_cooldown = (
-        pb_hsl._equity_hard_stop_handle_position_during_cooldown
-    )
-    _equity_hard_stop_reset_after_restart = pb_hsl._equity_hard_stop_reset_after_restart
-    _equity_hard_stop_refresh_halted_runtime_forced_modes = (
-        pb_hsl._equity_hard_stop_refresh_halted_runtime_forced_modes
-    )
-    _equity_hard_stop_initialize_from_history = (
-        pb_hsl._equity_hard_stop_initialize_from_history
-    )
-    _equity_hard_stop_initialize_coin_from_history = (
-        pb_hsl._equity_hard_stop_initialize_coin_from_history
-    )
-    _equity_hard_stop_start_coin_history_replay = (
-        pb_hsl._equity_hard_stop_start_coin_history_replay
-    )
-    _equity_hard_stop_log_status = pb_hsl._equity_hard_stop_log_status
-    _equity_hard_stop_check = pb_hsl._equity_hard_stop_check
-    _equity_hard_stop_coin_active_pside = pb_hsl._equity_hard_stop_coin_active_pside
-    _equity_hard_stop_coin_symbols = pb_hsl._equity_hard_stop_coin_symbols
-    _equity_hard_stop_symbol_supported_for_coin_replay = (
-        pb_hsl._equity_hard_stop_symbol_supported_for_coin_replay
-    )
-    _equity_hard_stop_reset_coin_after_restart = pb_hsl._equity_hard_stop_reset_coin_after_restart
-    _equity_hard_stop_check_coin = pb_hsl._equity_hard_stop_check_coin
-    _equity_hard_stop_apply_coin_metrics_sample = (
-        pb_hsl._equity_hard_stop_apply_coin_metrics_sample
-    )
-    _equity_hard_stop_coin_needs_panic_supervision = (
-        pb_hsl._equity_hard_stop_coin_needs_panic_supervision
-    )
-    _equity_hard_stop_coin_red_active = pb_hsl._equity_hard_stop_coin_red_active
-    _equity_hard_stop_handle_coin_position_during_cooldown = (
-        pb_hsl._equity_hard_stop_handle_coin_position_during_cooldown
-    )
-    _equity_hard_stop_log_coin_cooldown_status = (
-        pb_hsl._equity_hard_stop_log_coin_cooldown_status
-    )
-    _equity_hard_stop_emit_coin_status = pb_hsl._equity_hard_stop_emit_coin_status
-    _equity_hard_stop_prime_coin_runtime_for_replay = (
-        pb_hsl._equity_hard_stop_prime_coin_runtime_for_replay
-    )
-    _equity_hard_stop_activate_coin_red_from_metrics = (
-        pb_hsl._equity_hard_stop_activate_coin_red_from_metrics
-    )
-    _equity_hard_stop_set_red_runtime_forced_modes = (
-        pb_hsl._equity_hard_stop_set_red_runtime_forced_modes
-    )
-    _equity_hard_stop_set_red_paused_runtime_forced_modes = (
-        pb_hsl._equity_hard_stop_set_red_paused_runtime_forced_modes
-    )
-    _equity_hard_stop_set_coin_runtime_forced_mode = (
-        pb_hsl._equity_hard_stop_set_coin_runtime_forced_mode
-    )
-    _equity_hard_stop_clear_coin_runtime_forced_mode = (
-        pb_hsl._equity_hard_stop_clear_coin_runtime_forced_mode
-    )
-    _equity_hard_stop_clear_runtime_forced_modes = (
-        pb_hsl._equity_hard_stop_clear_runtime_forced_modes
-    )
-    _equity_hard_stop_count_open_positions = (
-        pb_hsl._equity_hard_stop_count_open_positions
-    )
-    _equity_hard_stop_count_blocking_open_orders = (
-        pb_hsl._equity_hard_stop_count_blocking_open_orders
-    )
-    _equity_hard_stop_has_open_position_symbol = pb_hsl._equity_hard_stop_has_open_position_symbol
-    _equity_hard_stop_count_blocking_open_orders_symbol = (
-        pb_hsl._equity_hard_stop_count_blocking_open_orders_symbol
-    )
-    _equity_hard_stop_log_red_progress = pb_hsl._equity_hard_stop_log_red_progress
-    _equity_hard_stop_finalize_red_stop = pb_hsl._equity_hard_stop_finalize_red_stop
-    _equity_hard_stop_finalize_coin_red_stop = pb_hsl._equity_hard_stop_finalize_coin_red_stop
-    _equity_hard_stop_run_red_supervisor = pb_hsl._equity_hard_stop_run_red_supervisor
-    _equity_hard_stop_run_coin_red_supervisor = pb_hsl._equity_hard_stop_run_coin_red_supervisor
-    _apply_equity_hard_stop_orange_overlay = (
-        pb_hsl._apply_equity_hard_stop_orange_overlay
-    )
 
     def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
         """Hook: exchange-specific filtering for approved symbols used for new entries."""
@@ -3483,7 +3242,6 @@ class Passivbot:
                 return
             boot_stage = "risk_input_readiness"
             pass
-            await risk_input_recovery.wait_for_startup(self)
             pass
             if self.stop_signal_received:
                 self._monitor_emit_stop(
@@ -6238,164 +5996,7 @@ class Passivbot:
         await asyncio.sleep(1.0)
         return True
 
-    async def _run_halted_hsl_protection_if_active(self, *, pace: bool = True) -> bool:
-        """Protect proven cooldown scopes while unrelated episode evidence is unavailable."""
-        coin_mode = self._equity_hard_stop_signal_mode() == "coin"
-        scopes = []
-        if coin_mode:
-            initialized = bool(getattr(self, "_equity_hard_stop_coin_initialized", False))
-            ready_pairs = getattr(self, "_equity_hard_stop_coin_replay_ready_pairs", set())
-            for pside, states in getattr(self, "_equity_hard_stop_coin", {}).items():
-                for symbol, state in states.items():
-                    pass
-        else:
-            scopes = [
-                (pside, None, self._hsl_state(pside))
-                for pside in self._hsl_psides()
-                if False and self._hsl_state(pside)["halted"]
-            ]
-        if not scopes:
-            return False
-        if not await self.refresh_protective_authoritative_state(require_balance=False):
-            return not pace  # Recovery must pace an attempted protective owner.
-        now_ms = int(self.get_exchange_time())
-        panic_needed = False
-        cooldown_entry_cancels = []
-        policy = self._equity_hard_stop_cooldown_position_policy()
-        if policy == "manual" and any(
-            not state["no_restart_latched"]
-            and (
-                state["cooldown_repanic_reset_pending"]
-                or (state["cooldown_until_ms"] is not None and now_ms < state["cooldown_until_ms"])
-            )
-            and any(
-                order.get("position_side") == pside
-                and self._canonical_open_order_reduce_only(order) is False
-                for order_symbol, orders in self.open_orders.items()
-                if symbol is None or order_symbol == symbol
-                for order in orders
-            )
-            and pb_hsl._equity_hard_stop_manual_cooldown_intervention(
-                self, pside, symbol=symbol
-            ) is None
-            for pside, symbol, state in scopes
-        ):
-            # Absence needs a successful fill tail after the account observation.
-            # A failed/degraded refresh leaves the proof unknown; it must not
-            # suppress independently ready protection in other scopes.
-            ledger = getattr(self, "freshness_ledger", None)
-            epoch = int(getattr(ledger, "epoch", 0))
-            generation = int(getattr(self, "_account_invalidation_generation", 0) or 0)
-            await asyncio.wait_for(self.update_pnls(source="hsl_cooldown_protection"),
-                                   timeout=_HSL_COOLDOWN_HISTORY_TIMEOUT_SECONDS if not pace else None)
-            pending = getattr(self, "_authoritative_pending_confirmations", {})
-            if (
-                int(getattr(ledger, "epoch", 0)) != epoch
-                or int(getattr(self, "_account_invalidation_generation", 0) or 0) != generation
-                or any(int(pending.get(surface, 0)) > epoch for surface in ACCOUNT_SURFACES)
-            ):
-                if not await self.refresh_protective_authoritative_state(require_balance=False):
-                    return not pace
-            now_ms = int(self.get_exchange_time())
-        for pside, symbol, state in scopes:
-            cooldown_until_ms = state["cooldown_until_ms"]
-            terminal = bool(state["no_restart_latched"])
-            if not terminal and (
-                not state["cooldown_repanic_reset_pending"]
-                and (cooldown_until_ms is None or now_ms >= cooldown_until_ms)
-            ):
-                continue
-            symbols = [symbol] if coin_mode else self._equity_hard_stop_position_symbols(pside)
-            symbols = [
-                candidate
-                for candidate in symbols
-                if self._equity_hard_stop_has_open_position_symbol(pside, candidate)
-            ]
-            if symbols and coin_mode and not terminal and policy != "normal":
-                await self._equity_hard_stop_handle_coin_position_during_cooldown(
-                    pside, symbol, now_ms
-                )
-                panic_needed |= bool(
-                    state["halted"]
-                    and self._runtime_forced_modes.get(pside, {}).get(symbol) == "panic"
-                )
-            elif symbols and not terminal and policy != "normal":
-                await self._equity_hard_stop_handle_position_during_cooldown(pside, now_ms)
-                panic_needed |= bool(
-                    state["halted"]
-                    and any(
-                        self._equity_hard_stop_halted_mode(pside, item) == "panic"
-                        for item in symbols
-                    )
-                )
-            # Normal-policy reopening belongs to the ordinary HSL evaluator,
-            # whose caller supplies a fresh validated balance. This reduced
-            # protection owner never releases a halt through balance-less replay.
-            # Flat cooldown scopes still prohibit initials; held normal and
-            # graceful-stop scopes retain their existing entry policy.
-            if not state["halted"]:
-                # Canonical restart may already prove RED in the new episode.
-                # Keep that current risk in this wave even when another scope
-                # supplies cancellation-only work.
-                panic_needed |= bool(
-                    symbols
-                    and state["runtime"].red_latched()
-                    and (state["last_metrics"] or {}).get("red_active_now", False)
-                )
-                continue
-            if (
-                not terminal
-                and policy == "manual"
-                and pb_hsl._equity_hard_stop_manual_cooldown_intervention(
-                    self, pside, symbol=symbol
-                ) is not False
-            ):
-                # Only complete fill evidence proving no intervention permits
-                # cancellation; manual ownership or unavailable evidence preserves orders.
-                continue
-            for order_symbol, orders in self.open_orders.items():
-                if coin_mode and order_symbol != symbol:
-                    continue
-                if (
-                    not terminal
-                    and policy in {"normal", "graceful_stop"}
-                    and not state["cooldown_unresolved_residue"]
-                    and self._equity_hard_stop_has_open_position_symbol(pside, order_symbol)
-                ):
-                    continue
-                cooldown_entry_cancels.extend(
-                    dict(order)
-                    for order in orders
-                    if order.get("position_side") == pside
-                    and self._canonical_open_order_reduce_only(order) is False
-                )
-        if not panic_needed and not cooldown_entry_cancels:
-            return False
-        # Only the existing panic planner can produce protective closes. A
-        # cancellation-only wave must not construct or freshen ordinary intent.
-        to_cancel, to_create = (
-            await self.calc_protective_panic_orders_to_cancel_and_create()
-            if panic_needed
-            else ([], [])
-        )
-        cancel_keys = {(order["symbol"], order["id"]) for order in to_cancel}
-        for order in cooldown_entry_cancels:
-            key = (order["symbol"], order["id"])
-            if key not in cancel_keys:
-                to_cancel.append(order)
-                cancel_keys.add(key)
-        await self.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
-        if pace:
-            await self._sleep_unless_shutdown(
-                float(self.live_value("execution_delay_seconds")), stage="hsl_cooldown_protection"
-            )
-        return True
 
-    async def _run_latched_hsl_supervisor_if_active(
-        self, *, cycle_id: object, loop_timings_ms: dict[str, int], single_pass: bool = False, after_close=None
-    ) -> bool:
-        """Run already-latched RED supervision without requiring fill readiness."""
-        return False
 
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
@@ -16073,7 +15674,7 @@ class Passivbot:
         for idx, symbol in idx_to_symbol.items():
             snap = market_snapshots[symbol]
             for pside in sorted(target_psides_by_symbol[symbol]):
-                enabled = Passivbot._equity_hard_stop_enabled(self, pside, symbol=symbol)
+                policy = hsl_revised_live.policy(self, pside, symbol)
                 inputs.append({
                     "symbol_idx": idx,
                     "pside": pside,
@@ -16082,8 +15683,7 @@ class Passivbot:
                     "price_step": float(self.price_steps[symbol]),
                     "execution_type": (
                         execution_types[symbol, pside] if execution_types is not None else
-                        (Passivbot._equity_hard_stop_panic_close_order_type(self, pside, symbol=symbol)
-                         if enabled else "limit")
+                        (policy["panic_close_order_type"] if policy["enabled"] else "limit")
                     ),
                 })
         orders = reconciler.parse_and_validate_protective_closes(
@@ -19263,7 +18863,7 @@ class Passivbot:
                 }
             )
 
-        risk_input_recovery.validate_balances(input_dict["balance_raw"], input_dict["balance"])
+        balance_validation.validate_balances(input_dict["balance_raw"], input_dict["balance"])
         input_json = json.dumps(input_dict)
         rust_call_id = self._next_live_event_remote_call_id("rust")
         orchestrator_started_ms = int(utc_ms())

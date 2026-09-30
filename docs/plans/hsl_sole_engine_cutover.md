@@ -2,7 +2,7 @@
 
 Status: incomplete implementation draft; do not merge or deploy.
 
-This branch implements the first caller cutover from the approved
+This branch implements the caller cutover and a further validated cleanup slice from the approved
 [sole-engine migration plan](hsl_sole_engine_migration.md). It is not evidence that
 legacy removal or integrated migration acceptance is complete.
 
@@ -17,8 +17,17 @@ legacy removal or integrated migration acceptance is complete.
   bounded position/fill settlement contracts remain in place.
 - Fake-live cycles use that same owner. Tests explicitly migrate their synthetic
   legacy fixture rather than inheriting an implicit restart-policy decision.
-- Shared exchange fee and order-construction parameters have a separate module;
-  the old module still contains its duplicate pending removal.
+- Shared exchange fee and order-construction parameters have a separate module.
+  Positive finite raw/sizing balance checks also have a shared owner, independent
+  of legacy recovery. The old modules still contain duplicates pending removal.
+- Legacy controller aliases and constructor state, the halted supervisor entrypoints,
+  unreachable fill/PnL branches, fake supervisor helpers and replay benchmark are removed.
+- Schema defaults and configuration validation no longer expose legacy tiers,
+  terminal thresholds, grace fallback or position-during-cooldown controls.
+  Newly authored examples explicitly choose `always`; canonical hydration still
+  leaves missing restart choices unset and rejects later enabled scopes without a choice.
+- Public unified examples explicitly author portfolio policies and portfolio optimizer
+  bounds. Core HSL guides, risk guidance and rollback instructions describe the revised contract.
 
 ## Remaining implementation before migration qualification
 
@@ -42,26 +51,27 @@ legacy removal or integrated migration acceptance is complete.
 Focused configuration/native/optimizer and revised live/fake-live tests exercise
 this entrypoint change. Native tests use a rebuilt source-verified extension.
 This is not full-suite green, CPU/GPU performance qualification, disabled-HSL
-trace parity, live acceptance or approval of the remaining deletion. Old tests
+trace parity or live acceptance. Old tests
 and documentation that explicitly require legacy behavior still need migration.
 The acceptance matrix in the parent plan applies to the final integrated tree.
 
-## Known integration failures in the current draft
+## Current validation and remaining test migration
 
-The broader preparation/config/override consumer suite passes 257 tests and fails
-three on this draft. The corresponding preparation branch passes all 260.
+The earlier three configuration integration failures are resolved. The current
+schema/example/migration/scenario/coin-override and retired-control suite passes
+**619 tests**; documentation/CLI checks add **55**, and migrated fake assertions add **4**.
+The current live/reconstruction/candle/trace/current-flat/protective/fake-live and
+shared balance suites pass **786 tests**. These results cover the applied Python
+cleanup; no Rust source changed in this cleanup slice. Native backtest/reporting,
+CPU optimizer and GPU service/backend/CLI routing add **159 passing tests**.
+These routing tests are not a new GPU throughput benchmark.
 
-- The suite selector-resolution test still exercises the removed
-  `no_restart_drawdown_threshold` field; its canonical-path coverage must move to
-  a supported field while retaining explicit rejection coverage for retired HSL.
-- Full template-based coin override files still include retired HSL defaults.
-  The template schema and generated/example configs must be migrated consistently
-  before the override-foundation and relative-path tests can pass unmodified in
-  purpose. Do not weaken retired-field rejection to make these fixtures load.
-
-These failures reinforce the schema/test obligations above. The earlier focused
-601-test and 367-test Rust results cover the preceding integrated caller slice,
-not completion of this broader migration.
+This is still not full-suite green. Legacy-only tests and legacy expectations in
+mixed balance, PnL, monitor and execution suites still reference the retired
+controller. Complete their retirement or migration with the corresponding revised
+invariants covered before merge. The legacy history method, its helpers and the
+legacy module group remain pending that coherent caller/test cleanup. Rust and
+low-level GPU removal and integrated performance qualification also remain open.
 
 ## Removal boundaries and direct validation targets
 

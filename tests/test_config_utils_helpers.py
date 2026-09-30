@@ -121,7 +121,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
     assert "market_orders_allowed" in loaded["live"]
     assert "market_order_near_touch_threshold" in loaded["live"]
     assert "pnls_max_lookback_days" in loaded["live"]
-    assert loaded["live"]["risk_input_max_attempts"] == 10
+    assert "risk_input_max_attempts" not in loaded["live"]
 
 
 def test_default_trailing_martingale_long_example_matches_template_and_rust_defaults():
@@ -159,20 +159,14 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "strategy",
             "unstuck",
         }
-        assert set(loaded["optimize"]["bounds"]["long"]) == {
-            "forager",
-            "hsl",
-            "risk",
-            "strategy",
-            "unstuck",
-        }
-        assert set(loaded["optimize"]["bounds"]["short"]) == {
-            "forager",
-            "hsl",
-            "risk",
-            "strategy",
-            "unstuck",
-        }
+        expected_bounds = {"forager", "risk", "strategy", "unstuck"}
+        if loaded["live"]["hsl_signal_mode"] == "unified":
+            assert "hsl" in loaded["optimize"]["bounds"]
+            assert "hsl" in loaded["bot"]
+        else:
+            expected_bounds.add("hsl")
+        for side in ("long", "short"):
+            assert set(loaded["optimize"]["bounds"][side]) == expected_bounds
 
 
 def test_validate_config_rejects_fractional_fee_conversion_max_age_ms():
@@ -1870,7 +1864,7 @@ def test_backtest_help_all_describes_high_value_overrides():
     assert "not a live slippage cap" in help_text
     assert "Terminal metric visibility config" in help_text
     assert "[] shows all; a list adds named metrics" in help_text
-    assert "Allowed values: graceful_stop or tp_only_with_active_entry_cancellation" in help_text
+    assert "--bot.long.hsl.orange_tier_mode" not in help_text
     assert "Allowed values: limit or market" in help_text
     assert "Allowed values: reduce_overweight or reduce_portfolio" in help_text
     assert "Allowed values: bounded or legacy_raw" in help_text
@@ -2250,33 +2244,16 @@ def test_live_reserved_user_alias_parses_short_and_long():
     assert getattr(parsed_long, "live.user") == "bybit_02"
 
 
-@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, 10.0, "10", None, float("inf"), float("nan")])
-def test_risk_input_attempt_budget_rejects_invalid_values(value):
-    config = get_template_config()
-    config["live"]["risk_input_max_attempts"] = value
-    with pytest.raises((TypeError, ValueError), match="risk_input_max_attempts"):
-        validate_config(config, verbose=False)
 
 
-def test_risk_input_attempt_budget_default_and_single_attempt():
-    config = get_template_config()
-    assert config["live"]["risk_input_max_attempts"] == 10
-    config["live"]["risk_input_max_attempts"] = 1
-    validate_config(config, verbose=False)
 
 
+@pytest.mark.parametrize("key", ["hsl_unavailable_grace_seconds", "hsl_accept_incomplete_history", "risk_input_max_attempts"])
 @pytest.mark.parametrize("value", [True, False, -1, "120", None, float("inf"), float("nan")])
-def test_hsl_unavailable_grace_rejects_invalid_values(value):
+def test_retired_hsl_recovery_controls_are_not_runtime_inputs(key, value):
+    from config import prepare_config
     config = get_template_config()
-    config["live"]["hsl_unavailable_grace_seconds"] = value
-    with pytest.raises((TypeError, ValueError), match="hsl_unavailable_grace_seconds"):
-        validate_config(config, verbose=False)
-
-
-def test_hsl_unavailable_grace_default_fractional_and_explicit_zero():
-    config = get_template_config()
-    assert config["live"]["hsl_unavailable_grace_seconds"] == 120.0
-    for value in (0.0, 120.5):
-        config["live"]["hsl_unavailable_grace_seconds"] = value
-        validate_config(config, verbose=False)
-        assert config["live"]["hsl_unavailable_grace_seconds"] == value
+    assert key not in config["live"]
+    config["live"][key] = value
+    normalized = prepare_config(config, verbose=False, target="canonical", runtime=None)
+    assert key not in normalized["live"]

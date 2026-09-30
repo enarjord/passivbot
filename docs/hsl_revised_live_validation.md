@@ -1,22 +1,21 @@
 # Revised HSL live validation and rollback
 
-The revised engine is an opt-in replacement for HSL behavior within one process; legacy remains
-the default. Simulation and offline fake-exchange validation do not authorize a live deployment.
+The revised engine is the only HSL implementation in this release. Simulation and offline fake-exchange validation do not authorize a live deployment.
 Start this checklist only after the operator has explicitly approved the account, configuration,
 launch command and intervention scope.
 
 ## Before the first live run
 
 1. Record the reviewed commit, source-verified Rust extension, selected engine, signal mode and
-   complete effective HSL policy. Preserve the pre-trial legacy launch command and a
-   legacy-compatible configuration separately from the revised trial command for rollback. Keep account identifiers, credentials and operational artifacts
+   complete effective HSL policy. Preserve the previous reviewed release, its source-verified native extension, launch command
+   and compatible configuration separately for rollback. Keep account identifiers, credentials and operational artifacts
    outside the public repository.
 2. Validate configuration through the canonical loader. Coin/pside policies belong under
    `bot.long.hsl` and `bot.short.hsl`; unified requires an explicitly supplied `bot.hsl` block.
    Confirm the chosen restart policy, the 1–90 day lookback, the raw
    balance/coin-slot budget and fractional EMA span. Renewed exposure clears cooldown; there
    is no revised manual-intervention policy. The historical curve anchors to the scope
-   budget plus current UPNL, not to balance alone. See [configuration migration](configuration.md#experimental-revised-hsl-configuration).
+   budget plus current UPNL, not to balance alone. See [configuration migration](configuration.md#hsl-configuration).
 3. Run a representative offline backtest and the fake runner using the intended mode, order type
    and scope count. Include both a panic and an ordinary-entry path. Verify the rebuilt extension,
    effective config, native scope diagnostics and resulting orders, not only process exit status.
@@ -67,18 +66,15 @@ return control to the operator. Inspect actual positions and resting orders befo
 next action. Changing a config file or stopping a process does not close a position or cancel an
 order.
 
-Rollback requires restarting with `live.hsl_engine=legacy` and a legacy-compatible configuration.
+Rollback to legacy requires installing the previous reviewed release and its matching native
+extension, then restarting with that release's compatible configuration and saved launch arguments.
+The current release rejects `live.hsl_engine=legacy`; changing that selector is not a rollback.
 Do not silently translate a unified portfolio policy into side policies, or reuse revised optimizer
-fitness as legacy fitness. Select the saved legacy configuration path and remove or replace
-trial CLI overrides, including `--live.hsl_engine revised`, signal mode and HSL policy overrides:
-CLI values override the file and can otherwise select revised again. Preserve unrelated launch
-arguments. Verify the proposed rollback command resolves to `live.hsl_engine=legacy` and the
-intended legacy policy before executing it within the operator-approved scope. Confirm the
-resulting engine, exposure, orders and HSL readiness after restart.
+fitness as legacy fitness. Validate the complete effective configuration and CLI overrides with the
+selected older release before executing an operator-approved rollback. Verify exposure, resting
+orders, engine and protection readiness afterwards.
 
-The operator can accept the live trial after the applicable cases show the intended exchange
+The operator can accept a live trial after the applicable cases show the intended exchange
 behavior, scope scheduling, source freshness, restart reconstruction and diagnostics. A successful
-trial does not switch other bots or remove legacy code. Default replacement and legacy cleanup
-follow the [sole-engine migration plan](plans/hsl_sole_engine_migration.md). The rollback
-command above applies only while the installed version still contains legacy HSL; after
-removal, rollback requires the previous reviewed release and a compatible configuration.
+trial does not authorize changes to other bots. The
+[sole-engine migration plan](plans/hsl_sole_engine_migration.md) defines migration qualification.

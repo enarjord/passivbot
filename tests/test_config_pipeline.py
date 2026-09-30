@@ -73,7 +73,7 @@ def test_prepare_config_preserves_fixed_runtime_override_mapping():
     source = get_template_config()
     source["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.trailing_martingale.entry.threshold_base_pct": 0.123,
-        "bot.short.hsl.no_restart_drawdown_threshold": 1.0,
+        "bot.short.hsl.red_threshold": 0.1,
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -457,7 +457,7 @@ def test_migrate_v7_trailing_grid_reports_inserted_v8_defaults():
     assert "backtest.taker_fee_override" in report["inserted_v8_defaults"]
     assert "live.approved_coins" in report["inserted_v8_defaults"]
     assert "live.forager_score_hysteresis_pct" in report["inserted_v8_defaults"]
-    assert "live.hsl_position_during_cooldown_policy" in report["inserted_v8_defaults"]
+    assert "live.hsl_position_during_cooldown_policy" not in report["inserted_v8_defaults"]
     assert "live.hsl_signal_mode" in report["inserted_v8_defaults"]
     assert (
         "bot.long.risk.position_exposure_enforcer_enabled"
@@ -848,18 +848,10 @@ def test_migrate_v7_trailing_grid_coin_override_migrates_conditional_hsl_aliases
             in report["moved_fields"]
         )
 
-    prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-    parsed = parse_overrides(
-        prepared,
-        verbose=False,
-        symbol_normalizer=lambda coin: coin,
-    )
-    parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
-    assert parsed_override["hsl"]["tier_ratios"] == {
-        "yellow": pytest.approx(0.45),
-        "orange": pytest.approx(0.75),
-    }
-    assert "forager" not in parsed_override
+    # V7 shape migration is independent of retiring HSL tiers. The HSL migration
+    # must be explicit rather than accepting optimizer/coin paths to removed fields.
+    with pytest.raises(ValueError, match="removed revised HSL parameter"):
+        prepare_config(migrated, verbose=False, target="canonical", runtime=None)
 
 
 def test_migrate_v7_trailing_grid_coin_override_rejects_hsl_aliases_outside_coin_mode():
@@ -1610,8 +1602,6 @@ def test_parse_overrides_rejects_v7_flat_strategy_override_keys(flat_key):
     [
         "long_hsl_enabled",
         "short_hsl_enabled",
-        "long_hsl_orange_tier_mode",
-        "short_hsl_orange_tier_mode",
         "long_hsl_panic_close_order_type",
         "short_hsl_panic_close_order_type",
     ],
@@ -1805,8 +1795,8 @@ def test_prepare_config_normalizes_coin_override_we_excess_allowance_mode():
         "we_excess_allowance_mode"
     ] == "legacy_raw"
     assert (
-        prepared["coin_overrides"]["BTC"]["bot"]["short"][
-            "risk_we_excess_allowance_mode"
+        prepared["coin_overrides"]["BTC"]["bot"]["short"]["risk"][
+            "we_excess_allowance_mode"
         ]
         == "legacy_raw"
     )
@@ -2239,40 +2229,34 @@ def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_clamps_hsl_ema_span_to_minimum():
+def test_prepare_config_preserves_fractional_hsl_ema_span():
     source = get_template_config()
-    source["bot"]["long"]["hsl"]["ema_span_minutes"] = 0.25
+    source["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.25
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["bot"]["long"]["hsl"]["ema_span_minutes"] == pytest.approx(1.0)
+    assert prepared["bot"]["long"]["hsl"]["ema_span_minutes"] == pytest.approx(1.25)
 
 
-def test_prepare_config_clamps_hsl_no_restart_threshold_to_red_threshold():
+def test_prepare_config_removes_retired_hsl_terminal_threshold():
     source = get_template_config()
     source["bot"]["long"]["hsl"]["red_threshold"] = 0.20
     source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(0.20)
+    assert "no_restart_drawdown_threshold" not in prepared["bot"]["long"]["hsl"]
 
 
 @pytest.mark.parametrize(
     ("group", "field", "value", "match"),
     [
-        ("hsl", "red_threshold", 0.0, r"bot\.long\.hsl\.red_threshold must be finite and > 0\.0"),
+        ("hsl", "red_threshold", 0.0, r"bot\.long\.hsl\.red_threshold"),
         (
             "hsl",
             "cooldown_minutes_after_red",
             -1.0,
-            r"bot\.long\.hsl\.cooldown_minutes_after_red must be finite and >= 0\.0",
-        ),
-        (
-            "hsl",
-            "tier_ratios",
-            {"yellow": 0.9, "orange": 0.8},
-            r"bot\.long\.hsl\.tier_ratios must satisfy 0 < yellow < orange < 1",
+            r"bot\.long\.hsl\.cooldown_minutes_after_red",
         ),
         (
             "risk",
@@ -2498,9 +2482,8 @@ def test_twel_policy_and_entry_gate_are_not_optimizer_bounds():
 
 
 def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
-    prepared = load_prepared_config(
-        "configs/fake_live_hsl_btc.hjson", verbose=False, target="live"
-    )
+    from hsl_revised_fixture import load_fake_hsl_config
+    prepared = prepare_config(load_fake_hsl_config(), verbose=False, target="live")
 
     assert prepared["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
     assert _strategy_side(prepared, "short")["entry"]["double_down_factor"] == pytest.approx(0.5)

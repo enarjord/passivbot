@@ -141,10 +141,6 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.hsl_startup_preview",
         "read-only offline HSL startup preview",
     ),
-    "hsl-replay-benchmark": CommandSpec(
-        "tools.hsl_replay_benchmark",
-        "benchmark the offline coin-HSL replay hot path",
-    ),
     "gpu-proxy-benchmark": CommandSpec(
         "tools.gpu_proxy_benchmark",
         "benchmark deterministic Apple MPS proxy workloads",

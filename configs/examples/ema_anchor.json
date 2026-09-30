@@ -54,12 +54,9 @@
                 "cooldown_minutes_after_red": 3270.0,
                 "ema_span_minutes": 427.0,
                 "enabled": false,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "graceful_stop",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.05,
-                "restart_after_red_policy": "threshold",
-                "tier_ratios": {"orange":0.75,"yellow":0.5}
+                "restart_after_red_policy": "always"
             },
             "risk": {
                 "entry_cooldown_minutes": 0.0,
@@ -110,12 +107,9 @@
                 "cooldown_minutes_after_red": 3270.0,
                 "ema_span_minutes": 427.0,
                 "enabled": false,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "graceful_stop",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.05,
-                "restart_after_red_policy": "threshold",
-                "tier_ratios": {"orange":0.75,"yellow":0.5}
+                "restart_after_red_policy": "always"
             },
             "risk": {
                 "entry_cooldown_minutes": 0.0,
@@ -170,7 +164,6 @@
         "forced_mode_long": "",
         "forced_mode_short": "",
         "hedge_mode": false,
-        "hsl_position_during_cooldown_policy": "panic",
         "hsl_signal_mode": "coin",
         "ignored_coins": {"long":[],"short":[]},
         "inactive_coin_candle_ttl_minutes": 10,
@@ -196,7 +189,8 @@
         "user": "bybit_01",
         "warmup_concurrency": 0,
         "warmup_jitter_seconds": 30,
-        "warmup_ratio": 0.3
+        "warmup_ratio": 0.3,
+        "hsl_engine": "revised"
     },
     "logging": {
         "backup_count": 5,

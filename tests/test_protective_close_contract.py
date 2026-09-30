@@ -84,7 +84,8 @@ async def test_ready_exit_isolated_from_another_symbols_quote_outage(monkeypatch
                 raise ValueError('malformed quote')
             raise MarketSnapshotUnavailable('quote temporarily unavailable')
         return {'B': quote}
-    monkeypatch.setattr(Passivbot, '_equity_hard_stop_enabled', lambda *a, **k: False)
+    from live import hsl_revised_live
+    monkeypatch.setattr(hsl_revised_live, 'policy', lambda *a: {'enabled': False, 'panic_close_order_type': 'limit'})
     monkeypatch.setattr(Passivbot, '_monitor_record_price_ticks', lambda *a, **k: None)
     monkeypatch.setattr(planning_gates, 'build_protective_planning_snapshot',
                         lambda bot, symbols, snapshots: SimpleNamespace(last_prices=lambda: {'B': 100.0}))
@@ -172,7 +173,8 @@ async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_e
         bot._record_market_snapshot_surface(symbols, snapshots)
         return snapshots
     bot._get_orchestrator_market_snapshots = quotes
-    monkeypatch.setattr(Passivbot, '_equity_hard_stop_enabled', lambda *a, **k: False)
+    from live import hsl_revised_live
+    monkeypatch.setattr(hsl_revised_live, 'policy', lambda *a: {'enabled': False, 'panic_close_order_type': 'limit'})
     monkeypatch.setattr(Passivbot, '_monitor_record_price_ticks', lambda *a, **k: None)
     targets = {symbol: {'long'} for symbol in ('A', 'B', 'C')}
     if fault == 'payload_shape':

@@ -1,4 +1,4 @@
-"""Configuration boundary for the opt-in revised HSL engine.
+"""Configuration boundary for the sole HSL engine.
 
 Missing restart choices remain explicit nulls while a scope is disabled, so later
 CLI/scenario enablement cannot mistake hydration for an operator's policy choice.
@@ -11,6 +11,7 @@ import re
 from .shared_bot import canonicalize_shared_bot_side
 
 REMOVED_FIELDS = frozenset({"tier_ratios", "orange_tier_mode", "no_restart_drawdown_threshold"})
+REMOVED_LIVE_FIELDS = frozenset({"hsl_accept_incomplete_history", "hsl_unavailable_grace_seconds", "risk_input_max_attempts"})
 FIELDS = frozenset({"enabled", "red_threshold", "ema_span_minutes", "panic_close_order_type",
                     "cooldown_minutes_after_red", "restart_after_red_policy"})
 
@@ -131,6 +132,8 @@ def _is_hsl_path(path):
 def validate_parameter_path(path, mode):
     if "hsl_position_during_cooldown_policy" in path:
         raise ValueError(f"{path} is removed in revised HSL; exposure clears cooldown")
+    if any(key in path for key in REMOVED_LIVE_FIELDS):
+        raise ValueError(f"{path} is a removed HSL recovery control; remove this bound/override")
     if not _is_hsl_path(path):
         return
     if any(key in path for key in REMOVED_FIELDS):
@@ -216,6 +219,11 @@ def normalize_revised(config, template, *, verbose=True):
                 effective = {**bot[side]["hsl"], **values["hsl"]}
                 normalize_block(effective, {}, f"coin_overrides.{coin}.bot.{side}.hsl", verbose=verbose)
                 enabled |= effective["enabled"]
+    for key in sorted(REMOVED_LIVE_FIELDS):
+        if key in config["live"]:
+            if verbose:
+                logging.warning("live.%s is removed; HSL evaluates best-effort history without an emergency fallback", key)
+            del config["live"][key]
     if "hsl_position_during_cooldown_policy" in config["live"]:
         if verbose:
             logging.warning("live.hsl_position_during_cooldown_policy is removed in revised HSL; exposure clears cooldown")

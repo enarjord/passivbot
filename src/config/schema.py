@@ -33,15 +33,9 @@ def _get_shared_bot_defaults():
                 "cooldown_minutes_after_red": 2160.0,
                 "ema_span_minutes": 720.0,
                 "enabled": False,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.15,
-                "restart_after_red_policy": "threshold",
-                "tier_ratios": {
-                    "orange": 0.75,
-                    "yellow": 0.5
-                }
+                "restart_after_red_policy": "always"
             },
             "risk": {
                 "entry_cooldown_minutes": 24.1,
@@ -82,15 +76,9 @@ def _get_shared_bot_defaults():
                 "cooldown_minutes_after_red": 1.0,
                 "ema_span_minutes": 1.0,
                 "enabled": False,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.01,
-                "restart_after_red_policy": "threshold",
-                "tier_ratios": {
-                    "orange": 0.75,
-                    "yellow": 0.5
-                }
+                "restart_after_red_policy": "always"
             },
             "risk": {
                 "entry_cooldown_minutes": 0.0,
@@ -417,9 +405,6 @@ def get_template_config():
                 "forced_mode_long": "",
                 "forced_mode_short": "",
                 "hedge_mode": False,
-                "hsl_accept_incomplete_history": False,
-                "hsl_unavailable_grace_seconds": 120.0,
-                "hsl_position_during_cooldown_policy": "panic",
                 "hsl_engine": "revised",
                 "hsl_signal_mode": "coin",
                 "ignored_coins": {
@@ -453,7 +438,6 @@ def get_template_config():
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "pnls_max_lookback_days": 30.0,
                 "recv_window_ms": 5000,
-                "risk_input_max_attempts": 10,
                 "startup_phase_budgets": {},
                 "strategy_kind": "trailing_martingale",
                 "time_in_force": "good_till_cancelled",

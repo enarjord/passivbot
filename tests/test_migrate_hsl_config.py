@@ -21,6 +21,13 @@ def deny_network(monkeypatch):
 def legacy(mode="coin"):
     cfg = get_template_config()
     cfg["live"]["hsl_signal_mode"] = mode
+    # Source fixture intentionally models the retired release, independent of defaults.
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"].update(
+            restart_after_red_policy="threshold", no_restart_drawdown_threshold=1.,
+            orange_tier_mode="tp_only_with_active_entry_cancellation",
+            tier_ratios={"yellow": .5, "orange": .75},
+        )
     cfg["bot"]["long"]["hsl"]["enabled"] = True
     # An authored retired optimizer override must be edited, never silently dropped.
     cfg["optimize"]["fixed_runtime_overrides"] = {}
