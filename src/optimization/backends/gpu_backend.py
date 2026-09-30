@@ -3970,7 +3970,7 @@ def _canonicalize_proxy_forager_weights(parameters, mapped, sig_digits):
 
 
 def _build_anchor_parameter_context(
-    config: dict, bound_map: dict[str, str]
+    config: dict, bound_map: dict[str, str], *, fallback_parameters: dict | None = None
 ) -> tuple[list[dict[str, float]] | None, dict[str, Bound]]:
     """Resolve anchor-fixed optimizer values without materializing every candidate config."""
 
@@ -4017,6 +4017,8 @@ def _build_anchor_parameter_context(
                 "GPU anchored fine-tune is missing fixed optimizer values for "
                 f"anchor {anchor_index}: {missing}"
             )
+        for name, value in (fallback_parameters or {}).items():
+            overrides.setdefault(name, value)
         parameter_overrides.append(overrides)
     if not parameter_overrides:
         raise ValueError("GPU anchored fine-tune requires at least one anchor")
@@ -4644,21 +4646,24 @@ def run_backend(
         bound_map,
     )
 
-    anchor_parameter_overrides, anchor_fixed_bounds = (
-        _build_anchor_parameter_context(config, bound_map)
-    )
     mapped_all = {
         bound_map[bound_key]: (index, bounds[index])
         for index, (bound_key, _path) in enumerate(key_paths)
         if bound_key in bound_map
     }
+    optional_fixed_parameters = _gpu_fixed_adaptive_parameters(proxy_config, bound_map, mapped_all)
+    anchor_parameter_overrides, anchor_fixed_bounds = (
+        _build_anchor_parameter_context(
+            config, bound_map, fallback_parameters=optional_fixed_parameters
+        )
+    )
     for parameter, (_index, bound) in mapped_all.items():
         if math.isclose(
             float(bound.low), float(bound.high), rel_tol=0.0, abs_tol=1.0e-12
         ):
             fixed_parameter_overrides.setdefault(parameter, float(bound.low))
     if anchor_parameter_overrides is None:
-        for name, value in _gpu_fixed_adaptive_parameters(proxy_config, bound_map, mapped_all).items():
+        for name, value in optional_fixed_parameters.items():
             fixed_parameter_overrides.setdefault(name, value)
     missing = sorted(set(bound_map.values()) - set(mapped_all) - set(fixed_parameter_overrides))
     if anchor_parameter_overrides is None and missing:

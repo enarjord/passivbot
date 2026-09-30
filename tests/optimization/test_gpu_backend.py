@@ -8259,3 +8259,24 @@ def test_gpu_optional_adaptive_parameters_keep_configured_values_without_bounds(
     assert fixed["long_forager_score_weights_unilateralness"] == 0.75
     assert fixed["short_entry_cooldown_max_duration_minutes"] == -1.0
     assert fixed["short_entry_cooldown_adverse_weight"] == 0.0
+
+
+def test_gpu_anchor_optional_adaptive_defaults_preserve_explicit_anchor_values():
+    from config.schema import get_template_config
+    from optimization.backends.gpu_backend import GPU_STRATEGY_BOUND_MAPS, _gpu_fixed_adaptive_parameters
+
+    cfg = get_template_config()
+    cfg[ANCHOR_PLAN_KEY] = {
+        "fixed_keys": ["long_entry_cooldown_weights_minutes_exposure_ratio"],
+        "anchors": [
+            {"fixed_values": [{"key": "long_entry_cooldown_weights_minutes_exposure_ratio", "value": 4.0}]},
+            {"fixed_values": [{"key": "long_entry_cooldown_weights_minutes_exposure_ratio", "value": 8.0}]},
+        ],
+    }
+    mapping = GPU_STRATEGY_BOUND_MAPS["trailing_martingale"]
+    fixed = _gpu_fixed_adaptive_parameters(cfg, mapping, {})
+    anchors, ranges = _build_anchor_parameter_context(cfg, mapping, fallback_parameters=fixed)
+    assert [a["long_entry_cooldown_exposure_weight"] for a in anchors] == [4.0, 8.0]
+    assert all(set(fixed) <= a.keys() for a in anchors)
+    assert all(a["long_entry_cooldown_max_duration_minutes"] == -1.0 for a in anchors)
+    assert ranges["long_entry_cooldown_weights_minutes_exposure_ratio"] == Bound(4.0, 8.0)
