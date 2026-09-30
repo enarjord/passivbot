@@ -561,3 +561,128 @@ def test_fused_dormant_scoring_respects_each_sides_eligible_count(strategy):
     disabled = runner.run(matrix)
     for key, value in active.items():
         torch.testing.assert_close(value, disabled[key].cpu(), rtol=0, atol=0, equal_nan=True)
+
+
+@GPU
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_constant_coin_cooldown_accepts_aggregated_candles_with_exact_parity(strategy, side):
+    import copy
+    from test_gpu_entry_sizing_parity import _fixture, _evaluate
+
+    cfg, candles, mss, btc, ts = _fixture(side, 2, "reentry")
+    cfg["live"]["strategy_kind"] = strategy
+    cfg["backtest"].update(dynamic_wel_by_tradability=False, candle_interval_minutes=5)
+    ts = (ts[0] // 300000) * 300000 + np.arange(len(ts), dtype=np.int64) * 300000
+    # Supply enough trading history for both strategy families after activation.
+    candles = np.concatenate((candles, np.repeat(candles[-1:], 94, axis=0)))
+    btc = np.full(len(candles), 50000.0)
+    ts = ts[0] + np.arange(len(candles), dtype=np.int64) * 300000
+    mss["__meta__"].update(data_interval_minutes=5, requested_start_ts=int(ts[0]))
+    for coin in ("BTC", "ETH"):
+        mss[coin]["last_valid_index"] = len(candles) * 5 - 1
+    candles[:, :, 0] = candles[:, :, 2] * 1.001
+    candles[:, :, 1] = candles[:, :, 2] * 0.999
+    cfg["bot"][side]["strategy"]["ema_anchor"].update(
+        ema_span_0=2, ema_span_1=3, offset=0.01, offset_psize_weight=0,
+        offset_volatility_1h_weight=0, offset_volatility_1m_weight=0,
+    )
+    cfg["coin_overrides"] = {coin: {"bot": {side: {"entry_cooldown": {
+        "min_duration_minutes": 10.0, "max_duration_minutes": 10.0,
+        "weights_minutes": {"adverse_directionality": 7.0},
+    }}}} for coin in ("BTC", "ETH")}
+    active, fills = _evaluate(side, (cfg, candles, mss, btc, ts))
+    baseline_cfg = copy.deepcopy(cfg)
+    for override in baseline_cfg["coin_overrides"].values():
+        override["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 0.0
+    disabled, baseline = _evaluate(side, (baseline_cfg, candles, mss, btc, ts))
+    assert len(fills) > 0
+    np.testing.assert_array_equal(fills, baseline)
+    assert active["fill_count"].item() == len(fills)
+    for key, value in active.items():
+        if isinstance(value, torch.Tensor):
+            torch.testing.assert_close(value, disabled[key], rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("pins,base,floor,ceiling,adverse,accept", [
+    ([np.nan, 10, 10, 7, np.nan], 0, 0, -1, 0, True),
+    ([np.nan, np.nan, 10, 7, np.nan], 10, 0, -1, 0, True),
+    ([np.nan, np.nan, 10, 7, np.nan], 0, 10, -1, 0, True),
+    ([np.nan, np.nan, 10, 7, np.nan], 0, 0, -1, 0, False),
+    ([0, 0, np.nan, np.nan, np.nan], 10, 10, 10, 7, False),
+    ([np.nan, 10, 10, np.nan, np.nan], 0, 0, 30, 7, True),
+    ([np.nan, 10, 10, 7, 0], 0, 0, -1, 0, True),
+    ([np.nan, 0, 10, 7, 0], 0, 0, -1, 0, True),
+])
+def test_effective_coin_cooldown_interval_demand(pins, base, floor, ceiling, adverse, accept):
+    from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
+    from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS as keys
+    from tools.gpu_proxy_benchmark import _base_parameter_values
+
+    values = _base_parameter_values()
+    values.update(entry_cooldown_minutes=base, entry_cooldown_min_duration_minutes=floor,
+                  entry_cooldown_max_duration_minutes=ceiling, entry_cooldown_adverse_weight=adverse,
+                  forager_score_weights_unilateralness=0)
+    matrix = np.asarray([[values[key] for key in keys]])
+    kwargs = dict(sides=1, interval_minutes=5, cooldown_coin_overrides=(np.asarray([pins]),))
+    if accept:
+        _scale_directional_minute_parameters(matrix, keys, **kwargs)
+    else:
+        with pytest.raises(ValueError, match="requires one-minute candles"):
+            _scale_directional_minute_parameters(matrix, keys, **kwargs)
+
+
+def test_inherited_coin_cooldown_clamp_validates_every_candidate_and_coin():
+    from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
+    from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS as keys
+    from tools.gpu_proxy_benchmark import _base_parameter_values
+
+    values = _base_parameter_values()
+    values.update(entry_cooldown_minutes=10, entry_cooldown_adverse_weight=0,
+                  forager_score_weights_unilateralness=0)
+    matrix = np.asarray([[values[key] for key in keys]] * 2)
+    pins = np.asarray([[np.nan, np.nan, 10, 7, np.nan]])
+    kwargs = dict(sides=1, interval_minutes=5, cooldown_coin_overrides=(pins,))
+    _scale_directional_minute_parameters(matrix, keys, **kwargs)
+    matrix[1, keys.index("entry_cooldown_minutes")] = 0
+    with pytest.raises(ValueError, match="requires one-minute candles"):
+        _scale_directional_minute_parameters(matrix, keys, **kwargs)
+    pins = np.vstack((pins, [np.nan, 0, 30, 7, np.nan]))
+    kwargs["cooldown_coin_overrides"] = (pins,)
+    with pytest.raises(ValueError, match="requires one-minute candles"):
+        _scale_directional_minute_parameters(matrix[:1], keys, **kwargs)
+
+
+@GPU
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("pin_side", ["long", "short"])
+def test_fused_constant_override_cooldown_accepts_aggregated_candles(strategy, pin_side):
+    from test_gpu_mps import _multicoin_exposure_fixture
+    from optimization.gpu import model, mps_kernel
+
+    _, row, run, data = _multicoin_exposure_fixture(
+        strategy, "long", count=100, interval_minutes=5, return_context=True,
+    )
+    prefix = "EMA_ANCHOR" if strategy == "ema_anchor" else "TRAILING_MARTINGALE"
+    keys = getattr(model, prefix + "_MULTICOIN_PARAM_KEYS")
+    cols = getattr(model, prefix + "_COIN_OVERRIDE_COLS")
+    start = getattr(model, prefix + "_COIN_OVERRIDE_ADAPTIVE_START")
+    overrides = np.full((2, cols), np.nan)
+    overrides[:, start:start + 4] = [10, 10, 0, 7]
+    cls = (mps_kernel.MpsEmaAnchorMulticoinFusedRunner if strategy == "ema_anchor"
+           else mps_kernel.MpsTrailingMartingaleMulticoinFusedRunner)
+    kwargs = {pin_side + "_coin_overrides": overrides}
+    runner = cls(run, data, dynamic_wel_by_tradability=False, **kwargs)
+    matrix = np.asarray([row + row], dtype=float)
+    active = {key: value.cpu().clone() for key, value in runner.run(matrix).items()
+              if isinstance(value, torch.Tensor)}
+    overrides[:, start + 3] = 0
+    baseline = cls(run, data, dynamic_wel_by_tradability=False, **kwargs).run(matrix)
+    for key, value in active.items():
+        torch.testing.assert_close(value, baseline[key].cpu(), rtol=0, atol=0, equal_nan=True)
+    # One nonconstant override on either fused side must still require 1m input.
+    overrides[1, start] = 0
+    overrides[1, start + 3] = 7
+    runner = cls(run, data, dynamic_wel_by_tradability=False, **kwargs)
+    with pytest.raises(ValueError, match="requires one-minute candles"):
+        runner.run(matrix)

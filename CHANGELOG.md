@@ -16,7 +16,7 @@ since the latest release tag; these features may already be available when insta
   start a fresh GPU search because the parameter layout changed.
   Replay completed-candle windows consistently in live/CPU, wait for all compared scores before
   ranking, and scope unavailable inputs to their consumers so closes remain independent.
-  Constant clamps need no modifier inputs. Validate optimizer bounds, coin overrides and candle
+  Constant clamps, including effective GPU coin overrides, need no modifier inputs. Validate optimizer bounds, coin overrides and candle
   intervals against reachable consumers while keeping RMS history separate from shared activation.
   Size history from eligible coin-side consumers and finalized optimizer pins; omit unused global
   cooldown horizons for explicit resolved or empty universes while retaining held graceful-stop

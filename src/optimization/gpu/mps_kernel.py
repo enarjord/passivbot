@@ -462,6 +462,7 @@ def _scale_directional_minute_parameters(
     sides: int,
     interval_minutes: float,
     ranking_coin_counts: tuple[int, ...] | None = None,
+    cooldown_coin_overrides: tuple[np.ndarray, ...] | None = None,
     dynamic_wel_by_tradability: bool = True,
 ) -> np.ndarray:
     """Convert minute-denominated directional inputs to candle periods.
@@ -533,7 +534,26 @@ def _scale_directional_minute_parameters(
                 # Match Rust's dormant scoring policy. Aggregated candles must
                 # never update a one-minute indicator that cannot be consumed.
                 scaled[~ranking, offset + keys.index("forager_score_weights_unilateralness")] = 0.0
-        rms = ((adverse > 0.0) & ~constant) | ranking
+        adverse_demand = (adverse > 0.0) & ~constant
+        if cooldown_coin_overrides is not None:
+            # Override rows are unscaled base/floor/ceiling/adverse/WEL pins.
+            # Resolve against each candidate before deciding whether RMS is used.
+            adverse_demand = np.zeros(len(scaled), dtype=bool)
+            overrides = cooldown_coin_overrides[side_index]
+            # Avoid per-coin work when all adverse weights are disabled.
+            if np.any(adverse > 0.0) or np.any(overrides[:, 3] > 0.0):
+                for pins in overrides:
+                    effective_adverse = pins[3] if np.isfinite(pins[3]) else adverse
+                    if pins[4] == 0.0 or not np.any(effective_adverse > 0.0):
+                        continue
+                    effective_base = pins[0] if np.isfinite(pins[0]) else base
+                    effective_floor = pins[1] if np.isfinite(pins[1]) else floor
+                    effective_ceiling = pins[2] if np.isfinite(pins[2]) else ceiling
+                    effective_constant = (effective_ceiling >= 0.0) & (
+                        np.maximum(effective_base, effective_floor) >= effective_ceiling
+                    )
+                    adverse_demand |= (effective_adverse > 0.0) & ~effective_constant
+        rms = adverse_demand | ranking
         rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit")] > 0.0
         if np.any(rms) and interval_minutes != 1.0:
             raise ValueError("GPU RMS directionality requires one-minute candles")
@@ -610,8 +630,8 @@ def _scale_multicoin_coin_overrides(
             "MPS candle interval must be finite and at least one minute"
         )
     adaptive_start = expected_cols - 4
-    if interval_minutes != 1.0 and np.any(scaled[:, adaptive_start + 3] > 0.0):
-        raise ValueError("GPU RMS directionality requires one-minute candles")
+    # RMS demand depends on the effective candidate plus these pins. Validate it
+    # when packing the candidate batch, not from incomplete overrides alone.
     for column in minute_columns | {
         hsl_start_column + 3,
         adaptive_start,
@@ -2232,6 +2252,13 @@ class MpsEmaAnchorMulticoinRunner:
                       if self.coin_override_label == "Trailing Martingale"
                       else EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN)
         self.rms_ranking_coin_counts = (int(np.count_nonzero(coin_overrides[:, wel_column] != 0.0)),)
+        cooldown_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
+                           if self.coin_override_label == "Trailing Martingale"
+                           else EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN)
+        self.rms_cooldown_coin_overrides = (coin_overrides[:, [
+            cooldown_column, self.coin_override_cols - 4, self.coin_override_cols - 3,
+            self.coin_override_cols - 1, wel_column,
+        ]].copy(),)
         self.coin_hsl_may_enable = True
         if self.coin_override_label == "EMA":
             hsl_overrides = coin_overrides[
@@ -2334,6 +2361,7 @@ class MpsEmaAnchorMulticoinRunner:
                 sides=1,
                 interval_minutes=self.interval_minutes,
                 ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+                cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
                 dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
             ),
             dtype=np.float32,
@@ -2792,6 +2820,11 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
             short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
         )),)
+        self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
+            EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+            self.coin_override_cols - 4, self.coin_override_cols - 3,
+            self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+        ]].copy(),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
@@ -2842,6 +2875,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 sides=2,
                 interval_minutes=self.interval_minutes,
                 ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+                cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
                 dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
             ),
             dtype=np.float32,
@@ -3047,6 +3081,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             sides=1,
             interval_minutes=self.interval_minutes,
             ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+            cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
             dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
         )
         return _pack_tm_parameter_matrix(
@@ -3309,6 +3344,11 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
             short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
         )),)
+        self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
+            TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
+            self.coin_override_cols - 4, self.coin_override_cols - 3,
+            self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+        ]].copy(),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
@@ -3353,6 +3393,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             sides=2,
             interval_minutes=self.interval_minutes,
             ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+            cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
             dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
         )
         return _pack_tm_parameter_matrix(
