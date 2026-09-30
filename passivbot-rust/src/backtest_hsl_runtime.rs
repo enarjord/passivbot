@@ -1,4 +1,4 @@
-//! Revised backtest execution integration. Permission is rebuilt from simulator facts.
+//! HSL backtest execution integration. Permission is rebuilt from simulator facts.
 use super::*;
 use crate::hsl_controller::{Action, Restart};
 use crate::hsl_evaluator as evaluator;

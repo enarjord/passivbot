@@ -234,7 +234,7 @@ def test_clean_red_aggregate_survives_smoke_and_startup_preview_consumers(observ
         _risk_attention_rank,
         _summarize_hsl_status,
     )
-    from tools.hsl_startup_preview import _bounded_hsl_data, _status_from_event
+    from tools.hsl_startup_preview import _bounded_hsl_data, _status_record_preview
 
     bot, _, wave, events = observed("unified")
     # No approximation/degradation flag should be needed to get RED attention.
@@ -256,7 +256,12 @@ def test_clean_red_aggregate_survives_smoke_and_startup_preview_consumers(observ
     )
     assert _risk_attention_rank(group) == 35
     assert _summarize_hsl_status({"one": group})["tier_counts"] == {"red": 1}
-    assert _status_from_event({"latest_data": _bounded_hsl_data(event)}) == "red"
+    assert (
+        _status_record_preview({"latest_data": _bounded_hsl_data(event)}, now_ms=NOW)[
+            "status"
+        ]
+        == "red"
+    )
 
 
 def test_inactive_scopes_are_visible_in_tui_and_overview(observed):
@@ -385,7 +390,7 @@ def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observ
         _risk_attention_rank,
         _summarize_hsl_status,
     )
-    from tools.hsl_startup_preview import _bounded_hsl_data, _status_from_event
+    from tools.hsl_startup_preview import _bounded_hsl_data, _status_record_preview
 
     bot, owner, _, events = observed("unified")
     wave = capture_report(
@@ -413,7 +418,12 @@ def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observ
     )
     assert _risk_attention_rank(group) == 20
     assert _summarize_hsl_status({"one": group})["tier_counts"] == {"stale": 1}
-    assert _status_from_event({"latest_data": _bounded_hsl_data(event)}) == "stale"
+    assert (
+        _status_record_preview({"latest_data": _bounded_hsl_data(event)}, now_ms=NOW)[
+            "status"
+        ]
+        == "stale_or_unavailable"
+    )
     bot.freshness_ledger.begin_epoch()
     bot.freshness_ledger.stamp("open_orders", now_ms=NOW)
     diagnostics.record(bot, clean)

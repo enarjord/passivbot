@@ -19531,7 +19531,7 @@ def test_streamed_gap_moment_matches_distinct_fill_timestamps(
             if strategy_kind == "ema_anchor"
             else MpsTrailingMartingaleMulticoinFusedRunner
         )
-        runner, matrix = cls(run, data, pnl_lookback_bars=1440), np.asarray([row + row])
+        runner, matrix = cls(run, data, pnl_lookback_bars=0), np.asarray([row + row])
     else:
         market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
         timestamps = (
@@ -19560,7 +19560,8 @@ def test_streamed_gap_moment_matches_distinct_fill_timestamps(
             market,
             run,
             single_data,
-            pnl_lookback_bars=1440,
+            pnl_lookback_bars=0,
+            hsl_enabled=False,
             long_enabled=True,
             short_enabled=True,
         ), np.asarray([single + single])
@@ -19704,7 +19705,8 @@ def test_mps_independent_unstuck_horizons_change_reducer_only(
             market,
             run,
             data,
-            pnl_lookback_bars=1440,
+            pnl_lookback_bars=0,
+            hsl_enabled=False,
             long_enabled=side == "long",
             short_enabled=side == "short",
         )
@@ -19830,7 +19832,7 @@ def _tm_directional_temporal_fixture(features=False, hedge_mode=False):
         short_enabled=True,
         hedge_mode=hedge_mode,
         hsl_enabled=features,
-        pnl_lookback_bars=100 if features else 0,
+        pnl_lookback_bars=1440 if features else 0,
         hsl_ema_tail_enabled=features,
         hsl_raw_drawdown_enabled=features,
         hsl_raw_tail_enabled=features,
@@ -19855,9 +19857,7 @@ def test_tm_directional_temporal_replay_preserves_every_output(
     )
     matrix = np.asarray([row + row] * 3, dtype=np.float64)
     history = dict(history_start_step=73, trade_start_step=113) if recent else {}
-    original = MpsTrailingMartingaleRunner(
-        market, run, data, pnl_lookback_bars=1440, **kwargs
-    )
+    original = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
     expected = {
         k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
         for k, v in original.run(matrix, **history).items()
@@ -19866,7 +19866,6 @@ def test_tm_directional_temporal_replay_preserves_every_output(
         market,
         run,
         data,
-        pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=3 * 2 * 47,
         **kwargs,
     )
@@ -19894,9 +19893,7 @@ def test_tm_directional_temporal_interruption_starts_next_run_fresh():
     matrix = np.asarray([row + row], dtype=np.float64)
     expected = {
         k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
-        for k, v in MpsTrailingMartingaleRunner(
-            market, run, data, pnl_lookback_bars=1440, **kwargs
-        )
+        for k, v in MpsTrailingMartingaleRunner(market, run, data, **kwargs)
         .run(matrix)
         .items()
     }
@@ -19912,7 +19909,6 @@ def test_tm_directional_temporal_interruption_starts_next_run_fresh():
         market,
         run,
         data,
-        pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=2 * 47,
         interrupt_check=interrupt,
         **kwargs,
@@ -19932,14 +19928,11 @@ def test_tm_directional_temporal_interruption_starts_next_run_fresh():
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 def test_tm_directional_temporal_state_abi_tracks_dispatch_features():
     market, run, data, row, kwargs = _tm_directional_temporal_fixture(True)
-    plain = MpsTrailingMartingaleRunner(
-        market, run, data, pnl_lookback_bars=1440, **kwargs
-    )
+    plain = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
     chunked = MpsTrailingMartingaleRunner(
         market,
         run,
         data,
-        pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=2 * 113,
         **kwargs,
     )
@@ -20003,7 +19996,7 @@ def test_tm_directional_temporal_preserves_invalid_valuation(chunk_bars):
             market,
             run,
             data,
-            pnl_lookback_bars=1440,
+            hsl_enabled=False,
             long_enabled=True,
             short_enabled=True,
             max_dispatch_candidate_bars=cap,
@@ -20021,9 +20014,7 @@ def test_tm_directional_temporal_preserves_early_liquidation_outputs():
     market = replace(market, maker_fee=2.0)
     row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("entry_initial_qty_pct")] = 1.0
     matrix = np.asarray([row + row], dtype=np.float64)
-    original = MpsTrailingMartingaleRunner(
-        market, run, data, pnl_lookback_bars=1440, **kwargs
-    )
+    original = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
     expected = {
         k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
         for k, v in original.run(matrix).items()
@@ -20033,7 +20024,6 @@ def test_tm_directional_temporal_preserves_early_liquidation_outputs():
         market,
         run,
         data,
-        pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=2 * 47,
         **kwargs,
     )
@@ -20049,14 +20039,11 @@ def test_tm_directional_temporal_preserves_early_liquidation_outputs():
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 def test_tm_directional_chunking_uses_actual_batch_work_and_switches_safely():
     market, run, data, row, kwargs = _tm_directional_temporal_fixture(True)
-    original = MpsTrailingMartingaleRunner(
-        market, run, data, pnl_lookback_bars=1440, **kwargs
-    )
+    original = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
     runner = MpsTrailingMartingaleRunner(
         market,
         run,
         data,
-        pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=2 * 1513,
         **kwargs,
     )
@@ -20120,7 +20107,8 @@ def test_mps_unstuck_rolling_pnl_window_expires_and_resets_fill_events():
 
     dense_round_trip_count = 2_096
     fills_per_round_trip = 4
-    assert MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY >= dense_round_trip_count
+    # Ordinary unstuck keeps one coalesced event per candle.
+    dense_capacity = dense_round_trip_count
     probe_kernel = (
         r"""
 kernel void passivbot_rolling_pnl_probe(
@@ -20226,9 +20214,9 @@ kernel void passivbot_rolling_pnl_probe(
 }
 """.replace("__DENSE_ROUND_TRIP_COUNT__", str(dense_round_trip_count))
         .replace("__FILLS_PER_ROUND_TRIP__", str(fills_per_round_trip))
-        .replace("__DENSE_CAPACITY__", str(MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY))
+        .replace("__DENSE_CAPACITY__", str(dense_capacity))
     )
-    buffer_size = 6 + MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
+    buffer_size = 6 + dense_capacity
     values = torch.empty((buffer_size, 2), dtype=torch.float32, device=gpu_device())
     indices = torch.empty((buffer_size, 2), dtype=torch.int32, device=gpu_device())
     output = torch.zeros(17, dtype=torch.float32, device=gpu_device())
