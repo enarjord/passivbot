@@ -3295,7 +3295,7 @@ class TestApplyFineTuneBounds:
                 )
             )
 
-        caplog.set_level(logging.WARNING)
+        caplog.set_level(logging.DEBUG)
         install_anchored_fine_tune_plan(config, ["long.param1", "long.param3"], str(anchors_dir))
         shape = build_optimization_shape(config)
         result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], config)
@@ -3547,7 +3547,7 @@ class TestApplyFineTuneBounds:
         seed["_starting_config_source"] = "seed.json"
         shape = build_optimization_shape(config)
 
-        caplog.set_level(logging.WARNING)
+        caplog.set_level(logging.DEBUG)
         individuals, raw_count = configs_to_individuals_streaming(
             [seed],
             shape.bounds,

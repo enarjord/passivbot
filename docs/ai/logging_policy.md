@@ -157,6 +157,23 @@ timestamped logical records and terminal rows after wrapping. If the budget is e
 producer's transition, aggregation, routing, or formatting policy; do not add a global sampler that
 can hide unrelated events. Startup is assessed separately because readiness milestones are bursty.
 
+## Optimizer Console
+
+Pareto changes print an initial summary, then an event-driven aggregate at most once per
+minute, plus pending changes on the final explicit flush. Include exact evaluation count,
+front size, feasible members, additions/removals, constraint range, and the first two configured
+objective ranges. Per-candidate objectives, full ranges, and duplicate rejection detail are DEBUG.
+Seed clamps print one warning per collected context with counts and at most three key samples;
+original values, bounds, adjusted values and source details are DEBUG.
+
+GPU temporal replay prints scenario/pass/stage context at start and correlates compact updates
+and completion with a replay ID. INFO progress is at most once per minute; intermediate updates
+are DEBUG. Percentage, average bars/second and ETA describe that replay only, not an entire suite
+or generation. Exact seed validation reports minute-spaced completed/in-flight/queued counts
+while waiting, and immediate start/completion. Its ETA uses only completions in the current run;
+without such evidence it is unknown. Presentation state is transient and never affects selection,
+result persistence, checkpoints, interruption, or worker failure policy.
+
 ## Fallback Visibility
 
 Trading-critical fallbacks follow `error_contract.md` and include the relevant input/symbol,
