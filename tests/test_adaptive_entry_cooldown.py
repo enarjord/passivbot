@@ -1467,6 +1467,55 @@ def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
     assert bot._max_configured_entry_cooldown_minutes() == 14400.0
 
 
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("source_kind", ["live", "original"])
+@pytest.mark.parametrize("selection_resolved", [False, True])
+def test_explicit_empty_side_only_requires_held_position_cooldowns(
+    side, source_kind, selection_resolved
+):
+    from passivbot import Passivbot
+    from config.runtime_compile import compile_runtime_config
+
+    other = "short" if side == "long" else "long"
+    bot = Passivbot.__new__(Passivbot)
+    cfg = prepare_config(get_template_config(), verbose=False)
+    for pside in ("long", "short"):
+        cfg["bot"][pside]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+        cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = (
+            14400.0 if pside == side else 5.0
+        )
+    cfg["live"]["approved_coins"] = {side: [], other: ["ETH"]}
+    cfg.pop("_coins_sources", None)
+    bot.config = compile_runtime_config(cfg, runtime="live")
+    if source_kind == "original":
+        bot.config["_coins_sources"] = {"approved_coins": {side: [], other: ["ETH"]}}
+    else:
+        bot.config.pop("_coins_sources", None)
+    bot.approved_coins_minus_ignored_coins = {other: {"ETH"}}
+    if selection_resolved:
+        bot.approved_coins_minus_ignored_coins[side] = set()
+    bot.is_approved = lambda pside, symbol: symbol in bot.approved_coins_minus_ignored_coins.get(pside, set())
+    bot._equity_hard_stop_enabled = lambda: False
+    bot._live_risk_uses_authoritative_pnl = lambda: False
+    bot.coin_overrides = {"BTC": {"bot": {side: {"entry_cooldown": {
+        "base_duration_minutes": 60.0,
+    }}}}}
+    bot.positions = {}
+    now = 30 * 24 * 60 * 60000
+    assert bot._max_configured_entry_cooldown_minutes() == 5.0
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 6 * 60000)
+    # Empty approval never drops history consumed by held graceful-stop positions.
+    bot.positions = {"BTC": {side: {"size": 1.0 if side == "long" else -1.0}}}
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 61 * 60000)
+    bot.positions = {"XRP": {side: {"size": 1.0 if side == "long" else -1.0}}}
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
+    bot.positions = {}
+    # Nonempty unresolved selection still retains its conservative default horizon.
+    sources = (bot.config["_coins_sources"] if source_kind == "original" else bot.config["live"])
+    sources["approved_coins"][side] = ["BTC"]
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
 async def test_live_adverse_rms_respects_side_approval_and_transitions(side):

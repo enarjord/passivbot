@@ -1988,10 +1988,14 @@ class Passivbot:
             }
             # Held positions can still DCA after removal under graceful stop.
             # Include them even before a restart has resolved per-cycle modes.
-            # Until selection is resolved (or for an all universe), retain the
-            # default. Otherwise each approved symbol supplies its effective policy.
-            if explicit and approved:
-                eligible = held | {symbol for symbol in approved if self.is_approved(pside, symbol)}
+            # An explicitly empty source is already resolved. For a nonempty
+            # unresolved selection (or an all universe), retain the default.
+            # Otherwise each eligible symbol supplies its effective policy.
+            if explicit and (approved or not raw):
+                eligible = held | {
+                    symbol for symbol in (approved or ())
+                    if raw and self.is_approved(pside, symbol)
+                }
                 symbols = sorted(eligible.intersection(overrides))
                 if eligible.difference(overrides):
                     symbols.append(None)

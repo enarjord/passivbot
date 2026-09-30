@@ -19,7 +19,7 @@ since the latest release tag; these features may already be available when insta
   Constant clamps need no modifier inputs. Validate optimizer bounds, coin overrides and candle
   intervals against reachable consumers while keeping RMS history separate from shared activation.
   Size history from eligible coin-side consumers and finalized optimizer pins; omit unused global
-  cooldown horizons for explicit resolved universes while retaining held graceful-stop
+  cooldown horizons for explicit resolved or empty universes while retaining held graceful-stop
   policies. Skip dormant RMS scoring and history when each side's eligible universe fits
   fixed slots without dynamic WEL, including aggregated GPU candles. Retry GPU EMA Anchor
   ranking after newly eligible coins finish warming up. Keep omitted adaptive optimizer
