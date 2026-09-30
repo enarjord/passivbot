@@ -103,6 +103,12 @@ _EMA_SIDE_BOUND_SUFFIXES = {
     "offset_volatility_ema_span_1h": "offset_volatility_ema_span_1h",
     "offset_volatility_ema_span_1m": "offset_volatility_ema_span_1m",
     "risk_entry_cooldown_minutes": "entry_cooldown_minutes",
+    "entry_cooldown_min_duration_minutes": "entry_cooldown_min_duration_minutes",
+    "entry_cooldown_max_duration_minutes": "entry_cooldown_max_duration_minutes",
+    "entry_cooldown_weights_minutes_exposure_ratio": "entry_cooldown_exposure_weight",
+    "entry_cooldown_weights_minutes_adverse_directionality": "entry_cooldown_adverse_weight",
+    "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
+    "forager_score_weights_unilateralness": "forager_score_weights_unilateralness",
     "total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
 
@@ -333,6 +339,12 @@ _TM_SIDE_BOUND_SUFFIXES = {
     "close_retracement_volatility_1h_weight": "close_retracement_volatility_1h_weight",
     "close_retracement_volatility_1m_weight": "close_retracement_volatility_1m_weight",
     "risk_entry_cooldown_minutes": "entry_cooldown_minutes",
+    "entry_cooldown_min_duration_minutes": "entry_cooldown_min_duration_minutes",
+    "entry_cooldown_max_duration_minutes": "entry_cooldown_max_duration_minutes",
+    "entry_cooldown_weights_minutes_exposure_ratio": "entry_cooldown_exposure_weight",
+    "entry_cooldown_weights_minutes_adverse_directionality": "entry_cooldown_adverse_weight",
+    "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
+    "forager_score_weights_unilateralness": "forager_score_weights_unilateralness",
     "risk_wel_enforcer_threshold": "wel_enforcer_threshold",
     "total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
@@ -466,9 +478,6 @@ def _validate_gpu_data_independent_scope(
 ) -> tuple[str, list[str], list[str]]:
     """Validate GPU behavior which does not depend on prepared candles or coin count."""
 
-    from config.entry_cooldown import reject_gpu_adaptive
-
-    reject_gpu_adaptive(config)
     strategy_kind = _validate_gpu_static_scope(config)
     if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
         raise ValueError("Apple MPS GPU scope validation requires allow_suite=True")
@@ -1881,6 +1890,22 @@ def _validate_gpu_coin_overrides(
             {
                 ("live", f"forced_mode_{enabled_side}"),
                 ("bot", enabled_side, "entry_cooldown", "base_duration_minutes"),
+                ("bot", enabled_side, "entry_cooldown", "min_duration_minutes"),
+                ("bot", enabled_side, "entry_cooldown", "max_duration_minutes"),
+                (
+                    "bot",
+                    enabled_side,
+                    "entry_cooldown",
+                    "weights_minutes",
+                    "exposure_ratio",
+                ),
+                (
+                    "bot",
+                    enabled_side,
+                    "entry_cooldown",
+                    "weights_minutes",
+                    "adverse_directionality",
+                ),
                 ("bot", enabled_side, "risk", "we_excess_allowance_pct"),
                 ("bot", enabled_side, "wallet_exposure_limit"),
             }
@@ -3659,7 +3684,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 6,  # Exact weight canonicalization and TM entry/selection/PnL parity.
+        "version": 7,  # Adaptive timing/RMS parameter layout and four-weight ranking.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {
@@ -3842,11 +3867,17 @@ def _build_proxy_parameter_dicts(
     fixed_parameter_overrides: dict[str, float] | None = None,
     optimizer_overrides: set[str] | None = None,
     sig_digits: int | None = None,
+    base_forager_weights: dict | None = None,
 ) -> list[dict]:
     """Include canonical pinned and active strategy values in each proxy candidate."""
 
     base_parameters = {
-        name: float(base_vector[index]) for name, (index, _bound) in mapped.items()
+        **{
+            f"{side}_forager_score_weights_{key}": float(value)
+            for side, weights in (base_forager_weights or {}).items()
+            for key, value in weights.items()
+        },
+        **{name: float(base_vector[index]) for name, (index, _bound) in mapped.items()},
     }
     anchor_columns = [
         column
@@ -3896,12 +3927,15 @@ def _canonicalize_proxy_forager_weights(parameters, mapped, sig_digits):
     for side in ("long", "short"):
         names = {
             key: f"{side}_forager_score_weights_{key}"
-            for key in ("volume", "ema_readiness", "volatility")
+            for key in ("volume", "ema_readiness", "volatility", "unilateralness")
         }
-        if not all(name in parameters for name in names.values()):
+        if not all(
+            names[key] in parameters
+            for key in ("volume", "ema_readiness", "volatility")
+        ):
             continue
         normalized = normalize_forager_score_weights(
-            {key: parameters[name] for key, name in names.items()},
+            {key: parameters.get(name, 0.0) for key, name in names.items()},
             path=f"bot.{side}.forager.score_weights",
         )
         for key, name in names.items():
@@ -5020,6 +5054,10 @@ def run_backend(
             fixed_parameter_overrides=fixed_parameter_overrides,
             optimizer_overrides=gpu_optimizer_overrides,
             sig_digits=sig_digits,
+            base_forager_weights={
+                side: config["bot"][side]["forager"]["score_weights"]
+                for side in ("long", "short")
+            },
         )
 
     def full_vector(row: np.ndarray) -> list[float]:

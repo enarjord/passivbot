@@ -12,6 +12,7 @@ from optimization.gpu.runtime import (
 )
 
 from optimization.gpu.model import (
+    ADAPTIVE_PARAM_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
@@ -417,16 +418,24 @@ def _upgrade_legacy_single_coin_wel_params(
     if params.ndim != 2 or params.shape[1] == side_width * 2:
         return params
     legacy_width = params.shape[1] // 2
-    if params.shape[1] % 2 or legacy_width not in (side_width - 2, side_width - 3):
+    previous_width = side_width - len(ADAPTIVE_PARAM_KEYS)
+    if params.shape[1] % 2 or legacy_width not in (
+        previous_width,
+        previous_width - 2,
+        previous_width - 3,
+    ):
         return params
     strategy_start = 1 if side_width == len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) else 0
     sides = []
+    defaults = np.array([0.0, -1.0, 0.0, 0.0, 60.0, 0.0, 1200.0], dtype=params.dtype)
     for offset in (0, legacy_width):
         side = params[:, offset : offset + legacy_width]
         parts = [side]
-        if legacy_width == side_width - 3:
+        if legacy_width == previous_width - 3:
             parts.append(np.full((len(params), 1), -1.0, dtype=params.dtype))
-        parts.append(side[:, strategy_start : strategy_start + 2])
+        if legacy_width != previous_width:
+            parts.append(side[:, strategy_start : strategy_start + 2])
+        parts.append(np.broadcast_to(defaults, (len(params), len(defaults))))
         sides.append(np.concatenate(parts, axis=1))
     return np.concatenate(sides, axis=1)
 
@@ -475,6 +484,7 @@ def _scale_directional_minute_parameters(
         "entry_cooldown_minutes",
         "hsl_cooldown_minutes_after_red",
     }
+    minute_keys.update(ADAPTIVE_PARAM_KEYS[:4])
     if "offset_volatility_ema_span_1m" in keys:
         minute_keys.add("offset_volatility_ema_span_1m")
     if "volatility_ema_span_1m" in keys:
@@ -486,8 +496,48 @@ def _scale_directional_minute_parameters(
     side_width = len(keys)
     for side_index in range(sides):
         offset = side_index * side_width
+        span_col = offset + keys.index("unilateralness_ema_span_1m")
+        adverse = scaled[:, offset + keys.index("entry_cooldown_adverse_weight")]
+        score = scaled[:, offset + keys.index("forager_score_weights_unilateralness")]
+        ceiling = scaled[:, offset + keys.index("entry_cooldown_max_duration_minutes")]
+        floor = scaled[:, offset + keys.index("entry_cooldown_min_duration_minutes")]
+        base = scaled[:, offset + keys.index("entry_cooldown_minutes")]
+        exposure = scaled[:, offset + keys.index("entry_cooldown_exposure_weight")]
+        policy = np.column_stack((floor, ceiling, exposure, adverse))
+        with np.errstate(over="ignore"):
+            finite_policy = np.isfinite(policy.astype(np.float32)).all()
+        if (
+            not finite_policy
+            or np.any(floor < 0)
+            or np.any(exposure < 0)
+            or np.any(adverse < 0)
+            or np.any((ceiling < 0) & (ceiling != -1))
+            or np.any((ceiling >= 0) & (ceiling < floor))
+            or np.any(((exposure > 0) | (adverse > 0)) & (ceiling < 0))
+        ):
+            raise ValueError(
+                "GPU adaptive cooldown requires finite nonnegative weights/floor and a valid bounded ceiling"
+            )
+        constant = (ceiling >= 0.0) & (np.maximum(base, floor) >= ceiling)
+        rms = ((adverse > 0.0) & ~constant) | (
+            (score > 0.0) if "n_positions" in keys else False
+        )
+        rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit")] > 0.0
+        if np.any(rms) and interval_minutes != 1.0:
+            raise ValueError("GPU RMS directionality requires one-minute candles")
+        spans = scaled[:, span_col]
+        if np.any(rms & (~np.isfinite(spans) | (spans < 1.0) | (spans > 100000.0))):
+            raise ValueError(
+                "GPU unilateralness spans must be finite and between 1 and 100000"
+            )
+        scaled[:, offset + keys.index("unilateralness_window")] = np.ceil(20.0 * spans)
         for key in minute_keys:
-            scaled[:, offset + keys.index(key)] /= interval_minutes
+            column = offset + keys.index(key)
+            if key == "entry_cooldown_max_duration_minutes":
+                finite_ceiling = scaled[:, column] >= 0.0
+                scaled[finite_ceiling, column] /= interval_minutes
+            else:
+                scaled[:, column] /= interval_minutes
         for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
             _validate_unstuck_ema_spans(scaled[:, offset + keys.index(key)])
         if interval_minutes != 1.0:
@@ -547,8 +597,19 @@ def _scale_multicoin_coin_overrides(
         raise ValueError(
             "MPS candle interval must be finite and at least one minute"
         )
-    for column in minute_columns | {hsl_start_column + 3}:
+    adaptive_start = expected_cols - 4
+    if interval_minutes != 1.0 and np.any(scaled[:, adaptive_start + 3] > 0.0):
+        raise ValueError("GPU RMS directionality requires one-minute candles")
+    for column in minute_columns | {
+        hsl_start_column + 3,
+        adaptive_start,
+        adaptive_start + 1,
+        adaptive_start + 2,
+        adaptive_start + 3,
+    }:
         finite = np.isfinite(scaled[:, column])
+        if column == adaptive_start + 1:
+            finite &= scaled[:, column] >= 0.0
         scaled[finite, column] /= interval_minutes
     if interval_minutes != 1.0:
         hsl_span_column = hsl_start_column + 2
@@ -566,7 +627,7 @@ def _scale_multicoin_coin_overrides(
             interval_minutes * np.log(decay_1m[positive_decay])
         )
         scaled[finite, hsl_span_column] = 2.0 / alpha_per_candle - 1.0
-    _validate_unstuck_ema_spans(scaled[:, -2:], allow_unset=True)
+    _validate_unstuck_ema_spans(scaled[:, -6:-4], allow_unset=True)
     return np.ascontiguousarray(scaled, dtype=np.float32)
 
 

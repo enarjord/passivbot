@@ -1163,6 +1163,12 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
         "close_retracement_volatility_1h_weight",
         "close_retracement_volatility_1m_weight",
         "risk_entry_cooldown_minutes",
+        "entry_cooldown_min_duration_minutes",
+        "entry_cooldown_max_duration_minutes",
+        "entry_cooldown_weights_minutes_exposure_ratio",
+        "entry_cooldown_weights_minutes_adverse_directionality",
+        "unilateralness_ema_span_1m",
+        "forager_score_weights_unilateralness",
         "risk_twel_enforcer_threshold",
         "risk_we_excess_allowance_pct",
         "risk_wel_enforcer_threshold",
@@ -5885,12 +5891,12 @@ def test_proxy_parameters_include_canonical_pinned_ema_values():
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("step,sig_digits", [(0.01, 6), (None, 3)])
-@pytest.mark.parametrize("weights", [(0.31, 0.72, 0.18), (0.0, 0.0, 0.0)])
+@pytest.mark.parametrize("weights", [(0.31, 0.72, 0.18, 0.4), (0.0, 0.0, 0.0, 0.0)])
 def test_proxy_forager_weights_match_exact_vector_roundtrip(side, step, sig_digits, weights):
     from config.bot import normalize_forager_score_weights
     from optimize import _canonicalize_optimizer_individual
 
-    keys = ("volume", "ema_readiness", "volatility")
+    keys = ("volume", "ema_readiness", "volatility", "unilateralness")
     paths = [(f"{side}_forager_score_weights_{key}",
               ("bot", side, "forager", "score_weights", key)) for key in keys]
     bounds = [Bound(0.0, 1.0, step) for _ in keys]
@@ -5917,16 +5923,16 @@ def test_proxy_forager_roundtrip_reapplies_fixed_and_mirrored_weights(fixed_volu
     from optimize import _canonicalize_optimizer_individual
 
     config = get_template_config()
-    keys = ("volume", "ema_readiness", "volatility")
+    keys = ("volume", "ema_readiness", "volatility", "unilateralness")
     paths = [
         (f"{side}_forager_score_weights_{key}",
          ("bot", side, "forager", "score_weights", key))
         for side in ("long", "short") for key in keys
     ]
-    bounds = [Bound(0.0, 1.0, 0.01)] * 3 + [Bound(0.0, 1.0, 0.2)] * 3
+    bounds = [Bound(0.0, 1.0, 0.01)] * 4 + [Bound(0.0, 1.0, 0.2)] * 4
     mapped = {name: (index, bounds[index]) for index, (name, _) in enumerate(paths)}
     active = [(name, index, bound) for name, (index, bound) in mapped.items()]
-    weights = [0.31, 0.72, 0.18, 0.8, 0.4, 0.6]
+    weights = [0.31, 0.72, 0.18, 0.4, 0.8, 0.4, 0.6, 0.2]
     fixed = {}
     if fixed_volume:
         config["optimize"]["fixed_runtime_overrides"] = {
@@ -5961,7 +5967,7 @@ def test_proxy_forager_roundtrip_preserves_anchor_fixed_weights():
     config = get_template_config()
     prefix = "long_forager_score_weights_"
     path = ("bot", "long", "forager", "score_weights", "volume")
-    fixed = {"ema_readiness": 0.72, "volatility": 0.18}
+    fixed = {"ema_readiness": 0.72, "volatility": 0.18, "unilateralness": 0.4}
     config[ANCHOR_PLAN_KEY] = {
         "fixed_keys": [prefix + key for key in fixed],
         "tunable_keys": [prefix + "volume"],
@@ -5993,7 +5999,10 @@ def test_proxy_forager_roundtrip_preserves_anchor_fixed_weights():
     )[0]
     assert {key: proxy[prefix + key] for key in fixed} == fixed
     effective = normalize_forager_score_weights(
-        {key: proxy[prefix + key] for key in ("volume", "ema_readiness", "volatility")},
+        {
+            key: proxy[prefix + key]
+            for key in ("volume", "ema_readiness", "volatility", "unilateralness")
+        },
         path="proxy weights",
     )
     assert effective == pytest.approx(exact["bot"]["long"]["forager"]["score_weights"])
@@ -8184,3 +8193,43 @@ def test_screening_scenario_labels_survive_canonical_config_roundtrip():
     config['optimize']['gpu']['screening']['scenarios'] = ['a', 'b']
     normalized = format_config(config, verbose=False)
     assert _resolve_options(normalized)['screening']['scenarios'] == ['a', 'b']
+
+
+def test_proxy_forager_roundtrip_retains_unsearched_unilateralness_weight():
+    from config.bot import normalize_forager_score_weights
+    from optimize import _canonicalize_optimizer_individual
+
+    config = get_template_config()
+    config["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.4
+    keys = ("volume", "ema_readiness", "volatility")
+    paths = [
+        (
+            f"long_forager_score_weights_{key}",
+            ("bot", "long", "forager", "score_weights", key),
+        )
+        for key in keys
+    ]
+    bounds = [Bound(0, 1, 0.01)] * 3
+    mapped = {name: (i, bounds[i]) for i, (name, _) in enumerate(paths)}
+    weights = [0.31, 0.72, 0.18]
+    exact = _canonicalize_optimizer_individual(
+        weights.copy(), config, bounds, 6, paths, []
+    )
+    proxy = _build_proxy_parameter_dicts(
+        weights,
+        mapped,
+        [(name, i, bound) for name, (i, bound) in mapped.items()],
+        np.array([weights]),
+        sig_digits=6,
+        base_forager_weights={
+            "long": config["bot"]["long"]["forager"]["score_weights"]
+        },
+    )[0]
+    actual = normalize_forager_score_weights(
+        {
+            key: proxy[f"long_forager_score_weights_{key}"]
+            for key in (*keys, "unilateralness")
+        },
+        path="proxy weights",
+    )
+    assert actual == pytest.approx(exact["bot"]["long"]["forager"]["score_weights"])

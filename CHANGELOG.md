@@ -6,12 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Add opt-in CPU/live adaptive entry cooldown and Forager RMS unilateralness scoring for
+- Add opt-in adaptive entry cooldown and Forager RMS unilateralness scoring for
   sustained one-way price action. Cooldown uses additive exposure-ratio and adverse-directionality
   weights with a floor/ceiling; RMS shares a floating-point EMA span across both consumers and
   decays during flat prices. Move the base duration to `bot.<side>.entry_cooldown` (schema v8.5.0),
   retaining legacy config/CLI/optimizer aliases, numeric defaults, and disabled-feature behavior.
-  New weights and optimizer dimensions remain opt-in; GPU rejects unsupported enabled settings.
+  New weights and optimizer dimensions remain opt-in. Metal/CUDA GPU screening supports both
+  features for EMA Anchor and Trailing Martingale, including per-coin cooldown overrides;
+  start a fresh GPU search because the parameter layout changed.
   Replay completed-candle windows consistently in live/CPU, wait for all compared scores before
   ranking, and scope unavailable inputs to their consumers so closes remain independent.
   Constant clamps need no modifier inputs. Validate optimizer bounds, coin overrides and candle

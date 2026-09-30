@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from config import get_template_config, prepare_config
-from config.entry_cooldown import maximum_duration, reject_gpu_adaptive
+from config.entry_cooldown import maximum_duration
 from test_orchestrator_json_api import make_input, make_symbol, bot_params_pair, compute
 from live import reconciler
 
@@ -100,7 +100,7 @@ def test_rms_real_replay_and_flat_tail():
         pbr.calc_signed_unilateralness([1.0, float("nan")] * (n + 1), span)
 
 
-def test_config_limits_zero_weights_and_gpu_rejection():
+def test_config_limits_zero_weights():
     cfg = prepare_config(get_template_config(), verbose=False)
     ec = cfg["bot"]["long"]["entry_cooldown"]
     assert maximum_duration(ec) == 24.1
@@ -110,8 +110,6 @@ def test_config_limits_zero_weights_and_gpu_rejection():
         maximum_duration(ec)
     ec["max_duration_minutes"] = 30
     assert maximum_duration(ec) == 30
-    with pytest.raises(ValueError, match="CPU"):
-        reject_gpu_adaptive(cfg)
 
 
 def test_adaptive_output_validator_checks_current_duration():
@@ -329,8 +327,6 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     )
     assert bounds["long_forager_score_weights_unilateralness"] == [0.0, 1.0]
     assert bounds["long_unilateralness_ema_span_1m"] == [20.0, 80.5]
-    with pytest.raises(ValueError, match="CPU"):
-        reject_gpu_adaptive(cfg)
 
 
 def test_forager_can_rank_carried_score_while_current_cooldown_is_unavailable():

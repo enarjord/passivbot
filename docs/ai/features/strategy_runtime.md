@@ -326,4 +326,9 @@ adverse inputs conservatively; effective trading modes remain Rust's decision.
 Current effective duration,
 not base alone, governs elapsed-time gating and entry-ladder staging. At effective
 zero retain existing strategy rules. Partial fills remain ordinary increasing fills.
-All new weights default to zero; GPU rejects enabled unsupported settings.
+All new weights default to zero. Metal/CUDA screening supports these settings for
+EMA Anchor and Trailing Martingale, including directional and fused portfolios.
+GPU RMS uses a finite exponential recurrence, reads the expiring return from immutable
+candles, and periodically rebuilds to bound float32 subtraction error. Replay checkpoints
+preserve each candidate/coin/side accumulator; exact Rust validation remains authoritative.
+The GPU parameter-layout revision invalidates older optimizer checkpoints.

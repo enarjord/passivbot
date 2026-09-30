@@ -510,6 +510,14 @@ in their execution identity. For a fill-sensitivity suite, set `backtest.suite_e
 ]
 ```
 
+GPU screening supports [adaptive entry cooldown and RMS unilateralness](adaptive_entry_cooldown.md)
+for EMA Anchor and Trailing Martingale, on Metal and CUDA, including single-coin,
+directional multi-coin and fused long/short runs. Cooldown floors, ceilings and additive
+weights accept optimizer bounds and per-coin overrides; the shared fractional RMS span and
+Forager scoring weight accept optimizer bounds. Active RMS requires one-minute candles.
+Defaults leave the features disabled. Exact Rust validation remains authoritative for the
+float32 proxy. Start a fresh GPU search after this layout revision.
+
 #### Deliberate current limitations
 
 Independent unstuck EMA horizons are supported on Apple MPS for EMA Anchor and Trailing Martingale,

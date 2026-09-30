@@ -21,6 +21,10 @@ from optimization.gpu.metric_registry import (
     HARD_STOP_PROXY_METRICS,
 )
 from optimization.gpu.model import (
+    adaptive_params,
+    ADAPTIVE_OVERRIDE_KEYS,
+    EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START,
     UNSTUCK_EMA_PARAM_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
@@ -1877,6 +1881,8 @@ def _candidate_parameter_matrix(
     for side_index, (side, base) in enumerate(base_params.items()):
         overrides = (static_overrides or {}).get(side, {})
         for column, key in enumerate(param_keys):
+            if key == "unilateralness_window":
+                continue
             source_key = (
                 key.removeprefix("unstuck_")
                 if couple_unstuck_emas
@@ -1896,6 +1902,12 @@ def _candidate_parameter_matrix(
                     )
                     for candidate in candidates
                 ]
+        if "unilateralness_window" in param_keys:
+            offset = side_index * len(param_keys)
+            matrix[:, offset + param_keys.index("unilateralness_window")] = np.ceil(
+                20.0
+                * matrix[:, offset + param_keys.index("unilateralness_ema_span_1m")]
+            )
     return matrix
 
 
@@ -2092,6 +2104,9 @@ class MpsSingleCoinProxy:
                 strategy.update(_hsl_params(bot, signal_mode=signal_mode))
             strategy["wallet_exposure_limit"] = float(
                 bot.get("wallet_exposure_limit", -1.0)
+            )
+            strategy.update(
+                adaptive_params(flatten_shared_bot_side(config["bot"][side]))
             )
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
@@ -2590,6 +2605,24 @@ def _build_multicoin_ema_coin_overrides(
         for column, key in enumerate(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS):
             if key in strategy_patch:
                 matrix[coin_index, column] = float(effective_strategy[key])
+        cooldown_patch = side_patch.get("entry_cooldown", {}) or {}
+        encoded = adaptive_params(effective_bot)
+        paths = (
+            ("min_duration_minutes",),
+            ("max_duration_minutes",),
+            ("weights_minutes", "exposure_ratio"),
+            ("weights_minutes", "adverse_directionality"),
+        )
+        for offset, (key, path) in enumerate(zip(ADAPTIVE_OVERRIDE_KEYS, paths)):
+            patch_value = cooldown_patch
+            for leaf in path:
+                if not isinstance(patch_value, dict) or leaf not in patch_value:
+                    break
+                patch_value = patch_value[leaf]
+            else:
+                matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START + offset] = (
+                    encoded[key]
+                )
         risk_patch = side_patch.get("risk", {}) or {}
         if "base_duration_minutes" in (side_patch.get("entry_cooldown", {}) or {}):
             matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN] = float(
@@ -2727,6 +2760,25 @@ def _build_multicoin_tm_coin_overrides(
                 coin_index,
                 TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
             ] = float(effective_strategy["gate_reentry"])
+        cooldown_patch = side_patch.get("entry_cooldown", {}) or {}
+        encoded = adaptive_params(effective_bot)
+        paths = (
+            ("min_duration_minutes",),
+            ("max_duration_minutes",),
+            ("weights_minutes", "exposure_ratio"),
+            ("weights_minutes", "adverse_directionality"),
+        )
+        for offset, (key, path) in enumerate(zip(ADAPTIVE_OVERRIDE_KEYS, paths)):
+            patch_value = cooldown_patch
+            for leaf in path:
+                if not isinstance(patch_value, dict) or leaf not in patch_value:
+                    break
+                patch_value = patch_value[leaf]
+            else:
+                matrix[
+                    coin_index,
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START + offset,
+                ] = encoded[key]
         risk_patch = side_patch.get("risk", {}) or {}
         if "base_duration_minutes" in (side_patch.get("entry_cooldown", {}) or {}):
             matrix[
@@ -2918,6 +2970,14 @@ def _build_single_coin_override_params(
             for offset, (key, _path) in enumerate(HSL_COIN_OVERRIDE_PATHS)
             if key != "hsl_panic_market"
         }
+    )
+    adaptive_start = (
+        EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START
+    )
+    columns.update(
+        {key: adaptive_start + i for i, key in enumerate(ADAPTIVE_OVERRIDE_KEYS)}
     )
     row = matrix[0]
     return (
@@ -3268,6 +3328,7 @@ class MpsMulticoinProxy:
             hsl_bot = (project_bot(payload, 0, side, config, base=True)
                        if self.hsl_engine == "revised" else base_bot)
             first_strategy.update(_hsl_params(hsl_bot, signal_mode=signal_mode))
+            first_strategy.update(adaptive_params(base_bot))
             missing = [
                 key for key in self.param_keys if key not in first_strategy
             ]

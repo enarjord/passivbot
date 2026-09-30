@@ -2,8 +2,11 @@
 
 Both features are opt-in. New weights default to zero; existing cooldown durations,
 Forager weights, CLI aliases and optimizer bounds retain their defaults. CPU backtests,
-CPU optimization and live planning share the Rust calculations. GPU optimization rejects
-enabled modifiers, duration bounds, or unilateralness scoring rather than ignoring them.
+CPU optimization and live planning share the Rust calculations. GPU screening supports
+both features for EMA Anchor and Trailing Martingale on Metal and CUDA, with the same
+configuration, optimizer dimensions, and per-coin cooldown overrides. GPU arithmetic is
+float32; exact Rust validation still determines accepted optimizer results. Start a fresh
+GPU search after this parameter-layout change; older checkpoints are incompatible.
 
 ## One indicator, two consumers
 
