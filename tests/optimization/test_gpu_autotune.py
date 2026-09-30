@@ -326,3 +326,55 @@ def test_cache_is_bounded_and_preserves_unrelated_files(tmp_path):
         controller.save(controller.width, 1.0, 30.0)
     assert len(list(tmp_path.glob("*.json"))) == 129
     assert unrelated.read_text() == "keep"
+
+
+@pytest.mark.parametrize("batch_config", [{}, {"batch_size": None}, {"batch_size": "auto"}])
+def test_mps_automatic_startup_uses_supported_device_name_api(monkeypatch, batch_config):
+    from config_utils import get_template_config
+    from optimization.backends.gpu_backend import _resolve_options
+
+    monkeypatch.setattr(tune, "_implementation_identity", lambda: "kernel-v1")
+    calls = []
+
+    def device_name():
+        calls.append("get_name")
+        return "Apple test GPU"
+
+    # PyTorch 2.13 exports get_name from torch.backends.mps. CUDA probing must
+    # not be required when the MPS backend is available.
+    torch = SimpleNamespace(
+        __version__="2.13.0",
+        backends=SimpleNamespace(
+            mps=SimpleNamespace(is_available=lambda: True, get_name=device_name)
+        ),
+        mps=SimpleNamespace(recommended_max_memory=lambda: 8 * 1024**3),
+    )
+    item = proxy()
+    item._torch = torch
+    config = get_template_config()
+    config["optimize"]["gpu"].pop("batch_size")
+    config["optimize"]["gpu"].update(batch_config)
+    tune.configure_batch_tuning([item], config, _resolve_options(config))
+    assert calls == ["get_name"]
+    assert item.batch_tuner.hardware["device"] == "mps"
+    assert item.batch_tuner.hardware["name"] == "Apple test GPU"
+    assert item.batch_tuner.hardware["memory"] == 8 * 1024**3
+
+
+def test_real_mps_automatic_startup_device_identity():
+    torch = pytest.importorskip("torch")
+    if not torch.backends.mps.is_available():
+        pytest.skip("Apple MPS unavailable")
+    from config_utils import get_template_config
+    from optimization.backends.gpu_backend import _resolve_options
+
+    item = proxy()
+    item._torch = torch
+    config = get_template_config()
+    tune.configure_batch_tuning([item], config, _resolve_options(config))
+    hardware = item.batch_tuner.hardware
+    assert hardware["device"] == "mps"
+    assert hardware["name"] == torch.backends.mps.get_name()
+    assert hardware["name"]
+    assert hardware["memory"] == torch.mps.recommended_max_memory()
+    assert hardware["memory"] > 0
