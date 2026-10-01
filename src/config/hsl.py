@@ -33,6 +33,41 @@ FIELDS = frozenset(
 )
 
 
+def _requires_hsl_migration(node, path=""):
+    """Inspect authored policies before hydration can erase their schema origin."""
+    if isinstance(node, dict):
+        return any(
+            _requires_hsl_migration(value, f"{path}.{key}" if path else str(key))
+            for key, value in node.items()
+            if not str(key).startswith("_")
+        )
+    if isinstance(node, list):
+        return any(_requires_hsl_migration(value, path) for value in node)
+    if not _is_hsl_path(path):
+        return False
+    leaf = re.split(r"[._]", path)[-1]
+    if leaf == "enabled":
+        return node not in (False, None, 0)
+    # Even a disabled old scope's authored policy must not survive hydration as
+    # authorization for a later CLI/scenario enablement of the new controller.
+    return (
+        path.endswith("restart_after_red_policy")
+        and isinstance(node, str)
+        and node.strip().lower() in {"always", "never"}
+    )
+
+
+def require_current_hsl_schema(config):
+    """Check the raw document, before schema hydration and internal partial views."""
+    from .migrations.legacy_v7 import _parse_version_tuple
+
+    version = _parse_version_tuple(config.get("config_version"))
+    if (version is None or version < (8, 6, 0)) and _requires_hsl_migration(config):
+        raise ValueError(
+            "pre-v8.6 HSL configuration requires explicit migration with passivbot tool migrate-hsl and re-backtesting before use"
+        )
+
+
 def engine(config):
     if "hsl_engine" not in config.get("live", {}):
         return "hsl"

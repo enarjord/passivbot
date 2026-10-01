@@ -23,8 +23,8 @@ def test_v8_package_line_preserves_forward_schema_migration_boundary():
     schema = Version(CONFIG_SCHEMA_VERSION.removeprefix("v"))
     assert package.release == (8, 2, 0)
     assert package.dev == 0
-    assert schema.release == (8, 5, 0)
-    assert "v8.4.0" in SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
+    assert schema.release == (8, 6, 0)
+    assert "v8.5.0" in SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
     assert CONFIG_SCHEMA_VERSION not in SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
     assert all(
         Version(old.removeprefix("v")) < schema

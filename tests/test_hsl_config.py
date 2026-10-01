@@ -389,3 +389,61 @@ def test_aggregate_balance_override_constructor_rejects_before_credentials(
     )
     with pytest.raises(ValueError, match="does not support live.balance_override"):
         passivbot.Passivbot(config)
+
+
+@pytest.mark.parametrize(
+    "version",
+    [None, "v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0", "8.5.0"],
+)
+@pytest.mark.parametrize("policy", ["always", "never"])
+@pytest.mark.parametrize("location", ["base", "coin", "fixed", "scenario", "disabled"])
+def test_old_selectorless_hsl_requires_explicit_migration(version, policy, location):
+    cfg = source(enabled=location == "base")
+    cfg["config_version"] = version
+    cfg["optimize"]["fixed_runtime_overrides"] = {}
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
+    if location in {"base", "disabled"}:
+        cfg["bot"]["long"]["hsl"]["restart_after_red_policy"] = policy
+    elif location == "coin":
+        cfg["coin_overrides"] = {
+            "TEST": {
+                "bot": {
+                    "long": {
+                        "hsl": {"enabled": True, "restart_after_red_policy": policy}
+                    }
+                }
+            }
+        }
+    elif location == "fixed":
+        cfg["optimize"]["fixed_runtime_overrides"] = {
+            "bot.long.hsl.enabled": True,
+            "bot.long.hsl.restart_after_red_policy": policy,
+        }
+    elif location == "scenario":
+        cfg["backtest"]["scenarios"] = [
+            {
+                "label": "hsl",
+                "overrides": {
+                    "bot.long.hsl.enabled": True,
+                    "bot.long.hsl.restart_after_red_policy": policy,
+                },
+            }
+        ]
+    with pytest.raises(ValueError, match="migrate-hsl"):
+        prepared(cfg)
+    from tools.migrate_hsl_config import migrate
+
+    converted = migrate(cfg)
+    assert prepared(converted)["config_version"] == "v8.6.0"
+
+
+def test_old_disabled_hsl_without_restart_authorization_can_upgrade():
+    cfg = source(enabled=False)
+    cfg["config_version"] = "v8.5.0"
+    cfg["optimize"]["fixed_runtime_overrides"] = {}
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = "threshold"
+    result = prepared(cfg)
+    assert result["config_version"] == "v8.6.0"
+    assert result["bot"]["long"]["hsl"]["restart_after_red_policy"] is None

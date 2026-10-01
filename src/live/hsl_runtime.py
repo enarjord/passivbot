@@ -360,6 +360,14 @@ def capture(
         for side, position in sides.items()
         if position["size"] != 0
     )
+    # Exchange orders are current scope evidence even after selection/history
+    # loses a now-flat pair. Capture it so current Rust permission can retire a
+    # resting panic without waiting for ordinary planning.
+    relevant.update(
+        (symbol, order["position_side"])
+        for symbol, orders in bot.open_orders.items()
+        for order in orders
+    )
     global_reasons = set(tape.reasons)
     if fills_started_ms is None or fills_completed_ms is None:
         global_reasons.add("fill_capture_unknown")

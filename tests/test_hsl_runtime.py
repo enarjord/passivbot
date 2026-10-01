@@ -1440,3 +1440,17 @@ def test_disabled_aggregate_hsl_does_not_restrict_balance_override(mode):
         for side in ("long", "short"):
             value.config["bot"][side]["hsl"]["enabled"] = False
     assert run(value) == ((), ())
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_order_only_unselected_flat_pair_gets_current_hsl_decision(side):
+    value = bot(side=side)
+    value.positions = {}
+    value.open_orders = {
+        SYMBOL: [{"position_side": side, "side": "sell" if side == "long" else "buy"}]
+    }
+    result, unavailable = run(value, symbols={"long": [], "short": []})
+    assert not unavailable
+    assert [(d.scope.symbol, d.scope.pside, d.action) for d in result] == [
+        (SYMBOL, side, "normal")
+    ]

@@ -26,7 +26,7 @@ from .migrations import (
 from .optimize_bounds import prune_inactive_optimize_strategy_bounds
 from .scoring import normalize_scoring_config
 from .schema import get_template_config
-from .hsl import normalization_template, normalize_hsl
+from .hsl import normalization_template, normalize_hsl, require_current_hsl_schema
 from .strategy import (
     prune_inactive_strategy_subtrees,
     reject_legacy_flat_strategy_fields,
@@ -74,6 +74,7 @@ def normalize_config(
         source_payload.get("backtest", {}).get("coin_sources")
     )
     live_coin_sources_input = {}
+    require_current_hsl_schema(source_payload)
     template = normalization_template(get_template_config(), source_payload)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     if flavor == "nested_current" and isinstance(config.get("config"), dict):

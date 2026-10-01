@@ -2422,3 +2422,101 @@ async def test_hsl_completed_pass_does_not_complete_pending_ordinary_work(
         if instance._ordinary is not None:
             instance._ordinary.cancel()
             await asyncio.gather(instance._ordinary, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["long", "short"])
+async def test_flat_unselected_order_only_panic_is_retired_by_protective_executor(
+    tmp_path, monkeypatch, side
+):
+    from copy import deepcopy
+    from passivbot_rust import order_type_snake_to_id
+
+    symbol = "BTC/USDT:USDT"
+    user = f"fake_hsl_order_only_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    cfg = generated_template(load_fake_hsl_config())
+    if side == "short":
+        cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
+        cfg["bot"]["long"]["hsl"]["enabled"] = False
+        cfg["bot"]["long"]["risk"].update(
+            n_positions=0, total_wallet_exposure_limit=0.0
+        )
+    cfg["bot"][side]["hsl"].update(enabled=True, restart_after_red_policy="always")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})
+    )
+    scenario = hjson.loads(
+        (REPO_ROOT / "scenarios/fake_live/hsl_long_red_restart.hjson").read_text()
+    )
+    scenario.pop("assertions", None)
+    scenario["account"].update(positions=[], fills=[])
+    scenario["run_initial_cycle"] = True
+    scenario_path = tmp_path / "scenario.hjson"
+    scenario_path.write_text(hjson.dumps(scenario))
+    completed = []
+
+    async def exercise(bot):
+        bot.cca._load_boot_order(
+            dict(
+                id="resting-panic",
+                symbol=symbol,
+                position_side=side,
+                side="sell" if side == "long" else "buy",
+                amount=5.0,
+                price=120.0 if side == "long" else 80.0,
+                reduce_only=True,
+                custom_id=bot.format_custom_id_single(
+                    order_type_snake_to_id(f"close_panic_{side}")
+                ),
+            )
+        )
+        instance = hsl_live.owner(bot)
+        instance.sources.clear()
+        bot._pnls_manager = None
+        bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+
+        async def unavailable_ordinary_plan(*args, **kwargs):
+            raise AssertionError(
+                "panic retirement must not depend on ordinary planning"
+            )
+
+        bot.prepare_planning_universe = unavailable_ordinary_plan
+        bot.calc_orders = unavailable_ordinary_plan
+        bot.market_snapshot_provider._cache.clear()
+        # Newly discovered external orders invalidate the account cohort.
+        for _ in range(2):
+            await bot.refresh_protective_authoritative_state(require_balance=True)
+        wave = instance.capture(await instance.acquire_quotes({symbol}))
+        assert wave.permission(symbol, side)[0] == "normal", wave.unavailable
+        assert bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0) == 0.0
+        assert "resting-panic" in bot.cca.open_orders
+        creates_before = sum(
+            r["method"] == "create_order" for r in bot.cca.export_request_log()
+        )
+        assert await instance.protect()
+        assert "resting-panic" not in bot.cca.open_orders
+        assert any(r["method"] == "cancel_order" for r in bot.cca.export_request_log())
+        assert (
+            sum(r["method"] == "create_order" for r in bot.cca.export_request_log())
+            == creates_before
+        )
+        completed.append(True)
+        return {"order_only_panic_retired": True}
+
+    monkeypatch.setattr(runner, "_run_fake_cycle", exercise)
+    try:
+        args = argparse.Namespace(
+            config=str(config_path),
+            scenario=str(scenario_path),
+            user=user,
+            max_steps=1,
+            output_dir=str(tmp_path / "run"),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await runner._async_main(args) == 0
+        assert completed
+    finally:
+        _cleanup_fake_user_state(user)

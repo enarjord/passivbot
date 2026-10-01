@@ -10,6 +10,7 @@ import sys
 from config import prepare_config
 from config.hsl import _mode, validate_parameter_path, validate_optimizer_metrics
 from config.load import load_input_config
+from config.migrations import migrate_config_version
 from config.optimize_bounds import flatten_optimize_bounds
 from config.overrides import normalize_coin_override_keys, parse_overrides
 from config.param_paths import (
@@ -134,6 +135,10 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
         block["restart_after_red_policy"] = policy
         path = ("bot", "hsl") if scope == "portfolio" else ("bot", scope, "hsl")
         chosen_paths[(*path, "restart_after_red_policy")] = policy
+    # This command is the explicit semantic migration boundary. Validate and
+    # upgrade the schema here before the ordinary loader checks old HSL inputs;
+    # never bypass malformed/future/unsupported schema rejection.
+    migrate_config_version(result, verbose=True)
     prepared = prepare_config(
         result,
         verbose=True,

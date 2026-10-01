@@ -518,12 +518,15 @@ def test_symlink_input_uses_callers_directory_for_relative_overrides(tmp_path):
         (folder / "coin.json").write_text(
             json.dumps({"bot": {"long": {"hsl": {"red_threshold": threshold}}}})
         )
-    original = parse_overrides(
-        load_prepared_config(str(link), verbose=False), verbose=False
-    )
+    with pytest.raises(ValueError, match="migrate-hsl"):
+        load_prepared_config(str(link), verbose=False)
     out = tmp_path / "output.json"
     assert main([str(link), str(out)]) == 0
-    assert json.loads(out.read_text())["coin_overrides"] == original["coin_overrides"]
+    loaded = parse_overrides(
+        load_prepared_config(str(out), verbose=False), verbose=False
+    )
+    assert loaded["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]["red_threshold"] == 0.3
+    assert json.loads(out.read_text())["coin_overrides"] == loaded["coin_overrides"]
 
 
 @pytest.mark.parametrize(
@@ -656,6 +659,9 @@ def test_scenario_dotted_path_uses_canonical_materialized_coin_shape(
     scenario = {f"coin_overrides.{coin}.bot.long.hsl.red_threshold": 0.3}
     cfg["backtest"]["scenarios"] = [{"label": "canonical", "overrides": scenario}]
     source = deepcopy(cfg)
+    # Reference the already-authored new semantics; the old source itself must
+    # go through the explicit migration below, not the ordinary loader.
+    source["config_version"] = CONFIG_SCHEMA_VERSION
     canonical = parse_overrides(
         prepare_config(
             source,

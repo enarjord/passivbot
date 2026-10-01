@@ -43,7 +43,11 @@ within a minute replace that minute's sample rather than repeatedly advancing th
 Known fill boundaries are evaluated before an episode reset or reopening. Nonpositive
 historical peaks and extreme numeric histories use explicit, reported approximations.
 Thresholds and saved fitness from older HSL versions are not interchangeable.
-Migrate and re-backtest configurations before upgrading.
+Migrate and re-backtest configurations before upgrading. Pre-v8.6 inputs with
+HSL enabled or an authored `always`/`never` restart choice require explicit
+`passivbot tool migrate-hsl` conversion even when `live.hsl_engine` is absent.
+Disabled old policies without a restart choice can be hydrated, but enabling HSL
+later still requires an explicit restart choice.
 
 ## Best-effort history
 
