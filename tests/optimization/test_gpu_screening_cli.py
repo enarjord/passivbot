@@ -21,9 +21,9 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("screening", [False, True])
-@pytest.mark.parametrize("auto_batch", [False, True])
+@pytest.mark.parametrize("auto_mode", ["fixed", "batch", "exact", "both"])
 async def test_gpu_suite_cli_dates_exact_validation_and_resume(
-    tmp_path, monkeypatch, capsys, screening, auto_batch
+    tmp_path, monkeypatch, capsys, screening, auto_mode
 ):
     from optimize import main
     from optimization.backends import gpu_backend
@@ -78,6 +78,42 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
                        survival_fraction=0.5, min_survivors=2),
         successive_halving={"enabled": False},
     )
+    auto_batch = auto_mode in {"batch", "both"}
+    auto_exact = auto_mode in {"exact", "both"}
+    if auto_exact:
+        from optimization.gpu import exact_autotune
+        from optimization.gpu import service
+        monkeypatch.setattr(exact_autotune, "WINDOW", 2)
+        monkeypatch.setattr(exact_autotune, "MIN_SECONDS", 0.0)
+        cfg["optimize"]["gpu"].update(exact_workers="auto", max_pending_exact=None)
+        sizing_events = []
+        capture_rss = gpu_backend.capture_worker_rss
+        size_workers = gpu_backend.initial_workers
+
+        def capture_baseline(*args, **kwargs):
+            sizing_events.append("baseline")
+            return capture_rss(*args, **kwargs)
+
+        def size_after_proxy(*args, **kwargs):
+            assert sizing_events[-1] == "proxy"
+            assert kwargs["baseline_rss"] > 0
+            sizing_events.append("workers")
+            return size_workers(*args, **kwargs)
+
+        def track_proxy(cls):
+            init = cls.__init__
+
+            def initialize(self, *args, **kwargs):
+                assert sizing_events and sizing_events[-1] in {"baseline", "proxy"}
+                sizing_events.append("proxy")
+                init(self, *args, **kwargs)
+
+            monkeypatch.setattr(cls, "__init__", initialize)
+
+        track_proxy(service.MpsSingleCoinProxy)
+        track_proxy(service.MpsMulticoinProxy)
+        monkeypatch.setattr(gpu_backend, "capture_worker_rss", capture_baseline)
+        monkeypatch.setattr(gpu_backend, "initial_workers", size_after_proxy)
     if auto_batch:
         from optimization.gpu import autotune
         # Exercise in-flight decisions within this bounded integration fixture.
@@ -106,10 +142,20 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     monkeypatch.setenv("PYTHONPATH", str(guard) + os.pathsep + os.environ.get("PYTHONPATH", ""))
     path = tmp_path / "config.json"
     path.write_text(json.dumps(cfg))
+    starting_args = []
+    if auto_exact:
+        seeds = tmp_path / "seeds"
+        seeds.mkdir()
+        for index in range(6):
+            candidate = json.loads(json.dumps(cfg))
+            candidate["bot"]["long"]["hsl"]["red_threshold"] = 0.02 + index * 0.02
+            (seeds / f"seed_{index}.json").write_text(json.dumps(candidate))
+        starting_args = ["-t", str(seeds)]
     monkeypatch.setattr(
         sys, "argv", ["optimize", str(path), "--suite", "y",
                       "--optimize.gpu.screening.scenarios",
-                      json.dumps(cfg["optimize"]["gpu"]["screening"]["scenarios"])]
+                      json.dumps(cfg["optimize"]["gpu"]["screening"]["scenarios"]),
+                      *starting_args]
     )
     with pytest.raises(SystemExit) as finished:
         await main()
@@ -124,6 +170,14 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     if auto_batch:
         assert "GPU auto-tune enabled" in log_output
         assert "GPU auto-tune trial" in log_output
+    if auto_exact:
+        assert "GPU exact auto-sizing" in log_output
+        assert "GPU exact queue auto-tune starting" in log_output
+        assert "__gpu_profile_" not in json.dumps(records)
+        assert "__gpu_profile_" not in repr(state)
+        assert state["seed_exact_done"] > 0
+    else:
+        assert "GPU exact queue auto-tune" not in log_output
     assert "Removed disabled legacy" in log_output
     if screening:
         assert "stages=screening:8,full:4" in log_output
