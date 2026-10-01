@@ -6,6 +6,13 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix legacy coin HSL live boundary checks rejecting a provable held episode after
+  recovering an incomplete older fill prefix. Reuse canonical coverage- and
+  freshness-checked suffix evidence before projecting the live window, preserving
+  starting quantities, realized PnL baselines, reset watermarks and strict recovery guards.
+  Give live recovery the same bounded, position-ordered fill-tail refresh as startup.
+  Canonical replay now preserves the same full-tape proof across clipped openings.
+
 - Show each Pareto objective's full range at INFO in ascending `[min,max]` order, with `*` on
   an improved goal-directed best endpoint. Keep new tradeoffs visible when no best improves,
   and derive both endpoints from the same feasible or explicitly labelled infeasible front.

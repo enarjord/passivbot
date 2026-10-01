@@ -285,6 +285,16 @@ PnL, or RED history. The recovered episode reports `position_anchored_episode_su
 normal formulas and EMA remain active. Ambiguous ordering, missing retained fills, failed coverage,
 and `threshold`/`never` policies keep their existing deferral behavior. Recompute this evidence
 from current observations on restart and invalidate it when retained fills or positions change.
+When a live ordinary-boundary window reports a missing opening, use this same guarded suffix
+recovery after applying a proven reset watermark and before projecting the live window.
+Projection preserves the proven starting quantity and PnL baseline when the window begins
+with a reduction. Already valid windows, including expired flat scopes, remain independent
+of discarded cache rows.
+Live boundary polling gives candidate recovery the same bounded, ordered tail-refresh
+opportunity before capturing fill evidence; a timeout or newer/pending position observation
+preserves deferral.
+Canonical replay captures the same projected full-tape proof when configured lookback starts
+inside an episode, so later live polling cannot disagree solely because the opening was clipped.
 
 After grace, Rust evaluates `max(0, realized_loss - current_upnl) / budget` against the configured
 RED threshold, without inventing an EMA. `realized_loss` is normally zero. Coin mode may supply the

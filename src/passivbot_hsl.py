@@ -2575,16 +2575,19 @@ def _equity_hard_stop_coin_input_observation(self, start_ms):
     manager = getattr(self, "_pnls_manager", None)
     if manager is None:
         return None
-    events = [event for event in manager.get_events()
+    full_events = manager.get_events()
+    events = [event for event in full_events
               if start_ms is None or _equity_hard_stop_fill_timestamp_ms(event) >= start_ms]
     pairs = _equity_hard_stop_index_coin_fill_events(events)
+    full_pairs = _equity_hard_stop_index_coin_fill_events(full_events)
     return {
         "positions": copy.deepcopy(self.positions),
         "balance": self.get_raw_balance(),
         "hsl": copy.deepcopy(self.hsl),
         "overrides": copy.deepcopy(getattr(self, "coin_overrides", {})),
-        "pairs": {pair: _equity_hard_stop_coin_observed_evidence(self, tape, *pair)
-                  for pair, tape in pairs.items()},
+        "pairs": {pair: _equity_hard_stop_coin_window_evidence(
+                      self, full_pairs[pair], *pair, start_ms)
+                  for pair in pairs},
     }
 
 
@@ -6576,18 +6579,38 @@ def _equity_hard_stop_emit_coin_status(self, pside: str, symbol: str, metrics: d
         )
 
 
+def _equity_hard_stop_coin_window_evidence(self, scope_events, pside, symbol, start_ms):
+    """Project a scoped tape without resurrecting excluded or recoverable history."""
+    qty_step = _hsl_qty_step_for_symbol(self, symbol)
+    window_events = scope_events
+    if start_ms is not None:
+        window_events = [event for event in scope_events
+                         if _equity_hard_stop_fill_timestamp_ms(event) >= start_ms]
+    evidence = _equity_hard_stop_coin_episode_evidence(
+        window_events, pside, symbol, qty_step=qty_step
+    )
+    if evidence.unavailable != "missing_opening_fill":
+        return evidence
+    # Recover a missing opening from canonical coverage/freshness-checked
+    # evidence before projection. Keep already valid windows independent of
+    # discarded cache rows, especially expired flat scopes.
+    evidence = _equity_hard_stop_coin_observed_evidence(
+        self, scope_events, pside, symbol
+    )
+    if start_ms is not None:
+        evidence = evidence.window(start_ms, int(self.get_exchange_time()))
+    return evidence
+
+
 def _equity_hard_stop_live_coin_episode_evidence(
     self, events, pside, symbol, state, start_ms
 ):
-    qty_step = _hsl_qty_step_for_symbol(self, symbol)
     scope_events = _equity_hard_stop_coin_events_after_reset(
-        events, pside, symbol, state.get("pnl_reset_timestamp_ms"), qty_step=qty_step
+        events, pside, symbol, state.get("pnl_reset_timestamp_ms"),
+        qty_step=_hsl_qty_step_for_symbol(self, symbol),
     )
-    if start_ms is not None:
-        scope_events = [event for event in scope_events
-                        if _equity_hard_stop_fill_timestamp_ms(event) >= start_ms]
-    return _equity_hard_stop_coin_episode_evidence(
-        scope_events, pside, symbol, qty_step=qty_step
+    return _equity_hard_stop_coin_window_evidence(
+        self, scope_events, pside, symbol, start_ms
     )
 
 
@@ -6610,12 +6633,15 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
     manager = getattr(self, "_pnls_manager", None)
     if manager is None:
         return False
+    start_ms = _equity_hard_stop_live_coin_history_start_ms(self, timestamp_ms)
+    # Ordinary account refresh can observe positions after its fill request.
+    # Candidate suffix recovery needs the same ordered tail proof as startup.
+    await _equity_hard_stop_refresh_coin_recovery_tail(self, start_ms)
     events = [
         event
         for event in manager.get_events()
         if _equity_hard_stop_fill_timestamp_ms(event) <= timestamp_ms
     ]
-    start_ms = _equity_hard_stop_live_coin_history_start_ms(self, timestamp_ms)
     for pside in self._hsl_psides():
         for symbol, state in list(
             getattr(self, "_equity_hard_stop_coin", {}).get(pside, {}).items()
