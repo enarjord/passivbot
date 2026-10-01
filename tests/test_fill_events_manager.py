@@ -9347,3 +9347,38 @@ async def test_kucoin_does_not_drop_malformed_timestamp_and_certify_history(time
     with pytest.raises(fem.FillEventDataError):
         await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000)
     api.fetch_my_trades.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_kucoin_nonempty_replays_are_quiet_without_changing_results(monkeypatch, caplog):
+    fetcher = KucoinFetcher(api=object())
+    ts = 1_700_000_000_000
+    trade = _kucoin_manager_fill('entry', ts, side='buy', qty=1.0, price=10.)
+    async def fetch_trades(*args):
+        return [dict(trade)]
+    async def enrich(*args):
+        return None
+    monkeypatch.setattr(fetcher, '_fetch_trades', fetch_trades)
+    monkeypatch.setattr(fetcher, '_enrich_with_order_details_bulk', enrich)
+    with caplog.at_level(logging.DEBUG, logger=fem.logger.name):
+        first = await fetcher.fetch(ts, ts+60000, detail_cache={})
+        second = await fetcher.fetch(ts, ts+60000, detail_cache={})
+    assert first == second and len(first) == 1
+    fetch_logs = [r for r in caplog.records if 'KucoinFetcher: fetched 1 trade events' in r.message]
+    assert len(fetch_logs) == 2 and all(r.levelno == logging.DEBUG for r in fetch_logs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('elapsed,expected', [(9.9, logging.DEBUG), (10., logging.INFO)])
+async def test_kucoin_slow_fetch_remains_visible(monkeypatch, caplog, elapsed, expected):
+    from types import SimpleNamespace
+    clock = iter([1000., 1000. + elapsed])
+    monkeypatch.setattr(fem, 'time', SimpleNamespace(time=lambda: next(clock)))
+    fetcher = KucoinFetcher(api=object())
+    async def fetch_trades(*args):
+        return []
+    monkeypatch.setattr(fetcher, '_fetch_trades', fetch_trades)
+    with caplog.at_level(logging.DEBUG, logger=fem.logger.name):
+        assert await fetcher.fetch(1_700_000_000_000, 1_700_000_060_000, detail_cache={}) == []
+    records = [r for r in caplog.records if 'KucoinFetcher: fetched 0 trade events' in r.message]
+    assert len(records) == 1 and records[0].levelno == expected

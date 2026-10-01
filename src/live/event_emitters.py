@@ -1035,10 +1035,16 @@ def emit_live_cycle_completed(
     cycle_id: str | None,
     loop_start_ms: int,
     timings_ms: dict[str, int],
+    execution_owner: str = "legacy",
+    ordinary_pending: bool | None = None,
+    ordinary_prepare_elapsed_ms: int | None = None,
+    ordinary_pending_age_ms: int | None = None,
 ) -> None:
     if not cycle_id:
         return
-    elapsed_ms = max(0, int(utc_ms()) - int(loop_start_ms))
+    now_ms = int(utc_ms())
+    bot._console_last_cycle_completed_ms = now_ms
+    elapsed_ms = max(0, now_ms - int(loop_start_ms))
     bot._emit_live_event(
         EventTypes.CYCLE_COMPLETED,
         level="debug",
@@ -1049,11 +1055,17 @@ def emit_live_cycle_completed(
         data={
             "elapsed_ms": elapsed_ms,
             "timings_ms": dict(timings_ms or {}),
+            "execution_owner": execution_owner,
+            **({"ordinary_pending": ordinary_pending} if ordinary_pending is not None else {}),
+            **({"ordinary_prepare_elapsed_ms": ordinary_prepare_elapsed_ms}
+               if ordinary_prepare_elapsed_ms is not None else {}),
+            **({"ordinary_pending_age_ms": ordinary_pending_age_ms}
+               if ordinary_pending_age_ms is not None else {}),
             "authoritative_epoch": _freshness_epoch(bot),
             "orders_changed": bool(getattr(bot, "execution_scheduled", False)),
         },
     )
-    if getattr(bot, "_live_event_current_cycle_id", None) == cycle_id:
+    if execution_owner == "legacy" and getattr(bot, "_live_event_current_cycle_id", None) == cycle_id:
         bot._live_event_current_cycle_id = None
 
 

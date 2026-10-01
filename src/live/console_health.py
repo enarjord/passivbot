@@ -41,31 +41,99 @@ def readiness_payload(bot, now_ms):
             missing.append(name)
         else:
             ages.append(now_ms - state.updated_ms)
-    return dict(bot_label=token(getattr(bot, 'user', None)), open_order_count=len(orders),
+    waits = getattr(bot, '_console_trailing_waits', {}) or {}
+    active = [(symbol, row) for symbol, row in waits.items()
+              if 'recovered_ms' not in row and any(pair[0] == symbol for pair in held)]
+    active.sort(key=lambda item: item[1]['since_ms'])
+    details = [dict(symbol=token(symbol, 48), phase=row['phase'],
+                    age_ms=max(0, now_ms - row['since_ms']))
+               for symbol, row in active[:3]]
+    surface_ages = {name: max(0, now_ms - state.updated_ms)
+                   for name in ('balance', 'positions', 'open_orders', 'fills')
+                   if (state := ledger.get(name)) is not None
+                   and 0 < state.updated_ms <= now_ms}
+    latest_write = getattr(bot, '_console_last_write_ms', None)
+    if not isinstance(latest_write, (int, float)) or not 0 < latest_write <= now_ms:
+        latest_write = None
+    completed = getattr(bot, '_console_last_cycle_completed_ms', None)
+    owner = getattr(bot, '_hsl_revised_live', None)
+    ordinary = getattr(owner, '_ordinary', None)
+    ordinary_started = getattr(owner, '_ordinary_started_ms', None)
+    ordinary_pending_age = (max(0, now_ms - ordinary_started)
+        if ordinary is not None and not ordinary.done() and ordinary_started is not None else None)
+    return dict(trailing_wait_count=len({symbol for symbol, _ in active} | {symbol for symbol, _ in blocked}),
+                trailing_wait_overflow_count=len({symbol for symbol, _ in blocked} - set(waits)),
+                trailing_wait_samples=details,
+                trailing_wait_max_ms=max((row['age_ms'] for row in details), default=None),
+                ordinary_pending_age_ms=ordinary_pending_age,
+                account_surface_ages_ms=surface_ages,
+                fills_pending=bool(pending.get('fills', 0) > getattr(ledger.get('fills'), 'epoch', 0)),
+                last_cycle_completed_age_ms=(now_ms - completed if completed is not None
+                                              and 0 < completed <= now_ms else None),
+                last_write_age_ms=(now_ms - latest_write if latest_write is not None else None),
+                bot_label=token(getattr(bot, 'user', None)), open_order_count=len(orders),
                 close_coverage=counts, account_pending=missing,
                 account_age_ms=max(ages) if len(ages) == 3 else None)
 
 
+def observe_order_write(bot, stamp):
+    """Retain one presentation timestamp independently of execution retry caches."""
+    try:
+        bot._console_last_write_ms = stamp
+    except Exception:
+        # Optional presentation never prevents recording the execution cache.
+        pass
+
+
+def _trailing_phase(reasons):
+    if 'position_fill_confirmation_pending' in reasons:
+        return 'fill_confirmation'
+    if any('candle' in reason for reason in reasons):
+        return 'candle_input'
+    return 'other_input'
+
+
 def log_trailing_recovery(bot, unavailable, now_ms):
-    """Pair existing input warnings with immediate, scoped recovery/clear notices."""
+    """Measure observed blocker phases, without profiling or controlling their work.
+
+    Elapsed time is attributed to the last observed phase until the next poll.
+    It includes polling, finalization and retrieval; it is not network-only time.
+    """
     try:
         prior = getattr(bot, '_console_trailing_blocked_since', {})
-        for symbol, since in list(prior.items()):
-            if symbol in unavailable:
-                continue
+        waits = getattr(bot, '_console_trailing_waits', {})
+        bot._console_trailing_waits = waits
+        bot._console_trailing_blocked_since = prior
+        for symbol, row in list(waits.items()):
+            if 'recovered_ms' not in row:
+                elapsed = max(0, now_ms - row['observed_ms'])
+                row['phase_ms'][row['phase']] += elapsed
+                row['observed_ms'] = now_ms
+                if symbol in unavailable:
+                    row['phase'] = _trailing_phase(unavailable[symbol])
+                    row['polls'] = min(999999, row['polls'] + 1)
+                    continue
+                row['recovered_ms'] = now_ms
             held = any(side.get('size', 0) for side in
                        getattr(bot, 'positions', {}).get(symbol, {}).values())
-            logging.info('[trailing] %s symbol=%s wait=%.1fs action=%s',
-                         'inputs recovered' if held else 'blocker cleared', token(symbol),
-                         max(0, now_ms - since) / 1000.,
-                         'trailing_evaluation_resumed' if held else 'position_no_longer_held')
-            del prior[symbol]
+            logging.info(
+                '[trailing] %s symbol=%s wait=%.1fs fill=%.1fs candles=%.1fs other=%.1fs polls=%d action=%s',
+                'inputs recovered' if held else 'blocker cleared', token(symbol),
+                max(0, row['recovered_ms'] - row['since_ms']) / 1000.,
+                row['phase_ms']['fill_confirmation'] / 1000.,
+                row['phase_ms']['candle_input'] / 1000., row['phase_ms']['other_input'] / 1000.,
+                row['polls'], 'trailing_evaluation_resumed' if held else 'position_no_longer_held')
+            del waits[symbol]
+            prior.pop(symbol, None)
         for symbol in sorted(unavailable):
-            if symbol not in prior:
-                if len(prior) >= 256:
-                    prior.pop(next(iter(prior)))
+            if symbol not in waits:
+                if len(waits) >= 256:
+                    continue
+                waits[symbol] = dict(since_ms=now_ms, observed_ms=now_ms,
+                                    phase=_trailing_phase(unavailable[symbol]), polls=1,
+                                    phase_ms=dict(fill_confirmation=0, candle_input=0, other_input=0))
                 prior[symbol] = now_ms
-        bot._console_trailing_blocked_since = prior
+        bot._console_trailing_wait_overflow = len(set(unavailable) - set(waits))
     except Exception as exc:
         logging.debug('[trailing] recovery presentation failed | error_type=%s', type(exc).__name__)
 

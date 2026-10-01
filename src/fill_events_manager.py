@@ -7322,7 +7322,7 @@ class KucoinFetcher(BaseFetcher):
         trades = await self._fetch_trades(since_ms, until_ms)
         trade_elapsed = time.time() - fetch_started
         logger.log(
-            logging.INFO if trades or trade_elapsed >= 10.0 else logging.DEBUG,
+            logging.INFO if trade_elapsed >= 10.0 else logging.DEBUG,
             "KucoinFetcher: fetched %d trade events in %.1fs",
             len(trades),
             trade_elapsed,
@@ -7347,16 +7347,17 @@ class KucoinFetcher(BaseFetcher):
 
         if closes:
             ph_started = time.time()
-            logger.info(
+            logger.debug(
                 "KucoinFetcher: fetching positions history for %d close fills",
                 len(closes),
             )
             ph_start_ms, ph_end_ms = self._positions_history_window(closes, self._now_func())
             ph = await self._fetch_positions_history(start_ms=ph_start_ms, end_ms=ph_end_ms)
-            logger.info(
+            ph_elapsed = time.time() - ph_started
+            logger.log(
+                logging.INFO if ph_elapsed >= 10.0 else logging.DEBUG,
                 "KucoinFetcher: fetched %d positions-history rows in %.1fs",
-                len(ph),
-                time.time() - ph_started,
+                len(ph), ph_elapsed,
             )
             self.pnl_observations = [
                 obs for pos in ph if (obs := self._position_history_observation(pos)) is not None
