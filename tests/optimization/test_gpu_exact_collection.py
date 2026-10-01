@@ -19,8 +19,8 @@ from test_hsl_revised_offline_runtime import deny_network, offline_cli_config
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stop_kind", ["interrupt", "recorder_error"])
-async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatch, stop_kind):
+@pytest.mark.parametrize("stop_kind", ["interrupt", "recorder_error", "seeded"])
+async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatch, stop_kind, capsys):
     import optimize
     from config.optimize_bounds import set_flat_optimize_bound
     from opt_utils import load_results
@@ -50,7 +50,7 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         set_flat_optimize_bound(cfg["optimize"]["bounds"], "trailing_martingale", key, [value, value])
     cfg["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.01, 0.2]
 
-    state = SimpleNamespace(resuming=False, proxy_calls=0, pools=[], submissions=[], records=[])
+    state = SimpleNamespace(resuming=stop_kind == "seeded", proxy_calls=0, pools=[], submissions=[], records=[])
     oldest_ready = threading.Event()
     recorded = threading.Event()
     original_record = optimize.ResultRecorder.record
@@ -141,9 +141,30 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
     monkeypatch.setattr(runtime, "gpu_device", lambda *args: "mps")
     path = tmp_path / "config.json"
     path.write_text(json.dumps(cfg))
-    monkeypatch.setattr(sys, "argv", ["optimize", str(path), "--suite", "n"])
+    argv = ["optimize", str(path), "--suite", "n"]
+    if stop_kind == "seeded":
+        seeds = tmp_path / "seeds"
+        seeds.mkdir()
+        for index, threshold in enumerate([0.05, 0.15]):
+            seed_config = copy.deepcopy(cfg)
+            seed_config["bot"]["long"]["hsl"]["red_threshold"] = threshold
+            (seeds / f"seed_{index}.json").write_text(json.dumps(seed_config))
+        argv += ["-t", str(seeds)]
+    monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit) as stopped:
         await optimize.main()
+    if stop_kind == "seeded":
+        assert stopped.value.code == 0
+        artifact, = (tmp_path / "optimize_results").rglob("all_results.bin")
+        records = list(load_results(str(artifact)))
+        final = pickle.loads((artifact.parent / "checkpoint.pkl").read_bytes())
+        assert final["seed_exact_done"] == 2
+        assert final["exact_done"] == cfg["optimize"]["iters"]
+        assert len(records) == cfg["optimize"]["iters"] + 2
+        output = capsys.readouterr().err
+        assert "GPU seed exact start | completed=0/2 workers=1" in output
+        assert "GPU seed exact complete | completed=2/2 inflight=0 queued=0" in output
+        return
     assert stopped.value.code == (130 if stop_kind == "interrupt" else 1)
     assert state.pools[-1].terminated
     assert state.proxy_calls == 2

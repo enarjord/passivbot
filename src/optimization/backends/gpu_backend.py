@@ -34,6 +34,7 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_contract import CONTRACT_KEY, recorded_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.replay_progress import suite_replay_context
+from optimization.progress import SeedBootstrapProgress
 from optimization.gpu.metric_registry import (
     reject_configured_exact_only_gpu_metrics,
 )
@@ -5644,6 +5645,9 @@ def run_backend(
 
         pending_seed = {}
         cursor = 0
+        seed_progress = SeedBootstrapProgress(
+            len(seed_bootstrap_selections), completed=seed_exact_done, workers=workers,
+        )
         try:
             while cursor < len(selected) or pending_seed:
                 interrupt_check()
@@ -5657,6 +5661,9 @@ def run_backend(
                     )
                     pending_seed[result] = item
                     cursor += 1
+                seed_progress.update(
+                    seed_exact_done, inflight=len(pending_seed), queued=len(selected) - cursor,
+                )
                 ready = _ready_submission_prefix(pending_seed)
                 if not ready:
                     PymooAsyncRecordingRunner._raise_if_pool_workers_exited(
@@ -5769,6 +5776,7 @@ def run_backend(
             maybe_save_checkpoint(force=True)
             raise
 
+        seed_progress.update(seed_exact_done, inflight=0, queued=0, force=True)
         ordered_payloads = []
         for source_index, _is_probe, _is_proxy_front in seed_bootstrap_selections:
             digest = vector_hash(starting_vectors[int(source_index)])

@@ -187,13 +187,19 @@ class ParetoStore:
         # ------------------------------------------------------------------
         self.n_iters = 0
         self._last_flush_ts = time.time()
+        self._last_front_log_ts = None
+        self._front_log_added = 0
+        self._front_log_removed = 0
         self._lock = threading.RLock()
 
         self.scoring_keys = None
         self.scoring_specs = None
 
-        # bootstrap from disk if any
+        # Reconstruction is historical state, not new optimizer progress.
+        # ResultRecorder installs the resume evaluation baseline after construction.
+        self._bootstrapping = True
         self._bootstrap_from_disk()
+        self._bootstrapping = False
 
     @staticmethod
     def _scoring_signature(specs: Sequence[Any]) -> tuple[tuple[Any, ...], ...]:
@@ -258,6 +264,7 @@ class ParetoStore:
         self._apply_entry_scoring_specs(entry)
         h = calc_hash(entry)
         with self._lock:
+            previous_front_size = len(self._front)
             if h in self._entries:  # fast‑dedupe
                 return False
 
@@ -275,7 +282,7 @@ class ParetoStore:
             if existing_hash:
                 existing_violation = self._violations.get(existing_hash, 0.0)
                 if violation >= existing_violation - 1e-12:
-                    self._log.info(
+                    self._log.debug(
                         "Dropping candidate whose obj score is already present with <= violation: %s",
                         obj,
                     )
@@ -320,7 +327,7 @@ class ParetoStore:
 
             self._log_front_state(
                 added=1,
-                removed=len(dominated),
+                removed=previous_front_size + 1 - len(self._front),
             )
 
             # maybe flush
@@ -347,6 +354,7 @@ class ParetoStore:
         with self._lock:
             self._write_all_to_disk()
             self._last_flush_ts = time.time()
+            self._emit_front_summary(force=True)
 
     def _maybe_flush(self) -> None:
         if time.time() - self._last_flush_ts >= self.flush_interval:
@@ -436,7 +444,14 @@ class ParetoStore:
         return tuple(values)
 
     def _log_front_state(self, *, added: int, removed: int) -> None:
-        """Emit a compact one‑liner with min / max / spread per objective."""
+        """Keep detailed updates at DEBUG and aggregate changes at INFO."""
+        if self._bootstrapping:
+            return
+        self._front_log_added += added
+        self._front_log_removed += removed
+        self._emit_front_summary()
+        if not self._log.isEnabledFor(logging.DEBUG):
+            return
         objs = [self._objectives[idx] for idx in self._front]
 
         mins = [min(col) for col in zip(*objs)]
@@ -460,9 +475,38 @@ class ParetoStore:
                     f"{pbr.round_dynamic(max(viols), 3)})"
                 )
 
-        self._log.info(
+        self._log.debug(
             f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}"
         )
+
+    def _emit_front_summary(self, *, force: bool = False) -> None:
+        if not self._front_log_added:
+            return
+        now = time.monotonic()
+        if not force and self._last_front_log_ts is not None and now - self._last_front_log_ts < 60.0:
+            return
+        violations = [self._violations.get(idx, 0.0) for idx in self._front]
+        feasible = sum(value <= 0.0 for value in violations)
+        constraint = f"{min(violations):.3g}..{max(violations):.3g}" if violations else "empty"
+        # Retain the first two configured objective ranges at normal verbosity;
+        # the full front remains available in files and DEBUG updates.
+        objective_count = len(next(iter(self._objectives.values()), ()))
+        keys = self.scoring_keys or [f"objective_{i}" for i in range(objective_count)]
+        ranges = []
+        for i, key in enumerate(keys[:2]):
+            values = [self._objectives[idx][i] for idx in self._front]
+            label = "".join(c if c.isprintable() else "_" for c in key)[:24]
+            if values:
+                ranges.append(f"{label}={min(values):.3g}..{max(values):.3g}")
+        if len(keys) > 2:
+            ranges.append(f"+{len(keys) - 2} metrics at DEBUG")
+        self._log.info(
+            "Pareto summary | eval=%d front=%d feasible=%d changes=+%d/-%d constraint=%s | %s",
+            self.n_iters, len(self._front), feasible,
+            self._front_log_added, self._front_log_removed, constraint, " ".join(ranges),
+        )
+        self._last_front_log_ts = now
+        self._front_log_added = self._front_log_removed = 0
 
     def _prune_front(self, n_prune: int) -> None:
         """Trim the Pareto front down by removing the most crowded entries."""

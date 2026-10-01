@@ -520,7 +520,7 @@ class ResultRecorder:
                     if isinstance(violation, (int, float))
                     else ""
                 )
-                logging.info(
+                logging.debug(
                     "Pareto update | eval=%d | front=%d | objectives=%s%s",
                     self.store.n_iters,
                     len(self.store._front),
@@ -1397,6 +1397,17 @@ def _record_seed_bounds_adjustment(
 def _flush_seed_bounds_adjustments(collector: dict | None) -> None:
     if not collector:
         return
+    contexts = sorted({key[0] for key in collector})
+    for context in contexts:
+        buckets = [(key, bucket) for key, bucket in sorted(collector.items()) if key[0] == context]
+        keys = list(dict.fromkeys(key[1] for key, _ in buckets))
+        samples = ",".join(key[:32] for key in keys[:3])
+        if len(keys) > 3:
+            samples += f",+{len(keys) - 3} more"
+        logging.warning(
+            "optimizer %s clamped to bounds | adjustments=%d keys=%d samples=%s | details at DEBUG",
+            context, sum(bucket["count"] for _, bucket in buckets), len(keys), samples,
+        )
     for (context, bound_key, path_repr, bounds_repr, adjusted), bucket in sorted(collector.items()):
         count = int(bucket["count"])
         source_examples = ", ".join(bucket["sources"])
@@ -1406,7 +1417,7 @@ def _flush_seed_bounds_adjustments(collector: dict | None) -> None:
         values = _format_clamp_samples(bucket["values"])
         plural = "values" if count != 1 else "value"
         source_label = "sources" if source_count != 1 else "source"
-        logging.warning(
+        logging.debug(
             "optimizer %s %s clamped to optimize bounds | count=%d | key=%s | path=%s | "
             "values=%s | bounds=%s | clamped=%s | %s=%s",
             context,
@@ -1467,6 +1478,7 @@ def config_to_individual(
         sig_digits,
     )
     if clamp_context:
+        adjustments = clamp_collector if clamp_collector is not None else {}
         for original, adjusted, bound, key_path in zip(values, enforced, bounds, key_paths):
             bound_key, path = key_path
             if path == (ANCHOR_GENE_KEY,) or path == [ANCHOR_GENE_KEY]:
@@ -1479,8 +1491,10 @@ def config_to_individual(
                 adjusted=adjusted,
                 bound=bound,
                 context=clamp_context,
-                collector=clamp_collector,
+                collector=adjustments,
             )
+        if clamp_collector is None:
+            _flush_seed_bounds_adjustments(adjustments)
     return enforced
 
 

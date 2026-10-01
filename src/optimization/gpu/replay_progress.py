@@ -40,11 +40,29 @@ class TemporalReplayProgress:
         self.context = _replay_context.get()
         self.candidates = candidates
         self.total_bars = total_bars
+        self.last_info_elapsed = 0.0
         self.log("start", 0, 0.0)
 
     def log(self, state, completed_bars, elapsed):
-        logging.info(
-            "GPU temporal replay %s | %sreplay=%d candidates=%d bars=%d/%d elapsed=%.1fs",
-            state, self.context, self.replay_id, self.candidates,
-            completed_bars, self.total_bars, elapsed,
+        # Context belongs on the start record; the replay ID correlates compact
+        # updates with that record without repeating every scenario name.
+        if state == "start":
+            logging.info(
+                "GPU replay start | %sreplay=%d candidates=%d bars=%d",
+                self.context, self.replay_id, self.candidates, self.total_bars,
+            )
+            return
+        percent = 100.0 * completed_bars / self.total_bars if self.total_bars else 100.0
+        rate = completed_bars / elapsed if elapsed > 0.0 else 0.0
+        eta = f"{max(0, self.total_bars - completed_bars) / rate:.0f}s" if rate > 0 else "unknown"
+        emit = logging.info
+        if state == "progress":
+            if elapsed - self.last_info_elapsed < 60.0:
+                emit = logging.debug
+            else:
+                self.last_info_elapsed = elapsed
+        emit(
+            "GPU replay %s | replay=%d progress=%.1f%% bars=%d/%d elapsed=%.0fs rate=%.0f bars/s eta_replay=%s",
+            state, self.replay_id, percent, completed_bars, self.total_bars,
+            elapsed, rate, eta,
         )
