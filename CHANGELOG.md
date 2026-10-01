@@ -8,7 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Reduce optimizer console noise with minute-spaced Pareto and GPU replay summaries,
   replay percentage, throughput and ETA, and exact seed-validation progress. Aggregate
-  seed-clamp warnings and retain per-candidate metrics and clamp details at DEBUG.
+  seed-clamp warnings and retain per-candidate metrics and clamp details at DEBUG. Resumed
+  Pareto summaries exclude historical reconstruction and use restored evaluation counts.
 
 - GPU optimization now tunes automatic candidate batch sizes during actual screening, using rolling
   throughput evidence, bounded trials, memory headroom, and reusable local calibration records.

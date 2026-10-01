@@ -162,7 +162,9 @@ can hide unrelated events. Startup is assessed separately because readiness mile
 Pareto changes print an initial summary, then an event-driven aggregate at most once per
 minute, plus pending changes on the final explicit flush. Include exact evaluation count,
 front size, feasible members, additions/removals, constraint range, and the first two configured
-objective ranges. Per-candidate objectives, full ranges, and duplicate rejection detail are DEBUG.
+objective ranges. Historical front reconstruction emits no partial summaries and is excluded
+from new-change counts; resumed updates use the restored evaluation baseline. Per-candidate
+objectives, full ranges, and duplicate rejection detail are DEBUG.
 Seed clamps print one warning per collected context with counts and at most three key samples;
 original values, bounds, adjusted values and source details are DEBUG.
 

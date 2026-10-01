@@ -195,8 +195,11 @@ class ParetoStore:
         self.scoring_keys = None
         self.scoring_specs = None
 
-        # bootstrap from disk if any
+        # Reconstruction is historical state, not new optimizer progress.
+        # ResultRecorder installs the resume evaluation baseline after construction.
+        self._bootstrapping = True
         self._bootstrap_from_disk()
+        self._bootstrapping = False
 
     @staticmethod
     def _scoring_signature(specs: Sequence[Any]) -> tuple[tuple[Any, ...], ...]:
@@ -442,6 +445,8 @@ class ParetoStore:
 
     def _log_front_state(self, *, added: int, removed: int) -> None:
         """Keep detailed updates at DEBUG and aggregate changes at INFO."""
+        if self._bootstrapping:
+            return
         self._front_log_added += added
         self._front_log_removed += removed
         self._emit_front_summary()

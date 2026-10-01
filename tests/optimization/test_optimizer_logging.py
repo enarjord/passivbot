@@ -100,3 +100,40 @@ def test_seed_clamps_are_one_warning_with_bounded_samples(caplog):
     assert "adjustments=25 keys=25" in warnings[0]
     assert "+22 more" in warnings[0] and len(warnings[0]) <= 240
     assert all("bounds=[0.0, 1.0] | clamped=1.0 | source=seed.json" in m for m in details)
+
+
+
+def test_resumed_pareto_summaries_exclude_reconstructed_history(tmp_path, caplog):
+    from optimize import ResultRecorder
+
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    options = dict(
+        results_dir=str(tmp_path), sig_digits=6, flush_interval=60,
+        scoring_keys=["metric1", "metric2"], compress=False, write_all_results=False,
+    )
+    original = ResultRecorder(**options)
+    for index in range(5):
+        original.record(entry(index))
+    original.flush()
+    original.close()
+    caplog.clear()
+
+    resumed = ResultRecorder(**options, starting_iters=123)
+    assert resumed.store.n_iters == 123
+    assert len(resumed.store.get_front()) == 5
+    resumed.flush()
+    assert not caplog.records
+
+    # A duplicate increments exact evaluation count but does not change the front.
+    resumed.record(entry(0))
+    assert not caplog.records
+    resumed.record(entry(5))
+    assert len(caplog.records) == 1
+    assert "eval=125 front=6 feasible=6 changes=+1/-0" in caplog.text
+    resumed.record(entry(6))
+    resumed.flush()
+    resumed.close()
+    assert len(caplog.records) == 2
+    assert "eval=126 front=7 feasible=7 changes=+1/-0" in caplog.records[-1].getMessage()
+    assert len(list((tmp_path / "pareto").glob("*.json"))) == 7
