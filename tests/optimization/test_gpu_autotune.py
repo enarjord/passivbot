@@ -127,12 +127,12 @@ def test_cache_reuse_refresh_and_classes(tmp_path):
     controller = first.controller(512, 1024, None)
     controller.save(256, 100.0, 60.0)
     assert tuner(tmp_path).controller(512, 1024, None).width == 256
-    assert tuner(tmp_path, mode="refresh").controller(512, 1024, None).width == 128
-    assert tuner(tmp_path).controller(512, 2048, None).width == 128
-    assert tuner(tmp_path).controller(512, 1024, 500).width == 128
+    assert tuner(tmp_path, mode="refresh").controller(512, 1024, None).width == 512
+    assert tuner(tmp_path).controller(512, 2048, None).width == 512
+    assert tuner(tmp_path).controller(512, 1024, 500).width == 512
     changed = proxy()
     changed.checkpoint_contract["base_params"]["hsl_enabled"] = 1
-    assert tuner(tmp_path, item=changed).controller(512, 1024, None).width == 128
+    assert tuner(tmp_path, item=changed).controller(512, 1024, None).width == 512
     # Equal-length new data/dates reuse execution evidence, not trading results.
     changed = proxy()
     changed.checkpoint_contract["hlcvs"]["sha256"] = "data-b"
@@ -140,7 +140,7 @@ def test_cache_reuse_refresh_and_classes(tmp_path):
     changed.checkpoint_contract["backtest"]["first_timestamp_ms"] = 456
     assert tuner(tmp_path, item=changed).controller(512, 1024, None).width == 256
     changed.checkpoint_contract["hlcvs"]["shape"][0] *= 2
-    assert tuner(tmp_path, item=changed).controller(512, 1024, None).width == 128
+    assert tuner(tmp_path, item=changed).controller(512, 1024, None).width == 512
 
 
 def test_cache_limits_and_corrupt_or_unwritable_cache(tmp_path, caplog):
@@ -148,10 +148,10 @@ def test_cache_limits_and_corrupt_or_unwritable_cache(tmp_path, caplog):
     item.controller(512, 1024, None).save(256, 100, 60)
     cache = next(tmp_path.glob("*.json"))
     cache.write_text('{"version": 1, "batch_size": 999999}')
-    assert tuner(tmp_path).controller(512, 1024, None).width == 128
+    assert tuner(tmp_path).controller(512, 1024, None).width == 512
     assert "cache unavailable" in caplog.text
     cache.write_text("not json")
-    assert tuner(tmp_path).controller(512, 1024, None).width == 128
+    assert tuner(tmp_path).controller(512, 1024, None).width == 512
     blocked = tmp_path / "not-a-directory"
     blocked.write_text("file")
     offline = tuner(blocked)
@@ -253,17 +253,17 @@ def test_gpu_changed_batch_width_preserves_every_metric(case, tmp_path):
 def test_adaptive_progress_reports_actual_chunks(monkeypatch, caplog):
     from optimization.gpu.service import _new_gpu_dispatch_progress, _update_gpu_dispatch_progress
 
-    ticks = iter([0.0, 31.0, 62.0])
+    ticks = iter([0.0, 61.0, 122.0])
     monkeypatch.setattr("optimization.gpu.service.time.monotonic", lambda: next(ticks))
     progress = _new_gpu_dispatch_progress(16, 16, adaptive=True)
     with caplog.at_level("INFO"):
         _update_gpu_dispatch_progress(progress, completed_candidates=2, strategy="test")
         _update_gpu_dispatch_progress(progress, completed_candidates=16, strategy="test")
-    assert "chunks=1 candidates=2/16" in caplog.records[0].message
-    assert "chunks=2 candidates=16/16" in caplog.records[1].message
+    assert "batches_done=1 scenario_evals=2/16" in caplog.records[0].message
+    assert "batches_done=2 scenario_evals=16/16" in caplog.records[1].message
 
 
-def test_corrupt_cache_is_repaired_and_low_memory_ignores_large_cached_width(tmp_path):
+def test_corrupt_cache_is_repaired_and_low_headroom_caps_cached_width(tmp_path):
     item = tuner(tmp_path)
     controller = item.controller(512, 1024, None)
     controller.save(256, 100, 60)
@@ -378,3 +378,174 @@ def test_real_mps_automatic_startup_device_identity():
     assert hardware["name"]
     assert hardware["memory"] == torch.mps.recommended_max_memory()
     assert hardware["memory"] > 0
+
+
+def test_long_replay_tunes_after_one_complete_batch_without_extra_work(tmp_path):
+    item = proxy()
+    item.batch_tuner = tuner(tmp_path, item=item)
+    batches = tune.proxy_batches(item, list(range(1536)), 512)
+    start, chunk = next(batches)
+    assert start == 0 and len(chunk) == 512
+    controller = next(iter(item.batch_tuner.controllers.values()))
+    for _ in range(100):
+        tune.record_replay_chunk(512, 4096, 2538000, 2.0)
+    assert controller.width == 512  # Timing cannot resize an active replay.
+    assert not list(tmp_path.glob('*.json'))
+    start, chunk = next(batches)
+    assert start == 512 and len(chunk) == 256
+    assert controller.baseline is not None
+    for _ in range(100):
+        tune.record_replay_chunk(256, 4096, 2538000, 2.0)
+    start, chunk = next(batches)
+    assert start == 768 and len(chunk) == 512  # Slower throughput rolls back.
+    assert controller.baseline is None
+    batches.close()
+
+
+def test_temporal_replay_consumes_only_one_retry_cooldown_window(tmp_path):
+    item = proxy()
+    item.batch_tuner = tuner(tmp_path, item=item)
+    batches = tune.proxy_batches(item, list(range(4096)), 512)
+    next(batches)
+    controller = next(iter(item.batch_tuner.controllers.values()))
+
+    def complete(width):
+        # Enough correlated samples to fill five windows in one replay.
+        for _ in range(128):
+            tune.record_replay_chunk(width, 4096, 2538000, 2.0)
+        return next(batches)
+
+    assert len(complete(512)[1]) == 256
+    assert len(complete(256)[1]) == 512
+    assert controller.cooldown == 3
+    for remaining in (2, 1, 0):
+        assert len(complete(512)[1]) == 512
+        assert controller.cooldown == remaining
+        assert controller.baseline is None
+    # Reaching the ceiling reverses direction, still only once per replay.
+    assert len(complete(512)[1]) == 512
+    assert controller.cooldown == 1
+    assert len(complete(512)[1]) == 512
+    assert controller.cooldown == 0
+    assert len(complete(512)[1]) == 256
+    assert controller.baseline is not None
+    batches.close()
+
+
+def test_abandoned_temporal_evidence_is_discarded_and_context_restored(tmp_path):
+    item = proxy()
+    item.batch_tuner = tuner(tmp_path, item=item)
+    batches = tune.proxy_batches(item, list(range(1024)), 512)
+    next(batches)
+    for _ in range(100):
+        tune.record_replay_chunk(512, 4096, 2538000, 2.0)
+    batches.close()
+    controller = next(iter(item.batch_tuner.controllers.values()))
+    assert controller.width == 512
+    assert not controller.samples
+    assert not list(tmp_path.glob('*.json'))
+    assert tune._REPLAY_SAMPLES.get() is None
+
+
+def test_temporal_evidence_is_bounded_and_uses_real_measured_seconds(tmp_path):
+    item = proxy()
+    item.batch_tuner = tuner(tmp_path, item=item)
+    batches = tune.proxy_batches(item, list(range(1024)), 512)
+    next(batches)
+    for _ in range(5000):
+        tune.record_replay_chunk(512, 4096, 2538000, 0.001)
+    assert len(tune._REPLAY_SAMPLES.get()) == 128
+    next(batches)
+    controller = next(iter(item.batch_tuner.controllers.values()))
+    assert controller.width == 512  # Normalization must not fake 30s of work.
+    batches.close()
+
+
+def test_old_calibration_version_does_not_restore_regressed_start(tmp_path):
+    import json
+    item = tuner(tmp_path)
+    controller = item.controller(512, 1024, None)
+    controller.save(128, 1, 60)
+    path = next(tmp_path.glob('*.json'))
+    record = json.loads(path.read_text()); record['version'] = 1
+    path.write_text(json.dumps(record))
+    assert tuner(tmp_path).controller(512, 1024, None).width == 512
+
+
+def test_temporal_trials_charge_host_overhead_and_handle_internal_splits(tmp_path):
+    item = proxy()
+    item.batch_tuner = tuner(tmp_path, item=item)
+    tick = [0.0]
+    batches = tune.proxy_batches(item, list(range(1024)), 512, clock=lambda: tick[0])
+    next(batches)
+    for _ in range(100):
+        tune.record_replay_chunk(64, 4096, 2538000, 2.0)
+    tick[0] = 400.0  # 200s kernels plus 200s packing/reduction/host overhead.
+    next(batches)
+    controller = next(iter(item.batch_tuner.controllers.values()))
+    assert controller.width == 256
+    assert controller.baseline[1] == pytest.approx(64 * 4096 / (4 * 2538000))
+    batches.close()
+
+
+def test_real_temporal_evidence_changes_width_without_changing_results(tmp_path, monkeypatch):
+    torch = pytest.importorskip('torch')
+    if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
+        pytest.skip('GPU unavailable')
+    from tools.gpu_proxy_benchmark import _build_case
+    item, candidates, *_ = _build_case(
+        'tm-multicoin-overhead', candidates=48, dispatch_batch_size=16,
+        single_bars=256, multicoin_bars=256, coins=3, seed=7,
+    )
+    item.runners['long'].max_dispatch_candidate_bars = 2048
+    expected = item.evaluate(candidates)
+    monkeypatch.setattr(tune, 'WINDOW', 2)
+    monkeypatch.setattr(tune, 'MIN_SECONDS', 0.0)
+    item.checkpoint_contract = {}  # Benchmark fixture omits optimizer/cache metadata.
+    item.max_dispatch_candidate_bars = 2048
+    item.batch_tuner = tuner(tmp_path, item=item)
+    actual = item.evaluate(candidates)
+    controller = next(iter(item.batch_tuner.controllers.values()))
+    assert controller.seen - {16}  # A real narrower shape was evaluated.
+    assert len(actual) == len(expected)
+    for left, right in zip(actual, expected):
+        assert left.keys() == right.keys()
+        for key in left:
+            assert left[key] == pytest.approx(right[key], rel=1e-12, abs=1e-12, nan_ok=True), key
+
+
+@pytest.mark.parametrize("device", ["cuda", "mps"])
+@pytest.mark.parametrize("mode", ["auto", "refresh"])
+def test_low_memory_start_is_bounded_and_cache_cannot_bypass_headroom(tmp_path, device, mode):
+    item = tuner(tmp_path)
+    item.hardware["device"] = device
+    item.controller(512, 1024, None).save(256, 100, 60)
+    pressure = [True]
+
+    def constrained_tuner(mode="auto"):
+        result = tuner(tmp_path, mode=mode)
+        result.hardware["device"] = device
+        del result._headroom  # Exercise the real backend-specific memory gate.
+        result.proxy._torch = SimpleNamespace(
+            cuda=SimpleNamespace(mem_get_info=lambda: (
+                1 if pressure[0] else 2 * 1024**3, 4 * 1024**3,
+            )),
+            mps=SimpleNamespace(
+                driver_allocated_memory=lambda: 80 if pressure[0] else 10,
+                recommended_max_memory=lambda: 100,
+            ),
+        )
+        return result
+
+    constrained = constrained_tuner(mode)
+    assert constrained.controller(512, 1024, None).width == 128
+    assert constrained.controller(64, 1024, None).width == 64
+    assert constrained.controller(512, 32, None).width == 32
+    # New production evidence can still grow when backend headroom recovers.
+    pressure[0] = False
+    controller = constrained.controller(512, 1024, None)
+    window(controller)
+    assert controller.width == 256
+    item.controller(512, 1024, None).save(64, 100, 60)
+    pressure[0] = True
+    assert constrained_tuner().controller(512, 1024, None).width == 64

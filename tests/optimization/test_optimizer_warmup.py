@@ -200,3 +200,306 @@ def test_prepare_suite_contexts_uses_shared_optimizer_warmup_helper():
     source = Path("src/optimize_suite.py").read_text(encoding="utf-8")
     assert "compute_optimizer_per_coin_warmup_minutes(" in source
     assert "stamp_warmup_metadata(" in source
+
+
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
+    from copy import deepcopy
+    import numpy as np
+    from backtest import run_backtest
+    from config import prepare_config
+    from optimize import _stamp_optimizer_warmup
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["live"]["max_warmup_minutes"] = 3
+    cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
+    bounds = cfg["optimize"]["bounds"]["long"]
+    bounds["forager"]["unilateralness_ema_span_1m"] = [1.0, 60.0]
+    if consumer == "forager":
+        bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+    else:
+        bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 10.0]}
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    # Only one selected coin is long-eligible, so score-only history is dormant.
+    expected_history = 3 if consumer == "forager" else 1201
+    assert compute_optimizer_per_coin_warmup_minutes(cfg)["__default__"] == expected_history
+    activation = compute_optimizer_per_coin_warmup_minutes(cfg, for_trade_activation=True)
+    assert activation["__default__"] == 3
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    unstamped_markets = deepcopy(markets)
+    baseline = run_backtest(hlcvs, unstamped_markets, cfg, "binance", btc, timestamps)
+    _stamp_optimizer_warmup(cfg, markets, ["LONGCOIN", "SHORTCOIN"])
+    assert markets["LONGCOIN"]["trade_start_index"] == 3
+    result = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    assert len(result[0]) > 0
+    np.testing.assert_array_equal(result[0], baseline[0])
+    np.testing.assert_array_equal(result[1], baseline[1])
+    assert result[2] == baseline[2]
+    if consumer == "forager":
+        # This candidate fits available slots and does not consume a ranking score.
+        cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+        result = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+        np.testing.assert_array_equal(result[0], baseline[0])
+        np.testing.assert_array_equal(result[1], baseline[1])
+        assert result[2] == baseline[2]
+    else:
+        # The enabled candidate uses its own short window, not the search maximum.
+        cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 1.0
+        cfg["bot"]["long"]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 1.0
+        fills, _, _, payload = run_backtest(
+            hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True
+        )
+        assert payload.backtest_params["trade_start_indices"][0] == 3
+        long_entries = [row for row in fills if str(row[13]).startswith("entry_") and "long" in str(row[13])]
+        assert min(int(row[0]) for row in long_entries) == 21
+        standalone = run_backtest(hlcvs, unstamped_markets, cfg, "binance", btc, timestamps)
+        np.testing.assert_array_equal(fills, standalone[0])
+        assert len(fills) > 0
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("consumer", ["forager", "adverse"])
+@pytest.mark.parametrize("pin", ["weight", "span"])
+@pytest.mark.parametrize("pin_source", ["runtime", "anchor"])
+def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
+    from copy import deepcopy
+    from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY
+    from optimization.warmup import _build_optimizer_boundary_configs
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["optimize"]["bounds"] = {}
+    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    weight_path = (["forager", "score_weights", "unilateralness"] if consumer == "forager"
+                   else ["entry_cooldown", "weights_minutes", "adverse_directionality"])
+    weight_key = ("forager_score_weights_unilateralness" if consumer == "forager"
+                  else "entry_cooldown_weights_minutes_adverse_directionality")
+    span_path = ["forager", "unilateralness_ema_span_1m"]
+    bounds = cfg["optimize"]["bounds"]
+    for pside in ("long", "short"):
+        bounds[f"{pside}_n_positions"] = [1.0]
+        bounds[f"{pside}_total_wallet_exposure_limit"] = [float(pside == side)]
+    bounds[f"{side}_{weight_key}"] = [0.0, 1.0]
+    bounds[f"{side}_unilateralness_ema_span_1m"] = [1.0, 100000.0]
+    key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_1m"
+    path = ["bot", side, *(weight_path if pin == "weight" else span_path)]
+    value = 0.0 if pin == "weight" else 2.5
+    expected = 0 if pin == "weight" else 51
+    if pin_source == "runtime":
+        cfg["optimize"]["fixed_runtime_overrides"] = {".".join(path): value}
+    else:
+        other_key = f"{side}_unilateralness_ema_span_1m" if pin == "weight" else f"{side}_{weight_key}"
+        other_path = ["bot", side, *(span_path if pin == "weight" else weight_path)]
+        cfg[ANCHOR_PLAN_KEY] = {
+            "anchors": [{"source": "anchor.json", "fixed_values": [{"key": key, "path": path, "value": value}]}],
+            "fixed_keys": [key], "tunable_keys": [other_key], "key_paths": [other_path],
+        }
+    before = deepcopy(cfg)
+    # Exercise the config passed to dataset preparation as well as finalized candidates.
+    data_cfg = build_optimizer_data_config(cfg)
+    assert compute_backtest_warmup_minutes(data_cfg) == expected
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == expected
+    for candidate in _build_optimizer_boundary_configs(cfg, rms_consumer_corner=True):
+        assert compute_backtest_warmup_minutes(candidate) == expected
+    assert cfg == before
+    if pin_source == "runtime":
+        cfg["optimize"]["fixed_runtime_overrides"] = {}
+    else:
+        cfg.pop(ANCHOR_PLAN_KEY)
+    assert compute_backtest_warmup_minutes(build_optimizer_data_config(cfg)) == 2000001
+
+
+def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["optimize"]["bounds"] = {}
+    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 2.5
+    cfg["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.forager.score_weights.unilateralness": 0.0,
+        "bot.long.forager.unilateralness_ema_span_1m": 1.0,
+    }
+    assert compute_backtest_warmup_minutes(cfg) == 51
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("searched", [False, True])
+def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, searched):
+    from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["live"]["approved_coins"] = {s: ["BTC", "ETH"] for s in ("long", "short")}
+    cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
+    cfg["optimize"]["bounds"] = {}
+    for s in ("long", "short"):
+        cfg["bot"][s]["risk"].update(n_positions=1, total_wallet_exposure_limit=float(s == side))
+        cfg["optimize"]["bounds"].update({f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
+    if searched:
+        cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+    cfg["coin_overrides"] = {coin: {"bot": {side: {"entry_cooldown": {
+        "weights_minutes": {"adverse_directionality": 0.0}, "max_duration_minutes": None,
+    }}}} for coin in ("BTC", "ETH")}
+    # An unselected override with an active inherited policy must not inflate history either.
+    cfg["coin_overrides"]["SOL"] = {"bot": {side: {"entry_cooldown": {"base_duration_minutes": 0.0}}}}
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    assert max(compute_per_coin_warmup_minutes(cfg).values()) == 0
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 0
+    # An inheriting selected coin makes the global policy reachable again.
+    cfg["backtest"]["coins"]["binance"].append("XRP")
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    cfg["live"]["approved_coins"][side].append("XRP")
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 2000001
+    # Without a resolved selection, retain the conservative global history.
+    cfg["backtest"]["coins"] = {}
+    cfg["live"]["approved_coins"] = {"long": [], "short": []}
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+
+
+@pytest.mark.parametrize("searched", [False, True])
+@pytest.mark.parametrize("dataset_known", [False, True])
+def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_known):
+    from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]} if dataset_known else {}
+    cfg["optimize"]["bounds"] = {}
+    cfg["coin_overrides"] = {}
+    for side, coin in (("long", "BTC"), ("short", "ETH")):
+        cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+        cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+        cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+        cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
+        cfg["optimize"]["bounds"].update({f"{side}_n_positions": [1.0], f"{side}_total_wallet_exposure_limit": [1.0]})
+        if searched:
+            cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+        cfg["coin_overrides"][coin] = {"bot": {side: {"entry_cooldown": {
+            "weights_minutes": {"adverse_directionality": 0.0}, "max_duration_minutes": None,
+        }}}}
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    assert max(compute_per_coin_warmup_minutes(cfg).values()) == 0
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 0
+    # Opening the opposite side makes that inherited policy a real consumer.
+    cfg["live"]["approved_coins"]["long"].append("ETH")
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 2000001
+    # A zero per-coin exposure pin still makes the newly approved side ineligible.
+    cfg["coin_overrides"]["ETH"]["bot"]["long"] = {"wallet_exposure_limit": 0.0}
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 0
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("searched", [False, True])
+@pytest.mark.parametrize("override_enabled", [False, True])
+@pytest.mark.parametrize("exact_dataset", [False, True])
+def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched, override_enabled, exact_dataset):
+    from backtest import _get_backtest_coin_override
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    symbol = "BTC/USDT:USDT"
+    monkeypatch.setattr("utils._load_coin_to_symbol_map", lambda exchange: {
+        "BTC": [symbol], symbol: [symbol], "BTCUSDT": [symbol],
+    })
+    coin, override_key = (symbol, "BTC") if exact_dataset else ("BTC", "binance::BTCUSDT")
+    cfg = get_template_config()
+    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": [coin], "short": [coin]})
+    cfg["backtest"]["coins"] = {"binance": [coin]}
+    cfg["optimize"]["bounds"] = {}
+    for s in ("long", "short"):
+        cfg["bot"][s]["risk"].update(n_positions=1, total_wallet_exposure_limit=float(s == side))
+        cfg["optimize"]["bounds"].update({f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 2.5
+    cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not override_enabled)
+    if searched:
+        cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+    patch = {"bot": {side: {"entry_cooldown": {
+        "weights_minutes": {"adverse_directionality": float(override_enabled)},
+        "max_duration_minutes": 60.0 if override_enabled else None,
+    }}}}
+    cfg["coin_overrides"] = {override_key: patch}
+    # The history budget must use the same policy as the actual payload resolver.
+    assert _get_backtest_coin_override(cfg, {}, "binance", coin) == patch
+    expected = 51 if override_enabled else 0
+    assert compute_backtest_warmup_minutes(cfg) == expected
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == expected
+    assert compute_per_coin_warmup_minutes(cfg)[override_key] == expected
+    # An exact identifier on another venue must not shadow the inherited policy.
+    cfg["coin_overrides"] = {"bybit::BTCUSDT": patch}
+    assert _get_backtest_coin_override(cfg, {}, "binance", coin) == {}
+    assert compute_backtest_warmup_minutes(cfg) == (51 if searched or not override_enabled else 0)
+    # Sizing may precede metadata loading: retain both possible policies offline.
+    cfg["coin_overrides"] = {override_key: patch}
+    monkeypatch.setattr("utils._load_coin_to_symbol_map", lambda exchange: {})
+    assert compute_backtest_warmup_minutes(cfg) == 51
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("dynamic", [False, True])
+@pytest.mark.parametrize("slots", [1, 2])
+@pytest.mark.parametrize("searched", [False, True])
+def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots, searched):
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": ["BTC", "ETH"], "short": ["BTC", "ETH"]})
+    cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=dynamic)
+    cfg["optimize"]["bounds"] = {f"{side}_n_positions": [slots]}
+    for s in ("long", "short"):
+        cfg["bot"][s]["risk"].update(n_positions=slots, total_wallet_exposure_limit=float(s == side))
+        cfg["optimize"]["bounds"].update({
+            f"{s}_n_positions": [slots],
+            f"{s}_total_wallet_exposure_limit": [float(s == side)],
+        })
+    cfg["bot"][side]["forager"].update(
+        unilateralness_ema_span_1m=100000,
+        score_weights=dict(volume=0, volatility=0, ema_readiness=0, unilateralness=float(not searched)),
+    )
+    if searched:
+        cfg["optimize"]["bounds"].update({
+            f"{side}_forager_score_weights_unilateralness": [0.0, 1.0],
+            f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0],
+            f"{side}_n_positions": [slots],
+        })
+    expected = 2000001 if dynamic or slots < 2 else 0
+    assert compute_backtest_warmup_minutes(cfg) == expected
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == expected
+    if not searched:
+        assert max(compute_per_coin_warmup_minutes(cfg).values()) == expected
+    # Adverse cooldown independently consumes RMS even when ranking cannot run.
+    cfg["bot"][side]["entry_cooldown"].update(
+        base_duration_minutes=0, max_duration_minutes=60,
+        weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+    )
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+
+
+def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": ["BTC", "ETH"], "short": []})
+    cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=False)
+    cfg["optimize"]["bounds"] = {}
+    cfg["bot"]["long"]["risk"].update(n_positions=2, total_wallet_exposure_limit=1)
+    cfg["bot"]["long"]["forager"].update(unilateralness_ema_span_1m=100000)
+    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1
+    cfg["optimize"]["bounds"]["long_n_positions"] = [1, 2]
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+    cfg["live"]["approved_coins"]["long"] = ["BTC"]
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    cfg["backtest"]["dynamic_wel_by_tradability"] = True
+    assert compute_backtest_warmup_minutes(cfg) == 0

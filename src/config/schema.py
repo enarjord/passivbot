@@ -5,9 +5,9 @@ from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
 
 
-CONFIG_SCHEMA_VERSION = "v8.4.0"
+CONFIG_SCHEMA_VERSION = "v8.5.0"
 SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset(
-    {"v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0"}
+    {"v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0"}
 )
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This
@@ -21,10 +21,12 @@ def _get_shared_bot_defaults():
         "long": {
             "forager": {
                 "score_weights": {
+                    "unilateralness": 0.0,
                     "ema_readiness": 0.21,
                     "volatility": 0.61,
                     "volume": 0.18
                 },
+                "unilateralness_ema_span_1m": 60.0,
                 "volatility_ema_span_1m": 2274.0,
                 "volume_drop_pct": 0.04,
                 "volume_ema_span_1m": 310.0
@@ -43,8 +45,13 @@ def _get_shared_bot_defaults():
                     "yellow": 0.5
                 }
             },
+            "entry_cooldown": {
+                "base_duration_minutes": 24.1,
+                "min_duration_minutes": 0.0,
+                "max_duration_minutes": None,
+                "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+            },
             "risk": {
-                "entry_cooldown_minutes": 24.1,
                 "n_positions": 7.0,
                 "position_exposure_enforcer_enabled": False,
                 "position_exposure_enforcer_threshold": 1.0,
@@ -70,10 +77,12 @@ def _get_shared_bot_defaults():
         "short": {
             "forager": {
                 "score_weights": {
+                    "unilateralness": 0.0,
                     "ema_readiness": 0.0,
                     "volatility": 0.0,
                     "volume": 0.0
                 },
+                "unilateralness_ema_span_1m": 60.0,
                 "volatility_ema_span_1m": 10.0,
                 "volume_drop_pct": 0.02,
                 "volume_ema_span_1m": 60.0
@@ -92,8 +101,13 @@ def _get_shared_bot_defaults():
                     "yellow": 0.5
                 }
             },
+            "entry_cooldown": {
+                "base_duration_minutes": 0.0,
+                "min_duration_minutes": 0.0,
+                "max_duration_minutes": None,
+                "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+            },
             "risk": {
-                "entry_cooldown_minutes": 0.0,
                 "n_positions": 1.0,
                 "position_exposure_enforcer_enabled": True,
                 "position_exposure_enforcer_threshold": 0.8,

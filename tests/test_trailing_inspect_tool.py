@@ -321,10 +321,14 @@ def test_extract_side_context_includes_global_and_risk_paths():
         "live": {"forced_mode_long": "p", "max_realized_loss_pct": 0.05},
         "bot": {
             "long": {
+                "entry_cooldown": {
+                    "base_duration_minutes": 2.0, "min_duration_minutes": 0.0,
+                    "max_duration_minutes": None,
+                    "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+                },
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
                     "n_positions": 1,
-                    "entry_cooldown_minutes": 2.0,
                     "position_exposure_enforcer_enabled": True,
                     "position_exposure_enforcer_threshold": 0.8,
                     "total_exposure_entry_gate_enabled": True,
@@ -374,6 +378,11 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
         "bot": {
             "long": {
                 "hsl": {"enabled": False},
+                "entry_cooldown": {
+                    "base_duration_minutes": 0.0, "min_duration_minutes": 0.0,
+                    "max_duration_minutes": None,
+                    "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+                },
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
                     "n_positions": 1,
@@ -393,7 +402,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                 "bot": {
                     "long": {
                         "hsl": {"enabled": True},
-                        "risk": {"entry_cooldown_minutes": 9.0},
+                        "entry_cooldown": {"base_duration_minutes": 9.0},
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {"threshold_base_pct": 0.2}
@@ -415,7 +424,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
     assert context["coin_strategy_override_symbols"] == ["XRP"]
     assert context["coin_context_override_descriptions"] == [
         "DOGE (bot.long.hsl)",
-        "XRP (bot.long.hsl, bot.long.risk, live.forced_mode_long)",
+        "XRP (bot.long.entry_cooldown, bot.long.hsl, live.forced_mode_long)",
     ]
 
 
@@ -1330,3 +1339,34 @@ def test_overview_rejects_duplicate_volatility_scenario_labels():
                 ("same", 0.02, 0.01),
             ),
         )
+
+
+@pytest.mark.parametrize(
+    "base,floor,ceiling,weight,expected,absent",
+    [
+        (0, 5, None, 0, "waits 5 minutes", "full recursive entry ladder simultaneously"),
+        (5, 0, 0, 0, "full recursive entry ladder simultaneously", "cooldown is positive"),
+        (0, 0, 30, 10, "effective entry cooldown is state-dependent", "full recursive entry ladder simultaneously"),
+        (5, 0, 30, 10, "effective entry cooldown is state-dependent", "waits 5 minutes"),
+        (0, 5, 5, 10, "waits 5 minutes", "state-dependent"),
+    ],
+)
+def test_overview_describes_effective_cooldown(base, floor, ceiling, weight, expected, absent):
+    from config import get_template_config, prepare_config
+
+    cfg = get_template_config()
+    cfg["bot"]["long"]["entry_cooldown"].update(
+        base_duration_minutes=base, min_duration_minutes=floor, max_duration_minutes=ceiling,
+        weights_minutes={"exposure_ratio": weight, "adverse_directionality": 0.0},
+    )
+    cfg = prepare_config(cfg, verbose=False)
+    context = trailing_inspect._extract_side_context(cfg, "long")
+    params = _params()
+    params["entry"]["retracement_base_pct"] = 0.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": context}},
+        parameter_source="test config", price_anchor=100.0,
+    )
+    comments = " ".join(result["sides"]["long"]["classification"]["entry_comments"])
+    assert expected in comments
+    assert absent not in comments

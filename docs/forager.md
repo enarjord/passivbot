@@ -14,7 +14,7 @@ Forager answers that question in a simple sequence:
 2. rank the survivors by a weighted score
 3. fill the available shortlist slots from that ranking
 
-This lets you control the tradeoff between liquidity, volatility, and entry readiness directly in config.
+This lets you control the tradeoff between liquidity, volatility, entry readiness, and sustained directionality directly in config.
 
 ## Inputs
 
@@ -24,6 +24,7 @@ For each side (`bot.long` and `bot.short`), forager uses:
 - `forager_volume_ema_span_1m`
 - `forager_volatility_ema_span_1m`
 - `forager_score_weights`
+- `unilateralness_ema_span_1m` (floating-point span, default 60)
 - `ema_span_0`
 - `ema_span_1`
 - `entry_initial_ema_dist`
@@ -34,6 +35,7 @@ It also depends on live/backtest market state:
 - EMA bands derived from `ema_span_0`, `ema_span_1`, and `sqrt(span_0 * span_1)`
 - 1m EMA quote volume
 - 1m EMA log range
+- completed 1m close returns for enabled RMS unilateralness scoring
 - tradability / enabled flags / slot availability
 
 ## Selection Flow
@@ -93,6 +95,16 @@ Interpretation:
 - near zero: close to triggering
 - larger positive: farther away from entry
 
+### Unilateralness
+
+`bot.<side>.forager.score_weights.unilateralness` optionally penalizes sustained
+one-way movement equally up or down. It uses the absolute signed RMS score from
+completed one-minute close returns. Lower is better; the candidate normalization
+inverts this penalty so higher total scores remain preferable. The weight defaults
+to zero and the floating-point `unilateralness_ema_span_1m` defaults to 60.
+See [adaptive entry cooldown and RMS](adaptive_entry_cooldown.md) for the formula,
+normalization, completed-candle readiness and decay through flat prices.
+
 ## `forager_score_weights`
 
 `forager_score_weights` is a dict with required keys:
@@ -100,40 +112,52 @@ Interpretation:
 - `volume`
 - `ema_readiness`
 - `volatility`
+- `unilateralness`
 
 Rules:
 
 - each value must be finite and non-negative
 - positive weights are relative; only their proportions matter
 - positive weights are normalized to unit sum before scoring
-- if all three weights are zero, Passivbot normalizes them to EMA-readiness-only ranking
+- if all four weights are zero, Passivbot normalizes them to EMA-readiness-only ranking
 
 Examples:
 
-- `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}`
+- `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}`
   - prioritize the most volatile candidates
-- `{"volume": 1.0, "ema_readiness": 0.0, "volatility": 0.0}`
+- `{"volume": 1.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0}`
   - maximize liquidity after coarse pruning
-- `{"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0}`
+- `{"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0}`
   - prioritize symbols closest to a real initial entry
-- `{"volume": 0.2, "ema_readiness": 0.6, "volatility": 0.2}`
+- `{"volume": 0.2, "ema_readiness": 0.6, "volatility": 0.2, "unilateralness": 0.0}`
   - bias toward actual setups while still preferring liquid, active symbols
-- `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0}`
+- `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0}`
   - normalize to EMA-readiness-only ranking
+
+- `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 1.0}`
+  - prefer the least unilateral retained candidates
+- `{"volume": 0.0, "ema_readiness": 0.2, "volatility": 0.4, "unilateralness": 0.4}`
+  - balance entry readiness and volatility against sustained one-way movement
 
 These sub-weights are also available under `optimize.bounds` as:
 
 - `long_forager_score_weights_volume`
 - `long_forager_score_weights_ema_readiness`
 - `long_forager_score_weights_volatility`
+- `long_forager_score_weights_unilateralness`
 - `short_forager_score_weights_volume`
 - `short_forager_score_weights_ema_readiness`
 - `short_forager_score_weights_volatility`
+- `short_forager_score_weights_unilateralness`
+
+The optional span dimensions are `long_unilateralness_ema_span_1m` and
+`short_unilateralness_ema_span_1m`. Unilateralness weights and spans are opt-in
+optimizer dimensions; they are not added to the default search space.
 
 Important: these weights only rank candidates for available initial-entry slots. They do not force
-entries, bypass entry conditions, or bypass risk/min-size gates. If all three weights are set to
+entries, bypass entry conditions, or bypass risk/min-size gates. If all four weights are set to
 zero, the canonical config is EMA-readiness-only ranking, so the saved config will show
-`{"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0}`. That means forager prefers symbols
+`{"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0}`. That means forager prefers symbols
 closest to their real initial-entry threshold when filling empty slots; it does not mean every
 approved symbol will immediately open or keep adding entries.
 
@@ -190,3 +214,9 @@ invent local substitute values.
 - Canonical shortlist scoring and selection live in Rust.
 - Python is responsible for gathering market data, building payloads, and calling Rust.
 - The canonical config names are `forager_volume_ema_span_1m` and `forager_volatility_ema_span_1m`.
+
+When unilateralness is enabled, the monitor's ranking total comes from the latest
+Rust scoring diagnostic, including all four components, volume pruning and tie
+ordering. Its source timestamp identifies the observation. No total is shown when
+there is no current scoring diagnostic; the monitor does not fetch RMS data or
+reconstruct selection to fill that gap.

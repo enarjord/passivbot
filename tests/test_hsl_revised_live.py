@@ -264,7 +264,7 @@ async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monk
     cfg = generated_template(legacy, mode)
     for side in ('long', 'short'):
         cfg['bot'][side]['unstuck']['enabled'] = False
-        cfg['bot'][side]['risk']['entry_cooldown_minutes'] = 0.
+        cfg['bot'][side]['entry_cooldown']['base_duration_minutes'] = 0.
     cfg['live']['max_realized_loss_pct'] = 1.
     cfg['live']['approved_coins']['long'] = ['BTC']
     cfg['live']['pnls_max_lookback_days'] = 1.
@@ -544,7 +544,7 @@ async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tm
     cfg['live']['max_realized_loss_pct'] = 1.
     for side in ('long', 'short'):
         cfg['bot'][side]['unstuck']['enabled'] = False
-        cfg['bot'][side]['risk']['entry_cooldown_minutes'] = 0.
+        cfg['bot'][side]['entry_cooldown']['base_duration_minutes'] = 0.
     block = cfg['bot']['hsl'] if mode == 'unified' else cfg['bot']['long']['hsl']
     block.update(enabled=True, red_threshold=.06, ema_span_minutes=1.,
                  panic_close_order_type='market', restart_after_red_policy=restart,

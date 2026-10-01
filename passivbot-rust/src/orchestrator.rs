@@ -30,7 +30,7 @@ pub struct ForagerHysteresisState {
 mod core {
     use crate::closes::{calc_wel_auto_reduce_long, calc_wel_auto_reduce_short};
     use crate::coin_selection::{
-        select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
+        forager_scoring_positions, select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
         ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
     };
     use crate::constants::{LONG, SHORT};
@@ -203,6 +203,7 @@ mod core {
         pub volume_component: f64,
         pub ema_readiness_component: f64,
         pub volatility_component: f64,
+        pub unilateralness_component: f64,
         pub selected: bool,
         pub incumbent: bool,
     }
@@ -257,6 +258,9 @@ mod core {
         InvalidStrategyParams {
             symbol_idx: usize,
             details: String,
+        },
+        UnilateralnessUnavailable {
+            symbol_idx: usize,
         },
         MissingEma {
             symbol_idx: usize,
@@ -315,6 +319,8 @@ mod core {
         pub close: EmaBySpan,
         pub log_range: EmaBySpan,
         pub volume: EmaBySpan,
+        #[serde(default)]
+        pub signed_unilateralness: EmaBySpan,
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -419,6 +425,16 @@ mod core {
         pub tradable: bool,
     }
 
+    /// Explicit live transport unavailability, scoped to the span and consumer.
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct UnilateralnessUnavailable {
+        #[serde(default)]
+        pub current: Vec<f64>,
+        #[serde(default)]
+        pub forager: Vec<f64>,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct SymbolInput {
@@ -431,6 +447,13 @@ mod core {
         /// callers that do not explicitly establish live data unavailability.
         #[serde(default)]
         pub allow_missing_strategy_inputs: bool,
+        /// CPU backtest RMS replay windows still warming from known listing
+        /// history. Only missing RMS inputs at these spans may be deferred;
+        /// unrelated inputs and non-finite scores remain strict.
+        #[serde(default)]
+        pub unilateralness_warmup_spans: Vec<f64>,
+        #[serde(default)]
+        pub unilateralness_unavailable: UnilateralnessUnavailable,
         /// Backtest-only hint: next candle range for "peek fill" decisions.
         /// `None` => unknown (live mode), default to full-grid expansion.
         pub next_candle: Option<NextCandle>,
@@ -536,41 +559,11 @@ mod core {
         Ok(())
     }
 
-    fn cooldown_delay_ms(cooldown_minutes: f64) -> u64 {
-        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
-            0
-        } else {
-            (cooldown_minutes * 60_000.0).ceil() as u64
-        }
-    }
-
     fn order_increases_position(pside: PositionSide, qty: f64) -> bool {
         match pside {
             PositionSide::Long => qty > 0.0,
             PositionSide::Short => qty < 0.0,
         }
-    }
-
-    fn add_order_cooldown_active(
-        now_timestamp_ms: u64,
-        last_increase_fill_timestamp_ms: Option<u64>,
-        cooldown_minutes: f64,
-    ) -> bool {
-        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
-            return false;
-        }
-        let Some(last_fill_ts) = last_increase_fill_timestamp_ms else {
-            return false;
-        };
-        let until_ms = last_fill_ts.saturating_add(cooldown_delay_ms(cooldown_minutes));
-        now_timestamp_ms < until_ms
-    }
-
-    fn allow_full_entry_ladder_simultaneously(
-        cooldown_minutes: f64,
-        entry_retracement_enabled: bool,
-    ) -> bool {
-        !entry_retracement_enabled && cooldown_minutes.is_finite() && cooldown_minutes == 0.0
     }
 
     fn keep_only_first_add_order(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
@@ -596,15 +589,12 @@ mod core {
         cooldown_minutes: f64,
         entry_retracement_enabled: bool,
     ) {
-        if add_order_cooldown_active(
-            now_timestamp_ms,
-            last_increase_fill_timestamp_ms,
-            cooldown_minutes,
-        ) {
+        let cooldown = crate::entry_cooldown::EntryCooldown::new(cooldown_minutes);
+        if cooldown.is_active(now_timestamp_ms, last_increase_fill_timestamp_ms) {
             orders.retain(|order| !order_increases_position(pside, order.qty));
             return;
         }
-        if !allow_full_entry_ladder_simultaneously(cooldown_minutes, entry_retracement_enabled) {
+        if !cooldown.allows_full_entry_ladder(entry_retracement_enabled) {
             keep_only_first_add_order(orders, pside);
         }
     }
@@ -1085,6 +1075,7 @@ mod core {
                         volume_component: item.volume_component,
                         ema_readiness_component: item.ema_readiness_component,
                         volatility_component: item.volatility_component,
+                        unilateralness_component: item.unilateralness_component,
                         selected: item.selected,
                         incumbent: item.incumbent,
                     })
@@ -2242,6 +2233,7 @@ mod core {
             enabled: false,
             volume_score: 0.0,
             volatility_score: 0.0,
+            unilateralness_score: 0.0,
             bid: 0.0,
             ask: 0.0,
             ema_lower: 0.0,
@@ -2450,12 +2442,37 @@ mod core {
                 enabled: true,
                 volume_score,
                 volatility_score,
+                // Filled below only if this candidate survives volume pruning.
+                unilateralness_score: 0.0,
                 bid,
                 ask,
                 ema_lower,
                 ema_upper,
                 entry_initial_ema_dist,
             });
+        }
+        if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
+            let scoring_positions = forager_scoring_positions(out, cfg)
+                .map_err(map_forager_selection_error)?;
+            let mut ranking_unavailable = false;
+            for pos in scoring_positions {
+                let s = &symbols[out[pos].index];
+                let side = symbol_side_input(s, pside);
+                match signed_unilateralness(s, &side.bot_params, true) {
+                    Ok(value) => out[pos].unilateralness_score = value.abs(),
+                    Err(err) => {
+                        handle_strategy_input_error(
+                            err, s, pside, StrategyInputScope::ForagerSelection, diagnostics,
+                        )?;
+                        ranking_unavailable = true;
+                    }
+                }
+            }
+            if ranking_unavailable {
+                // Never rank a ready subset of the retained scoring set.
+                // Keep scanning above so malformed supplied scores stay fatal.
+                out.clear();
+            }
         }
         Ok(())
     }
@@ -2583,6 +2600,7 @@ mod core {
     ) -> Result<(), OrchestratorError> {
         let explicitly_unavailable = match &err {
             OrchestratorError::MissingEma { .. } => symbol.allow_missing_strategy_inputs,
+            OrchestratorError::UnilateralnessUnavailable { .. } => true,
             OrchestratorError::MissingTrailing { .. } => {
                 !symbol_side_input(symbol, pside).trailing_available
             }
@@ -2748,6 +2766,129 @@ mod core {
         })
     }
 
+    fn signed_unilateralness(
+        symbol: &SymbolInput,
+        bp: &BotParams,
+        forager: bool,
+    ) -> Result<f64, OrchestratorError> {
+        let bundle = if forager {
+            symbol.forager_m1.as_ref().unwrap_or(&symbol.emas.m1)
+        } else {
+            &symbol.emas.m1
+        };
+        let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_1m)
+            .ok_or_else(|| {
+                let unavailable = if forager {
+                    &symbol.unilateralness_unavailable.forager
+                } else {
+                    &symbol.unilateralness_unavailable.current
+                };
+                if symbol.unilateralness_warmup_spans.contains(&bp.unilateralness_ema_span_1m)
+                    || unavailable.contains(&bp.unilateralness_ema_span_1m)
+                {
+                    OrchestratorError::UnilateralnessUnavailable { symbol_idx: symbol.symbol_idx }
+                } else {
+                    OrchestratorError::MissingEma { symbol_idx: symbol.symbol_idx }
+                }
+            })?;
+        if !value.is_finite() || value.abs() > 1.0 {
+            return Err(OrchestratorError::NonFiniteInput {
+                symbol_idx: Some(symbol.symbol_idx),
+                field: "signed_unilateralness",
+            });
+        }
+        Ok(value)
+    }
+
+    fn effective_cooldown(
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        balance: f64,
+        runtime_budget: RuntimeBudgetState,
+    ) -> Result<f64, OrchestratorError> {
+        let side = symbol_side_input(symbol, pside);
+        let bp = &side.bot_params;
+        crate::entry_cooldown::validate(bp).map_err(|_| OrchestratorError::NonFiniteInput {
+            symbol_idx: Some(symbol.symbol_idx),
+            field: "entry_cooldown",
+        })?;
+        if let Some(minutes) = crate::entry_cooldown::constant_duration(bp) {
+            return Ok(minutes);
+        }
+        // A held position with no remaining allocation is beyond any finite ratio.
+        // Saturate the bounded duration without dividing by zero.
+        if bp.entry_cooldown_weights_minutes.exposure_ratio > 0.0
+            && side.position.size != 0.0
+            && runtime_budget.effective_wallet_exposure_limit == 0.0
+        {
+            return Ok(bp
+                .entry_cooldown_max_duration_minutes
+                .expect("validated modifier ceiling"));
+        }
+        let exposure = if bp.entry_cooldown_weights_minutes.exposure_ratio > 0.0 {
+            let limit = runtime_budget.effective_wallet_exposure_limit;
+            Some(if side.position.size == 0.0 {
+                0.0
+            } else if limit > 0.0 {
+                calc_wallet_exposure(
+                    symbol.exchange.c_mult,
+                    balance,
+                    side.position.size.abs(),
+                    side.position.price,
+                ) / limit
+            } else {
+                return Err(OrchestratorError::NonFiniteInput {
+                    symbol_idx: Some(symbol.symbol_idx),
+                    field: "entry_cooldown_exposure_limit",
+                });
+            })
+        } else {
+            None
+        };
+        let adverse = if bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0 {
+            let signed = signed_unilateralness(symbol, bp, false)?;
+            Some(
+                (if pside == PositionSide::Long {
+                    -signed
+                } else {
+                    signed
+                })
+                .max(0.0),
+            )
+        } else {
+            None
+        };
+        crate::entry_cooldown::effective_duration(bp, exposure, adverse).map_err(|_| {
+            OrchestratorError::NonFiniteInput {
+                symbol_idx: Some(symbol.symbol_idx),
+                field: "entry_cooldown",
+            }
+        })
+    }
+
+    pub fn entry_cooldown_durations_json(raw: &str) -> Result<String, String> {
+        let input: OrchestratorInput = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+        let mut result = std::collections::BTreeMap::new();
+        for symbol in &input.symbols {
+            for (name, pside) in [("long", PositionSide::Long), ("short", PositionSide::Short)] {
+                let side = symbol_side_input(symbol, pside);
+                let value = match effective_cooldown(
+                    symbol,
+                    pside,
+                    input.balance,
+                    resolve_runtime_budget(side, side.bot_params.n_positions),
+                ) {
+                    Ok(value) => Some(value),
+                    Err(OrchestratorError::MissingEma { .. }
+                        | OrchestratorError::UnilateralnessUnavailable { .. }) => None,
+                    Err(err) => return Err(format!("{err:?}")),
+                };
+                result.insert(format!("{}:{name}", symbol.symbol_idx), value);
+            }
+        }
+        serde_json::to_string(&result).map_err(|e| e.to_string())
+    }
+
     fn generate_strategy_ideal_orders(
         input: &OrchestratorInput,
         symbol: &SymbolInput,
@@ -2816,6 +2957,11 @@ mod core {
             volatility_ema_1m,
             volatility_ema_1h,
         };
+        let cooldown_minutes = if wants_entries {
+            effective_cooldown(symbol, pside, input.balance, runtime_budget)?
+        } else {
+            0.0
+        };
         let generated = generate_strategy_orders(
             strategy_kind_for_symbol_side(&input.global),
             strategy_side,
@@ -2856,7 +3002,7 @@ mod core {
             pside,
             input.timestamp_ms,
             side.last_increase_fill_timestamp_ms,
-            side.bot_params.risk_entry_cooldown_minutes,
+            cooldown_minutes,
             strategy_requires_sequential_entry_staging(&strategy_params),
         );
         let mut closes = Vec::new();
@@ -2875,7 +3021,10 @@ mod core {
         diagnostics: &mut OrchestratorDiagnostics,
     ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
         let side = symbol_side_input(symbol, pside);
-        let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available)
+        let rms_warming = crate::entry_cooldown::uses_adverse_rms(&side.bot_params)
+            && (symbol.unilateralness_warmup_spans.contains(&side.bot_params.unilateralness_ema_span_1m)
+                || symbol.unilateralness_unavailable.current.contains(&side.bot_params.unilateralness_ema_span_1m));
+        let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
             && wants_entries
             && wants_closes
         {
@@ -4708,6 +4857,8 @@ mod core {
                 },
                 tradable: true,
                 allow_missing_strategy_inputs: false,
+                unilateralness_warmup_spans: Vec::new(),
+                unilateralness_unavailable: Default::default(),
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,
@@ -5379,6 +5530,7 @@ mod core {
             global.global_bot_params.long.forager_volume_drop_pct = 0.5;
             global.global_bot_params.long.forager_score_weights =
                 crate::types::ForagerScoreWeights {
+                    unilateralness: 0.0,
                     volume: 1.0,
                     ema_readiness: 1.0,
                     volatility: 1.0,

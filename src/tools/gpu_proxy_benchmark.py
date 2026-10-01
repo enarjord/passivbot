@@ -11,6 +11,7 @@ import numpy as np
 
 from optimization.gpu.runtime import gpu_device
 from optimization.gpu.model import (
+    adaptive_params,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
@@ -57,6 +58,7 @@ HSL_SIGNAL_MODE_COIN = 2.0
 
 def _base_parameter_values() -> dict[str, float]:
     return {
+        **adaptive_params({}),
         "base_qty_pct": 0.08,
         "ema_span_0": 60.0,
         "ema_span_1": 240.0,

@@ -7,6 +7,7 @@ performance only; exceptions from evaluation are deliberately not intercepted.
 from __future__ import annotations
 
 from collections import OrderedDict, deque
+from contextvars import ContextVar
 from functools import lru_cache
 import hashlib
 import json
@@ -18,10 +19,30 @@ import platform
 import statistics
 import tempfile
 import time
+from optimization.progress import log_tokens
 
 WINDOW = 24
 MIN_SECONDS = 30.0
-CACHE_VERSION = 1
+CACHE_VERSION = 2
+_REPLAY_SAMPLES = ContextVar("gpu_tuning_replay_samples", default=None)
+
+
+class ReplayEvidence(deque):
+    def __init__(self):
+        super().__init__(maxlen=128)
+        self.kernel_seconds = 0.0
+
+
+def record_replay_chunk(count, bars, total_bars, seconds, *, eligible=True):
+    """Observe completed production dispatches; never launch calibration work."""
+    samples = _REPLAY_SAMPLES.get()
+    if (
+        samples is not None and count > 0 and bars > 0 and total_bars > 0
+        and math.isfinite(seconds) and seconds > 0
+    ):
+        samples.kernel_seconds += seconds
+        if eligible:
+            samples.append((count, seconds * total_bars / bars, seconds))
 
 
 def is_auto(value):
@@ -101,7 +122,7 @@ def workload_contract(contract):
 
 
 class BatchController:
-    """Slow hill climbing with a rolling median, warm-up exclusion and cooldown."""
+    """Bounded hill climbing over completed work, with median smoothing."""
 
     def __init__(
         self,
@@ -121,10 +142,11 @@ class BatchController:
         self.seconds = 0.0
         self.seen = set()
         self.baseline = None
-        self.direction = 1
+        self.direction = -1 if self.width == self.ceiling else 1
         self.cooldown = 0
 
-    def observe(self, count, seconds):
+    def observe(self, count, seconds, *, evidence_seconds=None):
+        """Return true when a complete evidence window has been consumed."""
         # Remainders and cold first use of each allocation shape are not evidence.
         if count != self.width or not math.isfinite(seconds) or seconds <= 0:
             return
@@ -132,7 +154,7 @@ class BatchController:
             self.seen.add(self.width)
             return
         self.samples.append(count / seconds)
-        self.seconds += seconds
+        self.seconds += seconds if evidence_seconds is None else evidence_seconds
         if len(self.samples) < WINDOW or self.seconds < MIN_SECONDS:
             return
         rate = statistics.median(self.samples)
@@ -145,43 +167,46 @@ class BatchController:
             # Prefer a smaller allocation on a plateau; larger ones must pay off.
             accepted = rate >= old_rate * (0.98 if self.width < old_width else 1.05)
             if accepted:
-                logging.info(
-                    "GPU auto-tune accepted | batch=%d candidates/s=%.3f", self.width, rate
-                )
+                log_tokens("GPU auto-tune accepted |", [
+                    f"batch={self.width}", f"candidates/s={rate:.3f}",
+                    f"previous_candidates/s={old_rate:.3f}",
+                    "reason=smaller_plateau" if self.width < old_width else "reason=throughput_gain",
+                ])
                 self.save(self.width, rate, evidence_seconds)
                 self.cooldown = 1
             else:
-                logging.info(
-                    "GPU auto-tune retained | batch=%d trial_batch=%d", old_width, self.width
-                )
+                log_tokens("GPU auto-tune retained |", [
+                    f"batch={old_width}", f"trial_batch={self.width}",
+                    f"candidates/s={old_rate:.3f}", f"trial_candidates/s={rate:.3f}",
+                    "reason=insufficient_gain",
+                ])
                 self.width = old_width
                 self.direction *= -1
                 self.cooldown = 3
-            return
+            return True
         self.save(self.width, rate, evidence_seconds)
         if self.cooldown:
             self.cooldown -= 1
-            return
+            return True
         if not self.can_trial():
-            return
+            return True
         trial = (
             min(self.ceiling, self.width * 2) if self.direction > 0 else max(1, self.width // 2)
         )
         if trial == self.width:
             self.direction *= -1
             self.cooldown = 1
-            return
+            return True
         if trial > self.width and not self.can_grow():
             self.cooldown = 1
-            return
+            return True
         self.baseline = (self.width, rate)
         self.width = trial
-        logging.info(
-            "GPU auto-tune trial | batch=%d previous=%d rolling_candidates/s=%.3f",
-            trial,
-            self.baseline[0],
-            rate,
-        )
+        log_tokens("GPU auto-tune trial |", [
+            f"batch={trial}", f"previous={self.baseline[0]}",
+            f"rolling_candidates/s={rate:.3f}", "reason=throughput_probe",
+        ])
+        return True
 
 
 class CalibrationCache:
@@ -303,11 +328,13 @@ class ProxyBatchTuner(CalibrationCache):
             self.controllers.move_to_end(key)
             return self.controllers[key]
         # Bound the initial allocation. The existing dispatch plan is always the cap.
-        initial = min(128, ceiling)
-        source = "conservative"
+        # The work envelope does not bound batch-scaled replay/output buffers.
+        # Retain the established smaller start when device headroom is low.
+        initial = ceiling if self._headroom() else min(128, ceiling)
+        source = "dispatch_plan" if initial == ceiling else "memory_headroom"
         if self.mode != "refresh":
             width = self.read(key, "batch_size", 1, ceiling)
-            if width is not None and (width <= initial or self._headroom()):
+            if width is not None and width <= initial:
                 initial = width
                 source = "cache"
 
@@ -345,12 +372,37 @@ def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=time.perf_
         width = controller.width if controller is not None else ceiling
         chunk = candidates[start : start + width]
         started = clock() if controller is not None else 0.0
-        yield start, chunk
+        # Keep bounded timing evidence local until the entire replay, host copy,
+        # and metric reductions succeed. Failed/abandoned evaluations cannot tune.
+        samples = ReplayEvidence()
+        token = _REPLAY_SAMPLES.set(samples if controller is not None else None)
+        try:
+            yield start, chunk
+        finally:
+            _REPLAY_SAMPLES.reset(token)
         if controller is not None:
             previous = controller.width
-            controller.observe(len(chunk), clock() - started)
+            if samples and isinstance(controller, BatchController):
+                # Charge packing, allocations, reductions and host-copy overhead
+                # to each kernel sample so trials optimize end-to-end throughput.
+                overhead = max(1.0, (clock() - started) / samples.kernel_seconds)
+                for count, seconds, evidence_seconds in samples:
+                    # Scratch-limited runners may split one outer batch. Convert
+                    # their per-candidate rate to the outer controller's width.
+                    consumed = controller.observe(
+                        len(chunk), seconds * overhead * len(chunk) / count,
+                        evidence_seconds=evidence_seconds,
+                    )
+                    if consumed:
+                        # At most one decision/cooldown window per successful
+                        # candidate batch. Correlated temporal samples must not
+                        # exhaust the retry cooldown within a single replay.
+                        break
+            else:
+                controller.observe(len(chunk), clock() - started)
             if controller.width != previous:
                 tuner.revision = getattr(tuner, "revision", 0) + 1
+
         start += len(chunk)
 
 

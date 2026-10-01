@@ -7167,8 +7167,13 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
 def _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot) -> None:
     bot.coin_overrides = {}
     bot.config.setdefault("bot", {})
-    bot.config["bot"].setdefault("long", {})["risk_entry_cooldown_minutes"] = 0.0
-    bot.config["bot"].setdefault("short", {})["risk_entry_cooldown_minutes"] = 0.0
+    for side in ("long", "short"):
+        bot.config["bot"].setdefault(side, {}).update(
+            risk_entry_cooldown_minutes=0.0,
+            entry_cooldown_min_duration_minutes=0.0,
+            entry_cooldown_max_duration_minutes=None,
+            entry_cooldown_weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+        )
     bot.get_exchange_time = lambda: 1_700_000_000_000
 
 

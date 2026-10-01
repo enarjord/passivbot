@@ -27,13 +27,13 @@ def _fixture(side, coin_count, entry_kind):
     )
     for direction in ("long", "short"):
         bot = config["bot"][direction]
+        bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["hsl"]["enabled"] = False
         bot["unstuck"]["enabled"] = False
         bot["risk"].update(
             n_positions=coin_count if direction == side else 0,
             total_wallet_exposure_limit=float(coin_count) if direction == side else 0.0,
             we_excess_allowance_pct=0.0,
-            entry_cooldown_minutes=0.0,
             position_exposure_enforcer_enabled=False,
             total_exposure_enforcer_enabled=False,
         )
