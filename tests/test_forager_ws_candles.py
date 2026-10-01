@@ -1868,3 +1868,35 @@ async def test_receive_recovery_precedes_failed_ingestion(monkeypatch, caplog):
         await candle_ws.watch_forager_ws_symbol(bot, 'BTC')
     assert [event['data']['receive_status'] for event in events] == ['failed', 'recovered']
     assert 'stage=ingest error_type=ValueError' in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('terminal', ['recovered', 'retired'])
+async def test_overflow_watcher_terminal_event_survives_console_aggregate_clear(monkeypatch, terminal):
+    from ccxt.base.errors import NetworkError
+    from live.candle_ws_health import observe_receive_status
+    events, calls = [], []
+    monkeypatch.setattr('live.candle_ws_health.emit_event', lambda bot, event: events.append(event))
+    bot = SimpleNamespace(stop_signal_received=False, get_exchange_time=lambda: 1000000)
+    for i in range(256):
+        observe_receive_status(bot, str(i), error=NetworkError('private'))
+    async def watch(*args):
+        calls.append('receive')
+        if len(calls) == 1:
+            raise NetworkError('private')
+        bot.stop_signal_received = True
+        return []
+    bot.ccp = SimpleNamespace(watch_ohlcv=watch)
+    bot.cm = SimpleNamespace(clear_live_ws_ohlcv_state=lambda symbol: None)
+    async def sleep(*args, **kwargs):
+        assert len(bot._console_candle_receive['active']) == 256
+        for i in range(256):
+            observe_receive_status(bot, str(i), recovered=True)
+        assert bot._console_candle_receive is None
+        if terminal == 'retired':
+            bot.stop_signal_received = True
+    bot._sleep_unless_shutdown = sleep
+    await candle_ws.watch_forager_ws_symbol(bot, 'OVERFLOW')
+    assert [e['data']['receive_status'] for e in events if e.get('symbol') == 'OVERFLOW'] == [
+        'failed', terminal]
+    assert bot._console_candle_receive is None

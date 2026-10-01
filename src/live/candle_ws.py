@@ -301,6 +301,7 @@ async def _retire_watchers(bot: Any, tasks: dict[str, asyncio.Task]) -> None:
 async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
     """Watch one symbol and pass only validated finalized rows to the manager."""
     consecutive_failures = 0
+    receive_failed = False
     watcher_task = asyncio.current_task()
     try:
         while not bool(getattr(bot, "stop_signal_received", False)):
@@ -315,7 +316,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 if _watcher_is_retiring(bot, symbol, watcher_task):
                     break
                 from live.candle_ws_health import observe_receive_status
-                observe_receive_status(bot, symbol, recovered=True)
+                observe_receive_status(bot, symbol, recovered=True, previously_failed=receive_failed)
+                receive_failed = False
                 stage = "ingest"
                 ingest = getattr(bot.cm, "ingest_live_ws_ohlcv", None)
                 if callable(ingest):
@@ -350,6 +352,7 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 from live.candle_ws_health import observe_receive_status
                 shared_receive = stage == "receive" and isinstance(exc, NetworkError)
                 if shared_receive:
+                    receive_failed = True
                     observe_receive_status(bot, symbol, error=exc, retry_s=delay_s)
                 last_warning_ms = int(warning_state.get(symbol, 0) or 0)
                 if not shared_receive and (now_ms <= 0 or now_ms - last_warning_ms >= 300_000):
@@ -371,7 +374,7 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 )
     finally:
         from live.candle_ws_health import observe_receive_status
-        observe_receive_status(bot, symbol, retired=True)
+        observe_receive_status(bot, symbol, retired=True, previously_failed=receive_failed)
         if not _watcher_is_retiring(bot, symbol, watcher_task):
             await _best_effort_unwatch(bot, symbol)
 

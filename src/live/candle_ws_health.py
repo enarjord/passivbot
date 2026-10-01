@@ -11,10 +11,23 @@ from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, emit_event
 
 
-def observe_receive_status(bot, symbol, *, recovered=False, retired=False, error=None, retry_s=0.):
+def _emit_status(bot, symbol, status, *, error=None, retry_s=0.):
+    emit_event(bot, dict(event_type=EventTypes.CANDLE_WEBSOCKET_STATUS,
+        level='debug', component='candle_ws', tags=['candle', 'websocket'], symbol=symbol,
+        status='skipped' if status == 'retired' else status,
+        data=dict(receive_status=status, stage='receive', retry_s=retry_s,
+            **({'error_type': bounded_exception_type(error)} if error is not None else {}))))
+
+
+def observe_receive_status(bot, symbol, *, recovered=False, retired=False, error=None, retry_s=0.,
+                           previously_failed=False):
     try:
         state = getattr(bot, '_console_candle_receive', None)
         if (recovered or retired) and (state is None or symbol not in state['active']):
+            # The watcher's one-bit receive history is independent of the bounded
+            # console aggregate, which may have overflowed or already cleared.
+            if previously_failed:
+                _emit_status(bot, symbol, 'retired' if retired else 'recovered')
             return
         now = time.monotonic()
         if state is None:
@@ -34,10 +47,7 @@ def observe_receive_status(bot, symbol, *, recovered=False, retired=False, error
             if symbol not in state['sample'] and len(state['sample']) < 3:
                 state['sample'].append(symbol)
             state['peak'] = max(state['peak'], len(state['active']))
-        emit_event(bot, dict(event_type=EventTypes.CANDLE_WEBSOCKET_STATUS,
-            level='debug', component='candle_ws', tags=['candle', 'websocket'], symbol=symbol,
-            status='skipped' if retired else status, data=dict(receive_status=status, stage='receive', retry_s=retry_s,
-                **({'error_type': bounded_exception_type(error)} if error is not None else {}))))
+        _emit_status(bot, symbol, status, error=error, retry_s=retry_s)
         sample = ','.join(token(item.split('/')[0], 12) for item in state['sample'])
         if status == 'failed' and (state['failures'] == 1 or now - state['last_warning'] >= 300.):
             state['last_warning'] = now
