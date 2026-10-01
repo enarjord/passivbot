@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from optimization.gpu.replay_progress import TemporalReplayProgress
+from optimization.gpu.autotune import record_replay_chunk
 from optimization.gpu.runtime import (
     gpu_device, compile_shader, synchronize, wait_for_cuda_stream,
 )
@@ -3234,8 +3235,12 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             # between temporal chunks even when profiling is disabled.
             synchronize()
             dispatch_count += 1
-            max_dispatch_seconds = max(
-                max_dispatch_seconds, time.perf_counter() - started
+            dispatch_seconds = time.perf_counter() - started
+            max_dispatch_seconds = max(max_dispatch_seconds, dispatch_seconds)
+            processed_bars = min(begin_k + chunk_bars, stop_k) - begin_k
+            record_replay_chunk(
+                batch_size, processed_bars, stop_k - 1, dispatch_seconds,
+                eligible=begin_k > 1 and processed_bars == chunk_bars,
             )
             now = time.perf_counter()
             completed_k = min(begin_k + chunk_bars, stop_k)
@@ -3934,7 +3939,13 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                     group_size=(min(batch_size, 64), 1, 1),
                 )
                 synchronize()
-                longest = max(longest, time.perf_counter() - started)
+                dispatch_seconds = time.perf_counter() - started
+                longest = max(longest, dispatch_seconds)
+                processed_bars = min(first + chunk_bars, stop) - first
+                record_replay_chunk(
+                    batch_size, processed_bars, stop - begin, dispatch_seconds,
+                    eligible=first > begin and processed_bars == chunk_bars,
+                )
                 count += 1
                 now = time.perf_counter()
                 if now >= next_progress and first + chunk_bars < stop:

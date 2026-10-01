@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix slow GPU automatic batch calibration on long histories: preserve the existing bounded
+  dispatch width when memory headroom permits it and gather rolling evidence from completed
+  temporal chunks, applying trials between successful full candidate replays rather than waiting
+  for dozens of full-history batches.
+  Consume at most one tuning/cooldown window per replay to bound repeated unproductive trials.
+
 - Add opt-in adaptive entry cooldown and Forager RMS unilateralness scoring for
   sustained one-way price action. Cooldown uses additive exposure-ratio and adverse-directionality
   weights with a floor/ceiling; RMS shares a floating-point EMA span across both consumers and
