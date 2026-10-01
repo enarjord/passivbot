@@ -836,26 +836,31 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   batch size retains its existing behavior and safety caps. `population_size` and
   `max_dispatch_candidate_bars` also accept `"auto"` as an alias for their existing `null`
   defaults; they do not continuously change in this first implementation.
-  There is no separate calibration run. Initial automatic batches contain at most 128 candidates,
-  further limited by the existing dispatch plan and actual candidate demand. Completed screening
-  work supplies timing evidence, including packing, replay, reductions, and host results, without
-  extra GPU synchronization. Candidate order and evaluation coverage are preserved; proxy metric
-  reductions may differ at floating-point roundoff across batch shapes. Exact Rust validation
-  and all proxy/exact drift checks remain authoritative.
-  Each decision requires a rolling window of 24 full batches and at least 30 seconds of accumulated
-  measured work since the preceding decision. The first batch at each new size and partial final
-  batches are excluded. The controller uses median throughput, trials at most a doubling/halving
-  within the original dispatch ceiling, requires a 5% gain for larger batches, and accepts smaller
-  ones within 2% of previous throughput. It waits one evidence window after acceptance and three
-  after rejection before considering another trial. Available device-memory headroom gates growth.
-  This reduces reactions to short stalls; it does not guarantee an optimal setting or diagnose
-  thermal throttling. Early termination and changing candidate costs can still affect timings.
+  There is no separate calibration run. Automatic batches start at the existing resource-bounded
+  dispatch-plan width, or a compatible cached width, when device memory headroom permits it.
+  Low headroom retains a start of at most 128 candidates, and cached widths cannot bypass that
+  startup bound. This preserves established throughput on unconstrained devices. Numeric batch
+  sizes remain fixed.
+  Long temporal replays supply a bounded rolling window of completed dispatch timings, normalized
+  by processed history length. Decisions require 24 samples and at least 30 seconds of measured
+  work; cold first dispatches and partial history chunks are excluded. Evidence is committed only
+  after the complete candidate replay, reductions, and host results succeed. Batch changes apply
+  between complete candidate batches, never inside a candidate's strategy replay. Short/non-temporal
+  replays continue to use completed full-batch timings, excluding cold first batches and remainders.
+  The controller uses median throughput, trials at most a doubling/halving within the original
+  ceiling, requires a 5% gain for larger batches, and accepts smaller ones within 2% of previous
+  throughput. It waits one evidence window after acceptance and three after rejection before another
+  trial, consuming at most one decision or cooldown window per completed candidate batch.
+  Correlated temporal chunks cannot compress that cooldown into a single replay. Memory headroom gates growth. No additional replay or GPU synchronization is introduced.
+  Candidate order, evaluation coverage, exact Rust validation, and drift checks remain unchanged.
+  Estimates are advisory: changing candidate costs and thermal state can affect measurements, and
+  a width adjustment must still wait for the current complete candidate replay to finish.
   Atomic, bounded local records under `caches/gpu_autotune/` retain stable batch sizes and measured
   throughput. Identity includes hardware/runtime/kernel implementation, prepared workload shape,
   fixed parameters, metrics, search bounds, CPU worker setting, and suite/screening context. Equal-
   length new candle data can reuse evidence; history/coin-count or feature changes start separate
   classes. Cold compilation and allocations are not cached results. Cache corruption or I/O failure
-  logs a warning and leaves optimization running with conservative/in-memory sizing.
+  logs a warning and leaves optimization running with dispatch-plan/in-memory sizing.
   Tuning state is advisory and separate from search checkpoints: resume relearns or reuses local
   measurements without changing population, validation allocation, candidate RNG, or drift policy.
   CPU worker counts, exact queue limits, validations per generation, and dispatch work envelopes

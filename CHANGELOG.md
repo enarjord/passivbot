@@ -9,6 +9,12 @@ since the latest release tag; these features may already be available when insta
 - Live console health now distinguishes active trailing input waits, fill freshness, recent cycle/write activity, and pending revised preparation. Recovery records show observed blocker phases; candle cache notices identify their warmup scope. HSL reasons remain readable, shared candle receive failures are coalesced with durable per-symbol details, and routine KuCoin history re-fetches stay at DEBUG.
 - Command log archives use unique run suffixes so simultaneous starts and long shared command prefixes cannot select the same file. Live log prefixes include the configured user.
 - Structured cycle timings retain numeric authoritative refresh durations and report finite revised protective passes separately from overlapping ordinary preparation.
+- Fix slow GPU automatic batch calibration on long histories: preserve the existing bounded
+  dispatch width when memory headroom permits it and gather rolling evidence from completed
+  temporal chunks, applying trials between successful full candidate replays rather than waiting
+  for dozens of full-history batches.
+  Consume at most one tuning/cooldown window per replay to bound repeated unproductive trials.
+
 - Add opt-in adaptive entry cooldown and Forager RMS unilateralness scoring for
   sustained one-way price action. Cooldown uses additive exposure-ratio and adverse-directionality
   weights with a floor/ceiling; RMS shares a floating-point EMA span across both consumers and
