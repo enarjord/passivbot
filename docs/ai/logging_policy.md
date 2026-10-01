@@ -161,14 +161,17 @@ can hide unrelated events. Startup is assessed separately because readiness mile
 
 Every accepted Pareto member prints immediately, including tradeoffs that improve none of the
 objective extremes. Include exact evaluation count, front size, feasible members, additions/removals,
-constraint range, and the best value of every configured objective using its max/min goal. Split
+constraint range, and the full range of every configured objective in ascending `[min,max]` order. Split
 metrics into bounded, individually timestamped records with evaluation count and goal; never hide
-configured objectives behind a `+N metrics` abbreviation. `*` marks a new best relative to the
-preceding update in that scope, including its initial baseline. These are independent metric bests,
-which may come from different configs. Prefer the feasible front; explicitly label an infeasible
-front until feasibility is found. Historical reconstruction emits no updates and primes the restored
-best-value baseline; resumed updates use the restored evaluation count. Per-candidate objectives,
-full ranges, and duplicate rejection detail are DEBUG. Explicit flushes emit no additional updates.
+configured objectives behind a `+N metrics` abbreviation. `*` marks only the goal-directed best
+endpoint (minimum for min goals, maximum for max goals) when it improves relative to the preceding
+update in that scope, including its initial baseline. Widening the worse endpoint does not earn a
+marker. These are independent metric extrema, which may come from different configs; they do not
+describe the distribution inside the range. Derive both endpoints from the same scope: prefer the
+feasible front and explicitly label an infeasible front until feasibility is found. Historical
+reconstruction emits no updates and primes the restored best-value baseline; resumed updates use
+the restored evaluation count. Per-candidate objectives and duplicate rejection detail are DEBUG.
+Explicit flushes emit no additional updates.
 Seed clamps print one warning per collected context with counts and at most three key samples;
 original values, bounds, adjusted values and source details are DEBUG.
 

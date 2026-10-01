@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Show each Pareto objective's full range at INFO in ascending `[min,max]` order, with `*` on
+  an improved goal-directed best endpoint. Keep new tradeoffs visible when no best improves,
+  and derive both endpoints from the same feasible or explicitly labelled infeasible front.
+
 - GPU optimization now defaults to hardware/RAM-aware initial exact-validation worker sizing and
   continuous exact-queue tuning for omitted, null, or `"auto"` worker/queue settings. Queue trials
   use bounded evidence windows including queue-induced admission stalls, adapt sooner for expensive
@@ -16,6 +20,7 @@ since the latest release tag; these features may already be available when insta
 - Live console health now distinguishes active trailing input waits, fill freshness, recent cycle/write activity, and pending revised preparation. Recovery records show observed blocker phases; candle cache notices identify their warmup scope. HSL reasons remain readable, shared candle receive failures are coalesced with durable per-symbol details, and routine KuCoin history re-fetches stay at DEBUG.
 - Command log archives use unique run suffixes so simultaneous starts and long shared command prefixes cannot select the same file. Live log prefixes include the configured user.
 - Structured cycle timings retain numeric authoritative refresh durations and report finite revised protective passes separately from overlapping ordinary preparation.
+
 - Fix slow GPU automatic batch calibration on long histories: preserve the existing bounded
   dispatch width when memory headroom permits it and gather rolling evidence from completed
   temporal chunks, applying trials between successful full candidate replays rather than waiting
