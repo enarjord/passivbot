@@ -1841,3 +1841,30 @@ def test_shared_receive_details_reach_real_event_pipeline():
         assert pipeline.health_snapshot()['event_sink_error_total'] == 0
     finally:
         pipeline.close()
+
+
+@pytest.mark.asyncio
+async def test_receive_recovery_precedes_failed_ingestion(monkeypatch, caplog):
+    from ccxt.base.errors import NetworkError
+    events, calls = [], []
+    monkeypatch.setattr('live.candle_ws_health.emit_event', lambda bot, event: events.append(event))
+    async def watch(*args):
+        calls.append('receive')
+        if len(calls) == 1:
+            raise NetworkError('private')
+        return []
+    bot = SimpleNamespace(ccp=SimpleNamespace(watch_ohlcv=watch), stop_signal_received=False,
+                          get_exchange_time=lambda: 1000000)
+    async def ingest(*args):
+        assert bot._console_candle_receive is None
+        assert events[-1]['data']['receive_status'] == 'recovered'
+        raise ValueError('invalid candle')
+    bot.cm = SimpleNamespace(ingest_live_ws_ohlcv=ingest, clear_live_ws_ohlcv_state=lambda symbol: None)
+    async def sleep(*args, **kwargs):
+        if len(calls) == 2:
+            bot.stop_signal_received = True
+    bot._sleep_unless_shutdown = sleep
+    with caplog.at_level(logging.INFO):
+        await candle_ws.watch_forager_ws_symbol(bot, 'BTC')
+    assert [event['data']['receive_status'] for event in events] == ['failed', 'recovered']
+    assert 'stage=ingest error_type=ValueError' in caplog.text

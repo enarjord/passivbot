@@ -602,7 +602,7 @@ class Owner:
             if self._ordinary is None and not self._shutdown_requested():
                 self._ordinary_started_ms = int(utc_ms())
                 self._ordinary = asyncio.create_task(self._ordinary_plan())
-            completed_cycle = True
+            completed_cycle = not self._shutdown_requested()
             return dict(updated=True, ordinary_completed=completed_plan,
                         ordinary_executed=plan is not None, protective_work=protective_work)
         except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
