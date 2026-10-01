@@ -4544,5 +4544,8 @@ def test_authoritative_duration_is_numeric_only_and_context_scoped():
     assert result['timings_ms']['authoritative'] == 123
     assert result['timings_ms']['authorization'] == REDACTED
     assert result['timings_ms']['nested']['authoritative'] == REDACTED
+    event = LiveEvent(EventTypes.CYCLE_COMPLETED, data=dict(authoritative=2, auth='secret', timings_ms=dict(authoritative=123, authorization='secret', nested=dict(authoritative=5))))
+    assert dict(event.data) == result
     for value in ('secret', {'secret': 'value'}, True, -1, 10**1000, float('inf'), float('nan')):
         assert redact_payload({'timings_ms': {'authoritative': value}})['timings_ms']['authoritative'] == REDACTED
+        assert LiveEvent(EventTypes.CYCLE_COMPLETED, data={'timings_ms': {'authoritative': value}}).data['timings_ms']['authoritative'] == REDACTED

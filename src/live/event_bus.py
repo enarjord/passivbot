@@ -703,12 +703,17 @@ def _is_sensitive_key(key: object) -> bool:
     )
 
 
+def _public_authoritative_timing(parent_key: str, key: object, value: Any) -> bool:
+    # Only this bounded numeric duration is public; auth-like strings/maps stay secret.
+    return (parent_key == "timings_ms" and key == "authoritative"
+            and type(value) in (int, float) and 0 <= value <= 2**63 - 1)
+
+
 def redact_payload(value: Any, *, _parent_key: str = "") -> Any:
     if isinstance(value, Mapping):
         return {
             str(key): (
-                item if (_parent_key == "timings_ms" and key == "authoritative"
-                         and type(item) in (int, float) and 0 <= item <= 2**63 - 1)
+                item if _public_authoritative_timing(_parent_key, key, item)
                 else REDACTED if _is_sensitive_key(key)
                 else redact_payload(item, _parent_key=str(key))
             ) for key, item in value.items()
@@ -892,6 +897,7 @@ def _bounded_live_event_value(
     is_root: bool = False,
     omit_on_limit: bool = False,
     existing_budget_metadata: Mapping[str, int] | None = None,
+    parent_key: str = "",
 ) -> Any:
     if state.nodes >= LIVE_EVENT_MAX_NODES:
         state.add("node_limited")
@@ -984,7 +990,9 @@ def _bounded_live_event_value(
                 if normalized_key in normalized and (key_truncated or force_redaction):
                     state.add("omitted_keys")
                     continue
-                if force_redaction or _is_sensitive_key(normalized_key):
+                if not force_redaction and _public_authoritative_timing(parent_key, normalized_key, child):
+                    normalized[normalized_key] = child
+                elif force_redaction or _is_sensitive_key(normalized_key):
                     normalized[normalized_key] = REDACTED
                 else:
                     normalized[normalized_key] = _bounded_live_event_value(
@@ -992,6 +1000,7 @@ def _bounded_live_event_value(
                         depth=depth + 1,
                         ancestors=ancestors,
                         state=state,
+                        parent_key=normalized_key,
                     )
             else:
                 state.add(
@@ -2369,7 +2378,7 @@ def _format_console_duration_ms(duration_ms: int) -> str:
 def split_health_console(message: str, prefix: str = '[health]') -> list[str]:
     parts, line = [], prefix
     for word in message.removeprefix(prefix + ' ').split():
-        word = word[:160]
+        word = word[:max(1, 170 - len(prefix) - 1)]
         if len(line) + len(word) + 1 > 170:
             parts.append(line)
             line = prefix
@@ -3425,7 +3434,12 @@ class ConsoleSummarySink:
                 if separator:
                     self.logger.log(logging.DEBUG, '[risk] prior observations replaced; count=' + detail)
             else:
-                self.logger.log(_logging_level(event.level), text)
+                if len(text) > 170 and event.level not in ('debug', 'trace'):
+                    prefix = text.split(' ', 1)[0]
+                    for line in split_health_console(text, prefix):
+                        self.logger.log(_logging_level(event.level), line)
+                else:
+                    self.logger.log(_logging_level(event.level), text)
         if state is not None:
             key = (event.exchange, event.user, event.bot_id, event.event_type)
             written = self.admission.write(

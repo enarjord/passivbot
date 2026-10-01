@@ -215,3 +215,18 @@ def test_hsl_complete_reason_survives_console_continuation():
     visible = ' '.join(line for level, line in logger.lines if level >= 20)
     assert 'unavailable_reason=' + reason in visible
     assert 'stale_reason=' + reason in visible
+
+
+def test_long_trailing_records_fit_exchange_user_prefix_without_losing_fields():
+    logger = Logger()
+    sink = ConsoleSummarySink(logger)
+    sink.write(LiveEvent(EventTypes.TRAILING_STATUS, level='info', status='succeeded',
+        symbol='BTC/USDT:USDT', pside='long', cycle_id='cy_1234', data=dict(
+        kind='close', trailing_status='waiting_threshold', selected_mode='trailing',
+        threshold_met=False, retracement_met=True, threshold_pct=.01,
+        threshold_price=.000012345, retracement_pct=.005, retracement_price=.000012,
+        current_price=.0000123)))
+    assert all(len('2026-01-01T00:00:00Z WARNING  [' + 'x'*32 + '] ' + line) <= 240
+               for _, line in logger.lines)
+    assert 'symbol=BTC/USDT:USDT' in ' '.join(line for _, line in logger.lines)
+    assert 'pside=long' in ' '.join(line for _, line in logger.lines)
