@@ -48,7 +48,11 @@ def test_detect_flavor_variants():
     nested = {"config": copy.deepcopy(tmpl)}
     assert detect_flavor(nested, tmpl) == "nested_current"
 
-    live_only = {"bot": tmpl["bot"], "live": tmpl["live"]}
+    live_only = {
+        "config_version": tmpl["config_version"],
+        "bot": tmpl["bot"],
+        "live": tmpl["live"],
+    }
     assert detect_flavor(live_only, tmpl) == "live_only"
 
 
@@ -82,7 +86,11 @@ def test_build_base_config_pb_multi():
 
 def test_format_config_live_only_adds_sections():
     tmpl = _template()
-    live_only = {"bot": tmpl["bot"], "live": tmpl["live"]}
+    live_only = {
+        "config_version": tmpl["config_version"],
+        "bot": tmpl["bot"],
+        "live": tmpl["live"],
+    }
     out = format_config(live_only, verbose=False)
     out_live_only = format_config(live_only, verbose=False, live_only=True)
     # ensure missing sections were added
@@ -572,7 +580,11 @@ def test_format_config_prunes_legacy_close_grid_markup_aliases(caplog):
 
 def test_format_config_is_idempotent_for_lean_live_config():
     tmpl = _template()
-    lean_live = {"bot": copy.deepcopy(tmpl["bot"]), "live": copy.deepcopy(tmpl["live"])}
+    lean_live = {
+        "config_version": tmpl["config_version"],
+        "bot": copy.deepcopy(tmpl["bot"]),
+        "live": copy.deepcopy(tmpl["live"]),
+    }
 
     first = format_config(lean_live, verbose=False, live_only=True)
     second = format_config(copy.deepcopy(first), verbose=False, live_only=True)

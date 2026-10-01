@@ -399,3 +399,113 @@ async def test_fake_cycle_raises_read_failure_in_last_bounded_wait(monkeypatch):
 
 
 from hsl_fixture import load_fake_hsl_config
+
+
+@pytest.mark.asyncio
+async def test_account_reporting_after_protection_cannot_block_following_passes():
+    import asyncio
+    from types import SimpleNamespace
+    from live.hsl_live import Owner
+    from live.state_refresh import queue_protective_account_report
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    events = []
+    bot = SimpleNamespace(
+        stop_signal_received=False, _begin_live_event_cycle=lambda **kwargs: None
+    )
+
+    async def positions(old, new):
+        events.append("position-report")
+        entered.set()
+        await release.wait()
+
+    async def balance(**kwargs):
+        events.append("balance-report")
+
+    bot.log_position_changes, bot.handle_balance_update = positions, balance
+
+    async def refresh(**kwargs):
+        queue_protective_account_report(bot, [], [], require_balance=True)
+        return True
+
+    bot.refresh_protective_authoritative_state = refresh
+    instance = Owner(bot)
+    instance.remember_position = instance.schedule_history = (
+        instance.schedule_sources
+    ) = lambda: None
+
+    async def protect(**kwargs):
+        events.append("protect")
+        return False
+
+    instance.protect = protect
+
+    async def ordinary():
+        await release.wait()
+
+    instance._ordinary_plan = ordinary
+    try:
+        assert (await instance.cycle())["updated"]
+        await asyncio.wait_for(entered.wait(), 1.0)
+        assert events[0] == "protect"
+        assert (await asyncio.wait_for(instance.cycle(), 1.0))["updated"]
+        assert events.count("protect") == 2
+        assert events.count("position-report") == 1
+        release.set()
+        await instance._account_report
+        assert events[-1] == "balance-report"
+    finally:
+        release.set()
+        instance.cancel_inputs()
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_protective_reporting_coalesces_immutable_receipts_and_survives_hook_error(
+    caplog,
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from live.state_refresh import (
+        queue_protective_account_report,
+        publish_protective_account_report,
+    )
+
+    bot = SimpleNamespace(stop_signal_received=False)
+    bot.log_position_changes = AsyncMock(
+        side_effect=RuntimeError("private report details")
+    )
+    bot.handle_balance_update = AsyncMock()
+    initial, middle, latest = [{"size": 0}], [{"size": 1}], [{"size": 2}]
+    queue_protective_account_report(bot, initial, middle, require_balance=True)
+    queue_protective_account_report(bot, middle, latest, require_balance=False)
+    initial[0]["size"] = middle[0]["size"] = latest[0]["size"] = 99
+    await publish_protective_account_report(bot)
+    bot.log_position_changes.assert_awaited_once_with([{"size": 0}], [{"size": 2}])
+    bot.handle_balance_update.assert_awaited_once_with(source="REST")
+    assert bot._protective_account_report is None
+    assert "RuntimeError" in caplog.text and "private report details" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_owned_account_reporting():
+    import asyncio
+    from types import SimpleNamespace
+    from live.hsl_live import Owner
+    from live.state_refresh import queue_protective_account_report
+
+    entered = asyncio.Event()
+
+    async def stalled(*args):
+        entered.set()
+        await asyncio.Event().wait()
+
+    bot = SimpleNamespace(stop_signal_received=False, log_position_changes=stalled)
+    queue_protective_account_report(bot, [], [], require_balance=False)
+    instance = Owner(bot)
+    instance.schedule_account_reporting()
+    await asyncio.wait_for(entered.wait(), 1.0)
+    bot.stop_signal_received = True
+    instance.cancel_inputs()
+    await asyncio.gather(instance._account_report, return_exceptions=True)
+    assert instance._account_report.cancelled()

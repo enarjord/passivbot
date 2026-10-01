@@ -63,7 +63,7 @@ pub struct FlatCoin {
     pub symbol: String,
     pub pside: PositionSide,
     pub position_at: i64,
-    pub fills_at: i64,
+    pub fills_at: Option<i64>,
     pub history_start: i64,
 }
 #[derive(Debug, Deserialize)]
@@ -157,7 +157,8 @@ pub(crate) fn select(input: &Input) -> Result<Vec<&Pair>, String> {
             || flat.history_start != input.start
             || flat.position_at < input.now.saturating_sub(input.max_current_age_ms)
             || flat.position_at > input.now
-            || flat.fills_at != flat.position_at
+            || flat.position_at <= 0
+            || flat.fills_at.is_some_and(|t| t <= 0 || t > input.now)
         {
             return Err("invalid explicit flat coin observation".into());
         }
@@ -212,6 +213,17 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
     }
     let selected = select(input)?;
     let mut reasons = BTreeSet::new();
+    if let Some(flat) = &input.flat_coin {
+        match flat.fills_at {
+            None => {
+                reasons.insert("fill_capture_unknown".into());
+            }
+            Some(t) if t != flat.position_at => {
+                reasons.insert("snapshot_skew".into());
+            }
+            _ => {}
+        }
+    }
     let mut pairs = Vec::new();
     for p in &selected {
         if !fresh(p.position_at)

@@ -123,6 +123,7 @@ class Owner:
         self._schedule_clock = monotonic
         self._next_sources = self._next_history = 0.0
         self._ordinary = None
+        self._account_report = None
         self._ordinary_started_ms = None
         self._cycle_running = False
         self._running = False
@@ -621,9 +622,26 @@ class Owner:
         )
         return cancels, creates, bot._current_planning_snapshot, wave
 
+    def schedule_account_reporting(self):
+        import asyncio
+        from live.state_refresh import publish_protective_account_report
+
+        if self._account_report is not None and self._account_report.done():
+            _retrieve_on_shutdown(self._account_report)
+            self._account_report = None
+        if (
+            self._account_report is None
+            and getattr(self.bot, "_protective_account_report", None) is not None
+            and not self._shutdown_requested()
+        ):
+            self._account_report = asyncio.create_task(
+                publish_protective_account_report(self.bot)
+            )
+
     def cancel_inputs(self):
         for task in (
             self._ordinary,
+            self._account_report,
             getattr(self, "_fill_task", None),
             getattr(self, "_source_task", None),
             *self._quote_tasks.values(),
@@ -669,6 +687,7 @@ class Owner:
                         self.schedule_history()
                         self.schedule_sources()
                         await self.protect()
+                        self.schedule_account_reporting()
                 except (
                     NetworkError,
                     AuthoritativeSurfaceUnavailable,
@@ -789,6 +808,7 @@ class Owner:
                 await self.protect(deferred_reports=reports) or protective_work
             )
             timings["protection"] += int((perf_counter() - phase_started) * 1000)
+            self.schedule_account_reporting()
             if self._ordinary is None and not self._shutdown_requested():
                 self._ordinary_started_ms = int(utc_ms())
                 self._ordinary = asyncio.create_task(self._ordinary_plan())

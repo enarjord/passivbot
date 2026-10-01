@@ -1,7 +1,8 @@
-"""Canonical configuration and explicit migration for the opt-in HSL engine."""
+"""Canonical configuration and explicit migration for the sole HSL engine."""
 
 from argparse import Namespace
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -447,3 +448,43 @@ def test_old_disabled_hsl_without_restart_authorization_can_upgrade():
     result = prepared(cfg)
     assert result["config_version"] == "v8.6.0"
     assert result["bot"]["long"]["hsl"]["restart_after_red_policy"] is None
+
+
+@pytest.mark.parametrize("location", ["root", "scenario"])
+@pytest.mark.parametrize("policy", ["always", "never"])
+def test_old_root_file_backed_hsl_requires_migration_before_hydration(
+    tmp_path, location, policy
+):
+    from tools.migrate_hsl_config import migrate
+
+    cfg = source(enabled=False)
+    cfg["config_version"] = "v8.5.0"
+    cfg["optimize"]["fixed_runtime_overrides"] = {}
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
+    (tmp_path / "coin.json").write_text(
+        json.dumps(
+            {
+                "bot": {
+                    "long": {
+                        "hsl": {"enabled": True, "restart_after_red_policy": policy}
+                    }
+                }
+            }
+        )
+    )
+    patch = {"TEST": {"override_config_path": "coin.json"}}
+    if location == "root":
+        cfg["coin_overrides"] = patch
+    else:
+        cfg["backtest"]["scenarios"] = [
+            {"label": "file", "overrides": {"coin_overrides": patch}}
+        ]
+    with pytest.raises(ValueError, match="migrate-hsl"):
+        prepare_config(
+            cfg, base_config_path=str(tmp_path / "config.json"), verbose=False
+        )
+    result = migrate(cfg, base_config_path=str(tmp_path / "config.json"))
+    assert result["config_version"] == "v8.6.0"
+    assert not any(key.startswith("_hsl") for key in result)
+    assert prepare_config(result, verbose=False)["config_version"] == "v8.6.0"

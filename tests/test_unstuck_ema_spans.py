@@ -20,6 +20,15 @@ from warmup_utils import compute_per_coin_warmup_minutes
 def legacy_config(kind="trailing_martingale"):
     c = get_template_config()
     c["config_version"] = "v8.2.0"
+    # This fixture migrates unrelated strategy fields with old HSL disabled,
+    # not newly generated current-schema HSL restart authorization.
+    for side in ("long", "short"):
+        c["bot"][side]["hsl"].update(enabled=False, restart_after_red_policy=None)
+    c["optimize"]["fixed_runtime_overrides"] = {
+        key: value
+        for key, value in c["optimize"]["fixed_runtime_overrides"].items()
+        if ".hsl." not in key
+    }
     for root in (c["bot"], c["optimize"]["bounds"]):
         for side in ("long", "short"):
             strategy = root[side]["strategy"]["trailing_martingale"]

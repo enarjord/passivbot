@@ -33,39 +33,61 @@ FIELDS = frozenset(
 )
 
 
+def _authored_paths(node, path=""):
+    """Yield raw leaves, including scenario lists and dotted override paths."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if not str(key).startswith("_"):
+                yield from _authored_paths(value, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for value in node:
+            yield from _authored_paths(value, path)
+    else:
+        yield path, node
+
+
 def _requires_hsl_migration(node, path=""):
     """Inspect authored policies before hydration can erase their schema origin."""
-    if isinstance(node, dict):
-        return any(
-            _requires_hsl_migration(value, f"{path}.{key}" if path else str(key))
-            for key, value in node.items()
-            if not str(key).startswith("_")
-        )
-    if isinstance(node, list):
-        return any(_requires_hsl_migration(value, path) for value in node)
-    if not _is_hsl_path(path):
-        return False
-    leaf = re.split(r"[._]", path)[-1]
-    if leaf == "enabled":
-        return node not in (False, None, 0)
-    # Even a disabled old scope's authored policy must not survive hydration as
-    # authorization for a later CLI/scenario enablement of the new controller.
-    return (
-        path.endswith("restart_after_red_policy")
-        and isinstance(node, str)
-        and node.strip().lower() in {"always", "never"}
-    )
+    for path, value in _authored_paths(node, path):
+        if not _is_hsl_path(path):
+            continue
+        if path.endswith("enabled") and value not in (False, None, 0):
+            return True
+        # Disabled authored policies can later authorize CLI/scenario enablement.
+        if path.endswith("restart_after_red_policy") and isinstance(value, str):
+            if value.strip().lower() in {"always", "never"}:
+                return True
+    return False
 
 
-def require_current_hsl_schema(config):
-    """Check the raw document, before schema hydration and internal partial views."""
+def require_current_hsl_schema(config, *, base_config_path=""):
+    """Check raw root and referenced overrides before hydration loses origin."""
     from .migrations.legacy_v7 import _parse_version_tuple
 
     version = _parse_version_tuple(config.get("config_version"))
-    if (version is None or version < (8, 6, 0)) and _requires_hsl_migration(config):
-        raise ValueError(
-            "pre-v8.6 HSL configuration requires explicit migration with passivbot tool migrate-hsl and re-backtesting before use"
-        )
+    if version is not None and version >= (8, 6, 0):
+        return
+    message = "pre-v8.6 HSL configuration requires explicit migration with passivbot tool migrate-hsl and re-backtesting before use"
+    if _requires_hsl_migration(config):
+        raise ValueError(message)
+    from .overrides import load_override_config
+    from .parse import load_raw_config
+
+    # Use the normal resolver (root-relative path, then cwd), but inspect the
+    # authored file without first merging it into a current-schema template.
+    for path, value in _authored_paths(config):
+        if "coin_overrides" not in path or not path.endswith("override_config_path"):
+            continue
+        context = {
+            "coin_overrides": {"input": {"override_config_path": value}},
+            "live": {
+                "base_config_path": base_config_path
+                or config.get("live", {}).get("base_config_path", "")
+            },
+        }
+        authored = load_override_config(context, "input", config_loader=load_raw_config)
+        if _requires_hsl_migration(authored):
+            raise ValueError(message)
 
 
 def engine(config):

@@ -6560,7 +6560,10 @@ def _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot) -> None:
             risk_entry_cooldown_minutes=0.0,
             entry_cooldown_min_duration_minutes=0.0,
             entry_cooldown_max_duration_minutes=None,
-            entry_cooldown_weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+            entry_cooldown_weights_minutes={
+                "exposure_ratio": 0.0,
+                "adverse_directionality": 0.0,
+            },
         )
     bot.get_exchange_time = lambda: 1_700_000_000_000
 
@@ -7008,6 +7011,19 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
         )
     ]
     assert bot.balance_raw == pytest.approx(123.45 if require_balance else 0.0)
+    from live.state_refresh import publish_protective_account_report
+
+    bot.log_position_changes = AsyncMock()
+    bot.handle_balance_update = AsyncMock()
+    bot.log_position_changes.assert_not_awaited()
+    bot.handle_balance_update.assert_not_awaited()
+    await publish_protective_account_report(bot)
+    bot.log_position_changes.assert_awaited_once_with([], fetched_positions)
+    if require_balance:
+        bot.handle_balance_update.assert_awaited_once_with(source="REST")
+    else:
+        bot.handle_balance_update.assert_not_awaited()
+
     assert cooldown_updates == [(("BTC/USDT:USDT",), 1_700_000_000_000)]
     assert finalized == [expected_plan]
 

@@ -74,7 +74,7 @@ def normalize_config(
         source_payload.get("backtest", {}).get("coin_sources")
     )
     live_coin_sources_input = {}
-    require_current_hsl_schema(source_payload)
+    require_current_hsl_schema(source_payload, base_config_path=base_config_path)
     template = normalization_template(get_template_config(), source_payload)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     if flavor == "nested_current" and isinstance(config.get("config"), dict):

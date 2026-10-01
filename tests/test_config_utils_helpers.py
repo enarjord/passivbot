@@ -1239,7 +1239,11 @@ def test_project_config_prunes_unrelated_sections():
 
 def test_format_config_emits_coalesced_summary_without_leaf_noise(caplog):
     tmpl = get_template_config()
-    lean_live = {"bot": deepcopy(tmpl["bot"]), "live": deepcopy(tmpl["live"])}
+    lean_live = {
+        "config_version": tmpl["config_version"],
+        "bot": deepcopy(tmpl["bot"]),
+        "live": deepcopy(tmpl["live"]),
+    }
 
     with caplog.at_level(logging.INFO):
         format_config(lean_live, verbose=True, live_only=True)

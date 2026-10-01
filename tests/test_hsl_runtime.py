@@ -523,10 +523,13 @@ def test_coin_membership_keeps_eligible_and_historical_sides_separate():
     result, unavailable = run(
         value, symbols={"long": [SYMBOL], "short": ["SHORT_ONLY"]}
     )
-    assert [(d.scope.symbol, d.scope.pside) for d in result] == [(SYMBOL, "long")]
-    assert {(u.scope.symbol, u.scope.pside) for u in unavailable} == {
-        ("OLD_SHORT", "short"),
+    assert [(d.scope.symbol, d.scope.pside) for d in result] == [
+        (SYMBOL, "long"),
         ("SHORT_ONLY", "short"),
+    ]
+    assert result[-1].action == "normal"
+    assert {(u.scope.symbol, u.scope.pside) for u in unavailable} == {
+        ("OLD_SHORT", "short")
     }
 
 
@@ -567,10 +570,17 @@ def test_simultaneous_flat_empty_observation_needs_no_invented_mark_or_metadata(
         fills_at=NOW - 200,
         history_start=NOW - 86_400_000,
     )
-    # A local cache read or different remote observation is not that proof.
-    for kwargs in ({}, dict(fills_started_ms=NOW - 300, fills_completed_ms=NOW - 100)):
+    # Unknown or skewed fill capture is diagnostic, not a flatness veto.
+    for kwargs, reason in (
+        ({}, "fill_capture_unknown"),
+        (
+            dict(fills_started_ms=NOW - 300, fills_completed_ms=NOW - 100),
+            "snapshot_skew",
+        ),
+    ):
         result, unavailable = run(value, {}, **kwargs)
-        assert not result and unavailable
+        assert not unavailable and result[0].action == "normal"
+        assert reason in result[0].reasons
 
 
 @pytest.mark.parametrize("changes", [dict(qty=None), dict(timestamp=0)])
@@ -1454,3 +1464,18 @@ def test_order_only_unselected_flat_pair_gets_current_hsl_decision(side):
     assert [(d.scope.symbol, d.scope.pside, d.action) for d in result] == [
         (SYMBOL, side, "normal")
     ]
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_flat_order_only_pair_without_quote_cannot_block_current_protection(mode):
+    value = bot(mode)
+    flat = "RETIRED/USDT:USDT"
+    if mode == "coin":
+        value.positions = {}
+    value.open_orders = {flat: [{"position_side": "long", "side": "sell"}]}
+    decisions, unavailable = run(value, symbols={"long": [], "short": []})
+    assert not unavailable
+    if mode == "coin":
+        assert [(d.scope.symbol, d.action) for d in decisions] == [(flat, "normal")]
+    else:
+        assert decisions[0].action == "panic"

@@ -18,6 +18,15 @@ SPANS = ("ema_span_0", "ema_span_1")
 def legacy_config():
     config = clean_config(get_template_config())
     config["config_version"] = "v8.3.0"
+    # This fixture migrates unrelated strategy fields with old HSL disabled,
+    # not newly generated current-schema HSL restart authorization.
+    for side in ("long", "short"):
+        config["bot"][side]["hsl"].update(enabled=False, restart_after_red_policy=None)
+    config["optimize"]["fixed_runtime_overrides"] = {
+        key: value
+        for key, value in config["optimize"]["fixed_runtime_overrides"].items()
+        if ".hsl." not in key
+    }
     for root in (config["bot"], config["optimize"]["bounds"]):
         for side in ("long", "short"):
             strategy = root[side]["strategy"][KIND]

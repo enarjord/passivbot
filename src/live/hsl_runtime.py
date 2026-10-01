@@ -439,11 +439,11 @@ def capture(
         scoped_keys[scope] = keys
 
     pairs, pair_problems, pair_reasons, flat_coins = {}, {}, {}, {}
-    projected = {}
+    projected, empty_flat_pairs = {}, set()
     for scope, _, _ in policies:
         for symbol, side in scoped_keys[scope]:
             key = (symbol, side)
-            if key in pairs or key in pair_problems:
+            if key in pairs or key in pair_problems or key in empty_flat_pairs:
                 continue
             # Complete account snapshot absence means flat; no price/basis is
             # invented for exposure. Flat pairs still retain their cashflows.
@@ -463,26 +463,34 @@ def capture(
             quote = quotes.get(symbol)
             source = candle_sources.get(symbol)
             if (
-                scope.mode == "coin"
-                and size == 0
+                size == 0
                 and quote is None
                 and (source is None or not any(t.candles for t in source.tapes))
-                and bot._pnls_manager is not None
                 and (history is None or (not history.fills and not history.reasons))
-                and not tape.reasons
-                and fills_started_ms is not None
-                and fills_completed_ms == position_state.updated_ms
             ):
-                # This is the native contract's simultaneous factual flat/empty
-                # cohort, not a cache read relabelled as a fill observation.
-                flat_coins[scope] = dict(
-                    symbol=symbol,
-                    pside=side,
-                    position_at=position_state.updated_ms + offset,
-                    fills_at=fills_completed_ms + offset,
-                    history_start=start,
-                )
-                pair_reasons[key] = global_reasons | _source_reasons(source)
+                # A fresh complete position snapshot proves flatness. With no
+                # usable retained history this pair contributes no cashflows or
+                # UPNL, so neither a quote nor contract metadata is consumed.
+                # Keep its scope and actual fill-observation provenance.
+                empty_flat_pairs.add(key)
+                if scope.mode == "coin":
+                    flat_coins[scope] = dict(
+                        symbol=symbol,
+                        pside=side,
+                        position_at=position_state.updated_ms + offset,
+                        fills_at=(
+                            None
+                            if fills_completed_ms is None
+                            else fills_completed_ms + offset
+                        ),
+                        history_start=start,
+                    )
+                reasons = global_reasons | _source_reasons(source)
+                if fills_started_ms is None or fills_completed_ms is None:
+                    reasons.add("fill_capture_unknown")
+                elif fills_completed_ms != position_state.updated_ms:
+                    reasons.add("snapshot_skew")
+                pair_reasons[key] = reasons
                 continue
             multiplier = bot.c_mults.get(symbol)
             if not _finite(multiplier, positive=True):

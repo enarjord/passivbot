@@ -163,7 +163,7 @@ impl Backtest<'_> {
                             symbol: coin.clone(),
                             pside: side,
                             position_at: now,
-                            fills_at: now,
+                            fills_at: Some(now),
                             history_start: start,
                         });
                     }
@@ -193,7 +193,7 @@ impl Backtest<'_> {
                             symbol: coin.clone(),
                             pside: side,
                             position_at: now,
-                            fills_at: now,
+                            fills_at: Some(now),
                             history_start: start,
                         });
                     }

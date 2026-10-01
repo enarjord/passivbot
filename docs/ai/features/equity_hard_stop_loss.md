@@ -47,10 +47,16 @@ sides do not invent a divisor. Aggregate budgets use raw balance. TWEL does not 
 Use minute closes in live and backtest reconstruction. Historical coarser candles use the
 shared deterministic OHLC expansion; remaining gaps forward-fill then backfill a missing
 prefix. Current held exposure requires fresh usable marks, positions and balance.
+An unquoted, candle-free, history-free flat pair needs no mark or contract multiplier;
+preserve its scope for panic retirement without blocking aggregate protection. Fresh complete account
+positions prove flatness even with unknown or skewed fill capture, which remains
+explicit in diagnostics. Retained usable history is never discarded by this rule.
 
 Keep account/order/quote freshness, plan receipts, protection-first scheduling, shutdown
-checks and connector admission. Position-to-fill settling is shared with all trading
-and remains bounded; missing history cannot indefinitely lock that gate. A prior
+checks and connector admission. Routine account-change reporting runs after
+protection in one owned background task, with one coalesced pending receipt; slow
+or failed diagnostics cannot become a protective prerequisite. Position-to-fill settling
+is shared with all trading and remains bounded; missing history cannot indefinitely lock that gate. A prior
 permission is never a substitute for current facts before a write. Ordinary strategy,
 unstucking and PnL consumers retain their own readiness contracts.
 

@@ -661,12 +661,18 @@ def test_explicit_flat_coin_proof_is_neutral_but_absence_is_not_flat():
     assert trace["episodes"][0]["points"] == [
         dict(timestamp=request["now"], pnl=0, upnl=0, exposed=False, flatten=False)
     ]
+    for observed, reason in [
+        (None, "fill_capture_unknown"),
+        (request["now"] - 1, "snapshot_skew"),
+    ]:
+        request["flat_coin"] = {**proof, "fills_at": observed}
+        assert reason in rust(request)["reasons"]
     for changes in [
         dict(symbol="B"),
         dict(pside="short"),
         dict(position_at=request["now"] - 120_001),
         dict(position_at=request["now"] + 1),
-        dict(fills_at=request["now"] - 1),
+        dict(fills_at=request["now"] + 1),
         dict(history_start=-1),
     ]:
         request["flat_coin"] = {**proof, **changes}

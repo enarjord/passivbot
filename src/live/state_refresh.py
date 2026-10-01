@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 import logging
 import sys
+from copy import deepcopy
 
 from config.access import get_optional_config_value
 from live import event_emitters
@@ -135,7 +136,50 @@ async def _refresh_protective_authoritative_state(
         sorted(bot.positions), now_ms=int(bot.get_exchange_time())
     )
     bot._finalize_authoritative_refresh_consistency(plan)
+    queue_protective_account_report(
+        bot, _old_positions, fetched_positions_new, require_balance=require_balance
+    )
     return True
+
+
+def queue_protective_account_report(
+    bot, old_positions, new_positions, *, require_balance
+):
+    """Bounded observational receipt; never an account or trading authority."""
+    previous = getattr(bot, "_protective_account_report", None)
+    bot._protective_account_report = (
+        previous[0] if previous is not None else deepcopy(old_positions),
+        deepcopy(new_positions),
+        require_balance or (previous is not None and previous[2]),
+    )
+
+
+async def publish_protective_account_report(bot):
+    receipt = getattr(bot, "_protective_account_report", None)
+    if receipt is None or bot.stop_signal_received:
+        return
+    bot._protective_account_report = None
+    old_positions, new_positions, report_balance = receipt
+    for name, operation in (
+        (
+            "position-change",
+            lambda: bot.log_position_changes(old_positions, new_positions),
+        ),
+        ("balance-change", lambda: bot.handle_balance_update(source="REST")),
+    ):
+        if bot.stop_signal_received:
+            return
+        if name == "balance-change" and not report_balance:
+            continue
+        try:
+            await operation()
+        except Exception as exc:
+            # Reporting must not interrupt protection or suppress the next hook.
+            logging.error(
+                "[state] %s diagnostics failed | error_type=%s action=continue",
+                name,
+                bounded_exception_type(exc),
+            )
 
 
 async def refresh_authoritative_state_staged(bot) -> bool:
