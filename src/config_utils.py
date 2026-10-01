@@ -2256,6 +2256,8 @@ def add_arguments_recursively(
                 "optimize.gpu.batch_size",
                 "optimize.gpu.population_size",
                 "optimize.gpu.max_dispatch_candidate_bars",
+                "optimize.gpu.exact_workers",
+                "optimize.gpu.max_pending_exact",
             }:
                 type_ = _gpu_sizing_cli_value
             elif full_name == "optimize.gpu.screening.scenarios":

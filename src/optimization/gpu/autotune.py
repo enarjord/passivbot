@@ -124,11 +124,20 @@ def workload_contract(contract):
 class BatchController:
     """Bounded hill climbing over completed work, with median smoothing."""
 
-    def __init__(self, ceiling, initial, *, save=lambda *args: None, can_grow=lambda: True):
+    def __init__(
+        self,
+        ceiling,
+        initial,
+        *,
+        save=lambda *args: None,
+        can_grow=lambda: True,
+        can_trial=lambda: True,
+    ):
         self.ceiling = max(1, int(ceiling))
         self.width = max(1, min(int(initial), self.ceiling))
         self.save = save
         self.can_grow = can_grow
+        self.can_trial = can_trial
         self.samples = deque(maxlen=WINDOW)
         self.seconds = 0.0
         self.seen = set()
@@ -179,6 +188,8 @@ class BatchController:
         if self.cooldown:
             self.cooldown -= 1
             return True
+        if not self.can_trial():
+            return True
         trial = (
             min(self.ceiling, self.width * 2) if self.direction > 0 else max(1, self.width // 2)
         )
@@ -198,7 +209,82 @@ class BatchController:
         return True
 
 
-class ProxyBatchTuner:
+class CalibrationCache:
+    """Bounded advisory measurements; no market data, configs or search state."""
+
+    def __init__(self, cache_dir=None):
+        self.cache_dir = Path(cache_dir or "caches/gpu_autotune")
+        self.cache_warning = False
+        self.cache_write_disabled = False
+
+    def _warn(self, error):
+        if not self.cache_warning:
+            logging.warning(
+                "GPU auto-tune cache unavailable; continuing with in-memory tuning: %s", error
+            )
+            self.cache_warning = True
+
+    def read(self, key, field, floor, ceiling):
+        try:
+            record = json.loads((self.cache_dir / (key + ".json")).read_text())
+            width = record[field]
+            if (
+                record["version"] != CACHE_VERSION
+                or type(width) is not int
+                or not floor <= width <= ceiling
+                or not math.isfinite(record["candidates_per_second"])
+                or record["candidates_per_second"] <= 0
+            ):
+                raise ValueError("invalid calibration")
+            return width
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            self._warn(error)
+            return None
+
+    def write(self, key, field, width, rate, seconds):
+        if self.cache_write_disabled:
+            return
+        path = self.cache_dir / (key + ".json")
+        temporary = None
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=self.cache_dir, suffix=".tmp", delete=False
+            ) as stream:
+                temporary = Path(stream.name)
+                json.dump(
+                    dict(
+                        version=CACHE_VERSION,
+                        **{field: width},
+                        candidates_per_second=rate,
+                        evidence_seconds=seconds,
+                        window=WINDOW,
+                    ),
+                    stream,
+                )
+            os.replace(temporary, path)
+            # Bound the local advisory cache; never touch unrelated files.
+            entries = sorted(
+                self.cache_dir.glob("[0-9a-f]" * 64 + ".json"),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+            for stale in entries[128:]:
+                stale.unlink(missing_ok=True)
+        except OSError as error:
+            self.cache_write_disabled = True
+            self._warn(error)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError as error:
+                    self._warn(error)
+
+
+class ProxyBatchTuner(CalibrationCache):
     """Per-proxy workload classes; cache contains no configs or market data."""
 
     def __init__(self, proxy, *, mode, hardware, context, cache_dir=None):
@@ -214,17 +300,10 @@ class ProxyBatchTuner:
                 metrics=sorted(proxy.needed_metrics),
             )
         )
-        self.cache_dir = Path(cache_dir or "caches/gpu_autotune")
+        super().__init__(cache_dir)
         self.controllers = OrderedDict()
-        self.cache_warning = False
-        self.cache_write_disabled = False
-
-    def _warn(self, error):
-        if not self.cache_warning:
-            logging.warning(
-                "GPU auto-tune cache unavailable; continuing with in-memory tuning: %s", error
-            )
-            self.cache_warning = True
+        self.allow_trial = lambda: True
+        self.revision = 0
 
     def _headroom(self):
         torch = self.proxy._torch
@@ -232,6 +311,21 @@ class ProxyBatchTuner:
             free, total = torch.cuda.mem_get_info()
             return free >= max(256 * 1024**2, total * 0.2)
         return torch.mps.driver_allocated_memory() < torch.mps.recommended_max_memory() * 0.7
+
+    def retire_trials(self, *, except_key=None):
+        """Return inactive workload trials to measured widths without caching them."""
+        for key, controller in self.controllers.items():
+            if key == except_key or controller.baseline is None:
+                continue
+            controller.width = controller.baseline[0]
+            controller.baseline = None
+            controller.samples.clear()
+            controller.seconds = 0.0
+            controller.cooldown = max(controller.cooldown, 1)
+            self.revision += 1
+            log_tokens("GPU auto-tune retained |", [
+                f"batch={controller.width}", "reason=workload_phase_end",
+            ])
 
     def controller(self, ceiling, demand, end_step):
         ceiling = min(ceiling, demand)
@@ -245,6 +339,9 @@ class ProxyBatchTuner:
                 self.proxy.max_dispatch_candidate_bars,
             ]
         )
+        # Trials can span repeated calls of the same class, but a different
+        # demand/history class cannot inherit a gate from an inactive workload.
+        self.retire_trials(except_key=key)
         if key in self.controllers:
             self.controllers.move_to_end(key)
             return self.controllers[key]
@@ -253,70 +350,25 @@ class ProxyBatchTuner:
         # Retain the established smaller start when device headroom is low.
         initial = ceiling if self._headroom() else min(128, ceiling)
         source = "dispatch_plan" if initial == ceiling else "memory_headroom"
-        path = self.cache_dir / (key + ".json")
         if self.mode != "refresh":
-            try:
-                record = json.loads(path.read_text())
-                width = record["batch_size"]
-                if (
-                    record["version"] != CACHE_VERSION
-                    or type(width) is not int
-                    or not 1 <= width <= ceiling
-                    or not math.isfinite(record["candidates_per_second"])
-                    or record["candidates_per_second"] <= 0
-                ):
-                    raise ValueError("invalid batch calibration")
-                if width <= initial:
-                    initial = width
-                    source = "cache"
-            except FileNotFoundError:
-                pass
-            except (OSError, ValueError, KeyError, TypeError) as error:
-                self._warn(error)
+            width = self.read(key, "batch_size", 1, ceiling)
+            if width is not None and width <= initial:
+                initial = width
+                source = "cache"
 
         def save(width, rate, seconds):
-            if self.cache_write_disabled:
-                return
-            temporary = None
-            try:
-                self.cache_dir.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(
-                    mode="w", dir=self.cache_dir, suffix=".tmp", delete=False
-                ) as stream:
-                    temporary = Path(stream.name)
-                    json.dump(
-                        dict(
-                            version=CACHE_VERSION,
-                            batch_size=width,
-                            candidates_per_second=rate,
-                            evidence_seconds=seconds,
-                            window=WINDOW,
-                        ),
-                        stream,
-                    )
-                os.replace(temporary, path)
-                # Bound the local advisory cache; never touch unrelated files.
-                entries = sorted(
-                    self.cache_dir.glob("[0-9a-f]" * 64 + ".json"),
-                    key=lambda item: item.stat().st_mtime,
-                    reverse=True,
-                )
-                for stale in entries[128:]:
-                    stale.unlink(missing_ok=True)
-            except OSError as error:
-                self.cache_write_disabled = True
-                self._warn(error)
-            finally:
-                if temporary is not None:
-                    try:
-                        temporary.unlink(missing_ok=True)
-                    except OSError as error:
-                        self._warn(error)
+            self.write(key, "batch_size", width, rate, seconds)
 
         logging.info(
             "GPU auto-tune starting | batch=%d ceiling=%d source=%s", initial, ceiling, source
         )
-        controller = BatchController(ceiling, initial, save=save, can_grow=self._headroom)
+        controller = BatchController(
+            ceiling,
+            initial,
+            save=save,
+            can_grow=self._headroom,
+            can_trial=lambda: self.allow_trial(),
+        )
         self.controllers[key] = controller
         while len(self.controllers) > 8:
             self.controllers.popitem(last=False)
@@ -347,6 +399,8 @@ def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=time.perf_
         finally:
             _REPLAY_SAMPLES.reset(token)
         if controller is not None:
+            previous = controller.width
+            previous_trial = getattr(controller, "baseline", None) is not None
             if samples and isinstance(controller, BatchController):
                 # Charge packing, allocations, reductions and host-copy overhead
                 # to each kernel sample so trials optimize end-to-end throughput.
@@ -365,6 +419,12 @@ def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=time.perf_
                         break
             else:
                 controller.observe(len(chunk), clock() - started)
+            if (
+                controller.width != previous
+                or previous_trial != (getattr(controller, "baseline", None) is not None)
+            ):
+                tuner.revision = getattr(tuner, "revision", 0) + 1
+
         start += len(chunk)
 
 
