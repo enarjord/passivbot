@@ -202,7 +202,7 @@ class ParetoStore:
         self._bootstrapping = True
         self._bootstrap_from_disk()
         self._bootstrapping = False
-        self._last_best_scope, self._last_best = self._best_objectives()
+        self._last_best_scope, self._last_best, _ = self._front_objective_summary()
 
     @staticmethod
     def _scoring_signature(specs: Sequence[Any]) -> tuple[tuple[Any, ...], ...]:
@@ -446,12 +446,12 @@ class ParetoStore:
         return tuple(values)
 
     def _log_front_state(self, *, added: int, removed: int) -> None:
-        """Report every accepted member and the best of every objective."""
+        """Report every accepted member with objective ranges and new bests."""
         if self._bootstrapping:
             return
         self.front_additions += added
         self.last_front_change_at = time.monotonic()
-        scope, best = self._best_objectives()
+        scope, best, ranges = self._front_objective_summary()
         goals = [spec.goal for spec in self.scoring_specs] if self.scoring_specs else ["min"] * len(best)
         improved = [
             self._last_best is None or self._last_best_scope != scope or
@@ -468,11 +468,13 @@ class ParetoStore:
         keys = self.scoring_keys or [f"objective_{i}" for i in range(len(best))]
         for goal in ("max", "min"):
             metrics = [
-                f"{key}={value:.6g}{'*' if changed else ''}"
-                for key, value, direction, changed in zip(keys, best, goals, improved) if direction == goal
+                f"{key}=[{low:.6g}{'*' if changed and direction == 'min' else ''},"
+                f"{high:.6g}{'*' if changed and direction == 'max' else ''}]"
+                for key, (low, high), direction, changed in zip(keys, ranges, goals, improved)
+                if direction == goal
             ]
             if metrics:
-                log_tokens(f"Pareto best | eval={self.n_iters} goal={goal} |", metrics, logger=self._log)
+                log_tokens(f"Pareto range | eval={self.n_iters} goal={goal} |", metrics, logger=self._log)
         self._last_best_scope, self._last_best = scope, best
         if not self._log.isEnabledFor(logging.DEBUG):
             return
@@ -503,15 +505,17 @@ class ParetoStore:
             f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}"
         )
 
-    def _best_objectives(self):
+    def _front_objective_summary(self):
+        """Derive both endpoints and goal-directed bests from the same front."""
         if not self._front:
-            return "empty", None
+            return "empty", None, None
         feasible = [idx for idx in self._front if self._violations[idx] <= 0]
         members = feasible or self._front
         columns = list(zip(*(self._objectives[idx] for idx in members)))
         goals = [spec.goal for spec in self.scoring_specs] if self.scoring_specs else ["min"] * len(columns)
-        best = tuple((max if goal == "max" else min)(column) for goal, column in zip(goals, columns))
-        return "feasible_front" if feasible else "infeasible_front", best
+        ranges = tuple((min(column), max(column)) for column in columns)
+        best = tuple(high if goal == "max" else low for (low, high), goal in zip(ranges, goals))
+        return "feasible_front" if feasible else "infeasible_front", best, ranges
 
     def progress_snapshot(self):
         with self._lock:
