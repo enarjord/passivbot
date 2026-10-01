@@ -1652,3 +1652,58 @@ async def test_revised_trailing_console_failure_does_not_stop_execution():
     bot.live_value = lambda key: .05
     await instance.run()
     assert calls == ['cycle', 'console'] and not instance._running
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['ready', 'not_ready', 'io_failure', 'sink_failure', 'shutdown_protect'])
+async def test_revised_completed_pass_does_not_complete_pending_ordinary_work(monkeypatch, outcome):
+    import asyncio
+    from types import SimpleNamespace
+    from ccxt.base.errors import NetworkError
+    from live.event_bus import EventTypes
+    events = []
+    def emit(event_type, **kwargs):
+        if outcome == 'sink_failure':
+            raise OSError('sink unavailable')
+        events.append((event_type, kwargs))
+    bot = SimpleNamespace(execution_scheduled=False, _emit_live_event=emit,
+                          freshness_ledger=SimpleNamespace(epoch=1))
+    bot._begin_live_event_cycle = lambda **kwargs: setattr(bot, '_live_event_current_cycle_id', 'cy_1')
+    async def refresh(**kwargs):
+        if outcome == 'io_failure':
+            raise NetworkError('private transport details')
+        return outcome != 'not_ready'
+    bot.refresh_protective_authoritative_state = refresh
+    instance = hsl_revised_live.Owner(bot)
+    instance.poll_inputs = lambda: None
+    instance.remember_position = lambda: None
+    instance.schedule_history = lambda: None
+    instance.schedule_sources = lambda: None
+    async def protect(**kwargs):
+        if outcome == 'shutdown_protect':
+            bot.stop_signal_received = True
+        return False
+    async def prepare():
+        await asyncio.Event().wait()
+    instance.protect = protect
+    instance._ordinary_plan = prepare
+    try:
+        result = await instance.cycle()
+        assert result['updated'] is (outcome in ('ready', 'sink_failure', 'shutdown_protect'))
+        completions = [data for kind, data in events if kind == EventTypes.CYCLE_COMPLETED]
+        if outcome == 'ready':
+            assert len(completions) == 1
+            data = completions[0]['data']
+            assert data['execution_owner'] == 'revised'
+            assert data['ordinary_pending'] is True
+            assert data['ordinary_pending_age_ms'] >= 0
+            assert set(data['timings_ms']) == {'authoritative', 'protection', 'ordinary_execute'}
+            assert not instance._ordinary.done()
+            assert bot._live_event_current_cycle_id == 'cy_1'
+        else:
+            assert not completions
+        assert not instance._cycle_running
+    finally:
+        if instance._ordinary is not None:
+            instance._ordinary.cancel()
+            await asyncio.gather(instance._ordinary, return_exceptions=True)

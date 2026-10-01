@@ -1771,3 +1771,184 @@ def test_forager_staleness_uses_persisted_ws_canonical_tail():
     now_ms = 13 * ONE_MIN_MS + 10_000
 
     assert Passivbot._candle_staleness_ms(bot, "BTC", now_ms=now_ms) == 0
+
+
+@pytest.mark.asyncio
+async def test_shared_network_failure_preserves_each_symbol_and_recovery(monkeypatch, caplog):
+    from ccxt.base.errors import NetworkError
+    from live.candle_ws_health import observe_receive_status
+    from live.event_bus import EventTypes
+    events = []
+    monkeypatch.setattr('live.candle_ws_health.emit_event', lambda bot, event: events.append(event))
+    bot = SimpleNamespace()
+    with caplog.at_level(logging.INFO):
+        for symbol in ('BTC', 'ETH', 'SOL'):
+            observe_receive_status(bot, symbol, error=NetworkError('secret'), retry_s=1.)
+        for symbol in ('BTC', 'ETH'):
+            observe_receive_status(bot, symbol, recovered=True)
+        assert bot._console_candle_receive is not None
+        observe_receive_status(bot, 'SOL', recovered=True)
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert 'action=rest_fallback' in warnings[0]
+    assert 'receive recovered symbols=3 failures=3' in caplog.text
+    assert 'secret' not in caplog.text
+    assert [e['status'] for e in events] == ['failed']*3 + ['recovered']*3
+    assert all(e['event_type'] == EventTypes.CANDLE_WEBSOCKET_STATUS for e in events)
+    assert bot._console_candle_receive is None
+
+
+@pytest.mark.asyncio
+async def test_network_coalescing_preserves_retry_schedule_and_private_error_boundary(monkeypatch, caplog):
+    from ccxt.base.errors import NetworkError
+    events, delays = [], []
+    monkeypatch.setattr('live.candle_ws_health.emit_event', lambda bot, event: events.append(event))
+    async def watch(*args):
+        raise NetworkError('private exchange request')
+    bot = SimpleNamespace(ccp=SimpleNamespace(watch_ohlcv=watch),
+        cm=SimpleNamespace(clear_live_ws_ohlcv_state=lambda symbol: None),
+        get_exchange_time=lambda: 1_000_000, stop_signal_received=False)
+    async def sleep(delay, **kwargs):
+        delays.append(delay)
+        if len(delays) == 5:
+            bot.stop_signal_received = True
+    bot._sleep_unless_shutdown = sleep
+    with caplog.at_level(logging.INFO):
+        await candle_ws.watch_forager_ws_symbol(bot, 'BTC/USDT:USDT')
+    assert delays == [1., 2., 4., 8., 300.]
+    assert sum(r.levelno == logging.WARNING for r in caplog.records) == 1
+    assert [e['data']['receive_status'] for e in events] == ['failed'] * 5 + ['retired']
+    assert 'private' not in caplog.text
+    assert 'watchers cleared' in caplog.text
+
+
+def test_shared_receive_details_reach_real_event_pipeline():
+    from types import SimpleNamespace
+    from ccxt.base.errors import NetworkError
+    from live.event_bus import ListEventSink, LiveEventPipeline, EventTypes
+    from live.candle_ws_health import observe_receive_status
+    durable = ListEventSink()
+    pipeline = LiveEventPipeline(structured_sinks=[durable])
+    bot = SimpleNamespace(_live_event_pipeline=pipeline)
+    try:
+        observe_receive_status(bot, 'BTC', error=NetworkError('private'))
+        observe_receive_status(bot, 'BTC', retired=True)
+        assert pipeline.flush()
+        assert len(durable.events) == 2
+        assert all(e.event_type == EventTypes.CANDLE_WEBSOCKET_STATUS for e in durable.events)
+        assert durable.events[-1].status == 'skipped'
+        assert durable.events[-1].data['receive_status'] == 'retired'
+        assert pipeline.health_snapshot()['event_sink_error_total'] == 0
+    finally:
+        pipeline.close()
+
+
+@pytest.mark.asyncio
+async def test_receive_recovery_precedes_failed_ingestion(monkeypatch, caplog):
+    from ccxt.base.errors import NetworkError
+    events, calls = [], []
+    monkeypatch.setattr('live.candle_ws_health.emit_event', lambda bot, event: events.append(event))
+    async def watch(*args):
+        calls.append('receive')
+        if len(calls) == 1:
+            raise NetworkError('private')
+        return []
+    bot = SimpleNamespace(ccp=SimpleNamespace(watch_ohlcv=watch), stop_signal_received=False,
+                          get_exchange_time=lambda: 1000000)
+    async def ingest(*args):
+        assert bot._console_candle_receive is None
+        assert events[-1]['data']['receive_status'] == 'recovered'
+        raise ValueError('invalid candle')
+    bot.cm = SimpleNamespace(ingest_live_ws_ohlcv=ingest, clear_live_ws_ohlcv_state=lambda symbol: None)
+    async def sleep(*args, **kwargs):
+        if len(calls) == 2:
+            bot.stop_signal_received = True
+    bot._sleep_unless_shutdown = sleep
+    with caplog.at_level(logging.INFO):
+        await candle_ws.watch_forager_ws_symbol(bot, 'BTC')
+    assert [event['data']['receive_status'] for event in events] == ['failed', 'recovered']
+    assert 'stage=ingest error_type=ValueError' in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('terminal', ['recovered', 'retired'])
+async def test_overflow_watcher_terminal_event_survives_console_aggregate_clear(monkeypatch, terminal):
+    from ccxt.base.errors import NetworkError
+    from live.candle_ws_health import observe_receive_status
+    events, calls = [], []
+    monkeypatch.setattr('live.candle_ws_health.emit_event', lambda bot, event: events.append(event))
+    bot = SimpleNamespace(stop_signal_received=False, get_exchange_time=lambda: 1000000)
+    for i in range(256):
+        observe_receive_status(bot, str(i), error=NetworkError('private'))
+    async def watch(*args):
+        calls.append('receive')
+        if len(calls) == 1:
+            raise NetworkError('private')
+        bot.stop_signal_received = True
+        return []
+    bot.ccp = SimpleNamespace(watch_ohlcv=watch)
+    bot.cm = SimpleNamespace(clear_live_ws_ohlcv_state=lambda symbol: None)
+    async def sleep(*args, **kwargs):
+        assert len(bot._console_candle_receive['active']) == 256
+        for i in range(256):
+            observe_receive_status(bot, str(i), recovered=True)
+        assert bot._console_candle_receive is None
+        if terminal == 'retired':
+            bot.stop_signal_received = True
+    bot._sleep_unless_shutdown = sleep
+    await candle_ws.watch_forager_ws_symbol(bot, 'OVERFLOW')
+    assert [e['data']['receive_status'] for e in events if e.get('symbol') == 'OVERFLOW'] == [
+        'failed', terminal]
+    assert bot._console_candle_receive is None
+
+
+@pytest.mark.asyncio
+async def test_old_watcher_retirement_does_not_clear_replacement_receive_failure(monkeypatch, caplog):
+    from ccxt.base.errors import NetworkError
+    import asyncio
+    events = []
+    monkeypatch.setattr('live.candle_ws_health.emit_event', lambda bot, event: events.append(event))
+    old_ready, new_ready = asyncio.Event(), asyncio.Event()
+    release_old, release_new = asyncio.Event(), asyncio.Event()
+    bot = SimpleNamespace(stop_signal_received=False, get_exchange_time=lambda: 1000000,
+        cm=SimpleNamespace(clear_live_ws_ohlcv_state=lambda symbol: None))
+    async def watch(*args):
+        raise NetworkError('private')
+    bot.ccp = SimpleNamespace(watch_ohlcv=watch)
+    old = None
+    async def sleep(*args, **kwargs):
+        if asyncio.current_task() is old:
+            old_ready.set()
+            try:
+                await release_old.wait()
+            except asyncio.CancelledError:
+                await release_old.wait()
+        else:
+            new_ready.set()
+            await release_new.wait()
+    bot._sleep_unless_shutdown = sleep
+    with caplog.at_level(logging.INFO):
+        old = asyncio.create_task(candle_ws.watch_forager_ws_symbol(bot, 'BTC'))
+        replacement = None
+        try:
+            await asyncio.wait_for(old_ready.wait(), 1.)
+            candle_ws._mark_watcher_retiring(bot, 'BTC', old)
+            old.cancel()
+            await asyncio.sleep(0)
+            replacement = asyncio.create_task(candle_ws.watch_forager_ws_symbol(bot, 'BTC'))
+            await asyncio.wait_for(new_ready.wait(), 1.)
+            failures = [e for e in events if e['status'] == 'failed']
+            old_generation, new_generation = [e['data']['watcher_generation'] for e in failures]
+            assert old_generation != new_generation
+            release_old.set()
+            await asyncio.wait_for(old, 1.)
+            assert bot._console_candle_receive['active'] == {'BTC': new_generation}
+            assert 'watchers cleared' not in caplog.text
+            assert events[-1]['data']['receive_status'] == 'retired'
+            assert events[-1]['data']['watcher_generation'] == old_generation
+        finally:
+            release_old.set()
+            if replacement is not None:
+                replacement.cancel()
+            await asyncio.gather(old, *([replacement] if replacement is not None else []),
+                                 return_exceptions=True)

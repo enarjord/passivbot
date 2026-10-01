@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import time
 from datetime import datetime, timezone
@@ -38,7 +39,7 @@ def test_create_command_log_filename_uses_utc_timestamp_and_sanitized_command():
         timestamp=timestamp,
     )
 
-    assert filename == "20260404_180706_passivbot_live_-u_bybit_01_configs_live_my_config.json.log"
+    assert re.fullmatch(r"20260404_180706_passivbot_live_-u_bybit_01_configs_live_my_config.json_r[0-9a-f]{12}\.log", filename)
 
 
 def test_build_command_log_path_places_file_under_requested_dir():
@@ -46,7 +47,8 @@ def test_build_command_log_path_places_file_under_requested_dir():
 
     path = build_command_log_path(["passivbot live", "-u", "bybit_01"], "logs", timestamp=timestamp)
 
-    assert path == Path("logs/20260404_180706_passivbot_live_-u_bybit_01.log")
+    assert path.parent == Path("logs")
+    assert re.fullmatch(r"20260404_180706_passivbot_live_-u_bybit_01_r[0-9a-f]{12}\.log", path.name)
 
 
 def test_resolve_live_log_file_settings_defaults_to_timestamped_archive_and_stable_alias():
@@ -58,7 +60,7 @@ def test_resolve_live_log_file_settings_defaults_to_timestamped_archive_and_stab
 
     log_file = Path(settings["log_file"])
     assert log_file.parent == Path("logs")
-    assert log_file.name.endswith("_passivbot_live_-u_bitget_01_-lm_graceful_stop.log")
+    assert re.search(r"_passivbot_live_-u_bitget_01_-lm_graceful_stop_r[0-9a-f]{12}\.log$", log_file.name)
     assert Path(settings["current_log_file"]) == Path("logs/bitget_01.log")
     assert settings["rotation"] is True
     assert settings["max_bytes"] == 10 * 1024 * 1024
@@ -185,3 +187,12 @@ def test_stable_log_alias_raises_when_pointer_write_fails(monkeypatch, tmp_path)
 
     with pytest.raises(RuntimeError, match="failed to write stable live log pointer"):
         update_stable_log_alias(current_log, archived_log)
+
+
+def test_truncated_commands_and_same_second_restarts_have_separate_archives():
+    timestamp = datetime(2026, 4, 4, tzinfo=timezone.utc)
+    common = ["passivbot live", "--config", "x" * 160, "--user"]
+    names = {create_command_log_filename(common + [user], timestamp=timestamp)
+             for user in ("example_a", "example_b", "example_a")}
+    assert len(names) == 3
+    assert all(len(name) < 160 for name in names)

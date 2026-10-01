@@ -83,7 +83,7 @@ from live.diagnostic_safety import (
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
-from live.console_health import readiness_payload, log_trailing_recovery, ws_presentation_self_echo
+from live.console_health import readiness_payload, log_trailing_recovery, ws_presentation_self_echo, token
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
@@ -863,8 +863,8 @@ class Passivbot:
     TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA = 0.0005
     TRAILING_PRICE_MATERIALITY_RELATIVE_DELTA = 0.005
     STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS = 60 * 60 * 1000
-    # The longest live INFO prefix is 44 characters: timestamp, level, and Hyperliquid.
-    CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN = 196
+    # Reserve space for timestamp, level, and a bounded exchange/user prefix.
+    CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN = 170
     FORAGER_SELECTION_CONSOLE_MESSAGE_MAX_LEN = 196
     EXCHANGE_TIME_SYNC_CONSOLE_MESSAGE_MAX_LEN = 196
     _CANDLE_HEALTH_CONSOLE_SAMPLE_LIMIT = 3
@@ -5856,7 +5856,7 @@ class Passivbot:
         integer = Passivbot._format_candle_health_console_int
         base_message = (
             "[candle] health: "
-            f"symbols={integer(symbol_count)} "
+            f"scope=warmup_cache symbols={integer(symbol_count)} "
             f"unhealthy_surfaces={integer(unhealthy_surface_count)} "
             f"stale={integer(stale_count)} "
             f"synthetic={integer(synthetic_count)} "
@@ -5883,6 +5883,8 @@ class Passivbot:
             if len(candidate) > Passivbot.CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN:
                 break
             message = candidate
+        if unhealthy_samples and message == base_message:
+            message += f" | +{integer(len(unhealthy_samples))} more"
         return message
 
     def _maybe_log_candle_health_summary(self) -> None:
@@ -22686,7 +22688,7 @@ async def _run_live(startup_context: dict):
     startup_context["stage"] = "load_user_info"
     user_info = load_user_info(live_user)
     # Reconfigure logging with exchange prefix now that we know the exchange
-    exchange_prefix = user_info["exchange"]
+    exchange_prefix = token(user_info["exchange"] + ":" + live_user, 32)
     configure_logging(
         debug=effective_log_level, prefix=exchange_prefix, **log_file_settings
     )
