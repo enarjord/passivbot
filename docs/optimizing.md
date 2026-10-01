@@ -989,15 +989,21 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `max_pending_exact` also defaults to `null`; omitted, `null`, or `"auto"` values enable
   continuous exact-validation queue tuning. It starts at twice the larger of workers and
   `validate_per_generation`, or a compatible cached size. Trials move by that larger count,
-  between one and four times it. Decisions require at least 24 completed timings, 30 seconds of
-  wall time and four generations; the first full window excludes cold worker startup. The
-  controller measures completed validations per wall-clock second and reports rolling median
-  worker/queue times. Larger limits require a 5% gain; smaller limits are accepted within 2% of
+  between one and four times it. Decisions normally require at least 24 completed timings and
+  accumulated worker time equivalent to 30 seconds at full pool capacity. Expensive validations
+  can instead provide at least four timings with a 30-second median duration and a 120-second
+  active validation window. There is no minimum generation count; the first eligible window
+  excludes cold worker startup. Completed worker intervals supply a bounded rolling throughput
+  estimate, excluding GPU screening pauses and collection delays, with median worker/queue times.
+  Larger limits require a 5% gain; smaller limits are accepted within 2% of
   previous throughput. Acceptance waits one evidence window; rejection waits three.
-  CPU collectors only gather timings. Changes happen on the main thread before the next
-  generation's admission, never cancel submitted work, and always reserve complete validation
-  allocations. Existing work drains naturally after a shrink. GPU batch and queue trials are
-  coordinated; queue evidence resets when GPU batch sizing changes. Population, candidate order,
+  CPU collectors only gather timings. Changes happen on the main thread between exact seed
+  admission batches or before the next generation's admission, never cancel submitted work, and
+  always reserve complete validation allocations. Existing work drains naturally after a shrink.
+  An unfinished seed-stage trial
+  returns to its preceding limit before evolution so it cannot block GPU batch tuning.
+  GPU batch and queue trials are coordinated; queue evidence resets when GPU batch sizing changes.
+  Population, candidate order,
   proxy-front/probe allocation, drift gates and exact results retain their existing contracts.
   Compatible hardware/implementation, workload, bounds and worker-count classes reuse bounded
   advisory records under `caches/gpu_autotune/`. Timings are removed before result persistence

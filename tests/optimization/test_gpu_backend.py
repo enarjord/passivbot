@@ -181,6 +181,8 @@ def test_gpu_profiled_exact_worker_records_actual_queue_wait(monkeypatch):
     assert payload["F"] == [1.0]
     assert payload["__gpu_profile_queue_wait_seconds__"] == pytest.approx(3.0)
     assert payload["__gpu_profile_worker_seconds__"] == pytest.approx(4.0)
+    assert payload["__gpu_profile_worker_started__"] == 10.0
+    assert payload["__gpu_profile_worker_finished__"] == 14.0
 
 
 def test_gpu_profile_log_is_structured_json(caplog):

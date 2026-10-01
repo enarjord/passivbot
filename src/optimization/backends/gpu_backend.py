@@ -167,7 +167,10 @@ def _profiled_gpu_exact_worker(vector, submitted_at):
         payload["__gpu_profile_queue_wait_seconds__"] = max(
             0.0, started - float(submitted_at)
         )
-        payload["__gpu_profile_worker_seconds__"] = time.perf_counter() - started
+        finished = time.perf_counter()
+        payload["__gpu_profile_worker_seconds__"] = finished - started
+        payload["__gpu_profile_worker_started__"] = started
+        payload["__gpu_profile_worker_finished__"] = finished
     return payload
 
 
@@ -5771,7 +5774,7 @@ def run_backend(
         )
 
     def run_seed_bootstrap() -> None:
-        nonlocal seed_exact_done, seed_bootstrap_complete, persisted_halt_reason
+        nonlocal seed_exact_done, seed_bootstrap_complete, persisted_halt_reason, max_pending
         if seed_bootstrap_complete:
             return
 
@@ -5838,8 +5841,12 @@ def run_backend(
                     ) = pending_seed.pop(result)
                     payload = result.get()
                     if exact_timing_enabled and isinstance(payload, dict):
-                        payload.pop("__gpu_profile_worker_seconds__", None)
-                        payload.pop("__gpu_profile_queue_wait_seconds__", None)
+                        timing = [float(payload.pop(key, 0.0)) for key in (
+                            "__gpu_profile_worker_seconds__", "__gpu_profile_queue_wait_seconds__",
+                            "__gpu_profile_worker_started__", "__gpu_profile_worker_finished__",
+                        )]
+                        if queue_controller is not None:
+                            queue_controller.record(*timing)
                     PymooAsyncRecordingRunner._raise_if_worker_failure(
                         payload, source_index
                     )
@@ -5930,6 +5937,9 @@ def run_backend(
                     # checkpoint.  Honor the configured checkpoint interval
                     # instead of rewriting the complete seed plan per seed.
                     maybe_save_checkpoint()
+                if queue_controller is not None:
+                    queue_controller.update(generation)
+                    max_pending = queue_controller.limit
         except KeyboardInterrupt:
             cancel_pending_async_results(pending_seed)
             maybe_save_checkpoint(force=True)
@@ -6037,8 +6047,14 @@ def run_backend(
                 if exact_timing_enabled and isinstance(payload, dict)
                 else 0.0
             )
+            worker_started = worker_finished = 0.0
+            if exact_timing_enabled and isinstance(payload, dict):
+                worker_started = float(payload.pop("__gpu_profile_worker_started__", 0.0))
+                worker_finished = float(payload.pop("__gpu_profile_worker_finished__", 0.0))
             if queue_controller is not None:
-                queue_controller.record(worker_seconds, queue_wait_seconds)
+                queue_controller.record(
+                    worker_seconds, queue_wait_seconds, worker_started, worker_finished,
+                )
             if profile_enabled:
                 profile_totals["exact_work"] += worker_seconds
                 profile_totals["exact_queue_wait"] += queue_wait_seconds
@@ -6123,7 +6139,8 @@ def run_backend(
     try:
         run_seed_bootstrap()
         if queue_controller is not None:
-            queue_controller.reset(generation)
+            queue_controller.finish_bootstrap(generation)
+            max_pending = queue_controller.limit
         while exact_done < budget:
             interrupt_check()
             consume_ready()

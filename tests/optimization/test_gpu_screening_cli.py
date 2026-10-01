@@ -84,7 +84,6 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
         from optimization.gpu import exact_autotune
         monkeypatch.setattr(exact_autotune, "WINDOW", 2)
         monkeypatch.setattr(exact_autotune, "MIN_SECONDS", 0.0)
-        monkeypatch.setattr(exact_autotune, "MIN_GENERATIONS", 1)
         cfg["optimize"]["gpu"].update(exact_workers="auto", max_pending_exact=None)
     if auto_batch:
         from optimization.gpu import autotune
@@ -114,10 +113,20 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     monkeypatch.setenv("PYTHONPATH", str(guard) + os.pathsep + os.environ.get("PYTHONPATH", ""))
     path = tmp_path / "config.json"
     path.write_text(json.dumps(cfg))
+    starting_args = []
+    if auto_exact:
+        seeds = tmp_path / "seeds"
+        seeds.mkdir()
+        for index in range(6):
+            candidate = json.loads(json.dumps(cfg))
+            candidate["bot"]["long"]["hsl"]["red_threshold"] = 0.02 + index * 0.02
+            (seeds / f"seed_{index}.json").write_text(json.dumps(candidate))
+        starting_args = ["-t", str(seeds)]
     monkeypatch.setattr(
         sys, "argv", ["optimize", str(path), "--suite", "y",
                       "--optimize.gpu.screening.scenarios",
-                      json.dumps(cfg["optimize"]["gpu"]["screening"]["scenarios"])]
+                      json.dumps(cfg["optimize"]["gpu"]["screening"]["scenarios"]),
+                      *starting_args]
     )
     with pytest.raises(SystemExit) as finished:
         await main()
@@ -136,6 +145,8 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
         assert "GPU exact auto-sizing" in log_output
         assert "GPU exact queue auto-tune starting" in log_output
         assert "__gpu_profile_" not in json.dumps(records)
+        assert "__gpu_profile_" not in repr(state)
+        assert state["seed_exact_done"] > 0
     else:
         assert "GPU exact queue auto-tune" not in log_output
     assert "Removed disabled legacy" in log_output

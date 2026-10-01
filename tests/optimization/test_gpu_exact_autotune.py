@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -26,20 +27,27 @@ def controller(tmp_path, *, proxies=(), mode="auto", context=None):
     return item
 
 
-def window(item, seconds=2, work=1, wait=0):
-    for _ in range(tune.WINDOW):
+def window(item, seconds=2, work=None, wait=0):
+    count = max(tune.WINDOW, math.ceil(tune.MIN_SECONDS * item.workers / seconds))
+    for _ in range(count):
+        started = item.tick[0]
         item.tick[0] += seconds
         item.gen += 1
-        item.record(work, wait)
+        item.record(seconds if work is None else work, wait, started, item.tick[0])
         item.update(item.gen)
 
 
-def test_queue_waits_for_evidence_and_excludes_cold_window(tmp_path):
+def test_queue_waits_for_real_work_evidence_and_excludes_cold_window(tmp_path):
     item = controller(tmp_path)
-    window(item, 0.01)
+    for index in range(tune.WINDOW):
+        item.record(0.01, 0, index * 0.01, (index + 1) * 0.01)
+    item.update(0)
     assert not item.warmed and item.limit == 16
-    item.tick[0] += 31
-    item.update(item.gen)
+    item.tick[0] += 36000  # GPU-only time cannot manufacture CPU evidence.
+    item.update(100)
+    assert not item.warmed and item.limit == 16
+    item.reset(100)
+    window(item)
     assert item.warmed and item.limit == 16
     window(item)
     assert item.limit == 24 and item.baseline[0] == 16
@@ -68,21 +76,18 @@ def test_queue_failure_rolls_back_and_small_plateau_is_preferred(tmp_path):
 def test_queue_median_rejects_spike_invalid_samples_and_bounds_records(tmp_path):
     item = controller(tmp_path)
     for _ in range(item.ceiling * 4):
-        item.record(1, 0)
+        item.record(1, 0, item.tick[0], item.tick[0] + 1)
     assert len(item.collected) == item.ceiling
     item.reset(0)
     for bad in [0, -1, float("nan"), float("inf")]:
-        item.record(bad, 0)
-        item.record(1, bad)
+        item.record(bad, 0, 0, 1)
+        item.record(1, bad, 0, 1)
     item.update(0)
     assert item.completed == 1  # zero queue delay is valid
     item.reset(0)
-    item.tick[0] = 60
-    for _ in range(24):
-        item.record(1, 0)
-    item.update(0)  # Requires several generations, too.
-    assert not item.warmed
-    item.update(4)
+    for index in range(24):
+        item.record(5, 0, index * 5, (index + 1) * 5)
+    item.update(0)  # Enough CPU work permits calibration within seed generation.
     assert item.warmed
 
 
@@ -95,11 +100,11 @@ def test_proxy_and_queue_trials_are_coordinated_at_generation_boundary(tmp_path)
     window(item)
     assert not proxy_tuner.allow_trial()
     # Collector timing cannot make a queue decision until main-thread update.
-    item.record(1, 0)
+    item.record(1, 0, item.tick[0], item.tick[0] + 1)
     assert item.limit == 24
     window(item, 1.5)
     assert proxy_tuner.allow_trial()
-    item.record(1, 0)
+    item.record(1, 0, item.tick[0], item.tick[0] + 1)
     proxy_tuner.revision += 1
     item.update(item.gen)
     assert not item.samples and item.completed == 0
@@ -218,3 +223,98 @@ def test_auto_exact_options_roundtrip_and_cli(field, value):
     config["optimize"]["gpu"][field] = -1
     with pytest.raises(ValueError, match=field):
         _resolve_options(config)
+
+
+def test_lazy_suite_worker_sizing_uses_prepared_views_not_empty_context_maps(monkeypatch):
+    contexts = [SimpleNamespace(shared_hlcvs_np={}, exchanges=["x"], length=size)
+                for size in (256 * tune.MIB, 2 * 1024 * tune.MIB)]
+    calls = []
+
+    def prepared(ctx, exchange):
+        calls.append((ctx, exchange))
+        return SimpleNamespace(nbytes=ctx.length), None, [0]
+
+    evaluator = SimpleNamespace(contexts=contexts, get_prepared_context_data=prepared)
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: dict(
+        cores=16, available=8 * 1024 * tune.MIB, rss=512 * tune.MIB,
+    ))
+    assert tune.prepared_bytes(evaluator) == 2 * 1024 * tune.MIB
+    assert tune.initial_workers(None, 4, evaluator, mode="auto") == 1
+    assert len(calls) == 4  # each context once per sizing pass; no sum across scenarios
+
+
+def test_lazy_suite_prepared_bytes_preserves_time_view_and_coin_mapping():
+    import numpy as np
+    from optimize import SuiteEvaluator
+    master = np.zeros((100, 4, 4), dtype=np.float64)
+    spec = SimpleNamespace(name="fixture")
+    ctx = SimpleNamespace(
+        exchanges=["x"], shared_hlcvs_np={}, master_hlcvs_specs={"x": spec},
+        time_slice={"x": (20, 50)}, coin_slice_indices={"x": [0, 2]},
+        master_btc_specs=None,
+    )
+    evaluator = SuiteEvaluator.__new__(SuiteEvaluator)
+    evaluator.contexts = [ctx, ctx]
+    evaluator._master_arrays = {"hlcvs": {"fixture": master}, "btc": {}}
+    view, _, coins = evaluator.get_prepared_context_data(ctx, "x")
+    assert np.shares_memory(view, master) and coins == [0, 2]
+    assert tune.prepared_bytes(evaluator) == master[20:50].nbytes
+    assert ctx.shared_hlcvs_np == {}
+
+
+def test_long_validations_calibrate_during_seed_admission_without_four_generations(tmp_path):
+    item = controller(tmp_path)
+    def complete_wave(start, duration):
+        for _ in range(4):
+            item.record(duration, 0, start, start + duration)
+        item.update(0)
+    complete_wave(0, 120)
+    assert item.warmed and item.limit == 16
+    complete_wave(10000, 120)
+    assert item.limit == 24 and item.baseline[1] == pytest.approx(4 / 120)
+    complete_wave(20000, 90)
+    # Four jobs alone still need the generous 120-second active window.
+    assert item.baseline is not None
+    complete_wave(20090, 90)
+    assert item.baseline is None and item.limit == 24
+    assert item.cooldown == 1
+
+
+def test_bootstrap_exit_rolls_back_unfinished_queue_trial_and_unblocks_batch(tmp_path):
+    batch = SimpleNamespace(baseline=None)
+    tuner = SimpleNamespace(revision=0, controllers={"shape": batch})
+    proxy = SimpleNamespace(batch_tuner=tuner, checkpoint_contract={}, needed_metrics=[])
+    item = controller(tmp_path, proxies=[proxy])
+    window(item)
+    window(item)
+    assert item.limit == 24 and not tuner.allow_trial()
+    item.finish_bootstrap(0)
+    assert item.limit == 16 and item.baseline is None and tuner.allow_trial()
+    assert not item.samples
+
+
+def test_temporal_batch_and_exact_queue_trials_keep_revision_and_cooldown_boundaries(tmp_path):
+    from optimization.gpu.autotune import ProxyBatchTuner, proxy_batches, record_replay_chunk
+    proxy = SimpleNamespace(checkpoint_contract={}, needed_metrics=[],
+                            max_dispatch_candidate_bars=1000000)
+    proxy.batch_tuner = ProxyBatchTuner(
+        proxy, mode="refresh", hardware={"device": "test"}, context={}, cache_dir=tmp_path,
+    )
+    proxy.batch_tuner._headroom = lambda: True
+    item = controller(tmp_path, proxies=[proxy])
+    item.baseline = (16, 1)
+    batches = proxy_batches(proxy, list(range(2048)), 512)
+    next(batches)
+    for _ in range(128):
+        record_replay_chunk(512, 4096, 2538000, 2)
+    assert len(next(batches)[1]) == 512
+    assert proxy.batch_tuner.revision == 0
+    item.baseline = None
+    for _ in range(128):
+        record_replay_chunk(512, 4096, 2538000, 2)
+    assert len(next(batches)[1]) == 256
+    assert proxy.batch_tuner.revision == 1
+    item.record(120, 0, 0, 120)
+    item.update(0)
+    assert item.completed == 0 and not item.samples
+    batches.close()

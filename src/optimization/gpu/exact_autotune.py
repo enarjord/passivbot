@@ -1,4 +1,4 @@
-"""Initial CPU resource sizing and slow exact-queue tuning during real work."""
+"""Initial CPU sizing and bounded exact-queue tuning during production validation."""
 
 from collections import deque
 import logging
@@ -18,7 +18,8 @@ from optimization.gpu.autotune import (
 
 WINDOW = 24
 MIN_SECONDS = 30.0
-MIN_GENERATIONS = 4
+LONG_WINDOW_SECONDS = 120.0
+LONG_WINDOW_SAMPLES = 4
 MIB = 1024**2
 
 
@@ -75,7 +76,17 @@ def resource_snapshot():
 def prepared_bytes(evaluator):
     # Shared candle mappings are not copied for each suite scenario. Reserve for
     # the largest exact replay, not the sum of shared views of the same data.
-    contexts = [evaluator, *getattr(evaluator, "contexts", [])]
+    contexts = list(getattr(evaluator, "contexts", []))
+    prepared = getattr(evaluator, "get_prepared_context_data", None)
+    if contexts and prepared is not None:
+        # Lazy suite contexts do not populate shared_hlcvs_np. Use the exact
+        # prepared time views; coin subsetting remains a Rust index mapping.
+        # Attaching/shared views does not copy each scenario's master dataset.
+        return max(
+            sum(int(prepared(ctx, exchange)[0].nbytes) for exchange in ctx.exchanges)
+            for ctx in contexts
+        )
+    contexts = [evaluator, *contexts]
     return max(
         (
             sum(int(array.nbytes) for array in getattr(ctx, "shared_hlcvs_np", {}).values())
@@ -127,6 +138,7 @@ class ExactQueueController:
         context=None,
         hardware=None
     ):
+        self.workers = workers
         self.floor = max(workers, validations)
         self.ceiling = 4 * self.floor
         self.step = self.floor
@@ -136,7 +148,7 @@ class ExactQueueController:
         self.cache = CalibrationCache(cache_dir)
         self.key = _digest(
             dict(
-                kind="exact_queue_v1",
+                kind="exact_queue_v2",
                 workers=workers,
                 validations=validations,
                 hardware=(
@@ -192,14 +204,27 @@ class ExactQueueController:
         self.samples.clear()
         self.collected.clear()
         self.completed = 0
+        self.worker_seconds = 0.0
         self.started = self.clock()
         self.generation = generation
         self.revision = self.proxy_state()[0]
 
-    def record(self, worker_seconds, queue_seconds):
+    def finish_bootstrap(self, generation):
+        if self.baseline is not None:
+            old_limit, _ = self.baseline
+            self.baseline = None
+            self.limit = old_limit
+            self.cooldown = 1
+            logging.info(
+                "GPU exact queue auto-tune retained | pending=%d reason=seed_phase_end",
+                self.limit,
+            )
+        self.reset(generation)
+
+    def record(self, worker_seconds, queue_seconds, started, finished):
         # The collector only appends timing. The main thread consumes it after
         # joining the collector, before admission of the next generation.
-        self.collected.append((worker_seconds, queue_seconds))
+        self.collected.append((worker_seconds, queue_seconds, started, finished))
 
     def update(self, generation):
         revision, proxy_trial = self.proxy_state()
@@ -207,28 +232,46 @@ class ExactQueueController:
             self.reset(generation)
             return
         while self.collected:
-            worker_seconds, queue_seconds = self.collected.popleft()
+            worker_seconds, queue_seconds, started, finished = self.collected.popleft()
             if not (
                 math.isfinite(worker_seconds)
                 and worker_seconds > 0
                 and math.isfinite(queue_seconds)
                 and queue_seconds >= 0
+                and math.isfinite(started)
+                and math.isfinite(finished)
+                and finished > started
             ):
                 continue
-            self.samples.append((worker_seconds, queue_seconds))
+            self.samples.append((worker_seconds, queue_seconds, started, finished))
             self.completed += 1
-        elapsed = self.clock() - self.started
-        if (
-            len(self.samples) < WINDOW
-            or elapsed < MIN_SECONDS
-            or generation - self.generation < MIN_GENERATIONS
-        ):
-            return
-        rate = self.completed / elapsed if elapsed > 0 else 0.0
-        if rate <= 0:
+            self.worker_seconds += worker_seconds
+        # Union completed worker intervals: GPU screening pauses and delayed
+        # submission-order collection are not CPU validation throughput evidence.
+        elapsed = 0.0
+        end = float("-inf")
+        for start, stop in sorted((item[2], item[3]) for item in self.samples):
+            elapsed += max(0.0, stop - max(start, end))
+            end = max(end, stop)
+        if not self.samples:
             return
         work = statistics.median(item[0] for item in self.samples)
         wait = statistics.median(item[1] for item in self.samples)
+        # Accumulate measured work even when very fast tasks roll out of the
+        # bounded rate window. Divide by pool capacity so parallel jobs cannot
+        # manufacture a 30-second observation from a few wall-clock seconds.
+        regular = (
+            len(self.samples) >= WINDOW
+            and self.worker_seconds >= MIN_SECONDS * self.workers
+        )
+        long_work = (
+            len(self.samples) >= LONG_WINDOW_SAMPLES
+            and work >= MIN_SECONDS
+            and elapsed >= LONG_WINDOW_SECONDS
+        )
+        if not (regular or long_work):
+            return
+        rate = len(self.samples) / elapsed
         self.reset(generation)
         # First completed window excludes worker startup and cold exact replay.
         if not self.warmed:
