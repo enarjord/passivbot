@@ -326,6 +326,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                     if inspect.isawaitable(result):
                         await result
                 consecutive_failures = 0
+                from live.candle_ws_health import observe_receive_status
+                observe_receive_status(bot, symbol, recovered=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -344,8 +346,13 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                     now_ms = int(now_ms_fn()) if callable(now_ms_fn) else 0
                 except Exception:
                     now_ms = 0
+                from ccxt.base.errors import NetworkError
+                from live.candle_ws_health import observe_receive_status
+                shared_receive = stage == "receive" and isinstance(exc, NetworkError)
+                if shared_receive:
+                    observe_receive_status(bot, symbol, error=exc, retry_s=delay_s)
                 last_warning_ms = int(warning_state.get(symbol, 0) or 0)
-                if now_ms <= 0 or now_ms - last_warning_ms >= 300_000:
+                if not shared_receive and (now_ms <= 0 or now_ms - last_warning_ms >= 300_000):
                     logging.warning(
                         "[candle] forager websocket candle update failed | symbol=%s "
                         "stage=%s error_type=%s retry=%.1fs action=rest_fallback",
@@ -363,6 +370,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                     stage="forager_ws_candle_reconnect",
                 )
     finally:
+        from live.candle_ws_health import observe_receive_status
+        observe_receive_status(bot, symbol, retired=True)
         if not _watcher_is_retiring(bot, symbol, watcher_task):
             await _best_effort_unwatch(bot, symbol)
 

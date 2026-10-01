@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+from uuid import uuid4
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -132,7 +133,7 @@ def create_command_log_filename(
     command_str = " ".join(str(part) for part in command_args)
     sanitized_command = sanitize_log_filename(command_str)
     prefix = timestamp.astimezone(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return f"{prefix}_{sanitized_command}.log"
+    return f"{prefix}_{sanitized_command}_r{uuid4().hex[:12]}.log"
 
 
 def build_command_log_path(

@@ -3500,7 +3500,7 @@ def test_console_format_summarizes_periodic_health():
     )
 
     assert format_console_event(event) == (
-        "[health] up=2m3s last_loop=1.2s pos=2L/1S open_orders=? account_age=? "
+        "[health] up=2m3s last_loop=1.2s pos=2L/1S open_orders=? account_age=? last_cycle=? last_write=? "
         "errors_1h=1/10 ws_reconnects_total=2 rate_limits_total=3 "
         "rss=150.0MiB event_q=4/1000 event_drop=2 sink_err=1"
     )
@@ -3536,7 +3536,7 @@ def test_console_health_keeps_cumulative_activity_in_durable_event():
     )
 
     assert format_console_event(event) == (
-        "[health] up=19m33s last_loop=39.5s pos=0L/0S open_orders=? account_age=? "
+        "[health] up=19m33s last_loop=39.5s pos=0L/0S open_orders=? account_age=? last_cycle=? last_write=? "
         "errors_1h=0/10 rss=83.6MiB"
     )
 
@@ -3573,7 +3573,7 @@ def test_console_format_periodic_health_compacts_representative_longest_payload(
     rendered = format_console_event(event)
 
     assert rendered == (
-        "[health] up=19m33s last_loop=39.5s pos=0L/0S open_orders=? account_age=? "
+        "[health] up=19m33s last_loop=39.5s pos=0L/0S open_orders=? account_age=? last_cycle=? last_write=? "
         "errors_1h=0/10 ws_reconnects_total=4 rate_limits_total=5 rss=83.6MiB "
         "summary_late=2.3s slow=maintenance:5.0s,account:3.0s,market:1.0s"
     )
@@ -4533,3 +4533,16 @@ def test_cycle_events_are_reconstructable_by_cycle_id():
         EventTypes.CYCLE_COMPLETED,
     ]
     assert {event.cycle_id for event in structured.events} == {"cy_1"}
+
+
+def test_authoritative_duration_is_numeric_only_and_context_scoped():
+    from live.event_bus import redact_payload, REDACTED
+    result = redact_payload(dict(authoritative=2, auth='secret', timings_ms=dict(
+        authoritative=123, authorization='secret', nested=dict(authoritative=5))))
+    assert result['authoritative'] == REDACTED
+    assert result['auth'] == REDACTED
+    assert result['timings_ms']['authoritative'] == 123
+    assert result['timings_ms']['authorization'] == REDACTED
+    assert result['timings_ms']['nested']['authoritative'] == REDACTED
+    for value in ('secret', {'secret': 'value'}, True, -1, 10**1000, float('inf'), float('nan')):
+        assert redact_payload({'timings_ms': {'authoritative': value}})['timings_ms']['authoritative'] == REDACTED

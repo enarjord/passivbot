@@ -94,3 +94,45 @@ def test_normalized_short_close_is_resting_without_reduce_only_flag():
         open_orders={'BTC': [dict(symbol='BTC', position_side='short', side='buy')]})
     assert readiness_payload(bot, 1000)['close_coverage'] == dict(
         resting=1, waiting=0, blocked=0, unknown=0)
+
+
+def test_phase_breakdown_and_current_fill_readiness_are_observations(caplog):
+    ledger = FreshnessLedger(now_ms=1000)
+    for name in ('positions', 'balance', 'open_orders', 'fills'):
+        ledger.stamp(name, now_ms=1000)
+    bot = SimpleNamespace(user='example', freshness_ledger=ledger,
+        positions={'BTC': {'long': {'size': 1}}},
+        _authoritative_pending_confirmations={'fills': ledger.epoch + 1},
+        recent_order_executions=[{'execution_timestamp': 1000}],
+        _console_last_cycle_completed_ms=2000)
+    with caplog.at_level(logging.INFO):
+        log_trailing_recovery(bot, {'BTC': ['position_fill_confirmation_pending']}, 1000)
+        log_trailing_recovery(bot, {'BTC': ['missing_candles']}, 3000)
+        payload = readiness_payload(bot, 5000)
+        assert payload['trailing_wait_samples'] == [dict(symbol='BTC', phase='candle_input', age_ms=4000)]
+        assert payload['fills_pending'] is True
+        assert payload['account_surface_ages_ms']['fills'] == 4000
+        assert payload['last_cycle_completed_age_ms'] == 3000
+        assert payload['last_write_age_ms'] == 4000
+        log_trailing_recovery(bot, {}, 5000)
+    assert 'fill=2.0s candles=2.0s other=0.0s polls=2' in caplog.text
+    assert bot.positions == {'BTC': {'long': {'size': 1}}}
+    assert readiness_payload(bot, 6000)['trailing_wait_count'] == 0
+
+
+def test_readiness_observer_is_bounded():
+    bot = SimpleNamespace(positions={})
+    log_trailing_recovery(bot, {str(i): ['missing_candles'] for i in range(1000)}, 1000)
+    assert len(bot._console_trailing_waits) == 256
+    assert len(bot._console_trailing_blocked_since) == 256
+
+
+def test_console_retry_freezes_observed_recovery_time(monkeypatch, caplog):
+    bot = SimpleNamespace(positions={'BTC': {'long': {'size': 1}}})
+    log_trailing_recovery(bot, {'BTC': ['position_fill_confirmation_pending']}, 1000)
+    with monkeypatch.context() as patch:
+        patch.setattr(logging, 'info', lambda *args: (_ for _ in ()).throw(OSError('sink')))
+        log_trailing_recovery(bot, {}, 3000)
+    with caplog.at_level(logging.INFO):
+        log_trailing_recovery(bot, {}, 10000)
+    assert 'wait=2.0s fill=2.0s' in caplog.text

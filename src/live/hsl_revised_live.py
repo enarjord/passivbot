@@ -111,6 +111,7 @@ class Owner:
         self._schedule_clock = monotonic
         self._next_sources = self._next_history = 0.
         self._ordinary = None
+        self._ordinary_started_ms = None
         self._cycle_running = False
         self._running = False
         self.bot = bot
@@ -534,9 +535,16 @@ class Owner:
         was_running, self._running = self._running, True
         bot = self.bot
         reports = []
+        from utils import utc_ms
+        from time import perf_counter
+        started_ms = int(utc_ms())
+        completed_cycle = False
+        timings = dict(authoritative=0, protection=0, ordinary_execute=0)
+        cycle_id = None
+        ordinary_elapsed_ms = None
         try:
-            from utils import utc_ms
-            bot._begin_live_event_cycle(loop_start_ms=int(utc_ms()))
+            bot._begin_live_event_cycle(loop_start_ms=started_ms)
+            cycle_id = getattr(bot, '_live_event_current_cycle_id', None)
             bot.execution_scheduled = False
             bot.state_change_detected_by_symbol = set()
             self.poll_inputs()
@@ -544,6 +552,9 @@ class Owner:
             completed_plan = self._ordinary is not None and self._ordinary.done()
             # Retrieve completed failures before any fallible account refresh.
             if completed_plan:
+                if self._ordinary_started_ms is not None:
+                    ordinary_elapsed_ms = max(0, int(utc_ms()) - self._ordinary_started_ms)
+                self._ordinary_started_ms = None
                 completed, self._ordinary = self._ordinary, None
                 try:
                     plan = completed.result()
@@ -559,18 +570,24 @@ class Owner:
                 # Service ready work before a new confirming account read can
                 # invalidate it. Protection still gets first turn; every write
                 # retains its current-input and exact raw-balance admission.
+                phase_started = perf_counter()
                 protective_work = await self.protect(deferred_reports=reports)
+                timings['protection'] += int((perf_counter() - phase_started) * 1000)
                 if self._shutdown_requested():
                     return dict(updated=False, ordinary_completed=completed_plan,
                                 ordinary_executed=False, protective_work=protective_work)
                 cancels, creates, snapshot, wave = plan
                 if self._account_matches(wave, int(utc_ms())):
                     bot._current_planning_snapshot = snapshot
+                    phase_started = perf_counter()
                     await bot.execute_order_plan_to_exchange(cancels, creates)
+                    timings['ordinary_execute'] += int((perf_counter() - phase_started) * 1000)
                 else:
                     plan = None
-            if (not await bot.refresh_protective_authoritative_state(require_balance=True)
-                    or self._shutdown_requested()):
+            phase_started = perf_counter()
+            refreshed = await bot.refresh_protective_authoritative_state(require_balance=True)
+            timings['authoritative'] = int((perf_counter() - phase_started) * 1000)
+            if not refreshed or self._shutdown_requested():
                 return dict(updated=False, ordinary_completed=completed_plan,
                             ordinary_executed=plan is not None, protective_work=protective_work)
             self.remember_position()
@@ -579,9 +596,13 @@ class Owner:
                 self.schedule_history()
                 self._next_history = now + 5.
             self.schedule_sources()
+            phase_started = perf_counter()
             protective_work = await self.protect(deferred_reports=reports) or protective_work
+            timings['protection'] += int((perf_counter() - phase_started) * 1000)
             if self._ordinary is None and not self._shutdown_requested():
+                self._ordinary_started_ms = int(utc_ms())
                 self._ordinary = asyncio.create_task(self._ordinary_plan())
+            completed_cycle = True
             return dict(updated=True, ordinary_completed=completed_plan,
                         ordinary_executed=plan is not None, protective_work=protective_work)
         except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
@@ -592,6 +613,19 @@ class Owner:
             self._cycle_running = False
             for wave in reports:
                 self.report(wave)
+            if completed_cycle:
+                try:
+                    from live.event_emitters import emit_live_cycle_completed
+                    emit_live_cycle_completed(bot, cycle_id=cycle_id, loop_start_ms=started_ms,
+                        timings_ms=timings, execution_owner='revised',
+                        ordinary_pending=self._ordinary is not None and not self._ordinary.done(),
+                        ordinary_prepare_elapsed_ms=ordinary_elapsed_ms,
+                        ordinary_pending_age_ms=(max(0, int(utc_ms()) - self._ordinary_started_ms)
+                            if self._ordinary is not None and not self._ordinary.done()
+                            and self._ordinary_started_ms is not None else None))
+                except Exception as exc:
+                    logging.debug('[event] revised cycle timing unavailable | error_type=%s',
+                                  type(exc).__name__)
 
     async def run(self):
         """Serialized writes with periodic protection while preparation is pending."""

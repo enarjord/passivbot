@@ -136,12 +136,15 @@ def test_healthy_state_has_no_extra_periodic_reminder():
 
 def test_missing_account_surface_and_record_budget_are_visible():
     from live.event_bus import format_console_event
-    rendered = format_console_event(event(data={
+    logger = Logger()
+    sink = ConsoleSummarySink(logger)
+    sink.write(event(data={
         'observation_status': 'stale', 'account_unavailable': ['positions', 'open_orders'],
         'scopes': [dict(symbol='X' * 512, pside='long', unavailable_reason='Y' * 512)],
     }))
-    assert 'account=positions,open_orders' in rendered
-    assert len('2026-09-25T00:00:00Z WARNING  [hyperliquid] ' + rendered) <= 240
+    assert any('account=positions,open_orders' in line for _, line in logger.lines)
+    assert all(len('2026-09-25T00:00:00Z WARNING  [' + 'x'*32 + '] ' + line) <= 240
+               for _, line in logger.lines)
 
 
 def test_repeat_is_admitted_exactly_at_boundary():
@@ -169,7 +172,8 @@ def test_replaced_observation_is_durable_and_does_not_fake_current_outage():
         visible = [line for level, line in logger.lines if level >= 20]
         assert len(durable.events) == 201
         assert not any('HSL stale' in line for line in visible)
-        assert any('count=100 max_sample_age=12.0s' in line for line in visible)
+        assert not any('prior observations replaced' in line for line in visible)
+        assert any('count=100 max_sample_age=12.0s' in line for _, line in logger.lines)
         # Current staleness and recovery are still immediate, irrespective of the reminder.
         pipeline.emit(event(level='warning', data=dict(observation_status='stale')))
         pipeline.emit(event())
@@ -200,3 +204,14 @@ def test_routine_refresh_summary_moves_only_console_to_debug():
         assert logger.lines[0][0] == 10
     finally:
         pipeline.close()
+
+
+def test_hsl_complete_reason_survives_console_continuation():
+    logger = Logger()
+    sink = ConsoleSummarySink(logger)
+    reason = 'current_balance_does_not_match_required_observation'
+    sink.write(event(data=dict(observation_status='stale', stale_reasons=[reason],
+        scopes=[dict(symbol='BTC/USDT:USDT', pside='long', unavailable_reason=reason)])))
+    visible = ' '.join(line for level, line in logger.lines if level >= 20)
+    assert 'unavailable_reason=' + reason in visible
+    assert 'stale_reason=' + reason in visible
