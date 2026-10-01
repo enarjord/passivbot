@@ -140,3 +140,23 @@ def test_raw_pending_current_status_gets_risk_attention():
     assert report._risk_attention_rank(group) == 40
     group["latest_data"]["observation_status"] = "stale"
     assert report._risk_attention_rank(group) == 0
+
+
+@pytest.mark.parametrize("field", ["raw", "ema", "threshold"])
+def test_partial_scope_numbers_do_not_crash_or_invent_pending_red(field):
+    captured = groups()
+    next(iter(captured.values()))["latest_data"]["scopes"][0].pop(field)
+    assert report._summarize_hsl_status(captured)["closest_to_red"] == []
+    assert report._summarize_hsl_raw_red_pending(captured)["total"] == 0
+
+
+def test_shareable_observation_whitelists_nested_count_fields():
+    summary = report._summarize_hsl_status(groups())
+    summary["observations"][0]["counts"]["private_payload"] = "do not export"
+    summary["observations"][0]["action_counts"] = {
+        "normal": 1,
+        "private_payload": "do not export",
+    }
+    shareable = report._shareable_hsl_status(summary)
+    assert "private_payload" not in json.dumps(shareable)
+    assert shareable["observations"][0]["action_counts"] == {"normal": 1}

@@ -5502,6 +5502,7 @@ def _hsl_scope_groups(group):
                 and raw is not None
                 and threshold is not None
                 and raw > threshold
+                and score is not None
                 and score <= threshold
             ),
         }
@@ -5792,7 +5793,36 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
         if hsl_status.get(key) is not None
     }
     if isinstance(hsl_status.get("observations"), list):
-        out["observations"] = hsl_status["observations"][:5]
+        out["observations"] = []
+        for item in hsl_status["observations"][:5]:
+            if not isinstance(item, dict):
+                continue
+            safe = {
+                key: item[key]
+                for key in ("bot", "observation_status")
+                if item.get(key) is not None
+            }
+            for key in (
+                "latest_ts",
+                "scope_count",
+                "omitted_scopes",
+                "raw_pending_scope_count",
+            ):
+                value = _non_negative_int(item.get(key))
+                if value is not None:
+                    safe[key] = value
+            for field, keys in (
+                ("counts", ("green", "red", "inactive", "unavailable", "estimated")),
+                ("action_counts", ("normal", "panic", "halted")),
+            ):
+                counts = item.get(field)
+                if isinstance(counts, dict):
+                    safe[field] = {
+                        key: value
+                        for key in keys
+                        if (value := _non_negative_int(counts.get(key))) is not None
+                    }
+            out["observations"].append(safe)
         out["observations_truncated"] = hsl_status.get("observations_truncated", 0)
     closest = hsl_status.get("closest_to_red")
     if isinstance(closest, list):
