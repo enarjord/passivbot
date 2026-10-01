@@ -11,6 +11,32 @@ since the latest release tag; these features may already be available when insta
   between successful full candidate replays rather than waiting for dozens of full-history batches.
   Consume at most one tuning/cooldown window per replay to bound repeated unproductive trials.
 
+- Add opt-in adaptive entry cooldown and Forager RMS unilateralness scoring for
+  sustained one-way price action. Cooldown uses additive exposure-ratio and adverse-directionality
+  weights with a floor/ceiling; RMS shares a floating-point EMA span across both consumers and
+  decays during flat prices. Move the base duration to `bot.<side>.entry_cooldown` (schema v8.5.0),
+  retaining legacy config/CLI/optimizer aliases, numeric defaults, and disabled-feature behavior.
+  New weights and optimizer dimensions remain opt-in. Metal/CUDA GPU screening supports both
+  features for EMA Anchor and Trailing Martingale, including per-coin cooldown overrides;
+  start a fresh GPU search because the parameter layout changed.
+  Replay completed-candle windows consistently in live/CPU, wait for all compared scores before
+  ranking, and scope unavailable inputs to their consumers so closes remain independent.
+  Constant clamps, including effective GPU coin overrides, need no modifier inputs. Validate optimizer bounds, coin overrides and candle
+  intervals against reachable consumers while keeping RMS history separate from shared activation.
+  Size history from eligible coin-side consumers and finalized optimizer pins; omit unused global
+  cooldown horizons for explicit resolved or empty universes while retaining held graceful-stop
+  policies. Skip dormant RMS scoring and history when each side's eligible universe fits
+  fixed slots without dynamic WEL, including aggregated GPU candles. Retry GPU EMA Anchor
+  ranking after newly eligible coins finish warming up. Keep omitted adaptive optimizer
+  bounds fixed at their configured values.
+  Defer cooldown inputs
+  that become stale during loading. Reuse live RMS replay within a completed minute, invalidating
+  results on candle repairs or gap evidence; cache-only ranking uses the latest complete
+  contiguous window within its original source-age allowance, including before an internal gap.
+  Report enabled unilateralness ranking totals from Rust diagnostics in the monitor.
+  Document all four scoring weights, configuration, benchmarks, effective cooldown inspection,
+  and unchanged partial-fill semantics.
+
 - Report every accepted Pareto member with all configured objective bests, respecting max/min
   goals and marking new bests while retaining tradeoffs that improve no extremes. GPU logs now
   identify generations, phases, scenario groups, candidate batches and history/kernel work, with
@@ -476,8 +502,8 @@ The earlier incremental entries are preserved in the
 
 ### Upgrade notes
 
-- Current configs use schema `v8.4.0`; package/release versions and config-schema versions are
-  separate. Supported v8.0.0–v8.3.0 configs migrate on load. Review migration warnings and the
+- Current configs use schema `v8.5.0`; package/release versions and config-schema versions are
+  separate. Supported v8.0.0–v8.4.0 configs migrate on load. Review migration warnings and the
   normalized result before live use; do not relabel an old config to bypass migration.
 - Auto-unstuck owns independent `bot.<side>.unstuck.ema_span_0/1` horizons. Migration derives
   missing values from the effective strategy where possible. Trailing Martingale entry spans

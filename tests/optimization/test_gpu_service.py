@@ -8,6 +8,7 @@ from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
@@ -2630,8 +2631,8 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         "strategy": {
                             "ema_anchor": {"offset": 0.25, "ema_span_0": 90.0}
                         },
+                        "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
-                            "entry_cooldown_minutes": 15.0,
                             "we_excess_allowance_pct": 0.25,
                         },
                         "wallet_exposure_limit": 0.4,
@@ -2673,8 +2674,10 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
     assert matrix[1, 13:19].tolist() == pytest.approx(
         [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
     )
-    assert np.isnan(matrix[1, 19:-2]).all()
-    assert matrix[1, -2:].tolist() == pytest.approx([17.25, 211.75])
+    start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
+    assert np.isnan(matrix[1, 19:start]).all()
+    assert matrix[1, start : start + 2].tolist() == pytest.approx([17.25, 211.75])
+    assert np.isnan(matrix[1, start + 2 :]).all()
     assert contract["coins"] == ["BTC", "ETH"]
     assert contract["values"][0] == [None] * EMA_ANCHOR_COIN_OVERRIDE_COLS
     assert contract["exact_overrides"] == [
@@ -2879,7 +2882,7 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
                     },
                     "short": {
                         "strategy": {"ema_anchor": {"offset": 0.5}},
-                        "risk": {"entry_cooldown_minutes": 30.0},
+                        "entry_cooldown": {"base_duration_minutes": 30.0},
                     },
                 }
             }
@@ -3167,8 +3170,8 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                                 },
                             }
                         },
+                        "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
-                            "entry_cooldown_minutes": 15.0,
                             "we_excess_allowance_pct": 0.25,
                             "position_exposure_enforcer_enabled": True,
                             "position_exposure_enforcer_threshold": 0.8,

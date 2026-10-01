@@ -207,7 +207,7 @@ The supported slice is intentionally narrow:
   an effective assignment for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of single- and multi-coin EMA-anchor and
   trailing-martingale runs: `live.forced_mode_<side>: normal`, active-strategy parameters,
-  `risk.entry_cooldown_minutes`, and explicit
+  `entry_cooldown.base_duration_minutes`, and explicit
   `wallet_exposure_limit`, `risk.we_excess_allowance_pct`, and all six `unstuck` leaves are
   supported. Static single-coin values are applied after each optimizer candidate, preserving
   exact Rust's override precedence. Checkpoint identity records the resolved exact override values
@@ -509,6 +509,14 @@ in their execution identity. For a fill-sensitivity suite, set `backtest.suite_e
   {"label": "buffer_0_0005", "overrides": {"backtest.limit_order_fill_buffer_pct": 0.0005}}
 ]
 ```
+
+GPU screening supports [adaptive entry cooldown and RMS unilateralness](adaptive_entry_cooldown.md)
+for EMA Anchor and Trailing Martingale, on Metal and CUDA, including single-coin,
+directional multi-coin and fused long/short runs. Cooldown floors, ceilings and additive
+weights accept optimizer bounds and per-coin overrides; the shared fractional RMS span and
+Forager scoring weight accept optimizer bounds. Active RMS requires one-minute candles.
+Defaults leave the features disabled. Exact Rust validation remains authoritative for the
+float32 proxy. Start a fresh GPU search after this layout revision.
 
 #### Deliberate current limitations
 
