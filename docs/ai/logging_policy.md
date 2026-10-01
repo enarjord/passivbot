@@ -159,21 +159,44 @@ can hide unrelated events. Startup is assessed separately because readiness mile
 
 ## Optimizer Console
 
-Pareto changes print an initial summary, then an event-driven aggregate at most once per
-minute, plus pending changes on the final explicit flush. Include exact evaluation count,
-front size, feasible members, additions/removals, constraint range, and the first two configured
-objective ranges. Historical front reconstruction emits no partial summaries and is excluded
-from new-change counts; resumed updates use the restored evaluation baseline. Per-candidate
-objectives, full ranges, and duplicate rejection detail are DEBUG.
+Every accepted Pareto member prints immediately, including tradeoffs that improve none of the
+objective extremes. Include exact evaluation count, front size, feasible members, additions/removals,
+constraint range, and the best value of every configured objective using its max/min goal. Split
+metrics into bounded, individually timestamped records with evaluation count and goal; never hide
+configured objectives behind a `+N metrics` abbreviation. `*` marks a new best relative to the
+preceding update in that scope, including its initial baseline. These are independent metric bests,
+which may come from different configs. Prefer the feasible front; explicitly label an infeasible
+front until feasibility is found. Historical reconstruction emits no updates and primes the restored
+best-value baseline; resumed updates use the restored evaluation count. Per-candidate objectives,
+full ranges, and duplicate rejection detail are DEBUG. Explicit flushes emit no additional updates.
 Seed clamps print one warning per collected context with counts and at most three key samples;
 original values, bounds, adjusted values and source details are DEBUG.
 
-GPU temporal replay prints scenario/pass/stage context at start and correlates compact updates
-and completion with a replay ID. INFO progress is at most once per minute; intermediate updates
-are DEBUG. Percentage, average bars/second and ETA describe that replay only, not an entire suite
-or generation. Exact seed validation reports minute-spaced completed/in-flight/queued counts
+GPU logs identify generation and work phase: seed proxy screening, seed exact validation, evolution
+proxy screening/full evaluation, exact-worker waits, generation completion, and completion. An
+event-driven minute snapshot separates evolution proxy candidates completed in finished evaluations
+in this invocation, proxy-screened and exact seeds, evolution exact budget/completions/pending,
+current Pareto size/feasibility, accepted
+members in this invocation, time since its last Pareto change (unknown after resume until a new
+change), and run elapsed time. Phase transitions are immediate. Full optimizer options are DEBUG.
+
+Temporal replay prints scenario-group/stage context at start and correlates compact updates and
+completion with a replay ID. A replay evaluates one candidate batch across its historical bars
+(candle time steps); these bars and bars/second are batch-wide time steps, not candidate evaluations.
+History chunks bound the bars handled by each GPU kernel dispatch. Start logs show chunk size and
+updates/completion show actual kernel dispatch counts. Scenario-group progress separately reports
+completed candidate batches and candidate-scenario evaluations; with adaptive batching it does not
+invent a total batch count. Group context identifies scenarios sharing a compatible evaluation pass.
+Replay and group INFO progress are at most once per minute; intermediate replay updates are DEBUG.
+Use readable durations and explicitly scoped estimates: `eta_batch`, `eta_group`, and `eta_seed`;
+none is a whole-run estimate. Exact seed validation reports minute-spaced completed/in-flight/queued counts
 while waiting, and immediate start/completion. Its ETA uses only completions in the current run;
-without such evidence it is unknown. Presentation state is transient and never affects selection,
+without such evidence it is unknown. Auto-tune logs distinguish requested/effective batch limits,
+starting batch/source, trial/retained/accepted width, throughput evidence and reason. Proxy drift
+warnings show condition, action, sample evidence and thresholds on transition and at most once per
+minute for unchanged conditions; numeric churn does not create new warning signatures. Recovery
+and safety halts are immediate, with full diagnostic detail at DEBUG and unchanged halt decisions.
+Presentation state is transient and never affects selection,
 result persistence, checkpoints, interruption, or worker failure policy.
 
 ## Fallback Visibility

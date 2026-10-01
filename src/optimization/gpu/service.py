@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import time
+from optimization.progress import duration, log_tokens, publish_progress
+from optimization.gpu.replay_progress import replay_scope
 
 import numpy as np
 
@@ -155,7 +157,7 @@ _GPU_PROFILE_RUNNER_TIMING_KEYS = (
     "metric_reduction",
 )
 
-_GPU_DISPATCH_PROGRESS_INTERVAL_SECONDS = 30.0
+_GPU_DISPATCH_PROGRESS_INTERVAL_SECONDS = 60.0
 
 
 def _new_gpu_dispatch_progress(
@@ -211,17 +213,14 @@ def _update_gpu_dispatch_progress(
         if progress["adaptive"]
         else f"{completed_chunks}/{progress['total_chunks']}"
     )
-    logging.info(
-        "GPU proxy dispatch progress | strategy=%s chunks=%s "
-        "candidates=%d/%d elapsed=%.1fs eta=%.1fs",
-        strategy,
-        chunk_label,
-        completed_candidates,
-        int(progress["candidate_count"]),
-        elapsed,
-        remaining / max(rate, 1.0e-12),
-    )
-    progress["last_log"] = now
+    delivered = log_tokens(f"GPU scenario-group progress | {replay_scope()} |", [
+        f"strategy={strategy}", f"batches_done={chunk_label}",
+        f"scenario_evals={completed_candidates}/{int(progress['candidate_count'])}",
+        f"elapsed={duration(elapsed)}", f"eta_group={duration(remaining / max(rate, 1.0e-12))}",
+    ])
+    publish_progress()
+    if delivered:
+        progress["last_log"] = now
 
 
 def _gpu_profile_features(proxy, runners) -> dict[str, bool]:

@@ -18,6 +18,7 @@ import platform
 import statistics
 import tempfile
 import time
+from optimization.progress import log_tokens
 
 WINDOW = 24
 MIN_SECONDS = 30.0
@@ -136,15 +137,19 @@ class BatchController:
             # Prefer a smaller allocation on a plateau; larger ones must pay off.
             accepted = rate >= old_rate * (0.98 if self.width < old_width else 1.05)
             if accepted:
-                logging.info(
-                    "GPU auto-tune accepted | batch=%d candidates/s=%.3f", self.width, rate
-                )
+                log_tokens("GPU auto-tune accepted |", [
+                    f"batch={self.width}", f"candidates/s={rate:.3f}",
+                    f"previous_candidates/s={old_rate:.3f}",
+                    "reason=smaller_plateau" if self.width < old_width else "reason=throughput_gain",
+                ])
                 self.save(self.width, rate, evidence_seconds)
                 self.cooldown = 1
             else:
-                logging.info(
-                    "GPU auto-tune retained | batch=%d trial_batch=%d", old_width, self.width
-                )
+                log_tokens("GPU auto-tune retained |", [
+                    f"batch={old_width}", f"trial_batch={self.width}",
+                    f"candidates/s={old_rate:.3f}", f"trial_candidates/s={rate:.3f}",
+                    "reason=insufficient_gain",
+                ])
                 self.width = old_width
                 self.direction *= -1
                 self.cooldown = 3
@@ -165,12 +170,10 @@ class BatchController:
             return
         self.baseline = (self.width, rate)
         self.width = trial
-        logging.info(
-            "GPU auto-tune trial | batch=%d previous=%d rolling_candidates/s=%.3f",
-            trial,
-            self.baseline[0],
-            rate,
-        )
+        log_tokens("GPU auto-tune trial |", [
+            f"batch={trial}", f"previous={self.baseline[0]}",
+            f"rolling_candidates/s={rate:.3f}", "reason=throughput_probe",
+        ])
 
 
 class ProxyBatchTuner:
