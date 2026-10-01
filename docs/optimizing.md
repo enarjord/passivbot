@@ -978,7 +978,8 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   `validate_per_generation` so each generation requests proxy-front safety evidence. A partial
   final validation batch scales its reserved probe count down proportionally.
 - `exact_workers` defaults to `null`; omitted, `null`, and `"auto"` values select initial
-  hardware/RAM-aware sizing. It uses physical cores, CPU affinity and cgroup-v2 CPU/memory limits
+  hardware/RAM-aware sizing. It counts physical cores within CPU affinity (including SMT siblings),
+  and uses cgroup-v2 CPU/memory limits
   when available, reserves one core for GPU orchestration, and budgets 60% of available RAM using
   a conservative worker estimate from process RSS before GPU proxy allocation plus twice the
   largest prepared candle view
@@ -995,7 +996,9 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   can instead provide at least four timings with a 30-second median duration and a 120-second
   active validation window. There is no minimum generation count; the first eligible window
   excludes cold worker startup. Completed worker intervals supply a bounded rolling throughput
-  estimate, excluding GPU screening pauses and collection delays, with median worker/queue times.
+  estimate with median worker/queue times. Queue backpressure intervals, through the next
+  admission's GPU pass, also count so smaller queues cannot hide the CPU idle gaps they cause.
+  Unrelated GPU pauses and collection delays remain excluded.
   Larger limits require a 5% gain; smaller limits are accepted within 2% of
   previous throughput. Acceptance waits one evidence window; rejection waits three.
   CPU collectors only gather timings. Changes happen on the main thread between exact seed
@@ -1004,7 +1007,11 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   An unfinished seed-stage trial
   returns to its preceding limit before evolution so it cannot block GPU batch tuning.
   GPU batch and queue trials are coordinated; queue evidence resets when GPU batch sizing changes
-  or a batch trial resolves, including acceptance at the same width. Admission epochs exclude
+  or a batch trial resolves, including acceptance at the same width. Unfinished GPU trials return
+  to the preceding measured width when their workload class changes or seed screening ends,
+  so a one-shot seed workload cannot block CPU queue tuning. Trials for the same active class
+  can still gather evidence across consecutive replay calls.
+  Admission epochs exclude
   jobs queued before a queue change or GPU trial from subsequent timing evidence.
   Population, candidate order,
   proxy-front/probe allocation, drift gates and exact results retain their existing contracts.

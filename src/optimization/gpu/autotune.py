@@ -312,6 +312,21 @@ class ProxyBatchTuner(CalibrationCache):
             return free >= max(256 * 1024**2, total * 0.2)
         return torch.mps.driver_allocated_memory() < torch.mps.recommended_max_memory() * 0.7
 
+    def retire_trials(self, *, except_key=None):
+        """Return inactive workload trials to measured widths without caching them."""
+        for key, controller in self.controllers.items():
+            if key == except_key or controller.baseline is None:
+                continue
+            controller.width = controller.baseline[0]
+            controller.baseline = None
+            controller.samples.clear()
+            controller.seconds = 0.0
+            controller.cooldown = max(controller.cooldown, 1)
+            self.revision += 1
+            log_tokens("GPU auto-tune retained |", [
+                f"batch={controller.width}", "reason=workload_phase_end",
+            ])
+
     def controller(self, ceiling, demand, end_step):
         ceiling = min(ceiling, demand)
         key = _digest(
@@ -324,6 +339,9 @@ class ProxyBatchTuner(CalibrationCache):
                 self.proxy.max_dispatch_candidate_bars,
             ]
         )
+        # Trials can span repeated calls of the same class, but a different
+        # demand/history class cannot inherit a gate from an inactive workload.
+        self.retire_trials(except_key=key)
         if key in self.controllers:
             self.controllers.move_to_end(key)
             return self.controllers[key]

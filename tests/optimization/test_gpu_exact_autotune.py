@@ -411,3 +411,137 @@ def test_accepted_temporal_batch_trial_invalidates_collected_cpu_evidence(tmp_pa
     item.update(0)
     assert not item.warmed
     batches.close()
+
+
+def test_one_shot_seed_batch_trial_retires_before_exact_queue_evidence(tmp_path):
+    from optimization.gpu.autotune import ProxyBatchTuner, proxy_batches, record_replay_chunk
+    proxy = SimpleNamespace(checkpoint_contract={}, needed_metrics=[],
+                            max_dispatch_candidate_bars=1000000)
+    proxy.batch_tuner = ProxyBatchTuner(
+        proxy, mode="refresh", hardware={"device": "test"}, context={}, cache_dir=tmp_path,
+    )
+    proxy.batch_tuner._headroom = lambda: True
+    item = controller(tmp_path, proxies=[proxy])
+    batches = proxy_batches(proxy, list(range(768)), 512)
+    next(batches)
+    for _ in range(128):
+        record_replay_chunk(512, 4096, 2538000, 2)
+    next(batches)
+    # Seed demand ends before an expensive trial has enough evidence.
+    record_replay_chunk(256, 4096, 2538000, 2)
+    with pytest.raises(StopIteration):
+        next(batches)
+    seed = next(iter(proxy.batch_tuner.controllers.values()))
+    assert seed.baseline is not None
+    item.finish_seed_screen(0)
+    assert seed.width == 512 and seed.baseline is None and seed.cooldown == 1
+    assert not item.proxy_state()[1]
+    assert proxy.batch_tuner.revision == 2  # proposal and retirement invalidate evidence.
+    item.update(0)
+    window(item)
+    window(item)
+    assert item.limit == 24 and item.baseline is not None  # Seed-only class cannot block.
+    item.finish_bootstrap(0)
+    evolution = proxy_batches(proxy, list(range(1024)), 512)
+    next(evolution)
+    assert len(proxy.batch_tuner.controllers) == 2
+    assert not item.proxy_state()[1]
+    evolution.close()
+
+
+def test_inactive_class_trial_rolls_back_without_caching_unproven_width(tmp_path):
+    from optimization.gpu.autotune import ProxyBatchTuner, proxy_batches, record_replay_chunk
+    proxy = SimpleNamespace(checkpoint_contract={}, needed_metrics=[],
+                            max_dispatch_candidate_bars=1000000)
+    proxy.batch_tuner = ProxyBatchTuner(
+        proxy, mode="refresh", hardware={"device": "test"}, context={}, cache_dir=tmp_path,
+    )
+    proxy.batch_tuner._headroom = lambda: True
+    batches = proxy_batches(proxy, list(range(1024)), 512)
+    next(batches)
+    for _ in range(128):
+        record_replay_chunk(512, 4096, 2538000, 2)
+    next(batches)
+    batch = next(iter(proxy.batch_tuner.controllers.values()))
+    assert batch.width == 256 and batch.baseline is not None
+    batches.close()
+    assert batch.baseline is not None  # Same class can continue on its next call.
+    assert proxy.batch_tuner.controller(512, 1024, None) is batch
+    assert batch.baseline is not None
+    proxy.batch_tuner.controller(512, 2048, None)
+    assert batch.width == 512 and batch.baseline is None
+    cached = json.loads(next(tmp_path.glob('*.json')).read_text())
+    assert cached['batch_size'] == 512
+
+
+@pytest.mark.parametrize('long_work', [False, True])
+def test_shrink_trial_counts_queue_caused_admission_idle_gaps(tmp_path, long_work):
+    item = controller(tmp_path)
+    item.warmed = True
+    item.direction = -1
+    window(item)
+    assert item.limit == 8 and item.baseline[0] == 16
+    if long_work:
+        # Establish an expensive baseline with the same 4-worker service rate.
+        item.baseline = (16, 4 / 120)
+        for _ in range(4):
+            item.record(120, 0, 10120, 10240, epoch=item.epoch,
+                        admission_stall=(10000, 10120))
+        item.update(0)
+    else:
+        # Same service time as the baseline, but each admission wave now needs
+        # another GPU pass after the shallow queue has drained.
+        for index in range(60):
+            if index % 8 == 0:
+                stall = (item.tick[0], item.tick[0] + 100)
+                item.tick[0] += 100
+            start = item.tick[0]
+            item.tick[0] += 2
+            item.record(2, 0, start, item.tick[0], epoch=item.epoch,
+                        admission_stall=stall)
+            item.update(0)
+    assert item.baseline is None and item.limit == 16 and item.cooldown == 3
+    assert item.cache.read(item.key, 'max_pending_exact', 8, 32) == 16
+
+
+def test_overlapping_admission_stalls_count_once_and_do_not_manufacture_evidence(tmp_path):
+    item = controller(tmp_path)
+    for _ in range(4):
+        item.record(30, 0, 10000, 10030, epoch=item.epoch,
+                    admission_stall=(0, 10000))
+    item.update(0)
+    assert not item.warmed  # Large idle gap cannot replace 120 active seconds.
+    item.reset(0)
+    item.warmed = True
+    for _ in range(4):
+        item.record(120, 0, 10120, 10240, epoch=item.epoch,
+                    admission_stall=(10000, 10120))
+    item.update(0)
+    assert item.baseline[1] == pytest.approx(4 / 240)  # Not four times the stall.
+
+
+@pytest.mark.parametrize('allowed,expected', [([0, 1, 2, 3], 2), ([0, 2, 4, 6], 4)])
+def test_affinity_counts_allowed_package_core_pairs(tmp_path, monkeypatch, allowed, expected):
+    root = tmp_path / 'cpu'
+    for cpu in range(8):
+        topology = root / f'cpu{cpu}/topology'
+        topology.mkdir(parents=True)
+        (topology / 'physical_package_id').write_text('0')
+        (topology / 'core_id').write_text(str(cpu // 2))
+    assert tune._affinity_physical_cores(allowed, 8, 16, root) == expected
+    monkeypatch.setattr(tune.psutil, 'cpu_count', lambda logical=True: 16 if logical else 8)
+    monkeypatch.setattr(tune.psutil, 'Process', lambda: SimpleNamespace(
+        cpu_affinity=lambda: allowed, memory_info=lambda: SimpleNamespace(rss=0)))
+    monkeypatch.setattr(tune.psutil, 'virtual_memory', lambda: SimpleNamespace(available=1 << 40))
+    monkeypatch.setattr(tune, '_cgroup_limits', lambda: (None, None))
+    original = tune._affinity_physical_cores
+    monkeypatch.setattr(tune, '_affinity_physical_cores',
+                        lambda ids, physical, logical: original(ids, physical, logical, root))
+    assert tune.resource_snapshot()['cores'] == expected
+    assert tune.initial_workers(None, 4, SimpleNamespace(), mode='auto') == max(1, expected - 1)
+
+
+def test_affinity_missing_topology_uses_conservative_smt_ratio(tmp_path):
+    assert tune._affinity_physical_cores([0, 1, 2, 3], 8, 16, tmp_path) == 2
+    assert tune._affinity_physical_cores([0, 1, 2, 3], 8, 8, tmp_path) == 4
+    assert tune._affinity_physical_cores([0], 8, 16, tmp_path) == 1

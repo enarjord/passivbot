@@ -146,6 +146,7 @@ def _submit_gpu_exact_validation(
     *,
     profile: bool = False,
     admission_epoch: int | None = None,
+    admission_stalled_since: float | None = None,
 ):
     """Refuse new exact CPU work once the GPU interrupt latch is set."""
 
@@ -153,12 +154,14 @@ def _submit_gpu_exact_validation(
     if profile:
         submitted_at = time.perf_counter()
         return pool.apply_async(
-            _profiled_gpu_exact_worker, (vector, submitted_at, admission_epoch)
+            _profiled_gpu_exact_worker,
+            (vector, submitted_at, admission_epoch, admission_stalled_since)
         )
     return pool.apply_async(_evaluate_pymoo_worker_from_globals, (vector,))
 
 
-def _profiled_gpu_exact_worker(vector, submitted_at, admission_epoch=None):
+def _profiled_gpu_exact_worker(vector, submitted_at, admission_epoch=None,
+                               admission_stalled_since=None):
     """Attach opt-in worker time without changing persisted exact evidence."""
 
     started = time.perf_counter()
@@ -173,6 +176,10 @@ def _profiled_gpu_exact_worker(vector, submitted_at, admission_epoch=None):
         payload["__gpu_profile_worker_started__"] = started
         payload["__gpu_profile_worker_finished__"] = finished
         payload["__gpu_profile_admission_epoch__"] = admission_epoch
+        payload["__gpu_profile_admission_stall__"] = (
+            (admission_stalled_since, submitted_at)
+            if admission_stalled_since is not None else None
+        )
     return payload
 
 
@@ -5785,6 +5792,8 @@ def run_backend(
             return
 
         prepare_seed_proxy_screen()
+        if queue_controller is not None:
+            queue_controller.finish_seed_screen(generation)
         progress.transition("seed_exact")
 
         # Preserve the normalized seed pool and proxy-screening result before
@@ -5852,9 +5861,11 @@ def run_backend(
                             "__gpu_profile_worker_seconds__", "__gpu_profile_queue_wait_seconds__",
                             "__gpu_profile_worker_started__", "__gpu_profile_worker_finished__",
                         )]
+                        admission_stall = payload.pop("__gpu_profile_admission_stall__", None)
                         if queue_controller is not None:
                             queue_controller.record(
                                 *timing, epoch=payload.pop("__gpu_profile_admission_epoch__", None),
+                                admission_stall=admission_stall,
                             )
                         else:
                             payload.pop("__gpu_profile_admission_epoch__", None)
@@ -6062,10 +6073,15 @@ def run_backend(
             if exact_timing_enabled and isinstance(payload, dict):
                 worker_started = float(payload.pop("__gpu_profile_worker_started__", 0.0))
                 worker_finished = float(payload.pop("__gpu_profile_worker_finished__", 0.0))
+            admission_stall = (
+                payload.pop("__gpu_profile_admission_stall__", None)
+                if exact_timing_enabled and isinstance(payload, dict) else None
+            )
             if queue_controller is not None:
                 queue_controller.record(
                     worker_seconds, queue_wait_seconds, worker_started, worker_finished,
                     epoch=payload.pop("__gpu_profile_admission_epoch__", None),
+                    admission_stall=admission_stall,
                 )
             elif exact_timing_enabled and isinstance(payload, dict):
                 payload.pop("__gpu_profile_admission_epoch__", None)
@@ -6155,6 +6171,7 @@ def run_backend(
         if queue_controller is not None:
             queue_controller.finish_bootstrap(generation)
             max_pending = queue_controller.limit
+        admission_stall = None
         while exact_done < budget:
             interrupt_check()
             consume_ready()
@@ -6170,6 +6187,10 @@ def run_backend(
                 budget - exact_done - len(pending),
             )
             if max_pending - len(pending) < validation_count:
+                if queue_controller is not None and (
+                    admission_stall is None or admission_stall[0] != queue_controller.epoch
+                ):
+                    admission_stall = (queue_controller.epoch, time.perf_counter())
                 progress.transition("exact_wait")
                 consume_ready(wait_for_one=True)
                 continue
@@ -6347,6 +6368,11 @@ def run_backend(
                     interrupt_check,
                     profile=exact_timing_enabled,
                     admission_epoch=queue_controller.epoch if queue_controller else None,
+                    admission_stalled_since=(
+                        admission_stall[1] if queue_controller is not None
+                        and admission_stall is not None
+                        and admission_stall[0] == queue_controller.epoch else None
+                    ),
                 )
                 pending[result] = (
                     vector,
@@ -6360,6 +6386,7 @@ def run_backend(
                 submitted_hashes.add(digest)
                 submitted_this_generation += 1
 
+            admission_stall = None
             novelty_stall_generations = _update_novelty_stall(
                 novelty_stall_generations,
                 submitted=submitted_this_generation,

@@ -57,12 +57,32 @@ def _cgroup_limits(root=Path("/sys/fs/cgroup"), membership=Path("/proc/self/cgro
     return cpus, memory
 
 
+def _affinity_physical_cores(allowed, physical, logical, root=Path("/sys/devices/system/cpu")):
+    """Count package/core pairs within Linux affinity, with a conservative fallback."""
+    try:
+        pairs = {
+            (
+                (root / f"cpu{cpu}/topology/physical_package_id").read_text().strip(),
+                (root / f"cpu{cpu}/topology/core_id").read_text().strip(),
+            )
+            for cpu in allowed
+        }
+        if pairs and all(package and core for package, core in pairs):
+            return min(physical, len(pairs))
+    except OSError:
+        pass  # Optional topology; do not assume each allowed SMT sibling is a core.
+    return max(1, min(physical, len(allowed) * physical // logical))
+
+
 def resource_snapshot():
     process = psutil.Process()
     physical = psutil.cpu_count(logical=False) or psutil.cpu_count() or 1
     logical = psutil.cpu_count() or 1
     try:
-        logical = min(logical, len(process.cpu_affinity()))
+        allowed = process.cpu_affinity()
+        if allowed:
+            physical = _affinity_physical_cores(allowed, physical, logical)
+            logical = min(logical, len(allowed))
     except (AttributeError, OSError, psutil.Error):
         pass  # macOS has no CPU affinity API.
     quota, memory = _cgroup_limits()
@@ -160,7 +180,7 @@ class ExactQueueController:
         self.cache = CalibrationCache(cache_dir)
         self.key = _digest(
             dict(
-                kind="exact_queue_v3",
+                kind="exact_queue_v4",
                 workers=workers,
                 validations=validations,
                 hardware=(
@@ -224,6 +244,17 @@ class ExactQueueController:
         self.generation = generation
         self.revision = self.proxy_state()[0]
 
+    def finish_seed_screen(self, generation):
+        # Seed-only GPU classes may never be visited by evolution. Retire their
+        # unfinished trials before seed CPU admission can gather queue evidence.
+        for proxy in self.proxies:
+            tuner = getattr(proxy, "batch_tuner", None)
+            if tuner is not None:
+                retire = getattr(tuner, "retire_trials", None)
+                if retire is not None:
+                    retire()
+        self.update(generation)
+
     def finish_bootstrap(self, generation):
         if self.baseline is not None:
             old_limit, _ = self.baseline
@@ -237,10 +268,12 @@ class ExactQueueController:
             )
         self.reset(generation)
 
-    def record(self, worker_seconds, queue_seconds, started, finished, *, epoch):
+    def record(self, worker_seconds, queue_seconds, started, finished, *, epoch,
+               admission_stall=None):
         # The collector only appends timing. The main thread consumes it after
         # joining the collector, before admission of the next generation.
-        self.collected.append((worker_seconds, queue_seconds, started, finished, epoch))
+        self.collected.append((worker_seconds, queue_seconds, started, finished, epoch,
+                               admission_stall))
 
     def update(self, generation):
         revision, proxy_trial = self.proxy_state()
@@ -248,7 +281,7 @@ class ExactQueueController:
             self.reset(generation, invalidate=True)
             return
         while self.collected:
-            worker_seconds, queue_seconds, started, finished, epoch = self.collected.popleft()
+            worker_seconds, queue_seconds, started, finished, epoch, stall = self.collected.popleft()
             if epoch != self.epoch:
                 continue  # Work admitted before the current queue/batch trial is not evidence.
             if not (
@@ -261,14 +294,23 @@ class ExactQueueController:
                 and finished > started
             ):
                 continue
-            self.samples.append((worker_seconds, queue_seconds, started, finished))
+            if stall is not None and not (
+                len(stall) == 2 and all(math.isfinite(value) for value in stall)
+                and stall[0] <= stall[1] <= started
+            ):
+                continue
+            self.samples.append((worker_seconds, queue_seconds, started, finished, stall))
             self.completed += 1
             self.worker_seconds += worker_seconds
-        # Union completed worker intervals: GPU screening pauses and delayed
-        # submission-order collection are not CPU validation throughput evidence.
+        # Include admission stalls caused by queue backpressure, through the next
+        # submission (including its GPU pass). Otherwise a shallow queue can hide
+        # the CPU idle gaps it causes. Unrelated GPU pauses/collector delays stay
+        # excluded. Duplicate/overlapping stalls in a submission wave count once.
+        active = [(item[2], item[3]) for item in self.samples]
+        intervals = active + [item[4] for item in self.samples if item[4] is not None]
         elapsed = 0.0
         end = float("-inf")
-        for start, stop in sorted((item[2], item[3]) for item in self.samples):
+        for start, stop in sorted(intervals):
             elapsed += max(0.0, stop - max(start, end))
             end = max(end, stop)
         if not self.samples:
@@ -282,10 +324,15 @@ class ExactQueueController:
             len(self.samples) >= WINDOW
             and self.worker_seconds >= MIN_SECONDS * self.workers
         )
+        active_seconds = 0.0
+        end = float("-inf")
+        for start, stop in sorted(active):
+            active_seconds += max(0.0, stop - max(start, end))
+            end = max(end, stop)
         long_work = (
             len(self.samples) >= LONG_WINDOW_SAMPLES
             and work >= MIN_SECONDS
-            and elapsed >= LONG_WINDOW_SECONDS
+            and active_seconds >= LONG_WINDOW_SECONDS
         )
         if not (regular or long_work):
             return

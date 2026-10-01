@@ -8,9 +8,10 @@ since the latest release tag; these features may already be available when insta
 
 - GPU optimization now defaults to hardware/RAM-aware initial exact-validation worker sizing and
   continuous exact-queue tuning for omitted, null, or `"auto"` worker/queue settings. Queue trials
-  use bounded CPU-active evidence windows, adapt sooner for expensive validations, coordinate with
-  GPU batch tuning, and reuse compatible local measurements. Worker sizing includes lazy suite
-  views. Positive numbers remain fixed; explicit zero retains legacy sizing.
+  use bounded evidence windows including queue-induced admission stalls, adapt sooner for expensive
+  validations, coordinate with GPU batch tuning, and reuse compatible local measurements. Worker
+  sizing includes lazy suite views and physical cores within CPU affinity; unfinished one-shot GPU
+  trials cannot block queue calibration. Positive numbers remain fixed; explicit zero retains legacy sizing.
 
 - Live console health now distinguishes active trailing input waits, fill freshness, recent cycle/write activity, and pending revised preparation. Recovery records show observed blocker phases; candle cache notices identify their warmup scope. HSL reasons remain readable, shared candle receive failures are coalesced with durable per-symbol details, and routine KuCoin history re-fetches stay at DEBUG.
 - Command log archives use unique run suffixes so simultaneous starts and long shared command prefixes cannot select the same file. Live log prefixes include the configured user.
