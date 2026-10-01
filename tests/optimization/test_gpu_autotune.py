@@ -263,13 +263,13 @@ def test_adaptive_progress_reports_actual_chunks(monkeypatch, caplog):
     assert "batches_done=2 scenario_evals=16/16" in caplog.records[1].message
 
 
-def test_corrupt_cache_is_repaired_and_cached_reduction_needs_no_growth_headroom(tmp_path):
+def test_corrupt_cache_is_repaired_and_low_headroom_caps_cached_width(tmp_path):
     item = tuner(tmp_path)
     controller = item.controller(512, 1024, None)
     controller.save(256, 100, 60)
     constrained = tuner(tmp_path)
     constrained._headroom = lambda: False
-    assert constrained.controller(512, 1024, None).width == 256
+    assert constrained.controller(512, 1024, None).width == 128
     next(tmp_path.glob("*.json")).write_text("broken")
     repair = tuner(tmp_path).controller(512, 1024, None)
     repair.save(64, 80, 60)
@@ -512,3 +512,40 @@ def test_real_temporal_evidence_changes_width_without_changing_results(tmp_path,
         assert left.keys() == right.keys()
         for key in left:
             assert left[key] == pytest.approx(right[key], rel=1e-12, abs=1e-12, nan_ok=True), key
+
+
+@pytest.mark.parametrize("device", ["cuda", "mps"])
+@pytest.mark.parametrize("mode", ["auto", "refresh"])
+def test_low_memory_start_is_bounded_and_cache_cannot_bypass_headroom(tmp_path, device, mode):
+    item = tuner(tmp_path)
+    item.hardware["device"] = device
+    item.controller(512, 1024, None).save(256, 100, 60)
+    pressure = [True]
+
+    def constrained_tuner(mode="auto"):
+        result = tuner(tmp_path, mode=mode)
+        result.hardware["device"] = device
+        del result._headroom  # Exercise the real backend-specific memory gate.
+        result.proxy._torch = SimpleNamespace(
+            cuda=SimpleNamespace(mem_get_info=lambda: (
+                1 if pressure[0] else 2 * 1024**3, 4 * 1024**3,
+            )),
+            mps=SimpleNamespace(
+                driver_allocated_memory=lambda: 80 if pressure[0] else 10,
+                recommended_max_memory=lambda: 100,
+            ),
+        )
+        return result
+
+    constrained = constrained_tuner(mode)
+    assert constrained.controller(512, 1024, None).width == 128
+    assert constrained.controller(64, 1024, None).width == 64
+    assert constrained.controller(512, 32, None).width == 32
+    # New production evidence can still grow when backend headroom recovers.
+    pressure[0] = False
+    controller = constrained.controller(512, 1024, None)
+    window(controller)
+    assert controller.width == 256
+    item.controller(512, 1024, None).save(64, 100, 60)
+    pressure[0] = True
+    assert constrained_tuner().controller(512, 1024, None).width == 64

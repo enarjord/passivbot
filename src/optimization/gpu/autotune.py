@@ -249,8 +249,10 @@ class ProxyBatchTuner:
             self.controllers.move_to_end(key)
             return self.controllers[key]
         # Bound the initial allocation. The existing dispatch plan is always the cap.
-        initial = ceiling
-        source = "dispatch_plan"
+        # The work envelope does not bound batch-scaled replay/output buffers.
+        # Retain the established smaller start when device headroom is low.
+        initial = ceiling if self._headroom() else min(128, ceiling)
+        source = "dispatch_plan" if initial == ceiling else "memory_headroom"
         path = self.cache_dir / (key + ".json")
         if self.mode != "refresh":
             try:
@@ -264,7 +266,7 @@ class ProxyBatchTuner:
                     or record["candidates_per_second"] <= 0
                 ):
                     raise ValueError("invalid batch calibration")
-                if width <= initial or self._headroom():
+                if width <= initial:
                     initial = width
                     source = "cache"
             except FileNotFoundError:

@@ -837,8 +837,10 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   `max_dispatch_candidate_bars` also accept `"auto"` as an alias for their existing `null`
   defaults; they do not continuously change in this first implementation.
   There is no separate calibration run. Automatic batches start at the existing resource-bounded
-  dispatch-plan width, or a compatible cached width. This preserves established throughput instead
-  of imposing a small initial batch. Numeric batch sizes remain fixed.
+  dispatch-plan width, or a compatible cached width, when device memory headroom permits it.
+  Low headroom retains a start of at most 128 candidates, and cached widths cannot bypass that
+  startup bound. This preserves established throughput on unconstrained devices. Numeric batch
+  sizes remain fixed.
   Long temporal replays supply a bounded rolling window of completed dispatch timings, normalized
   by processed history length. Decisions require 24 samples and at least 30 seconds of measured
   work; cold first dispatches and partial history chunks are excluded. Evidence is committed only
