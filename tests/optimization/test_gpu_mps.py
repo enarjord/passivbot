@@ -15,6 +15,7 @@ GPU_AVAILABLE = torch.backends.mps.is_available() or torch.cuda.is_available()
 
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
@@ -24,6 +25,7 @@ from optimization.gpu.model import (
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
@@ -196,12 +198,12 @@ def test_tm_parameter_packing_preserves_positive_underflow_mode_per_side():
     assert packed[0, width + entry_column] == 0.0
 
 
-@pytest.mark.parametrize("side_width,strategy_start", [(37, 1), (54, 0)])
+@pytest.mark.parametrize("side_width,strategy_start", [(44, 1), (61, 0)])
 @pytest.mark.parametrize("missing_wel", [False, True])
 def test_legacy_single_coin_rows_gain_explicit_unstuck_spans(
     side_width, strategy_start, missing_wel
 ):
-    legacy_width = side_width - 2 - int(missing_wel)
+    legacy_width = side_width - 7 - 2 - int(missing_wel)
     params = np.arange(legacy_width * 2, dtype=np.float64).reshape(1, -1)
     upgraded = _upgrade_legacy_single_coin_wel_params(params, side_width=side_width)
     assert upgraded.shape == (1, side_width * 2)
@@ -210,9 +212,9 @@ def test_legacy_single_coin_rows_gain_explicit_unstuck_spans(
         actual = upgraded[0, side * side_width : (side + 1) * side_width]
         np.testing.assert_array_equal(actual[:legacy_width], original)
         if missing_wel:
-            assert actual[-3] == -1.0
+            assert actual[-10] == -1.0
         np.testing.assert_array_equal(
-            actual[-2:], original[strategy_start : strategy_start + 2]
+            actual[-9:-7], original[strategy_start : strategy_start + 2]
         )
 
 
@@ -2250,8 +2252,8 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
     if (b > 0) return;
     TrailingMartingaleMulticoinSideState long_side;
     TrailingMartingaleMulticoinSideState short_side;
-    TrailingMartingaleMulticoinSideConfig long_config;
-    TrailingMartingaleMulticoinSideConfig short_config;
+    TrailingMartingaleMulticoinSideConfig long_config = {};
+    TrailingMartingaleMulticoinSideConfig short_config = {};
     long_config.coin_hsl_mode = false;
     short_config.coin_hsl_mode = false;
     long_side.hsl = load_hsl(hsl_params, 0, 0);
@@ -2432,8 +2434,8 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     if (b > 0) return;
     TrailingMartingaleMulticoinSideState long_side;
     TrailingMartingaleMulticoinSideState short_side;
-    TrailingMartingaleMulticoinSideConfig long_config;
-    TrailingMartingaleMulticoinSideConfig short_config;
+    TrailingMartingaleMulticoinSideConfig long_config = {};
+    TrailingMartingaleMulticoinSideConfig short_config = {};
     long_config.coin_hsl_mode = true;
     short_config.coin_hsl_mode = false;
     long_config.volume_drop = 0.0f;
@@ -2725,8 +2727,8 @@ kernel void passivbot_tm_multicoin_dual_hsl_phase_probe(
     int po = int(b) * 22;
     TrailingMartingaleMulticoinSideState long_side;
     TrailingMartingaleMulticoinSideState short_side;
-    TrailingMartingaleMulticoinSideConfig long_config;
-    TrailingMartingaleMulticoinSideConfig short_config;
+    TrailingMartingaleMulticoinSideConfig long_config = {};
+    TrailingMartingaleMulticoinSideConfig short_config = {};
     long_side.hsl = load_hsl(params, po, 0);
     short_side.hsl = load_hsl(params, po + 11, 0);
     long_config.coin_hsl_mode =
@@ -2892,8 +2894,8 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     int po = int(b) * 22;
     EmaMulticoinSideState long_side;
     EmaMulticoinSideState short_side;
-    EmaMulticoinSideConfig long_config;
-    EmaMulticoinSideConfig short_config;
+    EmaMulticoinSideConfig long_config = {};
+    EmaMulticoinSideConfig short_config = {};
     long_side.hsl = load_hsl(params, po, 0);
     short_side.hsl = load_hsl(params, po + 11, 0);
     long_config.coin_hsl_mode =
@@ -3060,8 +3062,8 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
     if (b > 0) return;
     EmaMulticoinSideState long_side;
     EmaMulticoinSideState short_side;
-    EmaMulticoinSideConfig long_config;
-    EmaMulticoinSideConfig short_config;
+    EmaMulticoinSideConfig long_config = {};
+    EmaMulticoinSideConfig short_config = {};
     long_config.alpha_forager_volume = 1.0f;
     long_config.alpha_forager_volatility = 1.0f;
     short_config.alpha_forager_volume = 0.5f;
@@ -3205,8 +3207,8 @@ kernel void passivbot_tm_multicoin_candle_helpers_probe(
     if (b > 0) return;
     TrailingMartingaleMulticoinSideState long_side;
     TrailingMartingaleMulticoinSideState short_side;
-    TrailingMartingaleMulticoinSideConfig long_config;
-    TrailingMartingaleMulticoinSideConfig short_config;
+    TrailingMartingaleMulticoinSideConfig long_config = {};
+    TrailingMartingaleMulticoinSideConfig short_config = {};
     long_config.alpha_forager_volume = 1.0f;
     long_config.alpha_forager_volatility = 1.0f;
     short_config.alpha_forager_volume = 0.5f;
@@ -3510,8 +3512,8 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     if (b > 0) return;
     EmaMulticoinSideState long_side;
     EmaMulticoinSideState short_side;
-    EmaMulticoinSideConfig long_config;
-    EmaMulticoinSideConfig short_config;
+    EmaMulticoinSideConfig long_config = {};
+    EmaMulticoinSideConfig short_config = {};
     long_config.coin_hsl_mode = false;
     short_config.coin_hsl_mode = false;
     long_config.volume_drop = 0.0f;
@@ -3839,6 +3841,21 @@ def _tm_twel_enforcer_fields(
     ] + list(_HSL_DISABLED_VALUES.values())
 
 
+_ADAPTIVE_DISABLED_VALUES = dict(
+    zip(
+        (
+            "entry_cooldown_min_duration_minutes",
+            "entry_cooldown_max_duration_minutes",
+            "entry_cooldown_exposure_weight",
+            "entry_cooldown_adverse_weight",
+            "unilateralness_ema_span_1m",
+            "forager_score_weights_unilateralness",
+            "unilateralness_window",
+        ),
+        (0.0, -1.0, 0.0, 0.0, 60.0, 0.0, 1200.0),
+    )
+)
+
 _UNSTUCK_DISABLED_VALUES = {
     "unstuck_enabled": 0.0,
     "unstuck_ema_gating_enabled": 1.0,
@@ -3866,6 +3883,7 @@ _HSL_DISABLED_VALUES = {
 def _single_coin_param_row(values, keys):
     merged = {
         **_UNSTUCK_DISABLED_VALUES,
+        **_ADAPTIVE_DISABLED_VALUES,
         "unstuck_ema_span_0": 2.0,
         "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
@@ -3905,6 +3923,7 @@ def test_single_coin_interval_packing_scales_only_elapsed_minute_inputs(
             "hsl_cooldown_minutes_after_red": 7.5,
         }
     )
+    side.update(_ADAPTIVE_DISABLED_VALUES)
     original = np.asarray(
         [[side[key] for key in keys] * 2], dtype=np.float64
     )
@@ -3943,6 +3962,7 @@ def test_single_coin_interval_packing_compounds_hsl_elapsed_minute_decay(span):
         key: float(index + 1)
         for index, key in enumerate(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
     }
+    side.update(_ADAPTIVE_DISABLED_VALUES)
     side["hsl_ema_span_minutes"] = span
     original = np.asarray(
         [[side[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS] * 2],
@@ -3976,6 +3996,12 @@ def test_single_coin_interval_packing_preserves_one_minute_hsl_span_exactly():
         dtype=np.float64,
     ).reshape(1, -1)
     for side_index in range(2):
+        for key, value in _ADAPTIVE_DISABLED_VALUES.items():
+            values[
+                0,
+                side_index * len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+                + EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS.index(key),
+            ] = value
         values[
             0,
             side_index * len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
@@ -3999,6 +4025,7 @@ def test_single_coin_interval_packing_matches_exact_rust_hsl_elapsed_decay():
         key: float(index + 1)
         for index, key in enumerate(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
     }
+    side.update(_ADAPTIVE_DISABLED_VALUES)
     side["hsl_ema_span_minutes"] = 60.0
     original = np.asarray(
         [[side[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS] * 2],
@@ -4088,6 +4115,7 @@ def test_multicoin_ema_interval_packing_scales_forager_and_directional_spans():
             "hsl_cooldown_minutes_after_red": 35.0,
         }
     )
+    values.update(_ADAPTIVE_DISABLED_VALUES)
     original = np.asarray(
         [[values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS] * 2],
         dtype=np.float64,
@@ -4169,6 +4197,7 @@ def test_multicoin_tm_interval_packing_scales_forager_and_directional_spans():
             "hsl_cooldown_minutes_after_red": 35.0,
         }
     )
+    values.update(_ADAPTIVE_DISABLED_VALUES)
     original = np.asarray(
         [
             [
@@ -4809,7 +4838,7 @@ def test_mps_single_coin_overrides_shadow_candidates_and_track_exact(
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.9 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
-        risk["entry_cooldown_minutes"] = 0.0
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["total_exposure_entry_gate_enabled"] = False
         risk["position_exposure_enforcer_enabled"] = False
@@ -4858,7 +4887,6 @@ def test_mps_single_coin_overrides_shadow_candidates_and_track_exact(
         candidate[f"{side}_unstuck_close_pct"] = 0.9
         candidate[f"{side}_hsl_red_threshold"] = 0.8
         risk_patch = {
-            "entry_cooldown_minutes": 1_000.0,
             "we_excess_allowance_pct": 0.25,
         }
         if strategy_kind == "trailing_martingale":
@@ -4873,6 +4901,7 @@ def test_mps_single_coin_overrides_shadow_candidates_and_track_exact(
         side_overrides[side] = {
             "strategy": {strategy_kind: strategy_patch},
             "risk": risk_patch,
+            "entry_cooldown": {"base_duration_minutes": 1000.0},
             "wallet_exposure_limit": 0.4,
             "unstuck": {"close_pct": 0.2},
             "hsl": {"red_threshold": 0.2},
@@ -5026,7 +5055,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.1 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
-        risk["entry_cooldown_minutes"] = 100.0
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["position_exposure_enforcer_enabled"] = False
         risk["total_exposure_enforcer_enabled"] = False
@@ -5231,7 +5260,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.1 if enabled else 0.0
         risk["n_positions"] = 2 if enabled else 0
-        risk["entry_cooldown_minutes"] = 100.0
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["position_exposure_enforcer_enabled"] = False
         risk["total_exposure_enforcer_enabled"] = False
@@ -5573,6 +5602,7 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
+            **_ADAPTIVE_DISABLED_VALUES,
             "unstuck_ema_span_0": 2.0,
             "unstuck_ema_span_1": 3.0,
             **_HSL_DISABLED_VALUES,
@@ -5638,6 +5668,7 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
+            **_ADAPTIVE_DISABLED_VALUES,
             "unstuck_ema_span_0": 2.0,
             "unstuck_ema_span_1": 3.0,
             **_HSL_DISABLED_VALUES,
@@ -6133,7 +6164,7 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.2 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
-        risk["entry_cooldown_minutes"] = 100.0
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["total_exposure_entry_gate_enabled"] = False
         risk["position_exposure_enforcer_enabled"] = False
@@ -8923,7 +8954,7 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
-    assert "constant int SIDE_PARAMS = 37" in source
+    assert "constant int SIDE_PARAMS = 44" in source
     assert "total_exposure_reducer_qty" in source
     assert "secondary_close_qty" in source
     assert "realized_loss_gate_allows" in source
@@ -9262,7 +9293,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     )
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
-    assert "constant int PARAM_COLS = 44" in source
+    assert "constant int PARAM_COLS = 51" in source
     assert f"constant int OVERRIDE_COLS = {EMA_ANCHOR_COIN_OVERRIDE_COLS}" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
@@ -9336,6 +9367,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     row += _single_coin_exposure_fields() + [0.0, 0.0]
     row += list(_UNSTUCK_DISABLED_VALUES.values())
     row += list(_HSL_DISABLED_VALUES.values()) + [2.0, 3.0]
+    row += list(_ADAPTIVE_DISABLED_VALUES.values())
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0],
@@ -11054,7 +11086,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         hsl["hsl_enabled"] = 1.0
         hsl["hsl_red_threshold"] = 0.9
         hsl["hsl_signal_mode"] = float(signal_mode)
-        row = base + list(hsl.values()) + [2.0, 3.0]
+        row = base + list(hsl.values()) + [2.0, 3.0] + list(_ADAPTIVE_DISABLED_VALUES.values())
         assert len(row) == len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         return row
 
@@ -11289,6 +11321,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         metric_rows.append(row)
 
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.batch_size = 3
     proxy._torch = torch
     proxy.profile_enabled = False
@@ -11400,7 +11433,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         for item in service_results
     )
 
-    with pytest.raises(ValueError, match="88 columns"):
+    with pytest.raises(ValueError, match="102 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
     truncated = runner.run(
         np.asarray([rows[0]], dtype=np.float64),
@@ -11650,6 +11683,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
+        **_ADAPTIVE_DISABLED_VALUES,
         "unstuck_ema_span_0": 2.0,
         "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
@@ -12003,7 +12037,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         for item in service_results
     )
 
-    with pytest.raises(ValueError, match="122 columns"):
+    with pytest.raises(ValueError, match="136 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
     with pytest.raises(ValueError, match="short override matrix shaped"):
         MpsTrailingMartingaleMulticoinFusedRunner(
@@ -12072,7 +12106,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin" in source
-    assert "constant int PARAM_COLS = 61" in source
+    assert "constant int PARAM_COLS = 68" in source
     assert "effective_n_positions" in source
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
@@ -12173,6 +12207,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
+        **_ADAPTIVE_DISABLED_VALUES,
         "unstuck_ema_span_0": 2.0,
         "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
@@ -12835,6 +12870,7 @@ def _tm_single_row(
             unstuck_threshold=unstuck_threshold,
         )
         + [-1.0, 2.0, 3.0]
+        + list(_ADAPTIVE_DISABLED_VALUES.values())
     )
 
 
@@ -20753,6 +20789,7 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
     row.extend(_UNSTUCK_DISABLED_VALUES.values())
     row.extend(_HSL_DISABLED_VALUES.values())
     row.extend([2.0, 3.0])
+    row.extend(_ADAPTIVE_DISABLED_VALUES.values())
 
     output = MpsTrailingMartingaleMulticoinRunner(runs[0], data, side=side).run(
         np.array([row], dtype=np.float64)
@@ -20781,7 +20818,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 54" in source
+    assert "constant int SIDE_PARAMS = 61" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source
@@ -21953,7 +21990,10 @@ def test_mps_independent_unstuck_horizons_change_reducer_only(
             else TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
         )
         overrides = np.full((2, cols), np.nan)
-        overrides[:, -2:] = 0.5  # Both coin pins override the slow global candidate.
+        ema_start = (EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
+                     if strategy_kind == "ema_anchor"
+                     else TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN)
+        overrides[:, ema_start:ema_start + 2] = 0.5  # Pin both unstuck spans.
         pinned_runner, _ = _multicoin_exposure_fixture(
             strategy_kind,
             side,
@@ -22178,8 +22218,6 @@ def test_tm_directional_chunking_uses_actual_batch_work_and_switches_safely():
                 assert value == expected[key]
         assert runner.last_profile["dispatch_count"] == (1 if count == 1 else 3)
         assert ("temporal_chunk_bars" in runner.last_profile) == (count == 3)
-
-
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")

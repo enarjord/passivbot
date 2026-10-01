@@ -72,11 +72,14 @@ def _make_lazy_dataset(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rms_search", [False, True])
+@pytest.mark.parametrize("interval", [1, 5])
 async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_short_disabled(
-    monkeypatch,
+    monkeypatch, rms_search, interval,
 ):
     _stub_market_identity_validation(monkeypatch)
     config = get_template_config()
+    config["backtest"]["candle_interval_minutes"] = interval
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance", "bybit"]
@@ -91,6 +94,12 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     # Schema defaults keep shorts disabled. Optimizer candidates may enable
     # shorts later, so context preparation must not dedupe base vs long_only.
     config["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    if rms_search:
+        config["live"]["max_warmup_minutes"] = 3
+        config["optimize"]["bounds"]["long"]["forager"].update(
+            unilateralness_ema_span_1m=[1.0, 60.0],
+            score_weights={"unilateralness": [0.0, 1.0]},
+        )
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -104,13 +113,18 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
 
     async def fake_prepare_master_datasets(*_args, **kwargs):
         captured["allow_internal_nan_gaps"] = kwargs["allow_internal_nan_gaps"]
-        return {
+        datasets = {
             "combined": _make_lazy_dataset(
                 coins=("HYPE",),
                 coin_exchange={"HYPE": "binance"},
                 available_exchanges=["binance", "bybit"],
             )
         }
+        datasets["combined"].mss["HYPE"].update(
+            qty_step=0.001, price_step=0.01, min_qty=0.001, min_cost=1.0,
+            c_mult=1.0, maker=0.0, taker=0.0,
+        )
+        return datasets
 
     monkeypatch.setattr(optimize_suite, "load_markets", fake_load_markets)
     monkeypatch.setattr(
@@ -121,6 +135,7 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
+    # One eligible coin cannot require ranking, even while RMS weights are searched.
     contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
         config,
         suite_cfg,
@@ -130,6 +145,13 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
 
     assert [ctx.label for ctx in contexts] == ["base", "long_only", "short_only"]
     assert captured["allow_internal_nan_gaps"] is True
+    if rms_search:
+        for mss in contexts[0].msss.values():
+            assert mss["HYPE"]["warmup_minutes"] == 3
+            assert mss["HYPE"]["trade_start_index"] == 3
+            # Searching RMS scores cannot create competition for one eligible
+            # coin, so requested history remains the non-RMS strategy warmup.
+            assert mss["__meta__"]["warmup_minutes_requested"] == 3
 
 
 def test_suite_evaluator_close_releases_context_and_master_attachments():
@@ -584,8 +606,8 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
     evaluator = object.__new__(SuiteEvaluator)
     candidate = evaluator.build_scenario_candidate_config(previous, old_ctx)
     assert (
-        candidate["coin_overrides"]["HYPE"]["bot"]["long"]["risk"][
-            "entry_cooldown_minutes"
+        candidate["coin_overrides"]["HYPE"]["bot"]["long"]["entry_cooldown"][
+            "base_duration_minutes"
         ]
         == 37.0
     )

@@ -127,8 +127,10 @@
                     "yellow": 0.5
                 }
             },
+            "entry_cooldown": {
+                "base_duration_minutes": 0.0
+            },
             "risk": {
-                "entry_cooldown_minutes": 0.0,
                 "n_positions": 4,
                 "total_wallet_exposure_limit": 1,
                 "total_exposure_enforcer_enabled": true,
@@ -202,8 +204,10 @@
                     "yellow": 0.5
                 }
             },
+            "entry_cooldown": {
+                "base_duration_minutes": 0.0
+            },
             "risk": {
-                "entry_cooldown_minutes": 0.0,
                 "n_positions": 7,
                 "total_wallet_exposure_limit": 0,
                 "total_exposure_enforcer_enabled": true,
@@ -255,7 +259,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.4.0",
+    "config_version": "v8.5.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -395,12 +399,14 @@
                         0.001
                     ]
                 },
-                "risk": {
-                    "entry_cooldown_minutes": [
+                "entry_cooldown": {
+                    "base_duration_minutes": [
                         0.0,
                         60.0,
                         0.1
-                    ],
+                    ]
+                },
+                "risk": {
                     "n_positions": [
                         10,
                         10,
@@ -624,12 +630,14 @@
                         0.001
                     ]
                 },
-                "risk": {
-                    "entry_cooldown_minutes": [
+                "entry_cooldown": {
+                    "base_duration_minutes": [
                         0.0,
                         60.0,
                         0.1
-                    ],
+                    ]
+                },
+                "risk": {
                     "n_positions": [
                         10,
                         10,

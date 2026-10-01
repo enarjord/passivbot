@@ -14,7 +14,7 @@ those changes even while the package version still reports `8.1.0`. Read
 | Package version (`passivbot --version`) | The package's declared version; record the Git commit too when using `master` |
 | `config_version` | Config schema compatibility, independent of the package/release number |
 
-Current `master` uses config schema **v8.4.0** and accepts v8.0.0, v8.1.0, v8.2.0, and v8.3.0
+Current `master` uses config schema **v8.5.0** and accepts v8.0.0, v8.1.0, v8.2.0, v8.3.0, and v8.4.0
 through migration. These schema numbers do not imply corresponding published releases. Use
 examples and documentation from the same revision as the installed runtime. A config saved by a
 newer runtime may not load in an older tagged release; retain the original when upgrading.

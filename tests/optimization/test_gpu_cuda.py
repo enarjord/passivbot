@@ -183,8 +183,10 @@ def test_mps_compilation_does_not_apply_cuda_coin_specialization(monkeypatch):
 
 def test_disabled_hsl_specialization_requires_explicit_shader_guard(monkeypatch):
     """Only guarded multicoin sources may opt into the compact HSL state."""
+    from optimization import gpu
+    monkeypatch.delattr(gpu, "mps_kernel", raising=False)
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
-    sys.modules.pop("optimization.gpu.mps_kernel", None)
+    monkeypatch.delitem(sys.modules, "optimization.gpu.mps_kernel", raising=False)
     from optimization.gpu.mps_kernel import _with_hsl_disabled, _with_hsl_features
 
     guarded = (
@@ -205,17 +207,19 @@ def test_disabled_hsl_specialization_requires_explicit_shader_guard(monkeypatch)
     ) == compact
     with pytest.raises(RuntimeError, match="disabled-HSL feature guard"):
         _with_hsl_disabled("kernel void unguarded() {}", True)
-    sys.modules.pop("optimization.gpu.mps_kernel", None)
+    monkeypatch.delitem(sys.modules, "optimization.gpu.mps_kernel", raising=False)
 
 
 def test_disabled_hsl_specialization_excludes_fused_layout(monkeypatch):
     """The compact one-side HSL arrays must never back the fused kernel."""
+    from optimization import gpu
+    monkeypatch.delattr(gpu, "mps_kernel", raising=False)
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
-    sys.modules.pop("optimization.gpu.mps_kernel", None)
+    monkeypatch.delitem(sys.modules, "optimization.gpu.mps_kernel", raising=False)
     from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinFusedRunner
 
     assert MpsEmaAnchorMulticoinFusedRunner.hsl_disabled_specialization is False
-    sys.modules.pop("optimization.gpu.mps_kernel", None)
+    monkeypatch.delitem(sys.modules, "optimization.gpu.mps_kernel", raising=False)
 
 
 def test_disabled_hsl_source_removes_hsl_portfolio_scans():

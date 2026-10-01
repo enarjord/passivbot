@@ -20,6 +20,7 @@ from optimization.warmup import (
     compute_optimizer_backtest_warmup_minutes,
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
+    validate_optimizer_dataset_intervals,
 )
 from shared_arrays import attach_shared_array
 from suite_runner import (
@@ -212,7 +213,9 @@ async def prepare_suite_contexts(
             coin: deepcopy(dataset.mss.get(coin, {})) for coin in selected_coins
         }
         # Adjust per-coin indices relative to the time slice to avoid full hlcvs copies.
-        warmup_map = compute_optimizer_per_coin_warmup_minutes(scenario_config)
+        warmup_map = compute_optimizer_per_coin_warmup_minutes(
+            scenario_config, for_trade_activation=True
+        )
         for coin, meta in mss_slice.items():
             first_idx = int(meta.get("first_valid_index", 0))
             last_idx = int(meta.get("last_valid_index", total_steps_1m - 1))
@@ -352,6 +355,7 @@ async def prepare_suite_contexts(
                     f"Suite scenario {scenario.label} has no coins after applying exchange filters."
                 )
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
+            validate_optimizer_dataset_intervals(scenario_config, dataset.mss, dataset.exchange)
             if dataset.hlcvs_spec is not None:
                 start_idx, end_idx, coin_indices = _compute_slice_indices(
                     dataset,
@@ -457,6 +461,7 @@ async def prepare_suite_contexts(
                 continue
             exchanges_for_scenario.append(exchange_key)
             scenario_config["backtest"]["coins"][exchange_key] = list(coins_for_exchange)
+            validate_optimizer_dataset_intervals(scenario_config, dataset.mss, exchange_key)
             if dataset.hlcvs_spec is not None:
                 start_idx, end_idx, coin_indices = _compute_slice_indices(
                     dataset,

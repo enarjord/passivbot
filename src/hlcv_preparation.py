@@ -4493,6 +4493,7 @@ async def prepare_hlcvs_internal(
         meta["last_valid_index"] = last_idx
         warm_minutes = int(per_coin_warmups.get(coin, default_warm))
         meta["warmup_minutes"] = warm_minutes
+        meta["warmup_minutes_source"] = "history"
         trade_start_idx = first_idx + warm_minutes
         if trade_start_idx > last_idx:
             trade_start_idx = last_idx
@@ -5358,6 +5359,7 @@ def _resolve_combined_market_settings(
         mss["ohlcv_source"] = to_standard_exchange_name(best_exchange)
         logging.info(f"{coin}: OHLCV from {best_exchange}, market settings from {settings_exchange}")
     mss["warmup_minutes"] = int(per_coin_warmups.get(coin, default_warm))
+    mss["warmup_minutes_source"] = "history"
     return mss
 
 

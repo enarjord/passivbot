@@ -2,9 +2,9 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 44;
+constant int PARAM_COLS = 51;
 constant int COIN_COLS = 13;
-constant int OVERRIDE_COLS = 32;
+constant int OVERRIDE_COLS = 36;
 constant int UNSTUCK_EMA_OVERRIDE_START = 30;
 constant int HSL_OVERRIDE_START = 19;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 29;
@@ -30,6 +30,8 @@ constant int GAP_BINS = 128;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
+
+// PASSIVBOT_ADAPTIVE_TIMING
 
 // PASSIVBOT_UNSTUCK_EMA_COMMON
 
@@ -103,6 +105,8 @@ struct EmaMulticoinSideState {
     float ema2[MAX_COINS];
     float volatility_1m[MAX_COINS];
     float volatility_1h[MAX_COINS];
+    AdaptiveTiming adaptive[MAX_COINS];
+    float effective_cooldown[MAX_COINS];
     float forager_volume[MAX_COINS];
     float forager_volatility[MAX_COINS];
     float psize[MAX_COINS];
@@ -166,6 +170,7 @@ struct EmaMulticoinSideConfig {
     float span_1m;
     float alpha_1h;
     float alpha_1m;
+    AdaptiveTiming adaptive;
     float cooldown_min;
     float twel;
     float forager_volume_span;
@@ -378,7 +383,8 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
         ? 2.0f / (fmax(config.span_1h, 1.0f) + 1.0f) : 0.0f;
     config.alpha_1m = config.span_1m > 0.0f
         ? clamp(2.0f / (config.span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
-    config.cooldown_min = ceil(params[po + 10]);
+    config.cooldown_min = params[po + 10];
+    config.adaptive = load_adaptive_timing(params, po + 44);
     config.twel = params[po + 11];
     config.forager_volume_span = params[po + 12];
     config.forager_volatility_span = params[po + 13];
@@ -386,11 +392,12 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     config.w_volume = params[po + 15];
     config.w_ready = params[po + 16];
     config.w_volatility = params[po + 17];
-    float weight_sum = config.w_volume + config.w_ready + config.w_volatility;
+    float weight_sum = config.w_volume + config.w_ready + config.w_volatility + config.adaptive.score_weight;
     if (weight_sum > 0.0f) {
         config.w_volume /= weight_sum;
         config.w_ready /= weight_sum;
         config.w_volatility /= weight_sum;
+        config.adaptive.score_weight /= weight_sum;
     } else {
         config.w_volume = 0.0f;
         config.w_ready = 1.0f;
@@ -459,6 +466,14 @@ inline void init_ema_multicoin_side_state(
         side.volatility_1h[c] = 0.0f;
         side.forager_volume[c] = seed_volume;
         side.forager_volatility[c] = 0.0f;
+        side.adaptive[c] = config.adaptive;
+        side.effective_cooldown[c] = 0.0f;
+        if (c < coin_count) {
+            side.adaptive[c].minimum = coin_override_or(coin_overrides, c, 32, config.adaptive.minimum);
+            side.adaptive[c].maximum = coin_override_or(coin_overrides, c, 33, config.adaptive.maximum);
+            side.adaptive[c].exposure_weight = coin_override_or(coin_overrides, c, 34, config.adaptive.exposure_weight);
+            side.adaptive[c].adverse_weight = coin_override_or(coin_overrides, c, 35, config.adaptive.adverse_weight);
+        }
         side.psize[c] = 0.0f;
         side.pprice[c] = 0.0f;
         side.last_increase_k[c] = -1.0e20f;
@@ -597,6 +612,7 @@ inline void update_ema_multicoin_side_indicators(
             );
         }
         if (!valid) continue;
+        update_adaptive_rms(side.adaptive[c], bars, k, first_valid, coin_count * 4, c * 4 + 2);
         float log_range = log(high / low);
         update_unstuck_ema_band(side.unstuck_ema[c], close);
         side.ema0[c] = fma(
@@ -1101,6 +1117,12 @@ inline void update_ema_multicoin_side_selection(
         enabled_count -= 1;
         slots -= 1;
     }
+    if (enabled_count <= slots) {
+        for (int c = 0; c < coin_count; ++c) {
+            if (survivor[c]) selected[c] = true;
+        }
+        return;
+    }
     int keep = int(floor(
         float(enabled_count) * (1.0f - config.volume_drop) + 0.5f
     ));
@@ -1123,6 +1145,17 @@ inline void update_ema_multicoin_side_selection(
         }
     }
 
+    if (config.adaptive.score_weight > 0.0f) {
+        for (int c = 0; c < coin_count; ++c) {
+            if (survivor[c] && !isfinite(side.adaptive[c].score)) {
+                // Eligibility already changed: retry until all retained scores warm up.
+                side.selection_initialized = false;
+                return;
+            }
+        }
+    }
+    float unilateral_min = INFINITY;
+    float unilateral_max = -INFINITY;
     float volume_min = INFINITY;
     float volume_max = -INFINITY;
     float ready_min = INFINITY;
@@ -1146,6 +1179,10 @@ inline void update_ema_multicoin_side_selection(
                 ? 1.0f - close / threshold
                 : close / threshold - 1.0f)
             : INFINITY;
+        if (config.adaptive.score_weight > 0.0f) {
+            unilateral_min = fmin(unilateral_min, fabs(side.adaptive[c].score));
+            unilateral_max = fmax(unilateral_max, fabs(side.adaptive[c].score));
+        }
         volume_min = fmin(volume_min, forager_volume[c]);
         volume_max = fmax(volume_max, forager_volume[c]);
         ready_min = fmin(ready_min, readiness);
@@ -1181,9 +1218,16 @@ inline void update_ema_multicoin_side_selection(
             ? (forager_volatility[c] - volatility_min)
                 / (volatility_max - volatility_min)
             : 1.0f;
+        float unilateral_component = 0.0f;
+        if (config.adaptive.score_weight > 0.0f) {
+            unilateral_component = unilateral_max > unilateral_min
+                ? (unilateral_max - fabs(side.adaptive[c].score)) / (unilateral_max - unilateral_min)
+                : 1.0f;
+        }
         score[c] = config.w_volume * volume_component
             + config.w_ready * ready_component
-            + config.w_volatility * volatility_component;
+            + config.w_volatility * volatility_component
+            + config.adaptive.score_weight * unilateral_component;
     }
     for (int pick = 0; pick < slots; ++pick) {
         int best = -1;
@@ -1795,10 +1839,13 @@ inline void generate_ema_multicoin_side_orders(
         float effective_entry_minimum = short_side && candidate_entry_market
             ? market_entry_minimum : minimum;
         minimum_entry[c] = effective_entry_minimum;
-        float coin_cooldown_min = ceil(coin_override_or(
-            coin_overrides, c, 10, cooldown_min
-        ));
-        bool cooldown = coin_cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
+        float coin_cooldown_min = adaptive_duration(
+            side.adaptive[c], coin_override_or(coin_overrides, c, 10, cooldown_min),
+            psize[c] > 0.0f && balance > 0.0f
+                ? psize[c] * pprice[c] * c_mult / balance / fmax(coin_wel, 1.0e-12f) : 0.0f,
+            short_side);
+        side.effective_cooldown[c] = coin_cooldown_min;
+        bool cooldown = !isfinite(coin_cooldown_min) || coin_cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
             && float(k) < last_increase_k[c] + coin_cooldown_min;
         float cost_we = psize[c] > 0.0f && balance > 0.0f
             ? psize[c] * pprice[c] * c_mult / balance : 0.0f;

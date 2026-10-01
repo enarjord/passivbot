@@ -81,7 +81,11 @@ CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
 )
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
     {
-        "risk.entry_cooldown_minutes",
+        "entry_cooldown.base_duration_minutes",
+        "entry_cooldown.min_duration_minutes",
+        "entry_cooldown.max_duration_minutes",
+        "entry_cooldown.weights_minutes.exposure_ratio",
+        "entry_cooldown.weights_minutes.adverse_directionality",
         "risk.position_exposure_enforcer_enabled",
         "risk.position_exposure_enforcer_threshold",
         "risk.we_excess_allowance_pct",
@@ -282,7 +286,9 @@ def _extract_allowed_patch(
 
     source_doc = deepcopy(_unwrap_override_document(document, source=source))
     from .migrations.entry_ema import migrate_entry_ema_tree
+    from .migrations.entry_cooldown import migrate_entry_cooldown_tree
 
+    migrate_entry_cooldown_tree(source_doc, path=source)
     migrate_entry_ema_tree(source_doc, path=source)
     _reject_flat_strategy_coin_overrides(source_doc, coin=coin)
     source_live = source_doc.get("live")
@@ -367,13 +373,13 @@ def _extract_allowed_patch(
 
     def visit(value, policy, path: tuple[str, ...]):
         if policy is True:
-            if value is None:
+            if value is None and path[-2:] != ("entry_cooldown", "max_duration_minutes"):
                 raise TypeError(f"{_format_override_path(coin, path)} may not be null")
             return deepcopy(value)
         if not isinstance(policy, dict):
             if strict:
                 raise ValueError(f"{_format_override_path(coin, path)} is not overridable")
-            return None
+            return _MISSING
         if not isinstance(value, dict):
             raise TypeError(f"{_format_override_path(coin, path)} must be a dict")
         result = {}
@@ -385,7 +391,7 @@ def _extract_allowed_patch(
                     )
                 continue
             child_value = visit(child, policy[key], path + (key,))
-            if child_value is not None and (not isinstance(child_value, dict) or child_value):
+            if child_value is not _MISSING and (not isinstance(child_value, dict) or child_value):
                 result[key] = child_value
         return result
 
@@ -413,11 +419,14 @@ def _iter_patch_leaves(value, path=()):
     yield path, value
 
 
-def _get_nested_value(config: dict, path: tuple[str, ...]):
+_MISSING = object()
+
+
+def _get_nested_value(config: dict, path: tuple[str, ...], *, default=None):
     current = config
     for key in path:
         if not isinstance(current, dict) or key not in current:
-            return None
+            return default
         current = current[key]
     return current
 
@@ -431,6 +440,8 @@ def _validate_patch_leaf_types(
         reference = _get_nested_value(config, path)
         if reference is None:
             reference = _get_nested_value(template, path)
+        if value is None and path[-2:] == ("entry_cooldown", "max_duration_minutes"):
+            continue
         if isinstance(value, bool):
             if not isinstance(reference, bool):
                 raise TypeError(f"{display_path} must be numeric, not a boolean")
@@ -511,6 +522,25 @@ def _validate_effective_coin_config(
     for root in ("bot", "live"):
         if root in patch:
             nested_update(effective[root], deepcopy(patch[root]))
+    # This effective config represents one coin. Its pinned cooldown leaves
+    # cannot be changed by global optimizer genes, so omit those dimensions
+    # while validating the merged policy and the remaining search corners.
+    from .optimize_bounds import flatten_optimize_bounds
+    from .param_paths import resolve_optimizer_key_path
+
+    pinned_cooldown_paths = {
+        path for path, _ in _iter_patch_leaves(patch)
+        if len(path) >= 4 and path[0] == "bot" and path[2] == "entry_cooldown"
+    }
+    if pinned_cooldown_paths:
+        bounds = flatten_optimize_bounds(
+            effective["optimize"]["bounds"],
+            strategy_kind=effective.get("live", {}).get("strategy_kind"),
+        )
+        effective["optimize"]["bounds"] = {
+            key: value for key, value in bounds.items()
+            if resolve_optimizer_key_path(effective, key) not in pinned_cooldown_paths
+        }
     try:
         prepared = prepare_config(
             effective,
@@ -525,8 +555,8 @@ def _validate_effective_coin_config(
         ) from exc
     normalized_patch = {}
     for path, original_value in _iter_patch_leaves(patch):
-        normalized_value = _get_nested_value(prepared, path)
-        if normalized_value is None:
+        normalized_value = _get_nested_value(prepared, path, default=_MISSING)
+        if normalized_value is _MISSING:
             # wallet_exposure_limit is a per-coin runtime value calculated after
             # canonical config preparation, so it has no canonical global leaf.
             if len(path) == 3 and path[0] == "bot" and path[2] == "wallet_exposure_limit":

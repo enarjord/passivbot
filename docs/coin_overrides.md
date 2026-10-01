@@ -8,8 +8,8 @@ resolved, and shows examples for both inline and file-based overrides.
 
 Allowed fields are intentionally limited:
 
-- **Bot params** (per side): per-coin wallet exposure limits; selected risk fields
-  (`entry_cooldown_minutes`, position-exposure enforcer settings, and
+- **Bot params** (per side): per-coin wallet exposure limits; all `entry_cooldown` leaves (listed below);
+  selected risk fields (position-exposure enforcer settings and
   `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_dist`,
   `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `threshold`); and
   every HSL field when the global `live.hsl_signal_mode` is `"coin"`; and
@@ -27,6 +27,19 @@ nested v8 strategy path instead.
 patches that contain it fail with a migration message. A complete file used through
 `override_config_path` may contain the global field, but it is warned about and ignored for the
 coin patch; set the value in the main config instead.
+
+The complete cooldown override group is:
+
+- `entry_cooldown.base_duration_minutes`
+- `entry_cooldown.min_duration_minutes`
+- `entry_cooldown.max_duration_minutes`
+- `entry_cooldown.weights_minutes.exposure_ratio`
+- `entry_cooldown.weights_minutes.adverse_directionality`
+
+Omitted leaves inherit the global policy. An explicit zero disables that modifier for the coin;
+`max_duration_minutes: null` clears the ceiling only when the effective modifier weights are zero.
+Positive effective weights require a finite ceiling, and the ceiling must be at least the floor.
+Forager scoring weights and the RMS span remain global, not per-coin overrides.
 
 The complete conditional HSL override group is:
 
@@ -91,8 +104,14 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
             "ema_gating_enabled": false,
             "loss_allowance_pct": 0.005
           },
-          "risk": {
-            "entry_cooldown_minutes": 0.05
+          "entry_cooldown": {
+            "base_duration_minutes": 0.05,
+            "min_duration_minutes": 0.0,
+            "max_duration_minutes": 60.0,
+            "weights_minutes": {
+              "exposure_ratio": 10.0,
+              "adverse_directionality": 20.0
+            }
           },
           "hsl": {
             "enabled": true,
@@ -188,7 +207,7 @@ Main config:
 - A per-coin `unstuck.loss_allowance_pct` overrides only the selected coin+side's loss allowance
   percentage. It still uses the account-wide unstuck budget formula with `total_wallet_exposure_limit`;
   it does not create a separate per-coin realized-PnL tracker.
-- A per-coin `risk.entry_cooldown_minutes` gates only position-increasing entries for the selected
+- A per-coin `entry_cooldown.base_duration_minutes` gates only position-increasing entries for the selected
   coin+side. A per-coin `unstuck.ema_gating_enabled=false` disables only that coin+side's unstuck
   EMA trigger/readiness gate; the other unstuck eligibility checks still apply.
 - In global `coin` signal mode, per-coin HSL values drive the live supervisor and Rust backtest for
@@ -247,7 +266,7 @@ both the master's global settings and the selected source values.
 ```bash
 passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json \
   --master-config path/to/master.json --include-backtest-optimize \
-  --override-params long.strategy,long.risk.entry_cooldown_minutes
+  --override-params long.strategy,long.entry_cooldown.base_duration_minutes
 ```
 
 This pins each coin's long strategy and entry cooldown while inheriting the master's unstuck, HSL,
@@ -257,8 +276,8 @@ this selection produces the same patches.
 Selectors use the fine-tune dotted-path matcher: an optional `bot.` prefix, groups or individual
 leaves, full-segment prefix/suffix matching, and `*` as a one-segment wildcard. For example,
 `bot.long.strategy`, `long.strategy.entry.initial_qty_pct` (Trailing Martingale),
-`*.risk.entry_cooldown_minutes`, and `live.leverage` are valid selections. A bare leaf such as
-`entry_cooldown_minutes` selects both sides. Overlapping selectors are deduplicated. Group selectors
+`*.entry_cooldown.base_duration_minutes`, and `live.leverage` are valid selections. A bare leaf such as
+`base_duration_minutes` selects both sides. Overlapping selectors are deduplicated. Group selectors
 include only fields allowed by the coin-override policy; `long.risk` does not override global
 exposure or position-count settings. Empty selectors and selectors matching no allowed input
 fields are errors, including typos, inactive-strategy paths, and HSL selectors outside coin mode.

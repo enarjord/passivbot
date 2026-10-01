@@ -494,9 +494,9 @@ def test_build_backtest_payload_uses_global_warmup_floor(monkeypatch):
     hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
     monkeypatch.setattr(
         "backtest.compute_per_coin_warmup_minutes",
-        lambda _config: {"__default__": 30, "BTC": 30},
+        lambda _config, **_kwargs: {"__default__": 30, "BTC": 30},
     )
-    monkeypatch.setattr("backtest.compute_backtest_warmup_minutes", lambda _config: 100)
+    monkeypatch.setattr("backtest.compute_backtest_warmup_minutes", lambda _config, **_kwargs: 100)
 
     payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
 

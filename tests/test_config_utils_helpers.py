@@ -102,6 +102,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
 
     assert loaded["live"]["strategy_kind"] == "trailing_martingale"
     assert set(loaded["bot"]["long"]) == {
+        "entry_cooldown",
         "forager",
         "hsl",
         "risk",
@@ -109,6 +110,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
         "unstuck",
     }
     assert set(loaded["bot"]["short"]) == {
+        "entry_cooldown",
         "forager",
         "hsl",
         "risk",
@@ -128,7 +130,7 @@ def test_default_trailing_martingale_long_example_matches_template_and_rust_defa
     raw = json.loads(Path("configs/examples/default_trailing_martingale_long.json").read_text())
     template_long = get_template_config()["bot"]["long"]
 
-    for section in ("forager", "hsl", "risk", "unstuck"):
+    for section in ("entry_cooldown", "forager", "hsl", "risk", "unstuck"):
         assert raw["bot"]["long"][section] == template_long[section]
 
     assert raw["bot"]["long"]["strategy"]["trailing_martingale"] == get_strategy_defaults(
@@ -146,6 +148,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
         assert raw["config_version"] == get_template_config()["config_version"]
         loaded = load_config(str(path), verbose=False)
         assert set(loaded["bot"]["long"]) == {
+            "entry_cooldown",
             "forager",
             "hsl",
             "risk",
@@ -153,6 +156,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "unstuck",
         }
         assert set(loaded["bot"]["short"]) == {
+            "entry_cooldown",
             "forager",
             "hsl",
             "risk",
@@ -160,6 +164,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "unstuck",
         }
         assert set(loaded["optimize"]["bounds"]["long"]) == {
+            "entry_cooldown",
             "forager",
             "hsl",
             "risk",
@@ -167,6 +172,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "unstuck",
         }
         assert set(loaded["optimize"]["bounds"]["short"]) == {
+            "entry_cooldown",
             "forager",
             "hsl",
             "risk",
