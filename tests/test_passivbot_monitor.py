@@ -1911,10 +1911,10 @@ def test_log_health_summary_uses_fallback_when_emitter_missing(caplog, monkeypat
         bot._log_health_summary()
 
     assert bot.payload_reset_event_pipeline_timing is False
-    lines = [
-        record.message for record in caplog.records if "[health]" in record.message
-    ]
-    assert len(lines) == 1
+    lines = [record.message for record in caplog.records if "[health]" in record.message]
+    assert lines
+    assert all(len(line) <= 170 for line in lines)
+    assert "last_cycle=?" in " ".join(lines)
     assert "last_loop=n/a" in lines[0] and "account_age=?" in lines[0]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 

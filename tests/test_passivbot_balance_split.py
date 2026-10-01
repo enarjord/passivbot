@@ -4141,7 +4141,7 @@ def test_candle_health_summary_formatter_exact_format():
     )
 
     assert message == (
-        "[candle] health: symbols=3 unhealthy_surfaces=3 stale=2 synthetic=4 "
+        "[candle] health: scope=warmup_cache symbols=3 unhealthy_surfaces=3 stale=2 synthetic=4 "
         "worst_missing=6 | BTC 1m missing=2 tail=3; ETH 1h missing=1; SOL 15m missing=6"
     )
 
@@ -4168,11 +4168,10 @@ def test_candle_health_summary_formatter_bounds_hostile_labels_for_live_console(
     assert "\n" not in message
     assert "\r" not in message
     assert "\t" not in message
-    assert "+9 more" in message
+    assert "+10 more" in message
     assert len(message) <= Passivbot.CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN
-    assert Passivbot.CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN == 240 - (
-        len(rendered) - len(message)
-    )
+    record.log_prefix = "x" * 32
+    assert len(formatter.format(record)) <= 240
     assert len(rendered) <= 240
 
 
@@ -4227,7 +4226,7 @@ def test_candle_health_summary_projection_preserves_debug_payload_and_transition
     ]
     assert calls == [{"BTC/USDT:USDT"}, {"BTC/USDT:USDT"}]
     assert info_messages == [
-        "[candle] health: symbols=1 unhealthy_surfaces=1 stale=0 synthetic=3 "
+        "[candle] health: scope=warmup_cache symbols=1 unhealthy_surfaces=1 stale=0 synthetic=3 "
         "worst_missing=2 | BTC 1m missing=2 tail=2"
     ]
     assert len(debug_records) == 2

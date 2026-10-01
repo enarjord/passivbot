@@ -19,6 +19,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `cache.warmup_decision`
 - `candle.coverage_checked`
 - `candle.tail_projected`
+- `candle.websocket_status`
 - `config.market_compatibility`
 - `cycle.completed`
 - `cycle.degraded`

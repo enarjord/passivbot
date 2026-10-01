@@ -189,6 +189,7 @@ class EventTypes:
     EMA_UNAVAILABLE = "ema.unavailable"
     CANDLE_COVERAGE_CHECKED = "candle.coverage_checked"
     CANDLE_TAIL_PROJECTED = "candle.tail_projected"
+    CANDLE_WEBSOCKET_STATUS = "candle.websocket_status"
     CACHE_LOAD_COMPLETED = "cache.load.completed"
     CACHE_FLUSH_COMPLETED = "cache.flush.completed"
     CACHE_WARMUP_DECISION = "cache.warmup_decision"
@@ -517,6 +518,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EMA_UNAVAILABLE,
     EventTypes.CANDLE_COVERAGE_CHECKED,
     EventTypes.CANDLE_TAIL_PROJECTED,
+    EventTypes.CANDLE_WEBSOCKET_STATUS,
     EventTypes.CACHE_LOAD_COMPLETED,
     EventTypes.CACHE_FLUSH_COMPLETED,
     EventTypes.CACHE_WARMUP_DECISION,
@@ -682,11 +684,20 @@ def _is_sensitive_key(key: object) -> bool:
     )
 
 
-def redact_payload(value: Any) -> Any:
+def _public_authoritative_timing(parent_key: str, key: object, value: Any) -> bool:
+    # Only this bounded numeric duration is public; auth-like strings/maps stay secret.
+    return (parent_key == "timings_ms" and key == "authoritative"
+            and type(value) in (int, float) and 0 <= value <= 2**63 - 1)
+
+
+def redact_payload(value: Any, *, _parent_key: str = "") -> Any:
     if isinstance(value, Mapping):
         return {
-            str(key): REDACTED if _is_sensitive_key(key) else redact_payload(item)
-            for key, item in value.items()
+            str(key): (
+                item if _public_authoritative_timing(_parent_key, key, item)
+                else REDACTED if _is_sensitive_key(key)
+                else redact_payload(item, _parent_key=str(key))
+            ) for key, item in value.items()
         }
     if isinstance(value, list):
         return [redact_payload(item) for item in value]
@@ -868,6 +879,7 @@ def _bounded_live_event_value(
     is_root: bool = False,
     omit_on_limit: bool = False,
     existing_budget_metadata: Mapping[str, int] | None = None,
+    parent_key: str = "",
 ) -> Any:
     if state.nodes >= LIVE_EVENT_MAX_NODES:
         state.add("node_limited")
@@ -961,7 +973,9 @@ def _bounded_live_event_value(
                 if normalized_key in normalized and (key_truncated or force_redaction):
                     state.add("omitted_keys")
                     continue
-                if force_redaction or _is_sensitive_key(normalized_key):
+                if not force_redaction and _public_authoritative_timing(parent_key, normalized_key, child):
+                    normalized[normalized_key] = child
+                elif force_redaction or _is_sensitive_key(normalized_key):
                     normalized[normalized_key] = REDACTED
                 else:
                     normalized[normalized_key] = _bounded_live_event_value(
@@ -969,6 +983,7 @@ def _bounded_live_event_value(
                         depth=depth + 1,
                         ancestors=ancestors,
                         state=state,
+                        parent_key=normalized_key,
                     )
             else:
                 state.add(
@@ -1323,6 +1338,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     ),
     EventTypes.CANDLE_COVERAGE_CHECKED: EventRoute(console=False, text=False),
     EventTypes.CANDLE_TAIL_PROJECTED: EventRoute(console=False, text=False),
+    EventTypes.CANDLE_WEBSOCKET_STATUS: EventRoute(console=False, text=False),
     EventTypes.CACHE_LOAD_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.CACHE_FLUSH_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.CACHE_WARMUP_DECISION: EventRoute(console=False, text=False),
@@ -2331,9 +2347,9 @@ def _format_console_duration_ms(duration_ms: int) -> str:
 
 def split_health_console(message: str, prefix: str = "[health]") -> list[str]:
     parts, line = [], prefix
-    for word in message.removeprefix(prefix + " ").split():
-        word = word[:170]
-        if len(line) + len(word) + 1 > 190:
+    for word in message.removeprefix(prefix + ' ').split():
+        word = word[:max(1, 170 - len(prefix) - 1)]
+        if len(line) + len(word) + 1 > 170:
             parts.append(line)
             line = prefix
         line += " " + word
@@ -2382,6 +2398,31 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
     pending = data.get("account_pending")
     if isinstance(pending, list) and pending:
         parts.append("account_pending=" + ",".join(str(x) for x in pending[:3]))
+    fills_ages = data.get("account_surface_ages_ms", {})
+    if isinstance(fills_ages, Mapping):
+        age = _data_number(fills_ages, "fills")
+        if age is not None:
+            parts.append(f"fills_age={age / 1000.:.1f}s")
+    if data.get("fills_pending") is True:
+        parts.append("fills_pending=yes")
+    pending_age = _data_number(data, "ordinary_pending_age_ms")
+    if pending_age is not None:
+        parts.append(f"ordinary_pending={pending_age / 1000.:.1f}s")
+    waits = _data_int(data, "trailing_wait_count")
+    if waits:
+        age = _data_number(data, "trailing_wait_max_ms")
+        parts.append(f"trailing_input_wait={waits}" + (f"/{age / 1000.:.1f}s" if age is not None else ""))
+    overflow = _data_int(data, "trailing_wait_overflow_count")
+    if overflow:
+        parts.append(f"wait_untracked={overflow}")
+    samples = data.get("trailing_wait_samples")
+    if waits and isinstance(samples, list) and samples and isinstance(samples[0], Mapping):
+        row = samples[0]
+        parts.append("wait_scope=" + re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row.get("symbol", "?")))[:32]
+                     + ":" + re.sub(r"[^a-zA-Z0-9_]", "_", str(row.get("phase", "?")))[:24])
+    for field, label in (("last_cycle_completed_age_ms", "last_cycle"), ("last_write_age_ms", "last_write")):
+        age = _data_number(data, field)
+        parts.append(f"{label}={age / 1000.:.1f}s" if age is not None else f"{label}=?")
     cpu = _data_number(data, "cpu_percent")
     if cpu is not None:
         parts.append(f"cpu={cpu:.0f}%")
@@ -2532,12 +2573,13 @@ def _format_console_trailing_status(event: LiveEvent) -> str | None:
         return None
 
     parts = ["[trailing]"]
-    if event.status:
+    if event.symbol:
+        parts.append(f"symbol={_compact_trailing_console_label(event.symbol, limit=48)}")
+    if event.pside:
+        parts.append(f"pside={_compact_trailing_console_label(event.pside, limit=8)}")
+    # The strategy status already communicates success. Correlation stays durable.
+    if event.status and event.status != "succeeded":
         parts.append(event.status)
-    if event.cycle_id:
-        parts.append(
-            f"cycle={_compact_trailing_console_label(event.cycle_id, limit=36)}"
-        )
 
     kind = _data_str(data, "kind")
     trailing_status = _data_str(data, "trailing_status")
@@ -2590,12 +2632,6 @@ def _format_console_trailing_status(event: LiveEvent) -> str | None:
     current_price = _data_number(data, "current_price")
     if current_price:
         parts.append(f"cur={current_price:g}")
-    if event.symbol:
-        parts.append(
-            f"symbol={_compact_trailing_console_label(event.symbol, limit=48)}"
-        )
-    if event.pside:
-        parts.append(f"pside={_compact_trailing_console_label(event.pside, limit=8)}")
     return " ".join(parts)
 
 
@@ -3283,19 +3319,12 @@ def _format_hsl_console(event: LiveEvent) -> str:
             reasons[0] if isinstance(reasons, list) and reasons else None
         )
         if reason:
-            parts.append(
-                (
-                    "unavailable_reason="
-                    if row.get("unavailable_reason")
-                    else "estimate="
-                )
-                + token(reason, 28)
-            )
-    stale_reasons = data.get("stale_reasons")
+            parts.append(("unavailable_reason=" if row.get('unavailable_reason') else "estimate=")
+                         + token(reason, 64))
+    stale_reasons = data.get('stale_reasons')
     if isinstance(stale_reasons, list) and stale_reasons:
-        parts.insert(3, "stale_reason=" + token(stale_reasons[0], 28))
-    message = " ".join(parts)
-    return message if len(message) <= 195 else message[:192] + "..."
+        parts.insert(3, "stale_reason=" + token(stale_reasons[0], 64))
+    return " ".join(parts)
 
 
 def format_console_event(event: LiveEvent) -> str:
@@ -3423,18 +3452,20 @@ class ConsoleSummarySink:
 
         def emit(text):
             if state is not None:
-                # Separate replacement statistics from the state line.
-                main, separator, detail = text.partition(" replaced_samples=")
-                for line in split_health_console(main, "[risk]"):
+                main, separator, detail = text.partition(' replaced_samples=')
+                # Equivalent GREEN replacement churn remains durable detail.
+                # Do not spend another INFO record on unchanged observation ages.
+                for line in split_health_console(main, '[risk]'):
                     self.logger.log(_logging_level(event.level), line)
                 if separator:
-                    self.logger.log(
-                        logging.INFO,
-                        "[risk] prior observations replaced; count=" + detail,
-                    )
+                    self.logger.log(logging.DEBUG, '[risk] prior observations replaced; count=' + detail)
             else:
-                self.logger.log(_logging_level(event.level), text)
-
+                if len(text) > 170 and event.level not in ('debug', 'trace'):
+                    prefix = text.split(' ', 1)[0]
+                    for line in split_health_console(text, prefix):
+                        self.logger.log(_logging_level(event.level), line)
+                else:
+                    self.logger.log(_logging_level(event.level), text)
         if state is not None:
             key = (event.exchange, event.user, event.bot_id, event.event_type)
             written = self.admission.write(

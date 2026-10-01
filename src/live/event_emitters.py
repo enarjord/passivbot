@@ -109,9 +109,7 @@ _CYCLE_DEGRADED_INVALID_CODE_KEYS = (
     "mismatch_type",
     "error_type",
 )
-_CYCLE_DEGRADED_INVALID_SYMBOL_KEYS = (
-    "symbol",
-)
+_CYCLE_DEGRADED_INVALID_SYMBOL_KEYS = ("symbol",)
 _CYCLE_DEGRADED_INVALID_SYMBOL_LIST_KEYS = (
     "symbols",
     "expected_symbols",
@@ -242,9 +240,7 @@ def _sanitize_cycle_degraded_invalid(value: Any) -> dict[str, list[dict[str, Any
         return {}
     out: dict[str, list[dict[str, Any]]] = {}
     for raw_surface, raw_items in value.items():
-        surface = _cycle_degraded_bounded_text(
-            raw_surface, _CYCLE_DEGRADED_CODE_RE
-        )
+        surface = _cycle_degraded_bounded_text(raw_surface, _CYCLE_DEGRADED_CODE_RE)
         if surface is None or not isinstance(raw_items, list):
             continue
         items = []
@@ -732,7 +728,9 @@ def _emit_authoritative_remote_call_event_unchecked(
     cycle_id = current_live_event_cycle_id(bot)
     authoritative_epoch = _freshness_epoch(bot)
     remote_call_group_id = (
-        f"{cycle_id}:authoritative" if cycle_id else f"auth_{authoritative_epoch}:authoritative"
+        f"{cycle_id}:authoritative"
+        if cycle_id
+        else f"auth_{authoritative_epoch}:authoritative"
     )
     if stage == "start":
         remote_call_id = next_live_event_remote_call_id(bot, "rca")
@@ -997,9 +995,7 @@ def _emit_exchange_config_refresh_event_unchecked(
     )
 
 
-def emit_exchange_config_refresh_event(
-    bot: Any, *args: Any, **kwargs: Any
-) -> None:
+def emit_exchange_config_refresh_event(bot: Any, *args: Any, **kwargs: Any) -> None:
     """Best-effort structured visibility for periodic exchange config refresh."""
     try:
         _emit_exchange_config_refresh_event_unchecked(bot, *args, **kwargs)
@@ -1035,10 +1031,16 @@ def emit_live_cycle_completed(
     cycle_id: str | None,
     loop_start_ms: int,
     timings_ms: dict[str, int],
+    execution_owner: str = "ordinary",
+    ordinary_pending: bool | None = None,
+    ordinary_prepare_elapsed_ms: int | None = None,
+    ordinary_pending_age_ms: int | None = None,
 ) -> None:
     if not cycle_id:
         return
-    elapsed_ms = max(0, int(utc_ms()) - int(loop_start_ms))
+    now_ms = int(utc_ms())
+    bot._console_last_cycle_completed_ms = now_ms
+    elapsed_ms = max(0, now_ms - int(loop_start_ms))
     bot._emit_live_event(
         EventTypes.CYCLE_COMPLETED,
         level="debug",
@@ -1049,11 +1051,30 @@ def emit_live_cycle_completed(
         data={
             "elapsed_ms": elapsed_ms,
             "timings_ms": dict(timings_ms or {}),
+            "execution_owner": execution_owner,
+            **(
+                {"ordinary_pending": ordinary_pending}
+                if ordinary_pending is not None
+                else {}
+            ),
+            **(
+                {"ordinary_prepare_elapsed_ms": ordinary_prepare_elapsed_ms}
+                if ordinary_prepare_elapsed_ms is not None
+                else {}
+            ),
+            **(
+                {"ordinary_pending_age_ms": ordinary_pending_age_ms}
+                if ordinary_pending_age_ms is not None
+                else {}
+            ),
             "authoritative_epoch": _freshness_epoch(bot),
             "orders_changed": bool(getattr(bot, "execution_scheduled", False)),
         },
     )
-    if getattr(bot, "_live_event_current_cycle_id", None) == cycle_id:
+    if (
+        execution_owner == "ordinary"
+        and getattr(bot, "_live_event_current_cycle_id", None) == cycle_id
+    ):
         bot._live_event_current_cycle_id = None
 
 
@@ -1271,7 +1292,9 @@ def _bounded_memory_snapshot_delta(value: Any) -> float | None:
     if number is None:
         return None
     return round(
-        max(-_MEMORY_SNAPSHOT_MAX_DELTA_PCT, min(number, _MEMORY_SNAPSHOT_MAX_DELTA_PCT)),
+        max(
+            -_MEMORY_SNAPSHOT_MAX_DELTA_PCT, min(number, _MEMORY_SNAPSHOT_MAX_DELTA_PCT)
+        ),
         6,
     )
 
@@ -1291,14 +1314,21 @@ def _bounded_memory_snapshot_label(
     return value
 
 
-def _memory_snapshot_cache_samples(value: Any, *, timeframe: bool) -> list[dict[str, Any]]:
+def _memory_snapshot_cache_samples(
+    value: Any, *, timeframe: bool
+) -> list[dict[str, Any]]:
     if not isinstance(value, (list, tuple)):
         return []
     samples: list[dict[str, Any]] = []
     for raw in value[:3]:
         if not isinstance(raw, (list, tuple)):
             continue
-        if timeframe and len(raw) == 3 and isinstance(raw[0], tuple) and len(raw[0]) == 2:
+        if (
+            timeframe
+            and len(raw) == 3
+            and isinstance(raw[0], tuple)
+            and len(raw[0]) == 2
+        ):
             symbol_raw, timeframe_raw = raw[0]
             bytes_raw, candles_raw = raw[1:]
         elif timeframe and len(raw) == 4:
@@ -1335,9 +1365,7 @@ def _memory_snapshot_task_samples(value: Any) -> list[dict[str, Any]]:
     for raw in value[:4]:
         if not isinstance(raw, (list, tuple)) or len(raw) != 2:
             continue
-        count = _bounded_memory_snapshot_int(
-            raw[1], maximum=_MEMORY_SNAPSHOT_MAX_COUNT
-        )
+        count = _bounded_memory_snapshot_int(raw[1], maximum=_MEMORY_SNAPSHOT_MAX_COUNT)
         if count is None:
             continue
         samples.append(
@@ -1404,7 +1432,9 @@ def emit_memory_snapshot_event(
             bounded = _bounded_memory_snapshot_int(raw_value, maximum=maximum)
             if bounded is not None:
                 timeframe_cache[key] = bounded
-        samples = _memory_snapshot_cache_samples(timeframe_cache_samples, timeframe=True)
+        samples = _memory_snapshot_cache_samples(
+            timeframe_cache_samples, timeframe=True
+        )
         if samples:
             timeframe_cache["samples"] = samples
         if timeframe_cache:
@@ -1538,9 +1568,11 @@ def rust_output_order_debug_sample(
             ),
             "qty": _safe_float(item.get("qty")),
             "price": _safe_float(item.get("price")),
-            "reduce_only": bool(item.get("reduce_only"))
-            if item.get("reduce_only") is not None
-            else None,
+            "reduce_only": (
+                bool(item.get("reduce_only"))
+                if item.get("reduce_only") is not None
+                else None
+            ),
         }
         sample.append(
             {key: value for key, value in payload.items() if value is not None}
@@ -1558,7 +1590,9 @@ def _best_effort_rust_input_symbol_debug_sample(
     idx_to_symbol: dict[int, str] | None = None,
 ) -> dict[str, Any] | None:
     try:
-        return rust_input_symbol_debug_sample(input_symbols, idx_to_symbol=idx_to_symbol)
+        return rust_input_symbol_debug_sample(
+            input_symbols, idx_to_symbol=idx_to_symbol
+        )
     except Exception as exc:
         logging.debug(
             "[event] failed to build rust input debug sample: %s",
@@ -1698,9 +1732,10 @@ def _emit_market_snapshot_diagnostic_skipped_event_unchecked(
     context: str,
     error: BaseException,
 ) -> bool:
-    safe_context = _cycle_degraded_bounded_text(
-        context, _MARKET_SNAPSHOT_DIAGNOSTIC_CONTEXT_RE
-    ) or "unknown"
+    safe_context = (
+        _cycle_degraded_bounded_text(context, _MARKET_SNAPSHOT_DIAGNOSTIC_CONTEXT_RE)
+        or "unknown"
+    )
     emitted = bot._emit_live_event(
         EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
         level="warning",
@@ -1778,7 +1813,9 @@ def _forager_debug_payload(data: dict[str, Any], *, limit: int = 32) -> dict[str
         debug["unavailable_count"] = max(
             0, int(unavailable_count) if unavailable_count is not None else 0
         )
-        debug["unavailable_sample_count"] = len(sample) if isinstance(sample, list) else 0
+        debug["unavailable_sample_count"] = (
+            len(sample) if isinstance(sample, list) else 0
+        )
         debug["unavailable_truncated"] = bool(unavailable.get("truncated"))
     top_scores = data.get("top_scores")
     if isinstance(top_scores, list):
@@ -2133,8 +2170,7 @@ _EMA_DIAGNOSTIC_TYPES = frozenset(
 )
 _EMA_FALLBACK_METRICS = frozenset(("qv", "log_range"))
 _EMA_SYMBOL_RE = re.compile(
-    r"[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?/"
-    r"[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?"
+    r"[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?/" r"[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?"
 )
 _EMA_DIAGNOSTIC_REASON_CODES = frozenset(
     (
@@ -2166,13 +2202,19 @@ def _safe_ema_reason_code(value: Any, *, default: str = "unknown_failure") -> st
 
 def _safe_ema_error_type(value: Any) -> str:
     candidate = str(value or "")
-    return candidate if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", candidate) else "Error"
+    return (
+        candidate
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", candidate)
+        else "Error"
+    )
 
 
 def _safe_ema_types(value: Any) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple, set, frozenset)):
         return ()
-    return tuple(sorted({str(item) for item in value if str(item) in _EMA_DIAGNOSTIC_TYPES}))
+    return tuple(
+        sorted({str(item) for item in value if str(item) in _EMA_DIAGNOSTIC_TYPES})
+    )
 
 
 def _safe_ema_symbol(value: Any) -> str:
@@ -2268,7 +2310,9 @@ def _fallback_examples(
     return examples
 
 
-def _candidate_detail_tuple(item: Any) -> tuple[str, str, tuple[str, ...], tuple[float, ...]]:
+def _candidate_detail_tuple(
+    item: Any,
+) -> tuple[str, str, tuple[str, ...], tuple[float, ...]]:
     if not isinstance(item, (list, tuple)):
         return str(item), "Error", (), ()
     symbol = _safe_ema_symbol(item[0]) if len(item) >= 1 else "unknown"
@@ -2276,9 +2320,7 @@ def _candidate_detail_tuple(item: Any) -> tuple[str, str, tuple[str, ...], tuple
     ema_types = _safe_ema_types(item[2]) if len(item) >= 3 else ()
     raw_spans = item[3] if len(item) >= 4 and isinstance(item[3], (list, tuple)) else ()
     spans = tuple(
-        span
-        for value in raw_spans
-        if (span := _safe_finite_float(value)) is not None
+        span for value in raw_spans if (span := _safe_finite_float(value)) is not None
     )
     return symbol, error_type, ema_types, spans
 
@@ -2291,7 +2333,9 @@ def _candidate_unavailable_summary(
     out: list[dict[str, Any]] = []
     for reason, items in sorted((values or {}).items())[:limit]:
         details = [_candidate_detail_tuple(item) for item in items or []]
-        symbols = sorted({symbol for symbol, _error_type, _ema_types, _spans in details})
+        symbols = sorted(
+            {symbol for symbol, _error_type, _ema_types, _spans in details}
+        )
         error_types = sorted(
             {error_type for _symbol, error_type, _ema_types, _spans in details}
         )
@@ -2333,7 +2377,9 @@ def _ema_unavailable_debug_summary(
         ema_type_counts: Counter[str] = Counter()
         spans: list[float] = []
         for raw_item in raw_items or []:
-            symbol, error_type, ema_types, item_spans = _candidate_detail_tuple(raw_item)
+            symbol, error_type, ema_types, item_spans = _candidate_detail_tuple(
+                raw_item
+            )
             if symbol:
                 symbols.add(symbol)
             if error_type:
@@ -2393,7 +2439,9 @@ def _forager_top_score_sample(
         if not isinstance(item, dict):
             continue
         payload: dict[str, Any] = {
-            "symbol": str(item.get("symbol")) if item.get("symbol") is not None else None,
+            "symbol": (
+                str(item.get("symbol")) if item.get("symbol") is not None else None
+            ),
             "rank": _safe_int(item.get("rank")),
             "score": _safe_float(item.get("score")),
             "selected": bool(item.get("selected")),
@@ -2546,7 +2594,9 @@ def _emit_rust_orchestrator_returned_event_unchecked(
         data["diagnostic_keys"] = (
             sorted(diagnostics) if isinstance(diagnostics, dict) else []
         )
-        if output_order_sample is None and live_event_debug_profile_enabled(bot, "rust"):
+        if output_order_sample is None and live_event_debug_profile_enabled(
+            bot, "rust"
+        ):
             output_order_sample = _best_effort_rust_output_order_debug_sample(
                 orders,
                 idx_to_symbol=idx_to_symbol,
@@ -2676,9 +2726,7 @@ def _emit_forager_eligibility_changed_event_unchecked(
     )
 
 
-def emit_forager_eligibility_changed_event(
-    bot: Any, *args: Any, **kwargs: Any
-) -> None:
+def emit_forager_eligibility_changed_event(bot: Any, *args: Any, **kwargs: Any) -> None:
     try:
         _emit_forager_eligibility_changed_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
@@ -2759,8 +2807,12 @@ def _emit_hip3_account_mode_unsupported_event_unchecked(
             "approved_symbols": _bounded_market_symbol_summary(approved_symbols),
             "position_symbols": _bounded_market_symbol_summary(position_symbols),
             "open_order_symbols": _bounded_market_symbol_summary(open_order_symbols),
-            "isolated_only_symbols": _bounded_market_symbol_summary(isolated_only_symbols),
-            "live_isolated_symbols": _bounded_market_symbol_summary(live_isolated_symbols),
+            "isolated_only_symbols": _bounded_market_symbol_summary(
+                isolated_only_symbols
+            ),
+            "live_isolated_symbols": _bounded_market_symbol_summary(
+                live_isolated_symbols
+            ),
         },
         require_enqueue=True,
     )
@@ -2870,9 +2922,7 @@ def _emit_config_market_compatibility_event_unchecked(
     )
 
 
-def emit_config_market_compatibility_event(
-    bot: Any, *args: Any, **kwargs: Any
-) -> bool:
+def emit_config_market_compatibility_event(bot: Any, *args: Any, **kwargs: Any) -> bool:
     """Best-effort visibility for configured symbols skipped before eligibility."""
     try:
         return _emit_config_market_compatibility_event_unchecked(bot, *args, **kwargs)
@@ -2981,18 +3031,16 @@ def _emit_forager_selection_event_unchecked(
         "incumbent_count": len(incumbent),
         "incumbent_symbols": incumbent[:12],
         "slots_open": bool(slots_open),
-        "max_n_positions": int(max_n_positions) if max_n_positions is not None else None,
+        "max_n_positions": (
+            int(max_n_positions) if max_n_positions is not None else None
+        ),
         "slots_to_fill": int(slots_to_fill) if slots_to_fill is not None else None,
         "clip_pct": float(clip_pct) if clip_pct is not None else None,
         "volatility_drop_pct": (
-            float(volatility_drop_pct)
-            if volatility_drop_pct is not None
-            else None
+            float(volatility_drop_pct) if volatility_drop_pct is not None else None
         ),
         "score_hysteresis_pct": (
-            float(score_hysteresis_pct)
-            if score_hysteresis_pct is not None
-            else None
+            float(score_hysteresis_pct) if score_hysteresis_pct is not None else None
         ),
         "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
         "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,
@@ -3575,12 +3623,18 @@ def _emit_ema_fallback_used_event_unchecked(
     bot: Any,
     *,
     close_ema_recoveries: dict[str, list[tuple[float, int]]] | None = None,
-    close_ema_fallbacks: dict[str, list[tuple[float, int, int, str, str]]] | None = None,
+    close_ema_fallbacks: (
+        dict[str, list[tuple[float, int, int, str, str]]] | None
+    ) = None,
     forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] | None = None,
 ) -> bool:
     recovered_count = sum(len(items) for items in (close_ema_recoveries or {}).values())
-    close_fallback_count = sum(len(items) for items in (close_ema_fallbacks or {}).values())
-    forager_count = sum(len(items) for items in (forager_cached_ema_fallbacks or {}).values())
+    close_fallback_count = sum(
+        len(items) for items in (close_ema_fallbacks or {}).values()
+    )
+    forager_count = sum(
+        len(items) for items in (forager_cached_ema_fallbacks or {}).values()
+    )
     if not (recovered_count or close_fallback_count or forager_count):
         return False
     level = "warning" if close_fallback_count else "debug"
@@ -3630,7 +3684,9 @@ def emit_ema_fallback_used_event(bot: Any, *args: Any, **kwargs: Any) -> bool:
 def _emit_ema_unavailable_event_unchecked(
     bot: Any,
     *,
-    optional_ema_drops: dict[tuple[str, str, str], list[tuple[str, float]]] | None = None,
+    optional_ema_drops: (
+        dict[tuple[str, str, str], list[tuple[str, float]]] | None
+    ) = None,
     candidate_ema_unavailable_details: dict[str, list[tuple]] | None = None,
     ema_unavailable_reasons: dict[str, list[str]] | None = None,
 ) -> bool:
@@ -3662,9 +3718,11 @@ def _emit_ema_unavailable_event_unchecked(
     )[:8]:
         optional_summary.append(
             {
-                "ema_type": str(ema_type)
-                if str(ema_type) in _EMA_DIAGNOSTIC_TYPES
-                else "unknown",
+                "ema_type": (
+                    str(ema_type)
+                    if str(ema_type) in _EMA_DIAGNOSTIC_TYPES
+                    else "unknown"
+                ),
                 "reason_code": _safe_ema_reason_code(drop_reason_code),
                 "error_type": _safe_ema_error_type(error_type),
                 "symbols": _ema_symbol_sample(symbol for symbol, _span in items),
@@ -3852,7 +3910,12 @@ def emit_order_churn_evidence_event(
             EventTypes.ORDER_CHURN_EVIDENCE,
             level="debug",
             component="order.churn_history",
-            tags=(EventTags.ORDER, EventTags.GATE, EventTags.MEMORY, EventTags.SNAPSHOT),
+            tags=(
+                EventTags.ORDER,
+                EventTags.GATE,
+                EventTags.MEMORY,
+                EventTags.SNAPSHOT,
+            ),
             cycle_id=current_live_event_cycle_id(bot),
             status="skipped" if snapshot_status == "skipped" else "succeeded",
             reason_code=ReasonCodes.ORDER_CHURN_HISTORY,
@@ -3891,8 +3954,12 @@ def emit_order_churn_admission_event(
     """Emit one bounded summary after final churn admission and priority slicing."""
     try:
         rows = [order for order in list(orders or []) if isinstance(order, dict)]
-        reasons = Counter(str(order.get("_churn_gate_reason") or "unknown") for order in rows)
-        symbols = sorted({str(order.get("symbol")) for order in rows if order.get("symbol")})
+        reasons = Counter(
+            str(order.get("_churn_gate_reason") or "unknown") for order in rows
+        )
+        symbols = sorted(
+            {str(order.get("symbol")) for order in rows if order.get("symbol")}
+        )
         distances = [
             float(order["_churn_gate_market_distance"])
             for order in rows
@@ -3974,7 +4041,9 @@ def emit_order_churn_actions_accounted_event(
         return False
 
 
-def _order_event_data(order: dict | None, *, index: int | None = None) -> dict[str, Any]:
+def _order_event_data(
+    order: dict | None, *, index: int | None = None
+) -> dict[str, Any]:
     if not isinstance(order, dict):
         return {"order_type": type(order).__name__}
     data: dict[str, Any] = {
@@ -4313,7 +4382,9 @@ def emit_execution_order_event(
     extra: dict | None = None,
 ) -> None:
     try:
-        order_wave_id, action_id = _execution_event_ids(wave, action=action, index=index)
+        order_wave_id, action_id = _execution_event_ids(
+            wave, action=action, index=index
+        )
         data = _order_event_data(order, index=index)
         if isinstance(result, dict):
             data.update(
@@ -4354,11 +4425,31 @@ def emit_execution_order_event(
             cycle_id=bot._current_live_event_cycle_id(),
             order_wave_id=order_wave_id,
             action_id=action_id,
-            symbol=str(order.get("symbol")) if isinstance(order, dict) and order.get("symbol") else None,
-            pside=str(order.get("position_side")) if isinstance(order, dict) and order.get("position_side") else None,
-            side=str(order.get("side")) if isinstance(order, dict) and order.get("side") else None,
-            order_id=str((result or {}).get("id")) if isinstance(result, dict) and (result or {}).get("id") else None,
-            client_order_id=str(order.get("custom_id")) if isinstance(order, dict) and order.get("custom_id") else None,
+            symbol=(
+                str(order.get("symbol"))
+                if isinstance(order, dict) and order.get("symbol")
+                else None
+            ),
+            pside=(
+                str(order.get("position_side"))
+                if isinstance(order, dict) and order.get("position_side")
+                else None
+            ),
+            side=(
+                str(order.get("side"))
+                if isinstance(order, dict) and order.get("side")
+                else None
+            ),
+            order_id=(
+                str((result or {}).get("id"))
+                if isinstance(result, dict) and (result or {}).get("id")
+                else None
+            ),
+            client_order_id=(
+                str(order.get("custom_id"))
+                if isinstance(order, dict) and order.get("custom_id")
+                else None
+            ),
             status=status,
             reason_code=reason_code,
             data={key: value for key, value in data.items() if value is not None},
@@ -4758,7 +4849,9 @@ def _unstuck_status_side_summary(
             out["override_allowances"] = {
                 symbol: allowance for symbol, allowance in clean_items[:override_limit]
             }
-            out["override_allowances_truncated"] = max(0, len(clean_items) - override_limit)
+            out["override_allowances_truncated"] = max(
+                0, len(clean_items) - override_limit
+            )
     for key in (
         "next_symbol",
         "next_target_price",
@@ -4804,16 +4897,22 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "kind": kind,
         "diagnostics_supported": bool(payload.get("diagnostics_supported", True)),
         "strategy_kind": str(payload.get("strategy_kind") or "") or None,
-        "trailing_status": str(payload.get("status") or payload.get("trailing_status") or "unknown"),
+        "trailing_status": str(
+            payload.get("status") or payload.get("trailing_status") or "unknown"
+        ),
         "selected_mode": str(payload.get("selected_mode") or "") or None,
         "order_type": str(payload.get("order_type") or "") or None,
         "triggered": bool(payload.get("triggered", False)),
-        "threshold_met": bool(payload.get("threshold_met", False))
-        if "threshold_met" in payload
-        else None,
-        "retracement_met": bool(payload.get("retracement_met", False))
-        if "retracement_met" in payload
-        else None,
+        "threshold_met": (
+            bool(payload.get("threshold_met", False))
+            if "threshold_met" in payload
+            else None
+        ),
+        "retracement_met": (
+            bool(payload.get("retracement_met", False))
+            if "retracement_met" in payload
+            else None
+        ),
         "threshold_pct": _safe_float(payload.get("threshold_pct")),
         "threshold_price": threshold_price,
         "retracement_pct": retracement_pct,
@@ -5293,7 +5392,9 @@ def emit_fill_ingested_event(
             if key in fill_payload and data.get(key) is None:
                 data[key] = fill_payload.get(key)
         if live_event_debug_profile_enabled(bot, "fills"):
-            debug = _best_effort_fill_ingested_debug_payload(event, payload=fill_payload)
+            debug = _best_effort_fill_ingested_debug_payload(
+                event, payload=fill_payload
+            )
             if debug:
                 data["debug_profile"] = "fills"
                 data["debug"] = debug
