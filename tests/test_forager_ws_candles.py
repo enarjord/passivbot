@@ -1900,3 +1900,55 @@ async def test_overflow_watcher_terminal_event_survives_console_aggregate_clear(
     assert [e['data']['receive_status'] for e in events if e.get('symbol') == 'OVERFLOW'] == [
         'failed', terminal]
     assert bot._console_candle_receive is None
+
+
+@pytest.mark.asyncio
+async def test_old_watcher_retirement_does_not_clear_replacement_receive_failure(monkeypatch, caplog):
+    from ccxt.base.errors import NetworkError
+    import asyncio
+    events = []
+    monkeypatch.setattr('live.candle_ws_health.emit_event', lambda bot, event: events.append(event))
+    old_ready, new_ready = asyncio.Event(), asyncio.Event()
+    release_old, release_new = asyncio.Event(), asyncio.Event()
+    bot = SimpleNamespace(stop_signal_received=False, get_exchange_time=lambda: 1000000,
+        cm=SimpleNamespace(clear_live_ws_ohlcv_state=lambda symbol: None))
+    async def watch(*args):
+        raise NetworkError('private')
+    bot.ccp = SimpleNamespace(watch_ohlcv=watch)
+    old = None
+    async def sleep(*args, **kwargs):
+        if asyncio.current_task() is old:
+            old_ready.set()
+            try:
+                await release_old.wait()
+            except asyncio.CancelledError:
+                await release_old.wait()
+        else:
+            new_ready.set()
+            await release_new.wait()
+    bot._sleep_unless_shutdown = sleep
+    with caplog.at_level(logging.INFO):
+        old = asyncio.create_task(candle_ws.watch_forager_ws_symbol(bot, 'BTC'))
+        replacement = None
+        try:
+            await asyncio.wait_for(old_ready.wait(), 1.)
+            candle_ws._mark_watcher_retiring(bot, 'BTC', old)
+            old.cancel()
+            await asyncio.sleep(0)
+            replacement = asyncio.create_task(candle_ws.watch_forager_ws_symbol(bot, 'BTC'))
+            await asyncio.wait_for(new_ready.wait(), 1.)
+            failures = [e for e in events if e['status'] == 'failed']
+            old_generation, new_generation = [e['data']['watcher_generation'] for e in failures]
+            assert old_generation != new_generation
+            release_old.set()
+            await asyncio.wait_for(old, 1.)
+            assert bot._console_candle_receive['active'] == {'BTC': new_generation}
+            assert 'watchers cleared' not in caplog.text
+            assert events[-1]['data']['receive_status'] == 'retired'
+            assert events[-1]['data']['watcher_generation'] == old_generation
+        finally:
+            release_old.set()
+            if replacement is not None:
+                replacement.cancel()
+            await asyncio.gather(old, *([replacement] if replacement is not None else []),
+                                 return_exceptions=True)
