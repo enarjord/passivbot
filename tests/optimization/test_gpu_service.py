@@ -641,7 +641,7 @@ def test_gpu_terminal_profile_rebases_recent_window_steps():
 def test_gpu_dispatch_progress_is_rate_limited_and_reports_eta(
     monkeypatch, caplog
 ):
-    readings = iter((100.0, 120.0, 131.0, 162.0))
+    readings = iter((100.0, 120.0, 161.0, 222.0))
     monkeypatch.setattr(
         "optimization.gpu.service.time.monotonic", lambda: next(readings)
     )
@@ -660,10 +660,10 @@ def test_gpu_dispatch_progress_is_rate_limited_and_reports_eta(
             progress, completed_candidates=8, strategy="trailing_martingale"
         )
 
-    assert "chunks=2/4" in caplog.records[0].message
-    assert "candidates=4/8" in caplog.records[0].message
-    assert "eta=" in caplog.records[0].message
-    assert "chunks=4/4" in caplog.records[1].message
+    assert "batches_done=2/4" in caplog.records[0].message
+    assert "scenario_evals=4/8" in caplog.records[0].message
+    assert "eta_group=" in caplog.records[0].message
+    assert "batches_done=4/4" in caplog.records[1].message
 
 
 def test_single_coin_proxy_profile_is_empty_when_disabled(monkeypatch):

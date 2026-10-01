@@ -34,6 +34,13 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_contract import CONTRACT_KEY, recorded_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.replay_progress import suite_replay_context
+from optimization.progress import (
+    DriftProgress,
+    OptimizerProgress,
+    SeedBootstrapProgress,
+    gpu_work_context,
+    log_tokens,
+)
 from optimization.gpu.metric_registry import (
     reject_configured_exact_only_gpu_metrics,
 )
@@ -4947,7 +4954,7 @@ def run_backend(
             int(options["population_size"]),
             int(options["max_dispatch_candidate_bars"]),
         )
-    logging.info("GPU optimizer options: %s", options)
+    logging.debug("GPU optimizer options: %s", options)
 
     if suite_enabled:
         scenario_proxy_groups = {}
@@ -5001,7 +5008,7 @@ def run_backend(
             for _exchange, proxy in exchange_proxies
         ]
 
-        def evaluate_proxy(candidates, *, screening=False):
+        def evaluate_proxy_unscoped(candidates, *, screening=False):
             return _evaluate_gpu_suite_proxies(
                 evaluator_for_pool,
                 scenario_proxies,
@@ -5029,8 +5036,23 @@ def run_backend(
         )
         profile_proxies = [proxy]
 
-        def evaluate_proxy(candidates, *, screening=False):
-            return proxy.evaluate(candidates)
+        def evaluate_proxy_unscoped(candidates, *, screening=False):
+            with suite_replay_context(
+                pass_index=1, pass_count=1, labels=[exchange], exchanges=[exchange],
+                evaluation_stage="screening" if screening else "full",
+            ):
+                return proxy.evaluate(candidates)
+
+    def evaluate_proxy(candidates, *, screening=False):
+        phase = (
+            "seed_proxy" if not seed_bootstrap_complete
+            else "gpu_screening" if screening else "gpu_proxy"
+        )
+        progress.transition(phase)
+        with gpu_work_context(
+            generation + int(generation_in_progress), phase, progress.report,
+        ):
+            return evaluate_proxy_unscoped(candidates, screening=screening)
 
     configure_batch_tuning(profile_proxies, config, options)
 
@@ -5516,11 +5538,43 @@ def run_backend(
     profile_started = time.perf_counter() if profile_enabled else 0.0
     proxy_evaluations = 0
     novelty_stall_generations = 0
-    last_warning = None
     last_probe_shortfall = None
     last_checkpoint_at = 0.0
     last_checkpoint_exact = seed_exact_done + exact_done
     generation_in_progress = False
+
+    def progress_snapshot():
+        return {
+            "gen": generation + int(generation_in_progress),
+            "evolution_proxy_completed_run": proxy_evaluations,
+            "seed_proxy": (
+                len(starting_vectors)
+                if seed_bootstrap_mode == "screened" and seed_screen_complete else 0
+            ),
+            "seed_exact": seed_exact_done,
+            "evolution_exact": f"{exact_done}/{budget}",
+            "evolution_pending": len(pending),
+            **recorder.store.progress_snapshot(),
+        }
+
+    progress = OptimizerProgress(progress_snapshot)
+    drift_progress = DriftProgress(
+        rank_halt=drift_monitor.halt,
+        constraint_halt=drift_monitor.constraint_halt,
+        objective_tolerance=drift_monitor.objective_tolerance,
+    )
+    dispatch_limits = sorted({
+        getattr(item, "dispatch_batch_size", options["batch_size"])
+        for item in profile_proxies
+    })
+    log_tokens("GPU optimizer start |", [
+        f"population={population_size}", f"exact_budget={budget}",
+        f"exact_workers={workers}", f"max_pending_exact={max_pending}",
+        f"batch_setting={(config['optimize'].get('gpu') or {}).get('batch_size')}",
+        f"requested_batch_limit={options['batch_size']}",
+        f"dispatch_batch_limit={dispatch_limits[0]}..{dispatch_limits[-1]}",
+        "objective_bests=independent_exact_front_extremes (* marks improvement)",
+    ])
 
     def checkpoint_state() -> dict:
         seed_plan = None
@@ -5700,6 +5754,7 @@ def run_backend(
             return
 
         prepare_seed_proxy_screen()
+        progress.transition("seed_exact")
 
         # Preserve the normalized seed pool and proxy-screening result before
         # starting exact work. A hard interruption can then resume without
@@ -5724,6 +5779,9 @@ def run_backend(
 
         pending_seed = {}
         cursor = 0
+        seed_progress = SeedBootstrapProgress(
+            len(seed_bootstrap_selections), completed=seed_exact_done, workers=workers,
+        )
         try:
             while cursor < len(selected) or pending_seed:
                 interrupt_check()
@@ -5737,6 +5795,9 @@ def run_backend(
                     )
                     pending_seed[result] = item
                     cursor += 1
+                seed_progress.update(
+                    seed_exact_done, inflight=len(pending_seed), queued=len(selected) - cursor,
+                )
                 ready = _ready_submission_prefix(pending_seed)
                 if not ready:
                     PymooAsyncRecordingRunner._raise_if_pool_workers_exited(
@@ -5849,6 +5910,7 @@ def run_backend(
             maybe_save_checkpoint(force=True)
             raise
 
+        seed_progress.update(seed_exact_done, inflight=0, queued=0, force=True)
         ordered_payloads = []
         for source_index, _is_probe, _is_proxy_front in seed_bootstrap_selections:
             digest = vector_hash(starting_vectors[int(source_index)])
@@ -5894,6 +5956,7 @@ def run_backend(
         algorithm.initialization.sampling = sampling
 
         status = drift_monitor.evaluate()
+        drift_progress.update(status)
         if status["halt_reason"]:
             persisted_halt_reason = status["halt_reason"]
             maybe_save_checkpoint(force=True)
@@ -5910,7 +5973,7 @@ def run_backend(
         maybe_save_checkpoint(force=True)
 
     def consume_ready(*, wait_for_one: bool = False, checkpoint: bool = True) -> None:
-        nonlocal exact_done, last_warning, persisted_halt_reason
+        nonlocal exact_done, persisted_halt_reason
         while True:
             interrupt_check()
             # Preserve submission/generation order in the durable evidence
@@ -5921,7 +5984,10 @@ def run_backend(
             if ready:
                 break
             if not wait_for_one or not pending:
+                if pending:
+                    progress.report()
                 return
+            progress.report()
             PymooAsyncRecordingRunner._raise_if_pool_workers_exited(pool_workers)
             time.sleep(0.05)
         for result in ready:
@@ -6014,9 +6080,7 @@ def run_backend(
                 exact_objectives=exact_objectives,
             )
             status = drift_monitor.evaluate()
-            if status["warn_reason"] and status["warn_reason"] != last_warning:
-                logging.warning(status["warn_reason"])
-                last_warning = status["warn_reason"]
+            drift_progress.update(status)
             if status["halt_reason"]:
                 persisted_halt_reason = status["halt_reason"]
                 if checkpoint:
@@ -6027,13 +6091,7 @@ def run_backend(
         # resume recovers any durable results ahead of that safe checkpoint.
         if checkpoint:
             maybe_save_checkpoint(force=True)
-        else:
-            _log_gpu_profile(
-                "exact_progress",
-                generation=generation,
-                exact_completed=exact_done,
-                exact_inflight=len(pending),
-            )
+        progress.report()
 
     try:
         run_seed_bootstrap()
@@ -6041,6 +6099,7 @@ def run_backend(
             interrupt_check()
             consume_ready()
             if exact_done + len(pending) >= budget:
+                progress.transition("exact_wait")
                 consume_ready(wait_for_one=True)
                 continue
             validation_count = min(
@@ -6048,6 +6107,7 @@ def run_backend(
                 budget - exact_done - len(pending),
             )
             if max_pending - len(pending) < validation_count:
+                progress.transition("exact_wait")
                 consume_ready(wait_for_one=True)
                 continue
 
@@ -6289,19 +6349,11 @@ def run_backend(
                     exact_inflight=len(pending),
                 )
 
-            if generation == 1 or generation % 10 == 0:
-                elapsed = time.time() - start_time
-                logging.info(
-                    "GPU optimize | gen=%d proxy=%d (%.1f/s) exact=%d inflight=%d",
-                    generation,
-                    proxy_evaluations,
-                    proxy_evaluations / max(elapsed, 1.0e-9),
-                    exact_done,
-                    len(pending),
-                )
+            progress.transition("generation_complete")
             maybe_save_checkpoint(force=True)
 
         while pending and exact_done < budget:
+            progress.transition("exact_wait")
             consume_ready(wait_for_one=True)
         maybe_save_checkpoint(force=True)
         if profile_enabled:
@@ -6313,15 +6365,7 @@ def run_backend(
                 wall_seconds=_gpu_profile_elapsed(profile_started),
                 exact_validation_cumulative_seconds=dict(profile_totals),
             )
-        logging.info(
-            "GPU optimization complete | generations=%d proxy=%d seed_exact=%d "
-            "evolution_exact=%d wall=%.1fs",
-            generation,
-            proxy_evaluations,
-            seed_exact_done,
-            exact_done,
-            time.time() - start_time,
-        )
+        progress.transition("complete")
         return {"pool": pool, "pool_terminated": False}
     except KeyboardInterrupt:
         cancel_pending_async_results(pending)

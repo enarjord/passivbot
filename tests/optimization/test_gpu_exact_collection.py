@@ -19,14 +19,15 @@ from test_hsl_revised_offline_runtime import deny_network, offline_cli_config
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stop_kind", ["interrupt", "recorder_error"])
-async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatch, stop_kind):
+@pytest.mark.parametrize("stop_kind", ["interrupt", "recorder_error", "seeded", "seeded_screened"])
+async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatch, stop_kind, capsys):
     import optimize
     from config.optimize_bounds import set_flat_optimize_bound
     from opt_utils import load_results
     from optimization import problem
     from optimization.backends import gpu_backend
     from optimization.gpu import runtime, service
+    from optimization.progress import work_scope
     from optimization.shape import build_optimization_shape
 
     cfg = offline_cli_config(tmp_path, monkeypatch, "coin")
@@ -42,6 +43,9 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         population_size=8, batch_size=8, exact_workers=1, max_pending_exact=4,
         validate_per_generation=2, drift_probes=1, auto_lean_parallelism=False,
     )
+    seeded = stop_kind.startswith("seeded")
+    if stop_kind == "seeded_screened":
+        cfg["optimize"]["gpu"]["seed_bootstrap"]["mode"] = "screened"
     shape = build_optimization_shape(cfg)
     for key, path in shape.key_paths:
         value = cfg
@@ -50,7 +54,7 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         set_flat_optimize_bound(cfg["optimize"]["bounds"], "trailing_martingale", key, [value, value])
     cfg["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.01, 0.2]
 
-    state = SimpleNamespace(resuming=False, proxy_calls=0, pools=[], submissions=[], records=[])
+    state = SimpleNamespace(resuming=seeded, proxy_calls=0, pools=[], submissions=[], records=[], scopes=[])
     oldest_ready = threading.Event()
     recorded = threading.Event()
     original_record = optimize.ResultRecorder.record
@@ -109,6 +113,7 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
             pass
 
         def evaluate(self, candidates):
+            state.scopes.append(work_scope())
             state.proxy_calls += 1
             if not state.resuming and state.proxy_calls == 2:
                 assert len(state.submissions) == 2
@@ -141,12 +146,43 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
     monkeypatch.setattr(runtime, "gpu_device", lambda *args: "mps")
     path = tmp_path / "config.json"
     path.write_text(json.dumps(cfg))
-    monkeypatch.setattr(sys, "argv", ["optimize", str(path), "--suite", "n"])
+    argv = ["optimize", str(path), "--suite", "n"]
+    if seeded:
+        seeds = tmp_path / "seeds"
+        seeds.mkdir()
+        for index, threshold in enumerate([0.05, 0.15]):
+            seed_config = copy.deepcopy(cfg)
+            seed_config["bot"]["long"]["hsl"]["red_threshold"] = threshold
+            (seeds / f"seed_{index}.json").write_text(json.dumps(seed_config))
+        argv += ["-t", str(seeds)]
+    monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit) as stopped:
         await optimize.main()
+    if seeded:
+        assert stopped.value.code == 0
+        artifact, = (tmp_path / "optimize_results").rglob("all_results.bin")
+        records = list(load_results(str(artifact)))
+        final = pickle.loads((artifact.parent / "checkpoint.pkl").read_bytes())
+        assert final["seed_exact_done"] == 2
+        assert final["exact_done"] == cfg["optimize"]["iters"]
+        assert len(records) == cfg["optimize"]["iters"] + 2
+        output = capsys.readouterr().err
+        assert "GPU seed exact start | completed=0/2 workers=1" in output
+        assert "GPU seed exact complete | completed=2/2 inflight=0 queued=0" in output
+        assert "phase=seed_exact" in output and "phase=generation_complete" in output
+        assert "phase=complete" in output and "evolution_exact=32/32" in output
+        if stop_kind == "seeded_screened":
+            assert state.scopes[:2] == ["gen=0 phase=seed_proxy", "gen=1 phase=gpu_proxy"]
+            assert "phase=seed_proxy" in output and "seed_proxy=2" in output
+        else:
+            assert state.scopes[0] == "gen=1 phase=gpu_proxy"
+        assert work_scope() == "phase=gpu_proxy"
+        return
     assert stopped.value.code == (130 if stop_kind == "interrupt" else 1)
     assert state.pools[-1].terminated
     assert state.proxy_calls == 2
+    assert state.scopes[:2] == ["gen=1 phase=gpu_proxy", "gen=2 phase=gpu_proxy"]
+    assert work_scope() == "phase=gpu_proxy"
     assert len(state.submissions) == len(state.records) == 2
     assert not any(t.name == "gpu-exact-collector" for t in threading.enumerate())
 
