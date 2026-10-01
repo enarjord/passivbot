@@ -302,6 +302,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
     """Watch one symbol and pass only validated finalized rows to the manager."""
     consecutive_failures = 0
     receive_failed = False
+    from uuid import uuid4
+    receive_generation = uuid4().hex[:12]
     watcher_task = asyncio.current_task()
     try:
         while not bool(getattr(bot, "stop_signal_received", False)):
@@ -316,7 +318,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 if _watcher_is_retiring(bot, symbol, watcher_task):
                     break
                 from live.candle_ws_health import observe_receive_status
-                observe_receive_status(bot, symbol, recovered=True, previously_failed=receive_failed)
+                observe_receive_status(bot, symbol, recovered=True, previously_failed=receive_failed,
+                                       generation=receive_generation)
                 receive_failed = False
                 stage = "ingest"
                 ingest = getattr(bot.cm, "ingest_live_ws_ohlcv", None)
@@ -353,7 +356,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 shared_receive = stage == "receive" and isinstance(exc, NetworkError)
                 if shared_receive:
                     receive_failed = True
-                    observe_receive_status(bot, symbol, error=exc, retry_s=delay_s)
+                    observe_receive_status(bot, symbol, error=exc, retry_s=delay_s,
+                                           generation=receive_generation)
                 last_warning_ms = int(warning_state.get(symbol, 0) or 0)
                 if not shared_receive and (now_ms <= 0 or now_ms - last_warning_ms >= 300_000):
                     logging.warning(
@@ -374,7 +378,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 )
     finally:
         from live.candle_ws_health import observe_receive_status
-        observe_receive_status(bot, symbol, retired=True, previously_failed=receive_failed)
+        observe_receive_status(bot, symbol, retired=True, previously_failed=receive_failed,
+                               generation=receive_generation)
         if not _watcher_is_retiring(bot, symbol, watcher_task):
             await _best_effort_unwatch(bot, symbol)
 
