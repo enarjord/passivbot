@@ -524,8 +524,11 @@ async def test_real_pipeline_risk_attempt_delivery_and_failure_fallback(
         assert len(attempts) == 2  # No duplicate on healthy console delivery.
         assert attempts[0].levelno == logging.WARNING
         assert attempts[-1].levelno == logging.ERROR
-        for detail in ("retry_count=2", "max_attempts=2", "balance_raw=0.0", "stop_without_restart"):
+        for detail in ("retry_count=2", "max_attempts=2", "balance_raw=0.0"):
             assert detail in attempts[-1].message
+        terminal_rows = [r.message for r in caplog.records if r.levelno == logging.ERROR
+                         and r.message.startswith("[risk]")]
+        assert "action=stop_without_restart" in " ".join(terminal_rows)
         assert "CONSOLE_SECRET" not in caplog.text
         assert pipeline.flush(timeout=2.0)
         events = [e for e in structured.events if e.event_type == EventTypes.RISK_INPUT_STATUS]

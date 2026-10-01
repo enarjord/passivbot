@@ -1655,7 +1655,7 @@ async def test_revised_trailing_console_failure_does_not_stop_execution():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('outcome', ['ready', 'not_ready', 'io_failure', 'sink_failure'])
+@pytest.mark.parametrize('outcome', ['ready', 'not_ready', 'io_failure', 'sink_failure', 'shutdown_protect'])
 async def test_revised_completed_pass_does_not_complete_pending_ordinary_work(monkeypatch, outcome):
     import asyncio
     from types import SimpleNamespace
@@ -1680,6 +1680,8 @@ async def test_revised_completed_pass_does_not_complete_pending_ordinary_work(mo
     instance.schedule_history = lambda: None
     instance.schedule_sources = lambda: None
     async def protect(**kwargs):
+        if outcome == 'shutdown_protect':
+            bot.stop_signal_received = True
         return False
     async def prepare():
         await asyncio.Event().wait()
@@ -1687,7 +1689,7 @@ async def test_revised_completed_pass_does_not_complete_pending_ordinary_work(mo
     instance._ordinary_plan = prepare
     try:
         result = await instance.cycle()
-        assert result['updated'] is (outcome in ('ready', 'sink_failure'))
+        assert result['updated'] is (outcome in ('ready', 'sink_failure', 'shutdown_protect'))
         completions = [data for kind, data in events if kind == EventTypes.CYCLE_COMPLETED]
         if outcome == 'ready':
             assert len(completions) == 1

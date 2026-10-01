@@ -155,9 +155,12 @@ def _initialize_fresh_entry_trace(
 
 def add_to_recent_order_cancellations(bot, order):
     """Record a recently cancelled order to throttle repeated cancellations."""
+    stamp = _utc_ms()
     bot.recent_order_cancellations.append(
-        {**order, **{"execution_timestamp": _utc_ms()}}
+        {**order, **{"execution_timestamp": stamp}}
     )
+    from live.console_health import observe_order_write
+    observe_order_write(bot, stamp)
 
 
 def order_was_recently_cancelled(bot, order, max_age_ms=15_000) -> float:
@@ -198,7 +201,10 @@ def order_matches_bot_cancellation(bot, order, max_age_ms=180_000) -> bool:
 
 def add_to_recent_order_executions(bot, order):
     """Track newly created orders to limit duplicate submissions."""
-    bot.recent_order_executions.append({**order, **{"execution_timestamp": _utc_ms()}})
+    stamp = _utc_ms()
+    bot.recent_order_executions.append({**order, **{"execution_timestamp": stamp}})
+    from live.console_health import observe_order_write
+    observe_order_write(bot, stamp)
 
 
 def order_matches_recent_execution(bot, order, max_age_ms=180_000) -> bool:

@@ -2429,6 +2429,9 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
     if waits:
         age = _data_number(data, "trailing_wait_max_ms")
         parts.append(f"trailing_input_wait={waits}" + (f"/{age / 1000.:.1f}s" if age is not None else ""))
+    overflow = _data_int(data, "trailing_wait_overflow_count")
+    if overflow:
+        parts.append(f"wait_untracked={overflow}")
     samples = data.get("trailing_wait_samples")
     if waits and isinstance(samples, list) and samples and isinstance(samples[0], Mapping):
         row = samples[0]

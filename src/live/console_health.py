@@ -52,18 +52,18 @@ def readiness_payload(bot, now_ms):
                    for name in ('balance', 'positions', 'open_orders', 'fills')
                    if (state := ledger.get(name)) is not None
                    and 0 < state.updated_ms <= now_ms}
-    writes = [row.get('execution_timestamp') for rows in
-              (getattr(bot, 'recent_order_executions', ()),
-               getattr(bot, 'recent_order_cancellations', ())) for row in rows[-256:]]
-    latest_write = max((stamp for stamp in writes if isinstance(stamp, (int, float))
-                        and 0 < stamp <= now_ms), default=None)
+    latest_write = getattr(bot, '_console_last_write_ms', None)
+    if not isinstance(latest_write, (int, float)) or not 0 < latest_write <= now_ms:
+        latest_write = None
     completed = getattr(bot, '_console_last_cycle_completed_ms', None)
     owner = getattr(bot, '_hsl_revised_live', None)
     ordinary = getattr(owner, '_ordinary', None)
     ordinary_started = getattr(owner, '_ordinary_started_ms', None)
     ordinary_pending_age = (max(0, now_ms - ordinary_started)
         if ordinary is not None and not ordinary.done() and ordinary_started is not None else None)
-    return dict(trailing_wait_count=len(active), trailing_wait_samples=details,
+    return dict(trailing_wait_count=len({symbol for symbol, _ in active} | {symbol for symbol, _ in blocked}),
+                trailing_wait_overflow_count=len({symbol for symbol, _ in blocked} - set(waits)),
+                trailing_wait_samples=details,
                 trailing_wait_max_ms=max((row['age_ms'] for row in details), default=None),
                 ordinary_pending_age_ms=ordinary_pending_age,
                 account_surface_ages_ms=surface_ages,
@@ -74,6 +74,15 @@ def readiness_payload(bot, now_ms):
                 bot_label=token(getattr(bot, 'user', None)), open_order_count=len(orders),
                 close_coverage=counts, account_pending=missing,
                 account_age_ms=max(ages) if len(ages) == 3 else None)
+
+
+def observe_order_write(bot, stamp):
+    """Retain one presentation timestamp independently of execution retry caches."""
+    try:
+        bot._console_last_write_ms = stamp
+    except Exception:
+        # Optional presentation never prevents recording the execution cache.
+        pass
 
 
 def _trailing_phase(reasons):
@@ -119,13 +128,12 @@ def log_trailing_recovery(bot, unavailable, now_ms):
         for symbol in sorted(unavailable):
             if symbol not in waits:
                 if len(waits) >= 256:
-                    evicted = next(iter(waits))
-                    waits.pop(evicted)
-                    prior.pop(evicted, None)
+                    continue
                 waits[symbol] = dict(since_ms=now_ms, observed_ms=now_ms,
                                     phase=_trailing_phase(unavailable[symbol]), polls=1,
                                     phase_ms=dict(fill_confirmation=0, candle_input=0, other_input=0))
                 prior[symbol] = now_ms
+        bot._console_trailing_wait_overflow = len(set(unavailable) - set(waits))
     except Exception as exc:
         logging.debug('[trailing] recovery presentation failed | error_type=%s', type(exc).__name__)
 

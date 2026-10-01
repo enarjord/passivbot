@@ -314,6 +314,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 rows = await bot.ccp.watch_ohlcv(symbol, "1m")
                 if _watcher_is_retiring(bot, symbol, watcher_task):
                     break
+                from live.candle_ws_health import observe_receive_status
+                observe_receive_status(bot, symbol, recovered=True)
                 stage = "ingest"
                 ingest = getattr(bot.cm, "ingest_live_ws_ohlcv", None)
                 if callable(ingest):
@@ -326,8 +328,6 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                     if inspect.isawaitable(result):
                         await result
                 consecutive_failures = 0
-                from live.candle_ws_health import observe_receive_status
-                observe_receive_status(bot, symbol, recovered=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

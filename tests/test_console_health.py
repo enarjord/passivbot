@@ -104,6 +104,7 @@ def test_phase_breakdown_and_current_fill_readiness_are_observations(caplog):
         positions={'BTC': {'long': {'size': 1}}},
         _authoritative_pending_confirmations={'fills': ledger.epoch + 1},
         recent_order_executions=[{'execution_timestamp': 1000}],
+        _console_last_write_ms=1000,
         _console_last_cycle_completed_ms=2000)
     with caplog.at_level(logging.INFO):
         log_trailing_recovery(bot, {'BTC': ['position_fill_confirmation_pending']}, 1000)
@@ -136,3 +137,36 @@ def test_console_retry_freezes_observed_recovery_time(monkeypatch, caplog):
     with caplog.at_level(logging.INFO):
         log_trailing_recovery(bot, {}, 10000)
     assert 'wait=2.0s fill=2.0s' in caplog.text
+
+
+def test_wait_cap_retains_ages_and_reports_untracked_held_symbols():
+    symbols = {str(i): ['missing_candles'] for i in range(1000)}
+    bot = SimpleNamespace(positions={symbol: {'long': {'size': 1}} for symbol in symbols},
+                          _orchestrator_trailing_unavailable_reasons=symbols)
+    log_trailing_recovery(bot, symbols, 1000)
+    tracked = set(bot._console_trailing_waits)
+    log_trailing_recovery(bot, symbols, 11000)
+    assert set(bot._console_trailing_waits) == tracked
+    assert all(row['since_ms'] == 1000 and row['polls'] == 2
+               for row in bot._console_trailing_waits.values())
+    payload = readiness_payload(bot, 11000)
+    assert payload['trailing_wait_count'] == 1000
+    assert payload['trailing_wait_overflow_count'] == 744
+    assert payload['trailing_wait_max_ms'] == 10000
+    assert 'wait_untracked=744' in format_periodic_health_summary(payload)
+    log_trailing_recovery(bot, {symbol: symbols[symbol] for symbol in tracked}, 12000)
+    assert bot._console_trailing_wait_overflow == 0
+
+
+def test_last_write_survives_retry_cache_pruning(monkeypatch):
+    from live import reconciler
+    bot = SimpleNamespace(recent_order_executions=[], recent_order_cancellations=[])
+    clock = [1000]
+    monkeypatch.setattr(reconciler, '_utc_ms', lambda: clock[0])
+    reconciler.add_to_recent_order_executions(bot, {'id': 'create'})
+    bot.recent_order_executions.clear()
+    assert readiness_payload(bot, 901000)['last_write_age_ms'] == 900000
+    clock[0] = 901000
+    reconciler.add_to_recent_order_cancellations(bot, {'id': 'cancel'})
+    bot.recent_order_cancellations.clear()
+    assert readiness_payload(bot, 1801000)['last_write_age_ms'] == 900000
