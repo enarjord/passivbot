@@ -15,6 +15,7 @@ import passivbot_rust as pbr
 from config.limits import resolve_reducer_mode
 from config.metrics import canonicalize_metric_name, resolve_metric_value
 from config.scoring import extract_objective_specs
+from optimization.progress import duration, log_tokens
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
@@ -187,9 +188,10 @@ class ParetoStore:
         # ------------------------------------------------------------------
         self.n_iters = 0
         self._last_flush_ts = time.time()
-        self._last_front_log_ts = None
-        self._front_log_added = 0
-        self._front_log_removed = 0
+        self._last_best = None
+        self._last_best_scope = None
+        self.last_front_change_at = None
+        self.front_additions = 0
         self._lock = threading.RLock()
 
         self.scoring_keys = None
@@ -200,6 +202,7 @@ class ParetoStore:
         self._bootstrapping = True
         self._bootstrap_from_disk()
         self._bootstrapping = False
+        self._last_best_scope, self._last_best = self._best_objectives()
 
     @staticmethod
     def _scoring_signature(specs: Sequence[Any]) -> tuple[tuple[Any, ...], ...]:
@@ -354,7 +357,6 @@ class ParetoStore:
         with self._lock:
             self._write_all_to_disk()
             self._last_flush_ts = time.time()
-            self._emit_front_summary(force=True)
 
     def _maybe_flush(self) -> None:
         if time.time() - self._last_flush_ts >= self.flush_interval:
@@ -444,12 +446,34 @@ class ParetoStore:
         return tuple(values)
 
     def _log_front_state(self, *, added: int, removed: int) -> None:
-        """Keep detailed updates at DEBUG and aggregate changes at INFO."""
+        """Report every accepted member and the best of every objective."""
         if self._bootstrapping:
             return
-        self._front_log_added += added
-        self._front_log_removed += removed
-        self._emit_front_summary()
+        self.front_additions += added
+        self.last_front_change_at = time.monotonic()
+        scope, best = self._best_objectives()
+        goals = [spec.goal for spec in self.scoring_specs] if self.scoring_specs else ["min"] * len(best)
+        improved = [
+            self._last_best is None or self._last_best_scope != scope or
+            (value > self._last_best[i] if goals[i] == "max" else value < self._last_best[i])
+            for i, value in enumerate(best)
+        ]
+        log_tokens("Pareto update |", [
+            f"eval={self.n_iters}", f"front={len(self._front)}",
+            f"feasible={sum(self._violations[idx] <= 0 for idx in self._front)}",
+            f"changes=+{added}/-{removed}", f"best_scope={scope}",
+            f"quality={'improved' if any(improved) else 'unchanged_tradeoff'}",
+            f"constraint={min(self._violations[idx] for idx in self._front):.3g}..{max(self._violations[idx] for idx in self._front):.3g}",
+        ], logger=self._log)
+        keys = self.scoring_keys or [f"objective_{i}" for i in range(len(best))]
+        for goal in ("max", "min"):
+            metrics = [
+                f"{key}={value:.6g}{'*' if changed else ''}"
+                for key, value, direction, changed in zip(keys, best, goals, improved) if direction == goal
+            ]
+            if metrics:
+                log_tokens(f"Pareto best | eval={self.n_iters} goal={goal} |", metrics, logger=self._log)
+        self._last_best_scope, self._last_best = scope, best
         if not self._log.isEnabledFor(logging.DEBUG):
             return
         objs = [self._objectives[idx] for idx in self._front]
@@ -479,34 +503,25 @@ class ParetoStore:
             f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}"
         )
 
-    def _emit_front_summary(self, *, force: bool = False) -> None:
-        if not self._front_log_added:
-            return
-        now = time.monotonic()
-        if not force and self._last_front_log_ts is not None and now - self._last_front_log_ts < 60.0:
-            return
-        violations = [self._violations.get(idx, 0.0) for idx in self._front]
-        feasible = sum(value <= 0.0 for value in violations)
-        constraint = f"{min(violations):.3g}..{max(violations):.3g}" if violations else "empty"
-        # Retain the first two configured objective ranges at normal verbosity;
-        # the full front remains available in files and DEBUG updates.
-        objective_count = len(next(iter(self._objectives.values()), ()))
-        keys = self.scoring_keys or [f"objective_{i}" for i in range(objective_count)]
-        ranges = []
-        for i, key in enumerate(keys[:2]):
-            values = [self._objectives[idx][i] for idx in self._front]
-            label = "".join(c if c.isprintable() else "_" for c in key)[:24]
-            if values:
-                ranges.append(f"{label}={min(values):.3g}..{max(values):.3g}")
-        if len(keys) > 2:
-            ranges.append(f"+{len(keys) - 2} metrics at DEBUG")
-        self._log.info(
-            "Pareto summary | eval=%d front=%d feasible=%d changes=+%d/-%d constraint=%s | %s",
-            self.n_iters, len(self._front), feasible,
-            self._front_log_added, self._front_log_removed, constraint, " ".join(ranges),
-        )
-        self._last_front_log_ts = now
-        self._front_log_added = self._front_log_removed = 0
+    def _best_objectives(self):
+        if not self._front:
+            return "empty", None
+        feasible = [idx for idx in self._front if self._violations[idx] <= 0]
+        members = feasible or self._front
+        columns = list(zip(*(self._objectives[idx] for idx in members)))
+        goals = [spec.goal for spec in self.scoring_specs] if self.scoring_specs else ["min"] * len(columns)
+        best = tuple((max if goal == "max" else min)(column) for goal, column in zip(goals, columns))
+        return "feasible_front" if feasible else "infeasible_front", best
+
+    def progress_snapshot(self):
+        with self._lock:
+            return {
+                "front": len(self._front), "pareto_added": self.front_additions,
+                "feasible": sum(self._violations[idx] <= 0 for idx in self._front),
+                "last_pareto_age": duration(
+                    None if self.last_front_change_at is None else time.monotonic() - self.last_front_change_at
+                ),
+            }
 
     def _prune_front(self, n_prune: int) -> None:
         """Trim the Pareto front down by removing the most crowded entries."""

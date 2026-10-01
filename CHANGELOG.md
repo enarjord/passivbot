@@ -11,10 +11,16 @@ since the latest release tag; these features may already be available when insta
   between successful full candidate replays rather than waiting for dozens of full-history batches.
   Consume at most one tuning/cooldown window per replay to bound repeated unproductive trials.
 
-- Reduce optimizer console noise with minute-spaced Pareto and GPU replay summaries,
+- Report every accepted Pareto member with all configured objective bests, respecting max/min
+  goals and marking new bests while retaining tradeoffs that improve no extremes. GPU logs now
+  identify generations, phases, scenario groups, candidate batches and history/kernel work, with
+  periodic run/Pareto/exact progress, readable scoped ETAs and clearer auto-tune evidence. Coalesce
+  repeated drift warnings without changing validation or safety halt decisions.
+
+- Reduce optimizer console noise with minute-spaced GPU replay summaries,
   replay percentage, throughput and ETA, and exact seed-validation progress. Aggregate
   seed-clamp warnings and retain per-candidate metrics and clamp details at DEBUG. Resumed
-  Pareto summaries exclude historical reconstruction and use restored evaluation counts.
+  Pareto updates exclude historical reconstruction and use restored evaluation counts.
 
 - GPU optimization now tunes automatic candidate batch sizes during actual screening, using rolling
   throughput evidence, bounded trials, memory headroom, and reusable local calibration records.

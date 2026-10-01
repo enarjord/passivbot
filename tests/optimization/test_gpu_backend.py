@@ -8098,10 +8098,10 @@ def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching,
     assert calls == expected_batches
     messages = [record.getMessage() for record in caplog.records]
     if len(expected_batches) == 1:
-        assert any("suite_pass=1/1 scenarios=first,second exchange=x stage=full" in m for m in messages)
+        assert any("group=1/1" in m and "scenarios=first,second exchange=x stage=full" in m for m in messages)
     else:
-        assert any("suite_pass=1/2 scenarios=first exchange=x stage=full" in m for m in messages)
-        assert any("suite_pass=2/2 scenarios=second exchange=x stage=full" in m for m in messages)
+        assert any("group=1/2" in m and "scenarios=first exchange=x stage=full" in m for m in messages)
+        assert any("group=2/2" in m and "scenarios=second exchange=x stage=full" in m for m in messages)
     assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-2,), (-5,)]
     assert candidates == [{}, {'value': 5}]
     assert sum(p.last_profile.get('count', 0) for p in [first, second]) == 4
@@ -8152,7 +8152,7 @@ def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(scre
     assert [c[0] for c in calls] == expected_labels
     messages = [record.getMessage() for record in caplog.records]
     for index, label in enumerate(expected_labels, start=1):
-        assert any(f"suite_pass={index}/{len(expected_labels)} scenarios={label} "
+        assert any(f"group={index}/{len(expected_labels)}" in m and f"scenarios={label} "
                    f"exchange=x stage={'screening' if screening else 'full'}" in m for m in messages)
     assert calls[-1][2] == [3, 3]
     assert all(c[1] == {} for c in calls)

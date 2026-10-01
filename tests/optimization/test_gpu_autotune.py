@@ -253,14 +253,14 @@ def test_gpu_changed_batch_width_preserves_every_metric(case, tmp_path):
 def test_adaptive_progress_reports_actual_chunks(monkeypatch, caplog):
     from optimization.gpu.service import _new_gpu_dispatch_progress, _update_gpu_dispatch_progress
 
-    ticks = iter([0.0, 31.0, 62.0])
+    ticks = iter([0.0, 61.0, 122.0])
     monkeypatch.setattr("optimization.gpu.service.time.monotonic", lambda: next(ticks))
     progress = _new_gpu_dispatch_progress(16, 16, adaptive=True)
     with caplog.at_level("INFO"):
         _update_gpu_dispatch_progress(progress, completed_candidates=2, strategy="test")
         _update_gpu_dispatch_progress(progress, completed_candidates=16, strategy="test")
-    assert "chunks=1 candidates=2/16" in caplog.records[0].message
-    assert "chunks=2 candidates=16/16" in caplog.records[1].message
+    assert "batches_done=1 scenario_evals=2/16" in caplog.records[0].message
+    assert "batches_done=2 scenario_evals=16/16" in caplog.records[1].message
 
 
 def test_corrupt_cache_is_repaired_and_cached_reduction_needs_no_growth_headroom(tmp_path):
