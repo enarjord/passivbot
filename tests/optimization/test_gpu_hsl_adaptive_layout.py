@@ -30,7 +30,7 @@ def test_hsl_and_adaptive_fields_are_independent_in_native_shader(strategy, mult
         hsl_red_threshold=0.13,
         hsl_ema_span_minutes=7.0,
         hsl_cooldown_minutes_after_red=29.0,
-        hsl_restart_policy=1.0,
+        hsl_restart_policy=0.0,
         hsl_signal_mode=2.0,
         hsl_slot_count=3.0,
         unstuck_ema_span_0=11.0,

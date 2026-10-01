@@ -21,6 +21,9 @@ _KERNELS = (
 
 def _source(name):
     source = (_GPU / name).read_text()
+    source = source.replace(
+        "// PASSIVBOT_ADAPTIVE_TIMING", (_GPU / "mps_adaptive_timing.metal").read_text()
+    )
     for marker, filename in (
         ("UNSTUCK_EMA", "mps_unstuck_ema_common.metal"),
         ("HSL", "mps_hsl_common.metal"),
