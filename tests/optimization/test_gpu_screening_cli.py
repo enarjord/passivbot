@@ -82,9 +82,38 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
     auto_exact = auto_mode in {"exact", "both"}
     if auto_exact:
         from optimization.gpu import exact_autotune
+        from optimization.gpu import service
         monkeypatch.setattr(exact_autotune, "WINDOW", 2)
         monkeypatch.setattr(exact_autotune, "MIN_SECONDS", 0.0)
         cfg["optimize"]["gpu"].update(exact_workers="auto", max_pending_exact=None)
+        sizing_events = []
+        capture_rss = gpu_backend.capture_worker_rss
+        size_workers = gpu_backend.initial_workers
+
+        def capture_baseline(*args, **kwargs):
+            sizing_events.append("baseline")
+            return capture_rss(*args, **kwargs)
+
+        def size_after_proxy(*args, **kwargs):
+            assert sizing_events[-1] == "proxy"
+            assert kwargs["baseline_rss"] > 0
+            sizing_events.append("workers")
+            return size_workers(*args, **kwargs)
+
+        def track_proxy(cls):
+            init = cls.__init__
+
+            def initialize(self, *args, **kwargs):
+                assert sizing_events and sizing_events[-1] in {"baseline", "proxy"}
+                sizing_events.append("proxy")
+                init(self, *args, **kwargs)
+
+            monkeypatch.setattr(cls, "__init__", initialize)
+
+        track_proxy(service.MpsSingleCoinProxy)
+        track_proxy(service.MpsMulticoinProxy)
+        monkeypatch.setattr(gpu_backend, "capture_worker_rss", capture_baseline)
+        monkeypatch.setattr(gpu_backend, "initial_workers", size_after_proxy)
     if auto_batch:
         from optimization.gpu import autotune
         # Exercise in-flight decisions within this bounded integration fixture.

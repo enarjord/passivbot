@@ -66,7 +66,7 @@ from optimization.problem import (
 from utils import to_standard_exchange_name
 
 from optimization.gpu.autotune import configure_batch_tuning, is_auto
-from optimization.gpu.exact_autotune import ExactQueueController, initial_workers
+from optimization.gpu.exact_autotune import ExactQueueController, capture_worker_rss, initial_workers
 
 
 GPU_DEFAULTS = {
@@ -145,6 +145,7 @@ def _submit_gpu_exact_validation(
     interrupt_check: InterruptCheck,
     *,
     profile: bool = False,
+    admission_epoch: int | None = None,
 ):
     """Refuse new exact CPU work once the GPU interrupt latch is set."""
 
@@ -152,12 +153,12 @@ def _submit_gpu_exact_validation(
     if profile:
         submitted_at = time.perf_counter()
         return pool.apply_async(
-            _profiled_gpu_exact_worker, (vector, submitted_at)
+            _profiled_gpu_exact_worker, (vector, submitted_at, admission_epoch)
         )
     return pool.apply_async(_evaluate_pymoo_worker_from_globals, (vector,))
 
 
-def _profiled_gpu_exact_worker(vector, submitted_at):
+def _profiled_gpu_exact_worker(vector, submitted_at, admission_epoch=None):
     """Attach opt-in worker time without changing persisted exact evidence."""
 
     started = time.perf_counter()
@@ -171,6 +172,7 @@ def _profiled_gpu_exact_worker(vector, submitted_at):
         payload["__gpu_profile_worker_seconds__"] = finished - started
         payload["__gpu_profile_worker_started__"] = started
         payload["__gpu_profile_worker_finished__"] = finished
+        payload["__gpu_profile_admission_epoch__"] = admission_epoch
     return payload
 
 
@@ -4538,6 +4540,9 @@ def run_backend(
     interrupt_check()
     reject_configured_exact_only_gpu_metrics(config)
     options = _resolve_options(config)
+    worker_baseline_rss = capture_worker_rss(
+        options["exact_workers"], mode=options["tuning_mode"],
+    )
     validate_optimizer_effective_configs(config)
     evaluation_contract = recorded_evaluation_contract(config)
     checkpoint = None
@@ -5067,6 +5072,7 @@ def run_backend(
     options["exact_workers"] = initial_workers(
         options["exact_workers"], config["optimize"]["n_cpus"], evaluator_for_pool,
         mode=options["tuning_mode"], pending=options["max_pending_exact"],
+        baseline_rss=worker_baseline_rss,
     )
     configure_batch_tuning(profile_proxies, config, options)
 
@@ -5817,6 +5823,7 @@ def run_backend(
                         item[3],
                         interrupt_check,
                         profile=exact_timing_enabled,
+                        admission_epoch=queue_controller.epoch if queue_controller else None,
                     )
                     pending_seed[result] = item
                     cursor += 1
@@ -5846,7 +5853,11 @@ def run_backend(
                             "__gpu_profile_worker_started__", "__gpu_profile_worker_finished__",
                         )]
                         if queue_controller is not None:
-                            queue_controller.record(*timing)
+                            queue_controller.record(
+                                *timing, epoch=payload.pop("__gpu_profile_admission_epoch__", None),
+                            )
+                        else:
+                            payload.pop("__gpu_profile_admission_epoch__", None)
                     PymooAsyncRecordingRunner._raise_if_worker_failure(
                         payload, source_index
                     )
@@ -6054,7 +6065,10 @@ def run_backend(
             if queue_controller is not None:
                 queue_controller.record(
                     worker_seconds, queue_wait_seconds, worker_started, worker_finished,
+                    epoch=payload.pop("__gpu_profile_admission_epoch__", None),
                 )
+            elif exact_timing_enabled and isinstance(payload, dict):
+                payload.pop("__gpu_profile_admission_epoch__", None)
             if profile_enabled:
                 profile_totals["exact_work"] += worker_seconds
                 profile_totals["exact_queue_wait"] += queue_wait_seconds
@@ -6332,6 +6346,7 @@ def run_backend(
                     vector,
                     interrupt_check,
                     profile=exact_timing_enabled,
+                    admission_epoch=queue_controller.epoch if queue_controller else None,
                 )
                 pending[result] = (
                     vector,

@@ -980,7 +980,8 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `exact_workers` defaults to `null`; omitted, `null`, and `"auto"` values select initial
   hardware/RAM-aware sizing. It uses physical cores, CPU affinity and cgroup-v2 CPU/memory limits
   when available, reserves one core for GPU orchestration, and budgets 60% of available RAM using
-  a conservative worker estimate from process RSS plus twice the largest prepared candle view
+  a conservative worker estimate from process RSS before GPU proxy allocation plus twice the
+  largest prepared candle view
   (at least 512 MiB per worker). Suite scenarios sharing data are not summed as independent
   copies. A positive fixed queue limit also bounds automatic worker sizing. This is a sizing
   estimate, not an OOM guarantee or an empirical optimum. Worker count stays fixed during a run.
@@ -1002,7 +1003,9 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   always reserve complete validation allocations. Existing work drains naturally after a shrink.
   An unfinished seed-stage trial
   returns to its preceding limit before evolution so it cannot block GPU batch tuning.
-  GPU batch and queue trials are coordinated; queue evidence resets when GPU batch sizing changes.
+  GPU batch and queue trials are coordinated; queue evidence resets when GPU batch sizing changes
+  or a batch trial resolves, including acceptance at the same width. Admission epochs exclude
+  jobs queued before a queue change or GPU trial from subsequent timing evidence.
   Population, candidate order,
   proxy-front/probe allocation, drift gates and exact results retain their existing contracts.
   Compatible hardware/implementation, workload, bounds and worker-count classes reuse bounded

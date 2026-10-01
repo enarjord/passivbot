@@ -96,7 +96,18 @@ def prepared_bytes(evaluator):
     )
 
 
-def initial_workers(requested, inherited, evaluator, *, mode, pending=None):
+def capture_worker_rss(requested, *, mode):
+    """Capture the CPU coordinator baseline before GPU proxies allocate history."""
+    if requested is not None or mode == "off":
+        return None
+    try:
+        return psutil.Process().memory_info().rss
+    except (OSError, psutil.Error) as error:
+        logging.warning("GPU exact worker memory baseline unavailable: %s", error)
+        return None
+
+
+def initial_workers(requested, inherited, evaluator, *, mode, pending=None, baseline_rss=None):
     if requested is not None:
         return int(requested) or int(inherited)
     if mode == "off":
@@ -108,7 +119,8 @@ def initial_workers(requested, inherited, evaluator, *, mode, pending=None):
         return int(inherited)
     # RSS is deliberately conservative: interpreter/library costs plus room for
     # private Rust replay state. Keep 40% of available RAM for GPU/host growth.
-    per_worker = max(512 * MIB, resources["rss"] + 2 * prepared_bytes(evaluator))
+    worker_rss = resources["rss"] if baseline_rss is None else baseline_rss
+    per_worker = max(512 * MIB, worker_rss + 2 * prepared_bytes(evaluator))
     memory_workers = max(1, int(resources["available"] * 0.6) // per_worker)
     workers = max(1, min(max(1, resources["cores"] - 1), memory_workers))
     if pending:
@@ -148,7 +160,7 @@ class ExactQueueController:
         self.cache = CalibrationCache(cache_dir)
         self.key = _digest(
             dict(
-                kind="exact_queue_v2",
+                kind="exact_queue_v3",
                 workers=workers,
                 validations=validations,
                 hardware=(
@@ -173,6 +185,7 @@ class ExactQueueController:
         self.direction = 1
         self.cooldown = 0
         self.warmed = False
+        self.epoch = 0
         if mode != "refresh":
             cached = self.cache.read(self.key, "max_pending_exact", self.floor, self.ceiling)
             if cached is not None:
@@ -200,7 +213,9 @@ class ExactQueueController:
         )
         return revision, trial
 
-    def reset(self, generation):
+    def reset(self, generation, *, invalidate=False):
+        if invalidate:
+            self.epoch += 1
         self.samples.clear()
         self.collected.clear()
         self.completed = 0
@@ -214,6 +229,7 @@ class ExactQueueController:
             old_limit, _ = self.baseline
             self.baseline = None
             self.limit = old_limit
+            self.epoch += 1
             self.cooldown = 1
             logging.info(
                 "GPU exact queue auto-tune retained | pending=%d reason=seed_phase_end",
@@ -221,18 +237,20 @@ class ExactQueueController:
             )
         self.reset(generation)
 
-    def record(self, worker_seconds, queue_seconds, started, finished):
+    def record(self, worker_seconds, queue_seconds, started, finished, *, epoch):
         # The collector only appends timing. The main thread consumes it after
         # joining the collector, before admission of the next generation.
-        self.collected.append((worker_seconds, queue_seconds, started, finished))
+        self.collected.append((worker_seconds, queue_seconds, started, finished, epoch))
 
     def update(self, generation):
         revision, proxy_trial = self.proxy_state()
         if proxy_trial or revision != self.revision:
-            self.reset(generation)
+            self.reset(generation, invalidate=True)
             return
         while self.collected:
-            worker_seconds, queue_seconds, started, finished = self.collected.popleft()
+            worker_seconds, queue_seconds, started, finished, epoch = self.collected.popleft()
+            if epoch != self.epoch:
+                continue  # Work admitted before the current queue/batch trial is not evidence.
             if not (
                 math.isfinite(worker_seconds)
                 and worker_seconds > 0
@@ -286,6 +304,7 @@ class ExactQueueController:
                 self.cooldown = 1
             else:
                 self.limit = old_limit
+                self.epoch += 1
                 self.direction *= -1
                 self.cooldown = 3
             logging.info(
@@ -308,6 +327,7 @@ class ExactQueueController:
             return
         self.baseline = (self.limit, rate)
         self.limit = trial
+        self.epoch += 1
         logging.info(
             "GPU exact queue auto-tune trial | pending=%d previous=%d validations/s=%.3f",
             self.limit,

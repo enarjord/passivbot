@@ -33,14 +33,14 @@ def window(item, seconds=2, work=None, wait=0):
         started = item.tick[0]
         item.tick[0] += seconds
         item.gen += 1
-        item.record(seconds if work is None else work, wait, started, item.tick[0])
+        item.record(seconds if work is None else work, wait, started, item.tick[0], epoch=item.epoch)
         item.update(item.gen)
 
 
 def test_queue_waits_for_real_work_evidence_and_excludes_cold_window(tmp_path):
     item = controller(tmp_path)
     for index in range(tune.WINDOW):
-        item.record(0.01, 0, index * 0.01, (index + 1) * 0.01)
+        item.record(0.01, 0, index * 0.01, (index + 1) * 0.01, epoch=item.epoch)
     item.update(0)
     assert not item.warmed and item.limit == 16
     item.tick[0] += 36000  # GPU-only time cannot manufacture CPU evidence.
@@ -76,17 +76,17 @@ def test_queue_failure_rolls_back_and_small_plateau_is_preferred(tmp_path):
 def test_queue_median_rejects_spike_invalid_samples_and_bounds_records(tmp_path):
     item = controller(tmp_path)
     for _ in range(item.ceiling * 4):
-        item.record(1, 0, item.tick[0], item.tick[0] + 1)
+        item.record(1, 0, item.tick[0], item.tick[0] + 1, epoch=item.epoch)
     assert len(item.collected) == item.ceiling
     item.reset(0)
     for bad in [0, -1, float("nan"), float("inf")]:
-        item.record(bad, 0, 0, 1)
-        item.record(1, bad, 0, 1)
+        item.record(bad, 0, 0, 1, epoch=item.epoch)
+        item.record(1, bad, 0, 1, epoch=item.epoch)
     item.update(0)
     assert item.completed == 1  # zero queue delay is valid
     item.reset(0)
     for index in range(24):
-        item.record(5, 0, index * 5, (index + 1) * 5)
+        item.record(5, 0, index * 5, (index + 1) * 5, epoch=item.epoch)
     item.update(0)  # Enough CPU work permits calibration within seed generation.
     assert item.warmed
 
@@ -100,11 +100,11 @@ def test_proxy_and_queue_trials_are_coordinated_at_generation_boundary(tmp_path)
     window(item)
     assert not proxy_tuner.allow_trial()
     # Collector timing cannot make a queue decision until main-thread update.
-    item.record(1, 0, item.tick[0], item.tick[0] + 1)
+    item.record(1, 0, item.tick[0], item.tick[0] + 1, epoch=item.epoch)
     assert item.limit == 24
     window(item, 1.5)
     assert proxy_tuner.allow_trial()
-    item.record(1, 0, item.tick[0], item.tick[0] + 1)
+    item.record(1, 0, item.tick[0], item.tick[0] + 1, epoch=item.epoch)
     proxy_tuner.revision += 1
     item.update(item.gen)
     assert not item.samples and item.completed == 0
@@ -170,6 +170,40 @@ def test_worker_detection_failure_is_observable(monkeypatch, caplog):
     monkeypatch.setattr(tune, "resource_snapshot", fail)
     assert tune.initial_workers(None, 4, None, mode="auto") == 4
     assert "auto-sizing unavailable" in caplog.text
+
+
+def test_worker_sizing_excludes_gpu_coordinator_rss_but_uses_remaining_ram(monkeypatch):
+    rss = [512 * tune.MIB]
+    monkeypatch.setattr(tune.psutil, "Process", lambda: SimpleNamespace(
+        memory_info=lambda: SimpleNamespace(rss=rss[0]),
+    ))
+    baseline = tune.capture_worker_rss(None, mode="auto")
+    rss[0] = 10 * 1024 * tune.MIB  # GPU history remains only in the coordinator.
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: dict(
+        cores=8, available=8 * 1024 * tune.MIB, rss=rss[0],
+    ))
+    evaluator = SimpleNamespace(shared_hlcvs_np={
+        "x": SimpleNamespace(nbytes=100 * tune.MIB),
+    })
+    assert tune.initial_workers(None, 4, evaluator, mode="auto", baseline_rss=baseline) == 6
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: dict(
+        cores=8, available=1024 * tune.MIB, rss=rss[0],
+    ))
+    assert tune.initial_workers(None, 4, evaluator, mode="auto", baseline_rss=baseline) == 1
+
+
+@pytest.mark.parametrize("requested,mode", [(0, "auto"), (2, "auto"), (None, "off")])
+def test_worker_baseline_skips_fixed_and_off(monkeypatch, requested, mode):
+    monkeypatch.setattr(tune.psutil, "Process", lambda: pytest.fail("hardware queried"))
+    assert tune.capture_worker_rss(requested, mode=mode) is None
+
+
+def test_worker_baseline_failure_warns_and_keeps_conservative_fallback(monkeypatch, caplog):
+    def fail():
+        raise OSError("unavailable")
+    monkeypatch.setattr(tune.psutil, "Process", fail)
+    assert tune.capture_worker_rss(None, mode="auto") is None
+    assert "memory baseline unavailable" in caplog.text
 
 
 def test_cpu_affinity_and_container_limits_are_respected(monkeypatch):
@@ -266,7 +300,7 @@ def test_long_validations_calibrate_during_seed_admission_without_four_generatio
     item = controller(tmp_path)
     def complete_wave(start, duration):
         for _ in range(4):
-            item.record(duration, 0, start, start + duration)
+            item.record(duration, 0, start, start + duration, epoch=item.epoch)
         item.update(0)
     complete_wave(0, 120)
     assert item.warmed and item.limit == 16
@@ -314,7 +348,66 @@ def test_temporal_batch_and_exact_queue_trials_keep_revision_and_cooldown_bounda
         record_replay_chunk(512, 4096, 2538000, 2)
     assert len(next(batches)[1]) == 256
     assert proxy.batch_tuner.revision == 1
-    item.record(120, 0, 0, 120)
+    item.record(120, 0, 0, 120, epoch=item.epoch)
     item.update(0)
     assert item.completed == 0 and not item.samples
+    batches.close()
+
+
+@pytest.mark.parametrize("direction,limit", [(1, 16), (-1, 32)])
+@pytest.mark.parametrize("long_work", [False, True])
+def test_queue_trial_ignores_jobs_admitted_before_grow_or_shrink(tmp_path, direction, limit, long_work):
+    item = controller(tmp_path)
+    item.warmed = True
+    item.direction = direction
+    item.limit = limit
+    old_epoch = item.epoch
+    window(item)
+    assert item.limit == 24 and item.baseline[0] == limit
+    assert item.epoch != old_epoch
+    # Even a complete regular/expensive window of old-queue work cannot
+    # resolve this trial or cache the new admission setting.
+    for index in range(4 if long_work else 24):
+        start = 10000 if long_work else 10000 + index * 5
+        item.record(120 if long_work else 5, 0, start,
+                    start + (120 if long_work else 5), epoch=old_epoch)
+    item.update(0)
+    assert item.baseline is not None and not item.samples and item.completed == 0
+    assert item.cache.read(item.key, "max_pending_exact", item.floor, item.ceiling) == limit
+    window(item, 1.5)
+    assert item.baseline is None and item.limit == 24
+    assert item.cache.read(item.key, "max_pending_exact", item.floor, item.ceiling) == 24
+
+
+def test_accepted_temporal_batch_trial_invalidates_collected_cpu_evidence(tmp_path):
+    from optimization.gpu.autotune import ProxyBatchTuner, proxy_batches, record_replay_chunk
+    proxy = SimpleNamespace(checkpoint_contract={}, needed_metrics=[],
+                            max_dispatch_candidate_bars=1000000)
+    proxy.batch_tuner = ProxyBatchTuner(
+        proxy, mode="refresh", hardware={"device": "test"}, context={}, cache_dir=tmp_path,
+    )
+    proxy.batch_tuner._headroom = lambda: True
+    item = controller(tmp_path, proxies=[proxy])
+    batches = proxy_batches(proxy, list(range(2048)), 512)
+    next(batches)
+    for _ in range(128):
+        record_replay_chunk(512, 4096, 2538000, 2)
+    next(batches)
+    assert proxy.batch_tuner.revision == 1
+    item.update(0)  # Marks the active trial and invalidates pre-trial admissions.
+    epoch = item.epoch
+    for _ in range(4):
+        item.record(120, 0, 0, 120, epoch=epoch)
+    for _ in range(128):
+        record_replay_chunk(256, 4096, 2538000, 0.8)
+    assert len(next(batches)[1]) == 256  # Accepted smaller plateau; width stays put.
+    assert proxy.batch_tuner.revision == 2
+    assert not proxy.batch_tuner.controllers[next(iter(proxy.batch_tuner.controllers))].baseline
+    item.update(0)
+    assert item.epoch != epoch and not item.samples and item.completed == 0
+    # Late collectors also cannot resurrect evidence from that final trial pass.
+    for _ in range(4):
+        item.record(120, 0, 0, 120, epoch=epoch)
+    item.update(0)
+    assert not item.warmed
     batches.close()

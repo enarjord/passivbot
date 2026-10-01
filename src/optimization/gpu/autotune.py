@@ -382,6 +382,7 @@ def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=time.perf_
             _REPLAY_SAMPLES.reset(token)
         if controller is not None:
             previous = controller.width
+            previous_trial = getattr(controller, "baseline", None) is not None
             if samples and isinstance(controller, BatchController):
                 # Charge packing, allocations, reductions and host-copy overhead
                 # to each kernel sample so trials optimize end-to-end throughput.
@@ -400,7 +401,10 @@ def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=time.perf_
                         break
             else:
                 controller.observe(len(chunk), clock() - started)
-            if controller.width != previous:
+            if (
+                controller.width != previous
+                or previous_trial != (getattr(controller, "baseline", None) is not None)
+            ):
                 tuner.revision = getattr(tuner, "revision", 0) + 1
 
         start += len(chunk)

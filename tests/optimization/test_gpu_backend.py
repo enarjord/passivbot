@@ -156,12 +156,12 @@ def test_gpu_exact_submission_uses_profiled_worker_only_when_enabled(
     )
 
     _submit_gpu_exact_validation(
-        pool, [1.0], interrupt_check, profile=True
+        pool, [1.0], interrupt_check, profile=True, admission_epoch=3
     )
 
     assert pool.apply_async.call_args.args == (
         _profiled_gpu_exact_worker,
-        ([1.0], 12.5),
+        ([1.0], 12.5, 3),
     )
 
 
@@ -176,13 +176,14 @@ def test_gpu_profiled_exact_worker_records_actual_queue_wait(monkeypatch):
         lambda vector: {"F": vector},
     )
 
-    payload = _profiled_gpu_exact_worker([1.0], 7.0)
+    payload = _profiled_gpu_exact_worker([1.0], 7.0, 3)
 
     assert payload["F"] == [1.0]
     assert payload["__gpu_profile_queue_wait_seconds__"] == pytest.approx(3.0)
     assert payload["__gpu_profile_worker_seconds__"] == pytest.approx(4.0)
     assert payload["__gpu_profile_worker_started__"] == 10.0
     assert payload["__gpu_profile_worker_finished__"] == 14.0
+    assert payload["__gpu_profile_admission_epoch__"] == 3
 
 
 def test_gpu_profile_log_is_structured_json(caplog):
