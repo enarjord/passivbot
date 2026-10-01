@@ -937,6 +937,18 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
                 self.bot_value(pside, "forager_volume_drop_pct") or 0.0
             ),
         }
+        if float(out[pside]["score_weights"].get("unilateralness", 0.0)) > 0.0:
+            # Enabled RMS totals come from the same Rust selection that placed
+            # orders, including pruning, normalization and tie ordering. Never
+            # synthesize a three-component total while its fourth input is absent.
+            hint = getattr(self, "_monitor_runtime_forager_hints", {}).get(pside)
+            if (
+                hint
+                and hint["weights"] == out[pside]["score_weights"]
+                and hint["span"] == float(self.bot_value(pside, "unilateralness_ema_span_1m"))
+            ):
+                out[pside]["ranking"] = deepcopy(hint["ranking"])
+            continue
         if not out[pside]["forager_mode"] or not candidate_universe:
             continue
         if not hasattr(self, "build_forager_candidate_payload"):
@@ -1334,6 +1346,7 @@ def _update_monitor_runtime_hints(
     h1_log_range_emas: dict[str, dict[float, float]],
     idx_to_symbol: dict[int, str],
     orders: list[dict[str, Any]],
+    diagnostics: Optional[dict[str, Any]] = None,
 ) -> None:
     market_hints = self._build_monitor_runtime_market_hints(
         symbols, last_prices, m1_close_emas
@@ -1347,6 +1360,41 @@ def _update_monitor_runtime_hints(
         last_prices,
         market_hints,
     )
+
+    self._monitor_runtime_forager_hints = {}
+    for selection in (diagnostics or {}).get("forager_selections", []):
+        pside = selection["pside"]
+        top_scores = selection.get("top_scores", [])
+        if not selection.get("ranking_required") or not top_scores:
+            continue
+        weights = dict(self.bot_value(pside, "forager_score_weights"))
+        if float(weights.get("unilateralness", 0.0)) <= 0.0:
+            continue
+        top = top_scores[0]
+        score = float(top["score"])
+        self._monitor_runtime_forager_hints[pside] = {
+            "weights": weights,
+            "span": float(self.bot_value(pside, "unilateralness_ema_span_1m")),
+            "ranking": {
+                "source": "rust_orchestrator",
+                "observed_at_ms": int(utc_ms()),
+                "top_total": {
+                    "symbol": idx_to_symbol[int(top["symbol_idx"])],
+                    "raw_score": score,
+                    "normalized_score": score,
+                    "total_score": score,
+                    **{
+                        key: float(top[key])
+                        for key in (
+                            "volume_component",
+                            "volatility_component",
+                            "ema_readiness_component",
+                            "unilateralness_component",
+                        )
+                    },
+                },
+            },
+        }
 
 
 def _build_monitor_recent_section(self) -> dict[str, Any]:

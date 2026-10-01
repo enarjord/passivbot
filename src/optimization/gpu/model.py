@@ -75,6 +75,42 @@ def single_coin_shader_topology(
     return "generic"
 
 
+# Appended to the existing ABI so legacy parameter offsets stay stable.
+ADAPTIVE_PARAM_KEYS = (
+    "entry_cooldown_min_duration_minutes",
+    "entry_cooldown_max_duration_minutes",
+    "entry_cooldown_exposure_weight",
+    "entry_cooldown_adverse_weight",
+    "unilateralness_ema_span_1m",
+    "forager_score_weights_unilateralness",
+    "unilateralness_window",
+)
+ADAPTIVE_OVERRIDE_KEYS = ADAPTIVE_PARAM_KEYS[:4]
+
+
+def adaptive_params(bot: dict) -> dict:
+    """Encode canonical Rust payload leaves; -1 represents an absent ceiling."""
+    from math import ceil
+
+    weights = bot.get("entry_cooldown_weights_minutes", {})
+    span = float(bot.get("unilateralness_ema_span_1m", 60.0))
+    maximum = bot.get("entry_cooldown_max_duration_minutes")
+    return dict(
+        zip(
+            ADAPTIVE_PARAM_KEYS,
+            (
+                float(bot.get("entry_cooldown_min_duration_minutes", 0.0)),
+                -1.0 if maximum is None else float(maximum),
+                float(weights.get("exposure_ratio", 0.0)),
+                float(weights.get("adverse_directionality", 0.0)),
+                span,
+                float(bot.get("forager_score_weights", {}).get("unilateralness", 0.0)),
+                float(ceil(20.0 * span)),
+            ),
+        )
+    )
+
+
 EMA_ANCHOR_PARAM_KEYS = (
     "base_qty_pct",
     "ema_span_0",
@@ -154,8 +190,11 @@ EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN = (
 EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN = (
     EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN + 1
 )
-EMA_ANCHOR_COIN_OVERRIDE_COLS = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + len(
-    UNSTUCK_EMA_PARAM_KEYS
+EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START = (
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + len(UNSTUCK_EMA_PARAM_KEYS)
+)
+EMA_ANCHOR_COIN_OVERRIDE_COLS = EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START + len(
+    ADAPTIVE_OVERRIDE_KEYS
 )
 
 
@@ -185,6 +224,7 @@ EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS = (
     *HSL_PARAM_KEYS,
     "wallet_exposure_limit",
     *UNSTUCK_EMA_PARAM_KEYS,
+    *ADAPTIVE_PARAM_KEYS,
 )
 
 EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
@@ -201,6 +241,7 @@ EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     *UNSTUCK_PARAM_KEYS,
     *HSL_PARAM_KEYS,
     *UNSTUCK_EMA_PARAM_KEYS,
+    *ADAPTIVE_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
@@ -242,6 +283,7 @@ TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS = (
     *HSL_PARAM_KEYS,
     "wallet_exposure_limit",
     *UNSTUCK_EMA_PARAM_KEYS,
+    *ADAPTIVE_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
@@ -259,6 +301,7 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     *UNSTUCK_PARAM_KEYS,
     *HSL_PARAM_KEYS,
     *UNSTUCK_EMA_PARAM_KEYS,
+    *ADAPTIVE_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
@@ -345,9 +388,12 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN = (
 TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN + 1
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_COLS = (
+TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
     + len(UNSTUCK_EMA_PARAM_KEYS)
+)
+TRAILING_MARTINGALE_COIN_OVERRIDE_COLS = (
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START + len(ADAPTIVE_OVERRIDE_KEYS)
 )
 
 

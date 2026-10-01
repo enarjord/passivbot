@@ -32,9 +32,9 @@ backtest/optimizer smoke. Current-head independent review and CI are separate re
 
 ## Migration qualification
 
-The package is `8.2.0.dev0`; the canonical config schema is `v8.5.0`. Package and schema
+The package is `8.2.0.dev0`; the canonical config schema is `v8.6.0`. Package and schema
 versions have different meanings. Test every supported earlier v8 schema (`v8.0.0` through
-`v8.4.0`) in coin, pside and unified modes. Relabeling an old config is not a migration.
+`v8.5.0`) in coin, pside and unified modes. Relabeling an old config is not a migration.
 Require explicit restart choices and an explicit portfolio policy for unified mode; check
 file-backed coin overrides, effective scenario/optimizer policies and removed dimensions.
 Write a separate output, reload it through the normal loader and repeat migration to prove

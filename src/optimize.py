@@ -248,6 +248,7 @@ from optimization.warmup import (
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
     validate_optimizer_effective_configs,
+    validate_optimizer_dataset_intervals,
 )
 from optimization.shape import OptimizationShape, build_optimization_shape
 from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
@@ -372,10 +373,13 @@ def _stamp_optimizer_warmup(config: dict, mss: dict, coins: list[str]) -> None:
     individual, running it through ``individual_to_config``, and recomputing
     warmup from the resulting config.
 
+    RMS history is loaded separately. Its activation delay is candidate-specific
+    and enforced by Rust, so it must not enter this shared metadata.
+
     Must be called *after* ``prepare_hlcvs_mss`` and *before* the Evaluator
     reads ``mss``.
     """
-    warmup_map = compute_optimizer_per_coin_warmup_minutes(config)
+    warmup_map = compute_optimizer_per_coin_warmup_minutes(config, for_trade_activation=True)
     stamped = stamp_warmup_metadata(mss, coins, warmup_map)
     if stamped:
         summary = ", ".join(
@@ -459,6 +463,8 @@ def _register_exchange_data(
         prepare_result
     )
     _propagate_optimizer_dataset_override(config, exchange, coins, cache_dir, mss)
+    config["backtest"]["coins"][exchange] = coins
+    validate_optimizer_dataset_intervals(config, mss, exchange)
     prepared_hlcvs = hlcvs
     hlcvs, timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
         hlcvs,
@@ -561,7 +567,7 @@ class ResultRecorder:
                     if isinstance(violation, (int, float))
                     else ""
                 )
-                logging.info(
+                logging.debug(
                     "Pareto update | eval=%d | front=%d | objectives=%s%s",
                     self.store.n_iters,
                     len(self.store._front),
@@ -1488,9 +1494,18 @@ def _record_seed_bounds_adjustment(
 def _flush_seed_bounds_adjustments(collector: dict | None) -> None:
     if not collector:
         return
-    for (context, bound_key, path_repr, bounds_repr, adjusted), bucket in sorted(
-        collector.items()
-    ):
+    contexts = sorted({key[0] for key in collector})
+    for context in contexts:
+        buckets = [(key, bucket) for key, bucket in sorted(collector.items()) if key[0] == context]
+        keys = list(dict.fromkeys(key[1] for key, _ in buckets))
+        samples = ",".join(key[:32] for key in keys[:3])
+        if len(keys) > 3:
+            samples += f",+{len(keys) - 3} more"
+        logging.warning(
+            "optimizer %s clamped to bounds | adjustments=%d keys=%d samples=%s | details at DEBUG",
+            context, sum(bucket["count"] for _, bucket in buckets), len(keys), samples,
+        )
+    for (context, bound_key, path_repr, bounds_repr, adjusted), bucket in sorted(collector.items()):
         count = int(bucket["count"])
         source_examples = ", ".join(bucket["sources"])
         source_count = len(bucket["source_set"])
@@ -1501,7 +1516,7 @@ def _flush_seed_bounds_adjustments(collector: dict | None) -> None:
         values = _format_clamp_samples(bucket["values"])
         plural = "values" if count != 1 else "value"
         source_label = "sources" if source_count != 1 else "source"
-        logging.warning(
+        logging.debug(
             "optimizer %s %s clamped to optimize bounds | count=%d | key=%s | path=%s | "
             "values=%s | bounds=%s | clamped=%s | %s=%s",
             context,
@@ -1559,14 +1574,20 @@ def config_to_individual(
             target = target[part]
         values.append(target)
     enforced = enforce_bounds(
-        values,
+        [
+            # An unbounded fixed ceiling projects to the highest allowed search
+            # ceiling when importing a seed into a finite optimizer dimension.
+            bound.high
+            if value is None and tuple(path[-2:]) == ("entry_cooldown", "max_duration_minutes")
+            else value
+            for value, bound, (_, path) in zip(values, bounds, key_paths, strict=True)
+        ],
         bounds,
         sig_digits,
     )
     if clamp_context:
-        for original, adjusted, bound, key_path in zip(
-            values, enforced, bounds, key_paths
-        ):
+        adjustments = clamp_collector if clamp_collector is not None else {}
+        for original, adjusted, bound, key_path in zip(values, enforced, bounds, key_paths):
             bound_key, path = key_path
             if path == (ANCHOR_GENE_KEY,) or path == [ANCHOR_GENE_KEY]:
                 continue
@@ -1578,8 +1599,10 @@ def config_to_individual(
                 adjusted=adjusted,
                 bound=bound,
                 context=clamp_context,
-                collector=clamp_collector,
+                collector=adjustments,
             )
+        if clamp_collector is None:
+            _flush_seed_bounds_adjustments(adjustments)
     return enforced
 
 

@@ -802,6 +802,9 @@ def clean_config(config: dict) -> dict:
             for key in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"]
             if key in bounds
         }
+    from config.optimize_bounds import preserve_optional_adaptive_bounds
+
+    preserve_optional_adaptive_bounds(template, source)
     cleaned = _clean_with_template(template, source)
     prune_inactive_strategy_subtrees(cleaned)
     prune_inactive_optimize_strategy_bounds(cleaned)
@@ -2047,6 +2050,11 @@ def add_config_arguments(
     return registered_keys
 
 
+def _gpu_sizing_cli_value(value):
+    """Keep automatic intent when overriding an explicitly numeric input config."""
+    return "auto" if value.strip().lower() == "auto" else float(value)
+
+
 def add_arguments_recursively(
     parser,
     config,
@@ -2128,6 +2136,9 @@ def add_arguments_recursively(
         else:
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
+            nullable_cooldown_ceiling = full_name in {
+                f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")
+            }
             type_ = type(value)
             if "bounds" in full_name:
                 type_ = comma_separated_values_float
@@ -2145,6 +2156,12 @@ def add_arguments_recursively(
             elif "scoring" in full_name:
                 type_ = comma_separated_values
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
+            elif full_name in {
+                "optimize.gpu.batch_size",
+                "optimize.gpu.population_size",
+                "optimize.gpu.max_dispatch_candidate_bars",
+            }:
+                type_ = _gpu_sizing_cli_value
             elif full_name == "optimize.gpu.screening.scenarios":
                 type_ = parse_screening_scenarios
                 appendix = (
@@ -2152,6 +2169,8 @@ def add_arguments_recursively(
                 )
             elif isinstance(value, list) and "bounds" not in full_name:
                 type_ = comma_separated_values
+            elif nullable_cooldown_ceiling:
+                type_ = optional_float
             elif value is None:
                 if full_name == "backtest.btc_collateral_ltv_cap":
                     type_ = optional_float
@@ -2188,6 +2207,14 @@ def add_arguments_recursively(
                 old_acronym = create_acronym(old_name, acronyms)
                 hidden_names.append(f"-{old_acronym}")
                 acronyms.add(old_acronym)
+            if full_name.endswith("entry_cooldown.base_duration_minutes"):
+                old_name = full_name.replace(
+                    "entry_cooldown.base_duration_minutes", "risk.entry_cooldown_minutes"
+                )
+                hidden_names.extend([f"--{old_name}", f"--{old_name.replace('.', '_')}"])
+                old_acronym = create_acronym(old_name, acronyms)
+                hidden_names.append(f"-{old_acronym}")
+                acronyms.add(old_acronym)
             if command is None or len(acronym) > 1:
                 hidden_names.append(f"-{acronym}")
             _register_argument(
@@ -2197,7 +2224,8 @@ def add_arguments_recursively(
                 type=type_,
                 dest=full_name,
                 required=False,
-                default=None,
+                # Omitted nullable ceilings must differ from an explicit null.
+                default=argparse.SUPPRESS if nullable_cooldown_ceiling else None,
                 metavar=_argument_metavar(type_, full_name, value),
                 help=(
                     _argument_help_text(full_name, appendix)
@@ -2278,18 +2306,17 @@ def update_config_with_args(
     transform_root = config
     config = effective_config_payload(config)
     from config.hsl import validate_override_paths
-
-    supplied = {
-        key: value
-        for key, value in vars(args).items()
-        if value is not None
-        and (key in allowed_keys if allowed_keys is not None else "." in key)
+    nullable_cooldown_ceilings = {
+        f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")
     }
+    supplied = {key: value for key, value in vars(args).items()
+                if (value is not None or key in nullable_cooldown_ceilings)
+                and (key in allowed_keys if allowed_keys is not None else "." in key)}
     validate_override_paths(config, supplied, allow_engine=True)
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
-        if value is None:
+        if value is None and key not in nullable_cooldown_ceilings:
             continue
         if allowed_keys is not None:
             if key not in allowed_keys:

@@ -34,6 +34,13 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_contract import CONTRACT_KEY, recorded_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.replay_progress import suite_replay_context
+from optimization.progress import (
+    DriftProgress,
+    OptimizerProgress,
+    SeedBootstrapProgress,
+    gpu_work_context,
+    log_tokens,
+)
 from optimization.gpu.metric_registry import (
     reject_configured_exact_only_gpu_metrics,
 )
@@ -57,7 +64,11 @@ from optimization.problem import (
 )
 from utils import to_standard_exchange_name
 
+from optimization.gpu.autotune import configure_batch_tuning, is_auto
+
+
 GPU_DEFAULTS = {
+    "tuning_mode": "auto",
     "auto_lean_parallelism": True,
     "population_size": 1024,
     "batch_size": 4096,
@@ -101,6 +112,12 @@ _EMA_SIDE_BOUND_SUFFIXES = {
     "offset_volatility_ema_span_1h": "offset_volatility_ema_span_1h",
     "offset_volatility_ema_span_1m": "offset_volatility_ema_span_1m",
     "risk_entry_cooldown_minutes": "entry_cooldown_minutes",
+    "entry_cooldown_min_duration_minutes": "entry_cooldown_min_duration_minutes",
+    "entry_cooldown_max_duration_minutes": "entry_cooldown_max_duration_minutes",
+    "entry_cooldown_weights_minutes_exposure_ratio": "entry_cooldown_exposure_weight",
+    "entry_cooldown_weights_minutes_adverse_directionality": "entry_cooldown_adverse_weight",
+    "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
+    "forager_score_weights_unilateralness": "forager_score_weights_unilateralness",
     "total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
 
@@ -329,6 +346,12 @@ _TM_SIDE_BOUND_SUFFIXES = {
     "close_retracement_volatility_1h_weight": "close_retracement_volatility_1h_weight",
     "close_retracement_volatility_1m_weight": "close_retracement_volatility_1m_weight",
     "risk_entry_cooldown_minutes": "entry_cooldown_minutes",
+    "entry_cooldown_min_duration_minutes": "entry_cooldown_min_duration_minutes",
+    "entry_cooldown_max_duration_minutes": "entry_cooldown_max_duration_minutes",
+    "entry_cooldown_weights_minutes_exposure_ratio": "entry_cooldown_exposure_weight",
+    "entry_cooldown_weights_minutes_adverse_directionality": "entry_cooldown_adverse_weight",
+    "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
+    "forager_score_weights_unilateralness": "forager_score_weights_unilateralness",
     "risk_wel_enforcer_threshold": "wel_enforcer_threshold",
     "total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
@@ -783,6 +806,20 @@ def _gpu_fixed_bound_context(
     return fixed_bound_values, fixed_parameters
 
 
+def _gpu_fixed_adaptive_parameters(config: dict, bound_map: dict, mapped: dict) -> dict:
+    """Keep opt-in parameters fixed when they have no optimizer dimension."""
+    from config.shared_bot import flatten_shared_bot_side
+    from optimization.gpu.model import adaptive_params
+
+    supported = set(bound_map.values())
+    return {
+        name: value
+        for side in ("long", "short")
+        for key, value in adaptive_params(flatten_shared_bot_side(config["bot"][side])).items()
+        if (name := f"{side}_{key}") in supported and name not in mapped
+    }
+
+
 def _mirror_short_mapping(mapping: dict) -> None:
     """Mirror effective long values/bounds into existing short-side keys."""
 
@@ -1199,10 +1236,17 @@ def _resolve_options(config: dict) -> dict:
     for key, default in GPU_DEFAULTS.items():
         if key in nested_options:
             continue
+        if key in {
+            "population_size", "batch_size", "max_dispatch_candidate_bars"
+        } and is_auto((configured or {}).get(key)):
+            continue
         if key in (configured or {}) and configured[key] is not None:
             options[key] = (float if key == "drift_rank_halt" else type(default))(
                 configured[key]
             )
+    options["tuning_mode"] = options["tuning_mode"].strip().lower()
+    if options["tuning_mode"] not in {"auto", "refresh", "off"}:
+        raise ValueError("optimize.gpu.tuning_mode must be auto, refresh, or off")
     seed_bootstrap = dict(GPU_DEFAULTS["seed_bootstrap"])
     configured_seed_bootstrap = (configured or {}).get("seed_bootstrap")
     if configured_seed_bootstrap is not None and not isinstance(
@@ -1473,7 +1517,7 @@ def _apply_gpu_lean_tm_parallelism_defaults(
     if any(options[key] != GPU_DEFAULTS[key] for key in sizing_keys):
         return False
     configured_gpu = config.get("optimize", {}).get("gpu", {}) or {}
-    if any(configured_gpu.get(key) is not None for key in sizing_keys):
+    if any(not is_auto(configured_gpu.get(key)) for key in sizing_keys):
         return False
     if not _gpu_lean_tm_parallelism_eligible(
         config,
@@ -1873,7 +1917,23 @@ def _validate_gpu_coin_overrides(
         allowed.update(
             {
                 ("live", f"forced_mode_{enabled_side}"),
-                ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
+                ("bot", enabled_side, "entry_cooldown", "base_duration_minutes"),
+                ("bot", enabled_side, "entry_cooldown", "min_duration_minutes"),
+                ("bot", enabled_side, "entry_cooldown", "max_duration_minutes"),
+                (
+                    "bot",
+                    enabled_side,
+                    "entry_cooldown",
+                    "weights_minutes",
+                    "exposure_ratio",
+                ),
+                (
+                    "bot",
+                    enabled_side,
+                    "entry_cooldown",
+                    "weights_minutes",
+                    "adverse_directionality",
+                ),
                 ("bot", enabled_side, "risk", "we_excess_allowance_pct"),
                 ("bot", enabled_side, "wallet_exposure_limit"),
             }
@@ -1938,7 +1998,24 @@ def _validate_gpu_coin_overrides(
                 backtest_inert.append(rendered)
             if len(path) >= 3 and path[0] == "bot" and path[2] == "hsl":
                 hsl_override_paths.append(rendered)
-            if path not in allowed and not inert_forced_mode:
+            inert_cooldown = (
+                len(path) >= 4
+                and path[0] == "bot"
+                and path[2] == "entry_cooldown"
+                and (
+                    (path[3:] == ("max_duration_minutes",) and value_at(patch, path) is None)
+                    or (
+                        path[3:]
+                        in {
+                            ("min_duration_minutes",),
+                            ("weights_minutes", "exposure_ratio"),
+                            ("weights_minutes", "adverse_directionality"),
+                        }
+                        and value_at(patch, path) == 0.0
+                    )
+                )
+            )
+            if path not in allowed and not inert_forced_mode and not inert_cooldown:
                 unsupported.append(rendered)
     if hsl_override_paths:
         signal_mode = (
@@ -1957,7 +2034,9 @@ def _validate_gpu_coin_overrides(
                 f"{sorted(hsl_override_paths)}"
             )
     if unsupported:
-        supported_risk = "risk.entry_cooldown_minutes, risk.we_excess_allowance_pct"
+        supported_risk = (
+            "entry_cooldown.base_duration_minutes, risk.we_excess_allowance_pct"
+        )
         if strategy_kind == "trailing_martingale":
             supported_risk += (
                 ", risk.position_exposure_enforcer_enabled, "
@@ -3643,7 +3722,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 6,  # Exact weight canonicalization and TM entry/selection/PnL parity.
+        "version": 7,  # Adaptive timing/RMS parameter layout and four-weight ranking.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {
@@ -3824,11 +3903,17 @@ def _build_proxy_parameter_dicts(
     fixed_parameter_overrides: dict[str, float] | None = None,
     optimizer_overrides: set[str] | None = None,
     sig_digits: int | None = None,
+    base_forager_weights: dict | None = None,
 ) -> list[dict]:
     """Include canonical pinned and active strategy values in each proxy candidate."""
 
     base_parameters = {
-        name: float(base_vector[index]) for name, (index, _bound) in mapped.items()
+        **{
+            f"{side}_forager_score_weights_{key}": float(value)
+            for side, weights in (base_forager_weights or {}).items()
+            for key, value in weights.items()
+        },
+        **{name: float(base_vector[index]) for name, (index, _bound) in mapped.items()},
     }
     anchor_columns = [
         column
@@ -3880,12 +3965,15 @@ def _canonicalize_proxy_forager_weights(parameters, mapped, sig_digits):
     for side in ("long", "short"):
         names = {
             key: f"{side}_forager_score_weights_{key}"
-            for key in ("volume", "ema_readiness", "volatility")
+            for key in ("volume", "ema_readiness", "volatility", "unilateralness")
         }
-        if not all(name in parameters for name in names.values()):
+        if not all(
+            names[key] in parameters
+            for key in ("volume", "ema_readiness", "volatility")
+        ):
             continue
         normalized = normalize_forager_score_weights(
-            {key: parameters[name] for key, name in names.items()},
+            {key: parameters.get(name, 0.0) for key, name in names.items()},
             path=f"bot.{side}.forager.score_weights",
         )
         for key, name in names.items():
@@ -3896,7 +3984,7 @@ def _canonicalize_proxy_forager_weights(parameters, mapped, sig_digits):
 
 
 def _build_anchor_parameter_context(
-    config: dict, bound_map: dict[str, str]
+    config: dict, bound_map: dict[str, str], *, fallback_parameters: dict | None = None
 ) -> tuple[list[dict[str, float]] | None, dict[str, Bound]]:
     """Resolve anchor-fixed optimizer values without materializing every candidate config."""
 
@@ -3943,6 +4031,8 @@ def _build_anchor_parameter_context(
                 "GPU anchored fine-tune is missing fixed optimizer values for "
                 f"anchor {anchor_index}: {missing}"
             )
+        for name, value in (fallback_parameters or {}).items():
+            overrides.setdefault(name, value)
         parameter_overrides.append(overrides)
     if not parameter_overrides:
         raise ValueError("GPU anchored fine-tune requires at least one anchor")
@@ -4580,20 +4670,26 @@ def run_backend(
         bound_map,
     )
 
-    anchor_parameter_overrides, anchor_fixed_bounds = _build_anchor_parameter_context(
-        config, bound_map
-    )
     mapped_all = {
         bound_map[bound_key]: (index, bounds[index])
         for index, (bound_key, _path) in enumerate(key_paths)
         if bound_key in bound_map
     }
+    optional_fixed_parameters = _gpu_fixed_adaptive_parameters(proxy_config, bound_map, mapped_all)
+    anchor_parameter_overrides, anchor_fixed_bounds = (
+        _build_anchor_parameter_context(
+            config, bound_map, fallback_parameters=optional_fixed_parameters
+        )
+    )
     for parameter, (_index, bound) in mapped_all.items():
         if math.isclose(
             float(bound.low), float(bound.high), rel_tol=0.0, abs_tol=1.0e-12
         ):
             fixed_parameter_overrides.setdefault(parameter, float(bound.low))
-    missing = sorted(set(bound_map.values()) - set(mapped_all))
+    if anchor_parameter_overrides is None:
+        for name, value in optional_fixed_parameters.items():
+            fixed_parameter_overrides.setdefault(name, value)
+    missing = sorted(set(bound_map.values()) - set(mapped_all) - set(fixed_parameter_overrides))
     if anchor_parameter_overrides is None and missing:
         raise ValueError(
             f"GPU backend could not locate {strategy_kind} bounds for {missing}"
@@ -4862,7 +4958,7 @@ def run_backend(
             int(options["population_size"]),
             int(options["max_dispatch_candidate_bars"]),
         )
-    logging.info("GPU optimizer options: %s", options)
+    logging.debug("GPU optimizer options: %s", options)
 
     if suite_enabled:
         scenario_proxy_groups = {}
@@ -4913,7 +5009,7 @@ def run_backend(
             for _exchange, proxy in exchange_proxies
         ]
 
-        def evaluate_proxy(candidates, *, screening=False):
+        def evaluate_proxy_unscoped(candidates, *, screening=False):
             return _evaluate_gpu_suite_proxies(
                 evaluator_for_pool,
                 scenario_proxies,
@@ -4939,8 +5035,25 @@ def run_backend(
         )
         profile_proxies = [proxy]
 
-        def evaluate_proxy(candidates, *, screening=False):
-            return proxy.evaluate(candidates)
+        def evaluate_proxy_unscoped(candidates, *, screening=False):
+            with suite_replay_context(
+                pass_index=1, pass_count=1, labels=[exchange], exchanges=[exchange],
+                evaluation_stage="screening" if screening else "full",
+            ):
+                return proxy.evaluate(candidates)
+
+    def evaluate_proxy(candidates, *, screening=False):
+        phase = (
+            "seed_proxy" if not seed_bootstrap_complete
+            else "gpu_screening" if screening else "gpu_proxy"
+        )
+        progress.transition(phase)
+        with gpu_work_context(
+            generation + int(generation_in_progress), phase, progress.report,
+        ):
+            return evaluate_proxy_unscoped(candidates, screening=screening)
+
+    configure_batch_tuning(profile_proxies, config, options)
 
     def proxy_fitness(metric_rows: list[dict]) -> tuple[np.ndarray, np.ndarray]:
         objectives = np.empty((len(metric_rows), len(specs)), dtype=np.float64)
@@ -4996,6 +5109,10 @@ def run_backend(
             fixed_parameter_overrides=fixed_parameter_overrides,
             optimizer_overrides=gpu_optimizer_overrides,
             sig_digits=sig_digits,
+            base_forager_weights={
+                side: config["bot"][side]["forager"]["score_weights"]
+                for side in ("long", "short")
+            },
         )
 
     def full_vector(row: np.ndarray) -> list[float]:
@@ -5410,11 +5527,43 @@ def run_backend(
     profile_started = time.perf_counter() if profile_enabled else 0.0
     proxy_evaluations = 0
     novelty_stall_generations = 0
-    last_warning = None
     last_probe_shortfall = None
     last_checkpoint_at = 0.0
     last_checkpoint_exact = seed_exact_done + exact_done
     generation_in_progress = False
+
+    def progress_snapshot():
+        return {
+            "gen": generation + int(generation_in_progress),
+            "evolution_proxy_completed_run": proxy_evaluations,
+            "seed_proxy": (
+                len(starting_vectors)
+                if seed_bootstrap_mode == "screened" and seed_screen_complete else 0
+            ),
+            "seed_exact": seed_exact_done,
+            "evolution_exact": f"{exact_done}/{budget}",
+            "evolution_pending": len(pending),
+            **recorder.store.progress_snapshot(),
+        }
+
+    progress = OptimizerProgress(progress_snapshot)
+    drift_progress = DriftProgress(
+        rank_halt=drift_monitor.halt,
+        constraint_halt=drift_monitor.constraint_halt,
+        objective_tolerance=drift_monitor.objective_tolerance,
+    )
+    dispatch_limits = sorted({
+        getattr(item, "dispatch_batch_size", options["batch_size"])
+        for item in profile_proxies
+    })
+    log_tokens("GPU optimizer start |", [
+        f"population={population_size}", f"exact_budget={budget}",
+        f"exact_workers={workers}", f"max_pending_exact={max_pending}",
+        f"batch_setting={(config['optimize'].get('gpu') or {}).get('batch_size')}",
+        f"requested_batch_limit={options['batch_size']}",
+        f"dispatch_batch_limit={dispatch_limits[0]}..{dispatch_limits[-1]}",
+        "objective_bests=independent_exact_front_extremes (* marks improvement)",
+    ])
 
     def checkpoint_state() -> dict:
         seed_plan = None
@@ -5590,6 +5739,7 @@ def run_backend(
             return
 
         prepare_seed_proxy_screen()
+        progress.transition("seed_exact")
 
         # Preserve the normalized seed pool and proxy-screening result before
         # starting exact work. A hard interruption can then resume without
@@ -5614,6 +5764,9 @@ def run_backend(
 
         pending_seed = {}
         cursor = 0
+        seed_progress = SeedBootstrapProgress(
+            len(seed_bootstrap_selections), completed=seed_exact_done, workers=workers,
+        )
         try:
             while cursor < len(selected) or pending_seed:
                 interrupt_check()
@@ -5627,6 +5780,9 @@ def run_backend(
                     )
                     pending_seed[result] = item
                     cursor += 1
+                seed_progress.update(
+                    seed_exact_done, inflight=len(pending_seed), queued=len(selected) - cursor,
+                )
                 ready = _ready_submission_prefix(pending_seed)
                 if not ready:
                     PymooAsyncRecordingRunner._raise_if_pool_workers_exited(
@@ -5739,6 +5895,7 @@ def run_backend(
             maybe_save_checkpoint(force=True)
             raise
 
+        seed_progress.update(seed_exact_done, inflight=0, queued=0, force=True)
         ordered_payloads = []
         for source_index, _is_probe, _is_proxy_front in seed_bootstrap_selections:
             digest = vector_hash(starting_vectors[int(source_index)])
@@ -5784,6 +5941,7 @@ def run_backend(
         algorithm.initialization.sampling = sampling
 
         status = drift_monitor.evaluate()
+        drift_progress.update(status)
         if status["halt_reason"]:
             persisted_halt_reason = status["halt_reason"]
             maybe_save_checkpoint(force=True)
@@ -5800,7 +5958,7 @@ def run_backend(
         maybe_save_checkpoint(force=True)
 
     def consume_ready(*, wait_for_one: bool = False, checkpoint: bool = True) -> None:
-        nonlocal exact_done, last_warning, persisted_halt_reason
+        nonlocal exact_done, persisted_halt_reason
         while True:
             interrupt_check()
             # Preserve submission/generation order in the durable evidence
@@ -5811,7 +5969,10 @@ def run_backend(
             if ready:
                 break
             if not wait_for_one or not pending:
+                if pending:
+                    progress.report()
                 return
+            progress.report()
             PymooAsyncRecordingRunner._raise_if_pool_workers_exited(pool_workers)
             time.sleep(0.05)
         for result in ready:
@@ -5904,9 +6065,7 @@ def run_backend(
                 exact_objectives=exact_objectives,
             )
             status = drift_monitor.evaluate()
-            if status["warn_reason"] and status["warn_reason"] != last_warning:
-                logging.warning(status["warn_reason"])
-                last_warning = status["warn_reason"]
+            drift_progress.update(status)
             if status["halt_reason"]:
                 persisted_halt_reason = status["halt_reason"]
                 if checkpoint:
@@ -5917,13 +6076,7 @@ def run_backend(
         # resume recovers any durable results ahead of that safe checkpoint.
         if checkpoint:
             maybe_save_checkpoint(force=True)
-        else:
-            _log_gpu_profile(
-                "exact_progress",
-                generation=generation,
-                exact_completed=exact_done,
-                exact_inflight=len(pending),
-            )
+        progress.report()
 
     try:
         run_seed_bootstrap()
@@ -5931,6 +6084,7 @@ def run_backend(
             interrupt_check()
             consume_ready()
             if exact_done + len(pending) >= budget:
+                progress.transition("exact_wait")
                 consume_ready(wait_for_one=True)
                 continue
             validation_count = min(
@@ -5938,6 +6092,7 @@ def run_backend(
                 budget - exact_done - len(pending),
             )
             if max_pending - len(pending) < validation_count:
+                progress.transition("exact_wait")
                 consume_ready(wait_for_one=True)
                 continue
 
@@ -6178,19 +6333,11 @@ def run_backend(
                     exact_inflight=len(pending),
                 )
 
-            if generation == 1 or generation % 10 == 0:
-                elapsed = time.time() - start_time
-                logging.info(
-                    "GPU optimize | gen=%d proxy=%d (%.1f/s) exact=%d inflight=%d",
-                    generation,
-                    proxy_evaluations,
-                    proxy_evaluations / max(elapsed, 1.0e-9),
-                    exact_done,
-                    len(pending),
-                )
+            progress.transition("generation_complete")
             maybe_save_checkpoint(force=True)
 
         while pending and exact_done < budget:
+            progress.transition("exact_wait")
             consume_ready(wait_for_one=True)
         maybe_save_checkpoint(force=True)
         if profile_enabled:
@@ -6202,15 +6349,7 @@ def run_backend(
                 wall_seconds=_gpu_profile_elapsed(profile_started),
                 exact_validation_cumulative_seconds=dict(profile_totals),
             )
-        logging.info(
-            "GPU optimization complete | generations=%d proxy=%d seed_exact=%d "
-            "evolution_exact=%d wall=%.1fs",
-            generation,
-            proxy_evaluations,
-            seed_exact_done,
-            exact_done,
-            time.time() - start_time,
-        )
+        progress.transition("complete")
         return {"pool": pool, "pool_terminated": False}
     except KeyboardInterrupt:
         cancel_pending_async_results(pending)

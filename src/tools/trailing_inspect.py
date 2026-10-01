@@ -211,6 +211,17 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
                 f"{symbol} ({', '.join(sorted(context_paths))})"
             )
     hsl_enabled_global = bool(hsl.get("enabled", False))
+    cooldown = side["entry_cooldown"]
+    base = cooldown["base_duration_minutes"]
+    floor = cooldown["min_duration_minutes"]
+    ceiling = cooldown["max_duration_minutes"]
+    weights = cooldown["weights_minutes"]
+    clamped_base = max(base, floor)
+    if ceiling is not None:
+        clamped_base = min(clamped_base, ceiling)
+    state_dependent = any(weight > 0.0 for weight in weights.values()) and (
+        ceiling is None or clamped_base < ceiling
+    )
     return {
         "active": total_wallet_exposure_limit > 0.0 and n_positions > 0,
         "total_wallet_exposure_limit": total_wallet_exposure_limit,
@@ -260,10 +271,8 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "unstuck_threshold": _finite_float(
             unstuck.get("threshold", 0.0), f"bot.{pside}.unstuck.threshold"
         ),
-        "entry_cooldown_minutes": _finite_float(
-            risk.get("entry_cooldown_minutes", 0.0),
-            f"bot.{pside}.risk.entry_cooldown_minutes",
-        ),
+        "entry_cooldown_minutes": None if state_dependent else clamped_base,
+        "entry_cooldown": deepcopy(cooldown),
         "entry_ema_gate_mode": str(entry.get("ema_gate_mode", "unknown")),
         "entry_initial_ema_dist": _finite_float(
             entry.get("initial_ema_dist", 0.0), "entry.initial_ema_dist"
@@ -765,6 +774,21 @@ def _classify_side(
                 f"After an entry fill, the {cooldown:g}-minute cooldown blocks the next add even "
                 "if its trailing conditions are already satisfied."
             )
+    if context and cooldown is None:
+        policy = context["entry_cooldown"]
+        ceiling = policy["max_duration_minutes"]
+        ceiling_text = "unbounded" if ceiling is None else f"{ceiling:g} minutes"
+        weights = policy["weights_minutes"]
+        entry_comments.append(
+            "The effective entry cooldown is state-dependent: "
+            f"base {policy['base_duration_minutes']:g} minutes + "
+            f"{weights['exposure_ratio']:g} × exposure ratio + "
+            f"{weights['adverse_directionality']:g} × adverse directionality, "
+            f"with floor {policy['min_duration_minutes']:g} minutes and ceiling {ceiling_text}. "
+            "The overview has no current exposure or directionality input. A positive effective "
+            "duration stages only the next add and delays it relative to the latest entry fill; "
+            "a zero effective duration permits the passive recursive ladder when trailing is disabled."
+        )
     if entry["threshold_pct"] <= 0.0 and entry_trailing:
         entry_comments.append(
             "The threshold gate is immediate, so reversal tracking begins as soon as the position changes."

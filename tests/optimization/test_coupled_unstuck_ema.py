@@ -261,8 +261,10 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
             coin
         ],
     )
-    assert matrix[0, -2] == 71.5
-    assert np.isnan(matrix[0, -1])
+    start = getattr(model, f"{prefix}_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN")
+    assert matrix[0, start] == 71.5
+    assert np.isnan(matrix[0, start + 1])
+    assert np.isnan(matrix[0, start + 2 :]).all()
 
 
 def test_coupled_warmup_tracks_strategy_bounds_and_ignores_migrated_unstuck_pins():

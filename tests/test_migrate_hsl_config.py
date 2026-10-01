@@ -798,7 +798,7 @@ def test_previous_schema_migration_requires_policy_and_reloads_offline(
     assert "hsl_engine" not in loaded["live"]
 
 
-@pytest.mark.parametrize("version", ["v8.6.0", "v9.0.0", "v8.0.999", "banana"])
+@pytest.mark.parametrize("version", ["v8.7.0", "v9.0.0", "v8.0.999", "banana"])
 def test_cli_invalid_schema_preserves_input_and_existing_output(version, tmp_path):
     source, output = tmp_path / "old.json", tmp_path / "converted.json"
     cfg = legacy()
@@ -831,3 +831,39 @@ def test_public_examples_pass_effective_optimizer_and_migration_validation(path)
     assert migrate(result) == result
     assert "hsl_engine" not in result["live"]
     assert all(set(result["bot"][side]["hsl"]) == FIELDS for side in ("long", "short"))
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_master_v85_adaptive_policies_survive_hsl_migration(mode):
+    source = legacy(mode)
+    source["config_version"] = "v8.5.0"
+    cooldown = source["bot"]["long"]["entry_cooldown"]
+    cooldown.update(
+        min_duration_minutes=2.0,
+        max_duration_minutes=90.0,
+        weights_minutes={"exposure_ratio": 4.0, "adverse_directionality": 8.0},
+    )
+    source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 3.25
+    source["optimize"]["bounds"]["long"]["entry_cooldown"] = {
+        "weights_minutes": {"exposure_ratio": [2.0, 6.0, 0.25]}
+    }
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"entry_cooldown": {"max_duration_minutes": 55.0}}}}
+    }
+    policies = {"long": "always"}
+    portfolio = None
+    if mode == "unified":
+        portfolio = generated_template(get_template_config(), mode)["bot"]["hsl"]
+        portfolio.update(enabled=True, restart_after_red_policy="always")
+        policies = None
+    migrated = migrate(source, restart_policies=policies, portfolio=portfolio)
+    assert migrated["bot"]["long"]["entry_cooldown"] == cooldown
+    assert migrated["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] == 3.25
+    assert migrated["coin_overrides"] == source["coin_overrides"]
+    bounds = migrated["optimize"]["bounds"]["long"]["entry_cooldown"]
+    assert (
+        bounds["weights_minutes"]
+        == source["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"]
+    )
+    assert not {"min_duration_minutes", "max_duration_minutes"}.intersection(bounds)
+    assert migrate(migrated) == migrated

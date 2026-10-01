@@ -2,11 +2,16 @@ from copy import deepcopy
 from typing import Optional
 
 BOT_POSITION_SIDES = ("long", "short")
-BOT_SHARED_GROUPS = ("risk", "forager", "hsl", "unstuck")
+BOT_SHARED_GROUPS = ("entry_cooldown", "risk", "forager", "hsl", "unstuck")
 
 BOT_GROUP_FIELD_MAP = {
+    "entry_cooldown": {
+        "base_duration_minutes": "risk_entry_cooldown_minutes",
+        "min_duration_minutes": "entry_cooldown_min_duration_minutes",
+        "max_duration_minutes": "entry_cooldown_max_duration_minutes",
+        "weights_minutes": "entry_cooldown_weights_minutes",
+    },
     "risk": {
-        "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
         "total_exposure_entry_gate_enabled": "risk_twel_entry_gate_enabled",
@@ -20,6 +25,7 @@ BOT_GROUP_FIELD_MAP = {
     },
     "forager": {
         "score_weights": "forager_score_weights",
+        "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
         "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
         "volume_drop_pct": "forager_volume_drop_pct",
         "volume_ema_span_1m": "forager_volume_ema_span_1m",
@@ -110,7 +116,14 @@ def flatten_shared_bot_side(bot_side: dict | None) -> dict:
     result = {}
     for flat_key in FLAT_BOT_KEY_TO_GROUP_PATH:
         value = get_grouped_bot_value(bot_side, flat_key, default=None)
-        if flat_key in bot_side or value is not None:
+        if (
+            flat_key in bot_side
+            or value is not None
+            or (
+                flat_key == "entry_cooldown_max_duration_minutes"
+                and "max_duration_minutes" in get_bot_group(bot_side, "entry_cooldown")
+            )
+        ):
             result[flat_key] = deepcopy(value)
     for key, value in bot_side.items():
         if key in result or key in BOT_SHARED_GROUPS or key == "strategy":

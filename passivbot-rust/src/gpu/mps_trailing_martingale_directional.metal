@@ -39,7 +39,10 @@ constant int SCALAR_COLS = 68;
 constant int SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 50;
+constant int SIDE_PARAMS = 57;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
+#endif
 
 inline int elapsed_fill_day_bucket(float k, float first_eq_k, float interval_ms) {
     const float fill_day_candles = 86400000.0f / interval_ms;
@@ -217,6 +220,8 @@ inline bool realized_loss_proxy_allows_reducer(
     return -net_pnl + margin <= remaining_loss_budget;
 }
 
+// PASSIVBOT_ADAPTIVE_TIMING
+
 // PASSIVBOT_UNSTUCK_EMA_COMMON
 
 // PASSIVBOT_HSL_COMMON
@@ -305,6 +310,8 @@ struct TmSide {
 #else
     float close_retracement_base;
 #endif
+    AdaptiveTiming adaptive;
+    float cooldown_base, base_wel;
     float cooldown_min, twel, allowed_wel, entry_cap;
     bool gate_initial, gate_reentry, twel_entry_gate_enabled;
     bool wel_enforcer_enabled;
@@ -474,6 +481,9 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.close_retracement_v1m = p[o + 22];
 #endif
     s.cooldown_min = ceil(p[o + 23]);
+    s.cooldown_base = p[o + 23];
+    s.adaptive = load_adaptive_timing(p, o + 50);
+    s.adaptive.score_weight = 0.0f; // One coin never requires Forager ranking.
     s.twel = p[o + 24];
     s.gate_initial = p[o + 25] > 0.5f;
     s.gate_reentry = p[o + 26] > 0.5f;
@@ -487,6 +497,7 @@ inline TmSide load_side(constant float* p, int o, float seed) {
             ? fmax(s.twel / base_wel - 1.0f, 0.0f) : 0.0f;
         effective_allowance_pct = fmin(allowance_pct, max_effective);
     }
+    s.base_wel = base_wel;
     s.allowed_wel = base_wel > 0.0f
         ? base_wel * (1.0f + effective_allowance_pct) : 0.0f;
     s.twel_entry_gate_enabled = p[o + 29] > 0.5f;
@@ -1081,7 +1092,9 @@ inline void generate_orders(
     float market_min_q = entry_market
         ? min_entry_qty(price_now, qty_step, min_qty, min_cost, c_mult)
         : min_entry_qty(eprice, qty_step, min_qty, min_cost, c_mult);
-    bool cooldown = s.cooldown_min > 0.0f && s.last_inc_k >= 0.0f
+    s.cooldown_min = adaptive_duration(s.adaptive, s.cooldown_base,
+        we / fmax(s.base_wel, 1.0e-12f), !is_long);
+    bool cooldown = !isfinite(s.cooldown_min) || s.cooldown_min > 0.0f && s.last_inc_k >= 0.0f
         && kf < s.last_inc_k + s.cooldown_min;
     if (cooldown || balance <= 0.0f || s.initial_qty_pct <= 0.0f
         || s.allowed_wel <= 0.0f || eticks <= 1
@@ -2283,6 +2296,10 @@ inline void passivbot_single_coin_impl(
         float hour_lr = bars[bo + 4];
 #endif
         const bool valid = flags[fo + 0] != 0;
+        if (valid) {
+            update_adaptive_rms(long_side.adaptive, bars, k, first_valid, 5, 2);
+            update_adaptive_rms(short_side.adaptive, bars, k, first_valid, 5, 2);
+        }
         const bool can_gen = flags[fo + 1] != 0
             && (!recent_history_window || k >= bounded_trade_start);
         const int di = flags[fo + 2];

@@ -112,6 +112,10 @@ def validate_config(
     )
     require_config_dict(config, "monitor")
     _validate_fixed_runtime_overrides(config)
+    fixed_runtime = {
+        require_existing_config_path(config, key): value
+        for key, value in config["optimize"]["fixed_runtime_overrides"].items()
+    }
     strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
     optimize_bounds = (
         raw_optimize.get("bounds")
@@ -124,11 +128,55 @@ def validate_config(
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
+        span = bot_side["forager"]["unilateralness_ema_span_1m"]
+        if (
+            isinstance(span, bool)
+            or not isinstance(span, (int, float))
+            or not math.isfinite(span)
+            or not 1 <= span <= 100_000
+        ):
+            raise ValueError(
+                f"bot.{pside}.forager.unilateralness_ema_span_1m must be between 1 and 100000"
+            )
+        from .entry_cooldown import validate_entry_cooldown
+
+        validate_entry_cooldown(bot_side["entry_cooldown"], path=f"bot.{pside}.entry_cooldown")
+        from .optimize_bounds import flatten_optimize_bounds
+        from optimization.bounds import Bound
+
+        flat_bounds = flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
+        for modifier in ("exposure_ratio", "adverse_directionality"):
+            key = f"{pside}_entry_cooldown_weights_minutes_{modifier}"
+            if key not in flat_bounds:
+                continue
+            # Runtime pins win over sampled genes, including an explicit null
+            # ceiling or a zero weight that disables the searched modifier.
+            weight = fixed_runtime.get(
+                ("bot", pside, "entry_cooldown", "weights_minutes", modifier),
+                Bound.from_config(key, flat_bounds[key]).high,
+            )
+            ceiling_key = f"{pside}_entry_cooldown_max_duration_minutes"
+            ceiling = fixed_runtime.get(
+                ("bot", pside, "entry_cooldown", "max_duration_minutes"),
+                Bound.from_config(ceiling_key, flat_bounds[ceiling_key]).low
+                if ceiling_key in flat_bounds
+                else bot_side["entry_cooldown"]["max_duration_minutes"],
+            )
+            if weight > 0 and (
+                isinstance(ceiling, bool)
+                or not isinstance(ceiling, (int, float))
+                or not math.isfinite(ceiling)
+            ):
+                raise ValueError(
+                    f"bot.{pside}.entry_cooldown.max_duration_minutes must be finite when searching modifier weights"
+                )
+        # RMS candle compatibility is checked after dataset selection, when
+        # approved lists and per-coin overrides determine entry eligibility.
         entry_cooldown_minutes = float(
             get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
         )
         if entry_cooldown_minutes < 0.0:
-            raise ValueError(f"bot.{pside}.risk.entry_cooldown_minutes must be >= 0.0")
+            raise ValueError(f"bot.{pside}.entry_cooldown.base_duration_minutes must be >= 0.0")
         normalize_we_excess_allowance_mode(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
             path=f"bot.{pside}.risk.we_excess_allowance_mode",

@@ -1729,10 +1729,16 @@ def test_persist_batch_observer_receives_saved_batch(tmp_path):
     assert np.array_equal(batch, arr)
 
 
-def test_disk_load_observer_receives_summary_and_is_best_effort(tmp_path):
+@pytest.mark.parametrize(
+    "minute_offset, expected_days", [(720, 1), (1439, 2)], ids=["same-day", "utc-midnight"]
+)
+def test_disk_load_observer_receives_summary_and_is_best_effort(
+    tmp_path, minute_offset, expected_days
+):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "LOAD/USDT"
-    ts0 = _floor_minute(int(time.time() * 1000)) - 5 * ONE_MIN_MS
+    # Fixed UTC day: exercise both one shard and a midnight crossing without wall-clock flakiness.
+    ts0 = 1704067200000 + minute_offset * ONE_MIN_MS
     ts1 = ts0 + ONE_MIN_MS
     arr = np.array(
         [
@@ -1761,8 +1767,8 @@ def test_disk_load_observer_receives_summary_and_is_best_effort(tmp_path):
     assert payload["loaded_rows"] == 2
     assert payload["loaded_start_ts"] == ts0
     assert payload["loaded_end_ts"] == ts1
-    assert payload["days"] == 1
-    assert payload["source_days"] == {"primary": 1, "legacy": 0, "merged": 0}
+    assert payload["days"] == expected_days
+    assert payload["source_days"] == {"primary": expected_days, "legacy": 0, "merged": 0}
     assert payload["elapsed_ms"] >= 0
 
     def failing_observer(_payload):

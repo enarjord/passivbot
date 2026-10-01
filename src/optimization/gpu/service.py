@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import time
+from optimization.progress import duration, log_tokens, publish_progress
+from optimization.gpu.replay_progress import replay_scope
 
 import numpy as np
 
@@ -14,6 +16,7 @@ from config.shared_bot import flatten_shared_bot_side
 from config.validate import validate_limit_order_fill_buffer_pct
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
+from optimization.gpu.autotune import proxy_batches
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
     ENTRY_INTERVAL_METRICS,
@@ -21,6 +24,10 @@ from optimization.gpu.metric_registry import (
     HARD_STOP_PROXY_METRICS,
 )
 from optimization.gpu.model import (
+    adaptive_params,
+    ADAPTIVE_OVERRIDE_KEYS,
+    EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START,
     UNSTUCK_EMA_PARAM_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
@@ -152,15 +159,19 @@ _GPU_PROFILE_RUNNER_TIMING_KEYS = (
     "metric_reduction",
 )
 
-_GPU_DISPATCH_PROGRESS_INTERVAL_SECONDS = 30.0
+_GPU_DISPATCH_PROGRESS_INTERVAL_SECONDS = 60.0
 
 
-def _new_gpu_dispatch_progress(candidate_count: int, dispatch_batch_size: int):
-    if candidate_count <= dispatch_batch_size:
+def _new_gpu_dispatch_progress(
+    candidate_count: int, dispatch_batch_size: int, *, adaptive=False
+):
+    if candidate_count <= dispatch_batch_size and not adaptive:
         return None
     started = time.monotonic()
     return {
         "candidate_count": int(candidate_count),
+        "adaptive": adaptive,
+        "completed_chunks": 0,
         "dispatch_batch_size": int(dispatch_batch_size),
         "started": started,
         "last_log": started,
@@ -177,6 +188,7 @@ def _update_gpu_dispatch_progress(
 ) -> None:
     if progress is None:
         return
+    progress["completed_chunks"] += 1
     now = time.monotonic()
     elapsed = now - float(progress["started"])
     completed_candidates = min(
@@ -195,18 +207,19 @@ def _update_gpu_dispatch_progress(
         return
     rate = completed_candidates / max(elapsed, 1.0e-12)
     remaining = int(progress["candidate_count"]) - completed_candidates
-    logging.info(
-        "GPU proxy dispatch progress | strategy=%s chunks=%d/%d "
-        "candidates=%d/%d elapsed=%.1fs eta=%.1fs",
-        strategy,
-        completed_chunks,
-        int(progress["total_chunks"]),
-        completed_candidates,
-        int(progress["candidate_count"]),
-        elapsed,
-        remaining / max(rate, 1.0e-12),
+    chunk_label = (
+        str(progress["completed_chunks"])
+        if progress["adaptive"]
+        else f"{completed_chunks}/{progress['total_chunks']}"
     )
-    progress["last_log"] = now
+    delivered = log_tokens(f"GPU scenario-group progress | {replay_scope()} |", [
+        f"strategy={strategy}", f"batches_done={chunk_label}",
+        f"scenario_evals={completed_candidates}/{int(progress['candidate_count'])}",
+        f"elapsed={duration(elapsed)}", f"eta_group={duration(remaining / max(rate, 1.0e-12))}",
+    ])
+    publish_progress()
+    if delivered:
+        progress["last_log"] = now
 
 
 def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
@@ -444,6 +457,7 @@ def _add_gpu_terminal_profile(
 
 
 def _finish_gpu_proxy_profile(profile: dict, started: float) -> dict:
+    profile["dispatch_chunk_count"] = len(profile["dispatch_chunk_wall_seconds"])
     profile["actual_dispatch_batch_sizes"] = list(
         profile["actual_dispatch_batch_sizes"]
     )
@@ -1732,6 +1746,8 @@ def _candidate_parameter_matrix(
     for side_index, (side, base) in enumerate(base_params.items()):
         overrides = (static_overrides or {}).get(side, {})
         for column, key in enumerate(param_keys):
+            if key == "unilateralness_window":
+                continue
             source_key = (
                 key.removeprefix("unstuck_")
                 if couple_unstuck_emas
@@ -1751,6 +1767,12 @@ def _candidate_parameter_matrix(
                     )
                     for candidate in candidates
                 ]
+        if "unilateralness_window" in param_keys:
+            offset = side_index * len(param_keys)
+            matrix[:, offset + param_keys.index("unilateralness_window")] = np.ceil(
+                20.0
+                * matrix[:, offset + param_keys.index("unilateralness_ema_span_1m")]
+            )
     return matrix
 
 
@@ -1920,10 +1942,12 @@ class MpsSingleCoinProxy:
             strategy = dict(payload.strategy_params_list[0][side])
             risk = config["bot"][side]["risk"]
             if self.strategy_kind == "trailing_martingale":
-                strategy = flatten_trailing_martingale_params(strategy, risk)
+                strategy = flatten_trailing_martingale_params(
+                    strategy, flatten_shared_bot_side(config["bot"][side])
+                )
             else:
                 strategy["entry_cooldown_minutes"] = float(
-                    risk.get("entry_cooldown_minutes", 0.0) or 0.0
+                    config["bot"][side]["entry_cooldown"]["base_duration_minutes"] or 0.0
                 )
                 strategy["total_wallet_exposure_limit"] = float(
                     risk["total_wallet_exposure_limit"]
@@ -1937,6 +1961,9 @@ class MpsSingleCoinProxy:
                 strategy.update(_hsl_params(bot, signal_mode=signal_mode))
             strategy["wallet_exposure_limit"] = float(
                 bot.get("wallet_exposure_limit", -1.0)
+            )
+            strategy.update(
+                adaptive_params(flatten_shared_bot_side(config["bot"][side]))
             )
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
@@ -2224,12 +2251,21 @@ class MpsSingleCoinProxy:
         )
         self.last_profile = {}
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
-        progress = _new_gpu_dispatch_progress(len(candidates), dispatch_batch_size)
-        for start in range(0, len(candidates), dispatch_batch_size):
-            chunk_profile_started = time.perf_counter() if profile is not None else 0.0
+        progress = _new_gpu_dispatch_progress(
+            len(candidates),
+            dispatch_batch_size,
+            adaptive=getattr(self, "batch_tuner", None) is not None,
+        )
+        for start, chunk in proxy_batches(
+            self, candidates, dispatch_batch_size, end_step=effective_end_step
+        ):
+            chunk_profile_started = (
+                time.perf_counter() if profile is not None else 0.0
+            )
             interrupt_check()
-            chunk = candidates[start : start + dispatch_batch_size]
-            stage_started = time.perf_counter() if self.profile_enabled else 0.0
+            stage_started = (
+                time.perf_counter() if self.profile_enabled else 0.0
+            )
             parameter_matrix = self._parameter_matrix(chunk)
             if profile is not None:
                 profile["timings_seconds"]["candidate_materialization"] += (
@@ -2418,8 +2454,26 @@ def _build_multicoin_ema_coin_overrides(
         for column, key in enumerate(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS):
             if key in strategy_patch:
                 matrix[coin_index, column] = float(effective_strategy[key])
+        cooldown_patch = side_patch.get("entry_cooldown", {}) or {}
+        encoded = adaptive_params(effective_bot)
+        paths = (
+            ("min_duration_minutes",),
+            ("max_duration_minutes",),
+            ("weights_minutes", "exposure_ratio"),
+            ("weights_minutes", "adverse_directionality"),
+        )
+        for offset, (key, path) in enumerate(zip(ADAPTIVE_OVERRIDE_KEYS, paths)):
+            patch_value = cooldown_patch
+            for leaf in path:
+                if not isinstance(patch_value, dict) or leaf not in patch_value:
+                    break
+                patch_value = patch_value[leaf]
+            else:
+                matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START + offset] = (
+                    encoded[key]
+                )
         risk_patch = side_patch.get("risk", {}) or {}
-        if "entry_cooldown_minutes" in risk_patch:
+        if "base_duration_minutes" in (side_patch.get("entry_cooldown", {}) or {}):
             matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN] = float(
                 effective_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0
             )
@@ -2550,8 +2604,27 @@ def _build_multicoin_tm_coin_overrides(
                 coin_index,
                 TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
             ] = float(effective_strategy["gate_reentry"])
+        cooldown_patch = side_patch.get("entry_cooldown", {}) or {}
+        encoded = adaptive_params(effective_bot)
+        paths = (
+            ("min_duration_minutes",),
+            ("max_duration_minutes",),
+            ("weights_minutes", "exposure_ratio"),
+            ("weights_minutes", "adverse_directionality"),
+        )
+        for offset, (key, path) in enumerate(zip(ADAPTIVE_OVERRIDE_KEYS, paths)):
+            patch_value = cooldown_patch
+            for leaf in path:
+                if not isinstance(patch_value, dict) or leaf not in patch_value:
+                    break
+                patch_value = patch_value[leaf]
+            else:
+                matrix[
+                    coin_index,
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START + offset,
+                ] = encoded[key]
         risk_patch = side_patch.get("risk", {}) or {}
-        if "entry_cooldown_minutes" in risk_patch:
+        if "base_duration_minutes" in (side_patch.get("entry_cooldown", {}) or {}):
             matrix[
                 coin_index,
                 TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
@@ -2727,6 +2800,14 @@ def _build_single_coin_override_params(
             for offset, (key, _path) in enumerate(HSL_COIN_OVERRIDE_PATHS)
             if key != "hsl_panic_market"
         }
+    )
+    adaptive_start = (
+        EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START
+    )
+    columns.update(
+        {key: adaptive_start + i for i, key in enumerate(ADAPTIVE_OVERRIDE_KEYS)}
     )
     row = matrix[0]
     return (
@@ -3087,7 +3168,10 @@ class MpsMulticoinProxy:
             first_strategy.update(_unstuck_params(base_bot))
             hsl_bot = project_bot(payload, 0, side, config, base=True)
             first_strategy.update(_hsl_params(hsl_bot, signal_mode=signal_mode))
-            missing = [key for key in self.param_keys if key not in first_strategy]
+            first_strategy.update(adaptive_params(base_bot))
+            missing = [
+                key for key in self.param_keys if key not in first_strategy
+            ]
             if missing:
                 raise ValueError(
                     f"MPS multicoin {self.strategy_kind} {side} payload is "
@@ -3511,12 +3595,19 @@ class MpsMulticoinProxy:
         self.last_profile = {}
         dispatch_batch_size = getattr(self, "dispatch_batch_size", self.batch_size)
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
-        progress = _new_gpu_dispatch_progress(len(candidates), dispatch_batch_size)
-        for start in range(0, len(candidates), dispatch_batch_size):
-            chunk_profile_started = time.perf_counter() if profile is not None else 0.0
+        progress = _new_gpu_dispatch_progress(
+            len(candidates),
+            dispatch_batch_size,
+            adaptive=getattr(self, "batch_tuner", None) is not None,
+        )
+        for start, chunk in proxy_batches(self, candidates, dispatch_batch_size):
+            chunk_profile_started = (
+                time.perf_counter() if profile is not None else 0.0
+            )
             interrupt_check()
-            chunk = candidates[start : start + dispatch_batch_size]
-            stage_started = time.perf_counter() if self.profile_enabled else 0.0
+            stage_started = (
+                time.perf_counter() if self.profile_enabled else 0.0
+            )
             parameter_matrices = {
                 side: self._parameter_matrix(chunk, side) for side in self.sides
             }

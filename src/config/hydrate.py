@@ -127,14 +127,22 @@ def sync_with_template(
                     ["live", "base_config_path"], existing_base, base_config_path
                 )
     template_with_extras = deepcopy(template)
-    # Keep only explicitly supplied hsl portfolio authority and its search bounds.
-    if True:
-        for section in (("bot",), ("optimize", "bounds")):
-            target, source = template_with_extras, result
-            for key in section:
-                target, source = target[key], source[key]
-            if "hsl" in source:
-                target["hsl"] = deepcopy(source["hsl"])
+    from .optimize_bounds import preserve_optional_adaptive_bounds, set_flat_optimize_bound
+
+    # Canonicalize legacy leaves before template pruning; a mixed dictionary
+    # may contain both these leaves and explicit nested adaptive dimensions.
+    bounds = result["optimize"]["bounds"]
+    for key in list(bounds):
+        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_")):
+            set_flat_optimize_bound(bounds, result["live"]["strategy_kind"], key, bounds.pop(key))
+    preserve_optional_adaptive_bounds(template_with_extras, result)
+    # Keep only explicitly supplied HSL portfolio authority and its search bounds.
+    for section in (("bot",), ("optimize", "bounds")):
+        target, source = template_with_extras, result
+        for key in section:
+            target, source = target[key], source[key]
+        if "hsl" in source:
+            target["hsl"] = deepcopy(source["hsl"])
     template_with_extras.setdefault("live", {})["base_config_path"] = ""
     preserved_live_optimize_bounds = [
         ("optimize", "bounds", key)

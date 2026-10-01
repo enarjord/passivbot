@@ -94,6 +94,26 @@ OPTIMIZABLE_BOT_KEY_PATHS = {
     ),
 }
 
+for _side in BOT_POSITION_SIDES:
+    for _key, _path in {
+        "forager_score_weights_unilateralness": ("forager", "score_weights", "unilateralness"),
+        "unilateralness_ema_span_1m": ("forager", "unilateralness_ema_span_1m"),
+        # The fixed ceiling may be null even when its search endpoints are numeric.
+        "entry_cooldown_max_duration_minutes": ("entry_cooldown", "max_duration_minutes"),
+        "entry_cooldown_weights_minutes_exposure_ratio": (
+            "entry_cooldown",
+            "weights_minutes",
+            "exposure_ratio",
+        ),
+        "entry_cooldown_weights_minutes_adverse_directionality": (
+            "entry_cooldown",
+            "weights_minutes",
+            "adverse_directionality",
+        ),
+    }.items():
+        OPTIMIZABLE_BOT_KEY_PATHS[f"{_side}_{_key}"] = ("bot", _side, *_path)
+
+
 DEPRECATED_OPTIMIZE_BOUND_ALIASES = {
     "long_filter_volume_ema_span_1m": "long_forager_volume_ema_span_1m",
     "long_filter_volatility_ema_span_1m": "long_forager_volatility_ema_span_1m",
@@ -187,7 +207,7 @@ def resolve_dotted_config_path(
     if raw_parts[0] in BOT_POSITION_SIDES or (
         raw_parts[0] == "*"
         and len(raw_parts) >= 2
-        and raw_parts[1] in ("strategy", "risk", "forager", "hsl", "unstuck")
+        and raw_parts[1] in ("strategy", "entry_cooldown", "risk", "forager", "hsl", "unstuck")
     ):
         parts = ("bot", *raw_parts)
     else:
@@ -220,6 +240,10 @@ def resolve_dotted_config_path(
         and parts[-1] in ("ema_span_0", "ema_span_1")
     ):
         parts = (*parts[:-1], "entry", parts[-1])
+    if parts[-2:] == ("risk", "entry_cooldown_minutes"):
+        parts = (*parts[:-2], "entry_cooldown", "base_duration_minutes")
+    elif parts == ("entry_cooldown_minutes",):
+        parts = ("entry_cooldown", "base_duration_minutes")
     return tuple(parts)
 
 
@@ -277,12 +301,24 @@ def path_suffix_matches_selector(
     )
 
 
-def bound_path_matches_selector(
-    path: tuple[str, ...], selector_path: tuple[str, ...]
-) -> bool:
-    return path_matches_selector(path, selector_path) or path_suffix_matches_selector(
+def bound_path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
+    if path_matches_selector(path, selector_path) or path_suffix_matches_selector(
         path, selector_path
-    )
+    ):
+        return True
+    if path[-2:] == ("entry_cooldown", "base_duration_minutes"):
+        # Match the old leaf as well, including risk.* and side-qualified wildcards.
+        # Only the migrated base duration belonged to the historical risk group.
+        legacy_path = (*path[:-2], "risk", "entry_cooldown_minutes")
+        return (
+            path_matches_selector(legacy_path, selector_path)
+            or path_suffix_matches_selector(legacy_path, selector_path)
+            or (
+                selector_path[-1:] == ("risk",)
+                and path_suffix_matches_selector(legacy_path[:-1], selector_path)
+            )
+        )
+    return False
 
 
 def resolve_bound_selectors(

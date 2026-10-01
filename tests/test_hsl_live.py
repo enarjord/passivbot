@@ -378,7 +378,7 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
     cfg = generated_template(legacy, mode)
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"]["enabled"] = False
-        cfg["bot"][side]["risk"]["entry_cooldown_minutes"] = 0.0
+        cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
     cfg["live"]["max_realized_loss_pct"] = 1.0
     cfg["live"]["approved_coins"]["long"] = ["BTC"]
     cfg["live"]["pnls_max_lookback_days"] = 1.0
@@ -740,7 +740,7 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
     cfg["live"]["max_realized_loss_pct"] = 1.0
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"]["enabled"] = False
-        cfg["bot"][side]["risk"]["entry_cooldown_minutes"] = 0.0
+        cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
     block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,

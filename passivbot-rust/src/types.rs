@@ -419,6 +419,8 @@ pub struct ForagerScoreWeights {
     pub volume: f64,
     pub ema_readiness: f64,
     pub volatility: f64,
+    #[serde(default)]
+    pub unilateralness: f64,
 }
 
 impl Default for ForagerScoreWeights {
@@ -427,31 +429,39 @@ impl Default for ForagerScoreWeights {
             volume: 0.0,
             ema_readiness: 0.0,
             volatility: 1.0,
+            unilateralness: 0.0,
         }
     }
 }
 
 impl ForagerScoreWeights {
     pub fn canonicalize(&self) -> Result<Self, String> {
-        let values = [self.volume, self.ema_readiness, self.volatility];
+        let values = [
+            self.volume,
+            self.ema_readiness,
+            self.volatility,
+            self.unilateralness,
+        ];
         if values
             .iter()
             .any(|value| !value.is_finite() || *value < 0.0)
         {
             return Err("forager_score_weights must be finite and non-negative".to_string());
         }
-        let total = self.volume + self.ema_readiness + self.volatility;
+        let total = self.volume + self.ema_readiness + self.volatility + self.unilateralness;
         if total <= 0.0 {
             return Ok(Self {
                 volume: 0.0,
                 ema_readiness: 1.0,
                 volatility: 0.0,
+                unilateralness: 0.0,
             });
         }
         Ok(Self {
             volume: self.volume / total,
             ema_readiness: self.ema_readiness / total,
             volatility: self.volatility / total,
+            unilateralness: self.unilateralness / total,
         })
     }
 }
@@ -522,6 +532,14 @@ pub struct BotParams {
     pub hsl_panic_close_order_type: String,
     #[serde(default)]
     pub risk_entry_cooldown_minutes: f64,
+    #[serde(default)]
+    pub entry_cooldown_min_duration_minutes: f64,
+    #[serde(default)]
+    pub entry_cooldown_max_duration_minutes: Option<f64>,
+    #[serde(default)]
+    pub entry_cooldown_weights_minutes: crate::entry_cooldown::CooldownWeights,
+    #[serde(default = "default_unilateralness_span")]
+    pub unilateralness_ema_span_1m: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
     pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
@@ -583,6 +601,10 @@ impl Default for BotParams {
             hsl_enabled: default_hsl_enabled(),
             hsl_panic_close_order_type: default_hsl_panic_close_order_type(),
             risk_entry_cooldown_minutes: 0.0,
+            entry_cooldown_min_duration_minutes: 0.0,
+            entry_cooldown_max_duration_minutes: None,
+            entry_cooldown_weights_minutes: Default::default(),
+            unilateralness_ema_span_1m: 60.0,
             n_positions: 0,
             total_wallet_exposure_limit: 0.0,
             wallet_exposure_limit: 0.0,
@@ -1194,4 +1216,8 @@ impl Default for Analysis {
             hard_stop_post_restart_retrigger_pct: 0.0,
         }
     }
+}
+
+fn default_unilateralness_span() -> f64 {
+    60.0
 }

@@ -1954,14 +1954,62 @@ class Passivbot:
             return 0
         return 1 if cooldown_minutes < 1.0 else int(math.ceil(cooldown_minutes)) + 1
 
-    def _max_configured_entry_cooldown_minutes(self) -> float:
-        symbols: list[Optional[str]] = [None]
-        symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
-        return max(
-            float(self.bp(pside, "risk_entry_cooldown_minutes", symbol) or 0.0)
-            for symbol in symbols
-            for pside in ("long", "short")
+    def _entry_cooldown_horizon(self, pside, symbol=None) -> float:
+        from config.entry_cooldown import maximum_duration
+
+        return maximum_duration(
+            {
+                "base_duration_minutes": self.bp(pside, "risk_entry_cooldown_minutes", symbol),
+                "min_duration_minutes": self.bp(
+                    pside, "entry_cooldown_min_duration_minutes", symbol
+                ),
+                "max_duration_minutes": self.bp(
+                    pside, "entry_cooldown_max_duration_minutes", symbol
+                ),
+                "weights_minutes": self.bp(pside, "entry_cooldown_weights_minutes", symbol),
+            }
         )
+
+    def _max_configured_entry_cooldown_minutes(self) -> float:
+        overrides = getattr(self, "coin_overrides", {}) or {}
+        config = getattr(self, "config", {})
+        source = config.get("_coins_sources", {}).get(
+            "approved_coins", config.get("live", {}).get("approved_coins")
+        )
+        horizons = []
+        for pside in ("long", "short"):
+            if not self.is_pside_enabled(pside):
+                continue
+            raw = source.get(pside) if isinstance(source, dict) else source
+            approved = getattr(self, "approved_coins_minus_ignored_coins", {}).get(pside)
+            explicit = isinstance(raw, (list, tuple, set)) and not any(
+                str(coin).strip().lower() == "all" for coin in raw
+            )
+            held = {
+                symbol for symbol, positions in getattr(self, "positions", {}).items()
+                if positions.get(pside, {}).get("size", 0.0) != 0.0
+            }
+            # Held positions can still DCA after removal under graceful stop.
+            # Include them even before a restart has resolved per-cycle modes.
+            # An explicitly empty source is already resolved. For a nonempty
+            # unresolved selection (or an all universe), retain the default.
+            # Otherwise each eligible symbol supplies its effective policy.
+            if explicit and (approved or not raw):
+                eligible = held | {
+                    symbol for symbol in (approved or ())
+                    if raw and self.is_approved(pside, symbol)
+                }
+                symbols = sorted(eligible.intersection(overrides))
+                if eligible.difference(overrides):
+                    symbols.append(None)
+            else:
+                symbols = [None, *sorted(overrides)]
+            horizons.extend(
+                Passivbot._entry_cooldown_horizon(self, pside, symbol)
+                for symbol in symbols
+                if symbol is None or symbol in held or self.is_approved(pside, symbol)
+            )
+        return max(horizons, default=0.0)
 
     def _required_pnl_history_start_ms(
         self, now_ms: int, *, pnl_start_ms: Optional[int]
@@ -4389,6 +4437,8 @@ class Passivbot:
                 sentinel = object()
                 grouped_value = get_grouped_bot_value(side, path[2], default=sentinel)
                 if grouped_value is not sentinel:
+                    if path[2] == "entry_cooldown_weights_minutes":
+                        return {**self.bot_value(path[1], path[2]), **grouped_value}
                     return grouped_value
             for p in path:
                 if isinstance(d, dict) and p in d:
@@ -12994,9 +13044,7 @@ class Passivbot:
         max_cooldown_minutes = 0.0
         for symbol in out:
             for pside in ("long", "short"):
-                cooldown_minutes = float(
-                    self.bp(pside, "risk_entry_cooldown_minutes", symbol) or 0.0
-                )
+                cooldown_minutes = Passivbot._entry_cooldown_horizon(self, pside, symbol)
                 if cooldown_minutes > 0.0:
                     relevant_pairs.add((symbol, pside))
                     max_cooldown_minutes = max(max_cooldown_minutes, cooldown_minutes)
@@ -13043,9 +13091,7 @@ class Passivbot:
         pairs: set[tuple[str, str]] = set()
         for symbol in symbols:
             for pside in ("long", "short"):
-                cooldown_minutes = float(
-                    self.bp(pside, "risk_entry_cooldown_minutes", symbol)
-                )
+                cooldown_minutes = Passivbot._entry_cooldown_horizon(self, pside, symbol)
                 if cooldown_minutes > 0.0:
                     pairs.add((symbol, pside))
         return pairs
@@ -14841,6 +14887,10 @@ class Passivbot:
             "forager_volume_drop_pct",
             "forager_score_weights",
             "risk_entry_cooldown_minutes",
+            "entry_cooldown_min_duration_minutes",
+            "entry_cooldown_max_duration_minutes",
+            "entry_cooldown_weights_minutes",
+            "unilateralness_ema_span_1m",
             "n_positions",
             "total_wallet_exposure_limit",
             "wallet_exposure_limit",
@@ -14900,7 +14950,14 @@ class Passivbot:
                     "volume": float(val["volume"]),
                     "ema_readiness": float(val["ema_readiness"]),
                     "volatility": float(val["volatility"]),
+                    "unilateralness": float(val["unilateralness"]),
                 }
+            elif key == "entry_cooldown_weights_minutes":
+                out[out_key] = {
+                    name: float(val[name]) for name in ("exposure_ratio", "adverse_directionality")
+                }
+            elif key == "entry_cooldown_max_duration_minutes":
+                out[out_key] = None if val is None else float(val)
             elif key == "n_positions":
                 out[out_key] = int(round(val or 0.0))
             elif key in bool_keys:
@@ -15251,6 +15308,10 @@ class Passivbot:
         self._orchestrator_ema_bundle_completed = False
         self._orchestrator_ema_bundle_symbols = set()
         self._orchestrator_forager_m1_log_range_emas = {}
+        self._monitor_runtime_forager_hints = {}
+        self._orchestrator_signed_unilateralness = {}
+        self._orchestrator_forager_signed_unilateralness = {}
+        self._orchestrator_unilateralness_unavailable = {}
         self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_allow_missing_strategy_inputs_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
@@ -17499,6 +17560,31 @@ class Passivbot:
             for s in symbols
             if lr_span_long in forager_m1_log_range_emas[s]
         }
+        from live import unilateralness
+
+        self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
+        directional_scoring_sides = {
+            side for side in ("long", "short")
+            if self.is_pside_enabled(side)
+            and unilateralness.scoring_enabled(self, side, symbols)
+        }
+        directional_enabled = any(
+            side in directional_scoring_sides
+            or unilateralness.adverse_enabled(self, side, symbol)
+            for side in ("long", "short")
+            for symbol in symbols
+            if self.is_pside_enabled(side)
+        )
+        if directional_enabled:
+            directional, ranking_directional, missing_directional = await unilateralness.load(
+                self, symbols, cache_only_symbols, forager_cached_metric_max_age_by_symbol
+            )
+            self._orchestrator_signed_unilateralness = directional
+            self._orchestrator_forager_signed_unilateralness = ranking_directional
+            self._orchestrator_unilateralness_unavailable = missing_directional
+        else:
+            directional = {}
+            ranking_directional = {}
         rank_feature_unavailable_by_side = {
             "long": set(),
             "short": set(),
@@ -17507,6 +17593,11 @@ class Passivbot:
             ("long", vol_span_long, lr_span_long),
             ("short", vol_span_short, lr_span_short),
         ):
+            if pside in directional_scoring_sides:
+                span = float(self.bot_value(pside, "unilateralness_ema_span_1m"))
+                rank_feature_unavailable_by_side[pside].update(
+                    s for s in symbols if span not in ranking_directional.get(s, {})
+                )
             if not bool(is_forager_mode(pside)):
                 continue
             volume_required = volume_span > 0.0 and (
@@ -17529,7 +17620,6 @@ class Passivbot:
         self._forager_rank_feature_unavailable_by_side = (
             rank_feature_unavailable_by_side
         )
-        self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
         candidate_reason_names = {
             reason
             for reason in (
@@ -17856,10 +17946,18 @@ class Passivbot:
                     "allow_missing_strategy_inputs": (
                         symbol in allow_missing_strategy_inputs_symbols
                     ),
+                    "unilateralness_unavailable": getattr(
+                        self, "_orchestrator_unilateralness_unavailable", {}
+                    ).get(symbol, {}),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
                         "m1": {
+                            "signed_unilateralness": sorted(
+                                getattr(self, "_orchestrator_signed_unilateralness", {})
+                                .get(symbol, {})
+                                .items()
+                            ),
                             "close": m1_close_pairs,
                             "log_range": m1_lr_pairs,
                             "volume": m1_volume_pairs,
@@ -17867,6 +17965,11 @@ class Passivbot:
                         "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
                     },
                     "forager_m1": {
+                        "signed_unilateralness": sorted(
+                            getattr(self, "_orchestrator_forager_signed_unilateralness", {})
+                            .get(symbol, {})
+                            .items()
+                        ),
                         "close": [],
                         "log_range": forager_m1_lr_pairs,
                         "volume": m1_volume_pairs,
@@ -17977,6 +18080,7 @@ class Passivbot:
                 h1_log_range_emas=h1_log_range_emas,
                 idx_to_symbol=idx_to_symbol,
                 orders=orders,
+                diagnostics=diagnostics,
             )
 
         ideal_orders: dict[str, list] = {}

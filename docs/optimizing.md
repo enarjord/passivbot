@@ -207,7 +207,7 @@ The supported slice is intentionally narrow:
   an effective assignment for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of single- and multi-coin EMA-anchor and
   trailing-martingale runs: `live.forced_mode_<side>: normal`, active-strategy parameters,
-  `risk.entry_cooldown_minutes`, and explicit
+  `entry_cooldown.base_duration_minutes`, and explicit
   `wallet_exposure_limit`, `risk.we_excess_allowance_pct`, and all six `unstuck` leaves are
   supported. Static single-coin values are applied after each optimizer candidate, preserving
   exact Rust's override precedence. Checkpoint identity records the resolved exact override values
@@ -505,6 +505,14 @@ in their execution identity. For a fill-sensitivity suite, set `backtest.suite_e
 ]
 ```
 
+GPU screening supports [adaptive entry cooldown and RMS unilateralness](adaptive_entry_cooldown.md)
+for EMA Anchor and Trailing Martingale, on Metal and CUDA, including single-coin,
+directional multi-coin and fused long/short runs. Cooldown floors, ceilings and additive
+weights accept optimizer bounds and per-coin overrides; the shared fractional RMS span and
+Forager scoring weight accept optimizer bounds. Active RMS requires one-minute candles.
+Defaults leave the features disabled. Exact Rust validation remains authoritative for the
+float32 proxy. Start a fresh GPU search after this layout revision.
+
 #### Deliberate current limitations
 
 Independent unstuck EMA horizons are supported on Apple MPS for EMA Anchor and Trailing Martingale,
@@ -771,6 +779,7 @@ GPU-specific settings live under `optimize.gpu`:
   "optimize": {
     "backend": "gpu",
     "gpu": {
+      "tuning_mode": "auto",
       "auto_lean_parallelism": true,
       "batch_size": null,
       "max_dispatch_candidate_bars": null,
@@ -815,6 +824,42 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   Set `auto_lean_parallelism` to `false`, or set any of `population_size`, `batch_size`, or
   `max_dispatch_candidate_bars` to a number (including the ordinary default number), to retain the
   configured sizing unchanged.
+- `tuning_mode` controls continuous GPU candidate-batch tuning: `auto` (default) starts from
+  compatible local measurements when available; `refresh` ignores saved measurements and learns
+  anew; `off` uses the ordinary fixed dispatch sizing without reading or writing tuning evidence.
+  Tuning activates only when `batch_size` is omitted, `null`, or `"auto"`. An explicit numeric
+  batch size retains its existing behavior and safety caps. `population_size` and
+  `max_dispatch_candidate_bars` also accept `"auto"` as an alias for their existing `null`
+  defaults; they do not continuously change in this first implementation.
+  There is no separate calibration run. Automatic batches start at the existing resource-bounded
+  dispatch-plan width, or a compatible cached width, when device memory headroom permits it.
+  Low headroom retains a start of at most 128 candidates, and cached widths cannot bypass that
+  startup bound. This preserves established throughput on unconstrained devices. Numeric batch
+  sizes remain fixed.
+  Long temporal replays supply a bounded rolling window of completed dispatch timings, normalized
+  by processed history length. Decisions require 24 samples and at least 30 seconds of measured
+  work; cold first dispatches and partial history chunks are excluded. Evidence is committed only
+  after the complete candidate replay, reductions, and host results succeed. Batch changes apply
+  between complete candidate batches, never inside a candidate's strategy replay. Short/non-temporal
+  replays continue to use completed full-batch timings, excluding cold first batches and remainders.
+  The controller uses median throughput, trials at most a doubling/halving within the original
+  ceiling, requires a 5% gain for larger batches, and accepts smaller ones within 2% of previous
+  throughput. It waits one evidence window after acceptance and three after rejection before another
+  trial, consuming at most one decision or cooldown window per completed candidate batch.
+  Correlated temporal chunks cannot compress that cooldown into a single replay. Memory headroom gates growth. No additional replay or GPU synchronization is introduced.
+  Candidate order, evaluation coverage, exact Rust validation, and drift checks remain unchanged.
+  Estimates are advisory: changing candidate costs and thermal state can affect measurements, and
+  a width adjustment must still wait for the current complete candidate replay to finish.
+  Atomic, bounded local records under `caches/gpu_autotune/` retain stable batch sizes and measured
+  throughput. Identity includes hardware/runtime/kernel implementation, prepared workload shape,
+  fixed parameters, metrics, search bounds, CPU worker setting, and suite/screening context. Equal-
+  length new candle data can reuse evidence; history/coin-count or feature changes start separate
+  classes. Cold compilation and allocations are not cached results. Cache corruption or I/O failure
+  logs a warning and leaves optimization running with dispatch-plan/in-memory sizing.
+  Tuning state is advisory and separate from search checkpoints: resume relearns or reuses local
+  measurements without changing population, validation allocation, candidate RNG, or drift policy.
+  CPU worker counts, exact queue limits, validations per generation, and dispatch work envelopes
+  retain their existing resolution in this version. Existing Apple M3 population pre-sizing remains.
 - `batch_size` is the requested upper bound on candidates per MPS dispatch. Because Apple Silicon
   shares the GPU with WindowServer, the backend transparently splits a batch when its
   candidates-by-candles-by-coins-by-enabled-sides workload would make one Metal command buffer too

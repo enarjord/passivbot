@@ -336,7 +336,7 @@ class TestApplyConfigOverrides:
                 "long": {
                     "hsl": {"cooldown_minutes_after_red": 0.3},
                     "hsl_cooldown_minutes_after_red": 0.3,
-                    "risk": {"entry_cooldown_minutes": 0.0},
+                    "entry_cooldown": {"base_duration_minutes": 0.0},
                     "risk_entry_cooldown_minutes": 9.0,
                 }
             }
@@ -356,7 +356,7 @@ class TestApplyConfigOverrides:
         assert config["bot"]["long"]["hsl_cooldown_minutes_after_red"] == pytest.approx(
             1.0
         )
-        assert config["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(
+        assert config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(
             2.5
         )
         assert config["bot"]["long"]["risk_entry_cooldown_minutes"] == pytest.approx(
@@ -1600,6 +1600,7 @@ class TestIndividualToConfig:
                         "volatility_ema_span_1m": 225,
                         "volume_drop_pct": 0.57,
                         "score_weights": {
+                            "unilateralness": 0.0,
                             "volume": 0.0,
                             "ema_readiness": 0.0,
                             "volatility": 1.0,
@@ -1640,6 +1641,7 @@ class TestIndividualToConfig:
                         "volatility_ema_span_1m": 10,
                         "volume_drop_pct": 0.5,
                         "score_weights": {
+                            "unilateralness": 0.0,
                             "volume": 0.2,
                             "ema_readiness": 0.3,
                             "volatility": 0.5,
@@ -2428,7 +2430,7 @@ class TestValidateArray:
         config = {"backtest": {"coins": {}, "candle_interval_minutes": 2}}
         manager = RecordingArrayManager()
 
-        with patch("optimize._stamp_optimizer_warmup"):
+        with patch("optimize._stamp_optimizer_warmup"), patch("optimize.validate_optimizer_dataset_intervals"):
             _register_exchange_data(
                 "binance",
                 (["BTC"], hlcvs, mss, None, None, btc_usd_prices, timestamps),
@@ -3430,10 +3432,8 @@ class TestApplyFineTuneBounds:
                 )
             )
 
-        caplog.set_level(logging.WARNING)
-        install_anchored_fine_tune_plan(
-            config, ["long.param1", "long.param3"], str(anchors_dir)
-        )
+        caplog.set_level(logging.DEBUG)
+        install_anchored_fine_tune_plan(config, ["long.param1", "long.param3"], str(anchors_dir))
         shape = build_optimization_shape(config)
         result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], config)
 
@@ -3690,7 +3690,7 @@ class TestApplyFineTuneBounds:
         seed["_starting_config_source"] = "seed.json"
         shape = build_optimization_shape(config)
 
-        caplog.set_level(logging.WARNING)
+        caplog.set_level(logging.DEBUG)
         individuals, raw_count = configs_to_individuals_streaming(
             [seed],
             shape.bounds,
@@ -3922,22 +3922,18 @@ class TestConfigsToIndividuals:
         shape = build_optimization_shape(config)
 
         stale_seed = deepcopy(config)
-        stale_seed["optimize"]["bounds"]["long"]["risk"].pop("entry_cooldown_minutes")
-        stale_seed["optimize"]["bounds"]["short"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["optimize"]["bounds"]["long"]["entry_cooldown"].pop("base_duration_minutes")
+        stale_seed["optimize"]["bounds"]["short"]["entry_cooldown"].pop("base_duration_minutes")
         stale_seed["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"].pop(
             "entry_double_down_factor"
         )
         stale_seed["optimize"]["bounds"]["short"]["strategy"]["ema_anchor"].pop(
             "entry_double_down_factor"
         )
-        stale_seed["bot"]["long"]["risk"].pop("entry_cooldown_minutes")
-        stale_seed["bot"]["short"]["risk"].pop("entry_cooldown_minutes")
-        stale_seed["bot"]["long"]["strategy"]["ema_anchor"].pop(
-            "entry_double_down_factor"
-        )
-        stale_seed["bot"]["short"]["strategy"]["ema_anchor"].pop(
-            "entry_double_down_factor"
-        )
+        stale_seed["bot"]["long"]["entry_cooldown"].pop("base_duration_minutes")
+        stale_seed["bot"]["short"]["entry_cooldown"].pop("base_duration_minutes")
+        stale_seed["bot"]["long"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
+        stale_seed["bot"]["short"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
 
         result = configs_to_individuals(
             [stale_seed],

@@ -265,21 +265,34 @@ def build_optimizer_max_config(config: dict) -> dict:
     )
 
 
-def _build_optimizer_boundary_configs(config: dict) -> list[dict]:
+def _build_optimizer_boundary_configs(config: dict, *, rms_consumer_corner: bool = False) -> list[dict]:
     anchor_plan = get_anchor_plan(config)
-    if anchor_plan is None:
+    if anchor_plan is None and not rms_consumer_corner:
         return [build_optimizer_max_config(config)]
     shape = build_optimization_shape(config)
     overrides_list = config.get("optimize", {}).get("enable_overrides", []) or []
-    tunable_max_vector = [bound.high for bound in shape.bounds[1:]]
+    vector = [bound.high for bound in shape.bounds]
+    if rms_consumer_corner:
+        # Ranking may need fewer slots; adverse cooldown may need a lower
+        # base/floor. Use that consumer-enabling corner with maximal weights
+        # and ceiling, then finalize so runtime overrides and anchor pins win.
+        for i, ((_, path), bound) in enumerate(zip(shape.key_paths, shape.bounds)):
+            if path and path[-1] in ("base_duration_minutes", "min_duration_minutes"):
+                vector[i] = bound.low
+            if path and path[-1] == "n_positions":
+                value = bound.quantize(max(1.0, bound.low))
+                if round(value) <= 0 and bound.is_stepped and bound.max_index > 0:
+                    value = bound.quantize(bound.low + bound.step)
+                vector[i] = value
+    vectors = (
+        [[float(anchor_id), *vector[1:]] for anchor_id in range(len(anchor_plan.get("anchors") or []))]
+        if anchor_plan is not None else [vector]
+    )
     return [
         build_optimizer_vector_config(
-            [float(anchor_id), *tunable_max_vector],
-            config,
-            key_paths=shape.key_paths,
-            overrides_list=overrides_list,
+            candidate_vector, config, key_paths=shape.key_paths, overrides_list=overrides_list,
         )
-        for anchor_id in range(len(anchor_plan.get("anchors") or []))
+        for candidate_vector in vectors
     ]
 
 
@@ -291,6 +304,9 @@ def validate_optimizer_effective_configs(config: dict) -> None:
     for candidate in _build_optimizer_boundary_configs(config):
         effective = deepcopy(candidate)
         effective.setdefault("optimize", {})["fixed_runtime_overrides"] = {}
+        # Validate the finalized candidate itself. Search bounds were checked
+        # while building its shape; reapplying them here would undo runtime pins.
+        effective["optimize"]["bounds"] = {}
         validate_config(
             effective,
             raw_optimize=effective.get("optimize", {}),
@@ -299,12 +315,45 @@ def validate_optimizer_effective_configs(config: dict) -> None:
         )
 
 
+def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str) -> None:
+    """Reject reachable RMS consumers only after per-coin eligibility is known."""
+    if config["backtest"]["candle_interval_minutes"] == 1:
+        return
+    from backtest import prep_backtest_args
+    from warmup_utils import rms_side_enabled
+    from config.entry_cooldown import uses_adverse_rms
+
+    for candidate in _build_optimizer_boundary_configs(config, rms_consumer_corner=True):
+        bot_params, _, _, _ = prep_backtest_args(candidate, mss, exchange)
+        for side in ("long", "short"):
+            eligible = sum(pair[side]["entry_eligible"] for pair in bot_params)
+            for pair in bot_params:
+                params = pair[side]
+                ranking_possible = eligible > 1 and (
+                    candidate["backtest"]["dynamic_wel_by_tradability"]
+                    or eligible > bot_params[0][side]["n_positions"]
+                )
+                if (
+                    params["entry_eligible"]
+                    and rms_side_enabled(params, side)
+                    and (
+                        (ranking_possible and params["forager_score_weights"]["unilateralness"] > 0.0)
+                        or uses_adverse_rms(params)
+                    )
+                ):
+                    raise ValueError(
+                        "RMS unilateralness requires completed one-minute candles for the entire optimizer search"
+                    )
+
+
 def build_optimizer_data_config(config: dict) -> dict:
     """Return a copy whose side gates cover every optimizer-reachable side."""
     boundary_configs = _build_optimizer_boundary_configs(config)
     if not boundary_configs:
         return deepcopy(config)
     data_config = deepcopy(config)
+    # Dataset sizing must see runtime pins already applied, just as candidates do.
+    _apply_config_overrides(data_config, config.get("optimize", {}).get("fixed_runtime_overrides", {}))
     for pside in ("long", "short"):
         source = next(
             (
@@ -330,15 +379,30 @@ def build_optimizer_data_config(config: dict) -> dict:
     return data_config
 
 
-def compute_optimizer_per_coin_warmup_minutes(config: dict) -> dict:
+def compute_optimizer_per_coin_warmup_minutes(
+    config: dict, *, for_trade_activation: bool = False
+) -> dict:
+    """Separate loaded history from the activation budget shared by candidates.
+
+    RMS history covers the search space. RMS activation belongs to each final
+    candidate's Rust entry/ranking consumer, not the shared dataset metadata.
+    Other indicators retain their existing worst-case activation budget.
+    """
+    merged: dict[str, int] = {}
     boundary_configs = _build_optimizer_boundary_configs(config)
-    if len(boundary_configs) > 1:
-        merged: dict[str, int] = {}
-        for boundary_config in boundary_configs:
-            for key, value in compute_per_coin_warmup_minutes(boundary_config).items():
-                merged[key] = max(int(value), int(merged.get(key, 0)))
-        return merged
-    return compute_per_coin_warmup_minutes(boundary_configs[0])
+    if not for_trade_activation:
+        # The all-high corner can clamp cooldown to a constant even though
+        # lower base/floor candidates consume RMS and need its full history.
+        boundary_configs += _build_optimizer_boundary_configs(config, rms_consumer_corner=True)
+    for boundary_config in boundary_configs:
+        warmup_map = compute_per_coin_warmup_minutes(
+            boundary_config,
+            for_trade_activation=for_trade_activation,
+            include_rms=not for_trade_activation,
+        )
+        for key, value in warmup_map.items():
+            merged[key] = max(int(value), int(merged.get(key, 0)))
+    return merged
 
 
 def compute_optimizer_backtest_warmup_minutes(config: dict) -> int:
@@ -347,6 +411,7 @@ def compute_optimizer_backtest_warmup_minutes(config: dict) -> int:
 
 
 def stamp_warmup_metadata(mss: dict, coins: Sequence[str], warmup_map: dict) -> Counter:
+    """Stamp the shared trade-activation map, never the RMS history map."""
     default_warmup = int(warmup_map.get("__default__", 0))
     stamped: Counter = Counter()
     for coin in coins:
@@ -361,6 +426,7 @@ def stamp_warmup_metadata(mss: dict, coins: Sequence[str], warmup_map: dict) -> 
         else:
             trade_start = min(last_idx, first_idx + warmup_minutes)
         meta["warmup_minutes"] = warmup_minutes
+        meta["warmup_minutes_source"] = "activation"
         meta["trade_start_index"] = trade_start
         stamped[(warmup_minutes, trade_start)] += 1
     return stamped
@@ -376,4 +442,5 @@ __all__ = [
     "optimizer_dead_param_values",
     "stamp_warmup_metadata",
     "validate_optimizer_effective_configs",
+    "validate_optimizer_dataset_intervals",
 ]

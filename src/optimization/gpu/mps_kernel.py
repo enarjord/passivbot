@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from optimization.gpu.replay_progress import TemporalReplayProgress
+from optimization.gpu.autotune import record_replay_chunk
 from optimization.gpu.runtime import (
     gpu_device,
     compile_shader,
@@ -15,9 +16,11 @@ from optimization.gpu.runtime import (
 )
 
 from optimization.gpu.model import (
+    ADAPTIVE_PARAM_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
@@ -32,6 +35,7 @@ from optimization.gpu.model import (
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
@@ -406,16 +410,24 @@ def _upgrade_legacy_single_coin_wel_params(
     if params.ndim != 2 or params.shape[1] == side_width * 2:
         return params
     legacy_width = params.shape[1] // 2
-    if params.shape[1] % 2 or legacy_width not in (side_width - 2, side_width - 3):
+    previous_width = side_width - len(ADAPTIVE_PARAM_KEYS)
+    if params.shape[1] % 2 or legacy_width not in (
+        previous_width,
+        previous_width - 2,
+        previous_width - 3,
+    ):
         return params
     strategy_start = 1 if side_width == len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) else 0
     sides = []
+    defaults = np.array([0.0, -1.0, 0.0, 0.0, 60.0, 0.0, 1200.0], dtype=params.dtype)
     for offset in (0, legacy_width):
         side = params[:, offset : offset + legacy_width]
         parts = [side]
-        if legacy_width == side_width - 3:
+        if legacy_width == previous_width - 3:
             parts.append(np.full((len(params), 1), -1.0, dtype=params.dtype))
-        parts.append(side[:, strategy_start : strategy_start + 2])
+        if legacy_width != previous_width:
+            parts.append(side[:, strategy_start : strategy_start + 2])
+        parts.append(np.broadcast_to(defaults, (len(params), len(defaults))))
         sides.append(np.concatenate(parts, axis=1))
     return np.concatenate(sides, axis=1)
 
@@ -439,6 +451,9 @@ def _scale_directional_minute_parameters(
     *,
     sides: int,
     interval_minutes: float,
+    ranking_coin_counts: tuple[int, ...] | None = None,
+    cooldown_coin_overrides: tuple[np.ndarray, ...] | None = None,
+    dynamic_wel_by_tradability: bool = True,
 ) -> np.ndarray:
     """Convert minute-denominated directional inputs to candle periods.
 
@@ -462,6 +477,7 @@ def _scale_directional_minute_parameters(
         "entry_cooldown_minutes",
         "hsl_cooldown_minutes_after_red",
     }
+    minute_keys.update(ADAPTIVE_PARAM_KEYS[:4])
     if "offset_volatility_ema_span_1m" in keys:
         minute_keys.add("offset_volatility_ema_span_1m")
     if "volatility_ema_span_1m" in keys:
@@ -473,8 +489,75 @@ def _scale_directional_minute_parameters(
     side_width = len(keys)
     for side_index in range(sides):
         offset = side_index * side_width
+        span_col = offset + keys.index("unilateralness_ema_span_1m")
+        adverse = scaled[:, offset + keys.index("entry_cooldown_adverse_weight")]
+        score = scaled[:, offset + keys.index("forager_score_weights_unilateralness")]
+        ceiling = scaled[:, offset + keys.index("entry_cooldown_max_duration_minutes")]
+        floor = scaled[:, offset + keys.index("entry_cooldown_min_duration_minutes")]
+        base = scaled[:, offset + keys.index("entry_cooldown_minutes")]
+        exposure = scaled[:, offset + keys.index("entry_cooldown_exposure_weight")]
+        policy = np.column_stack((floor, ceiling, exposure, adverse))
+        with np.errstate(over="ignore"):
+            finite_policy = np.isfinite(policy.astype(np.float32)).all()
+        if (
+            not finite_policy
+            or np.any(floor < 0)
+            or np.any(exposure < 0)
+            or np.any(adverse < 0)
+            or np.any((ceiling < 0) & (ceiling != -1))
+            or np.any((ceiling >= 0) & (ceiling < floor))
+            or np.any(((exposure > 0) | (adverse > 0)) & (ceiling < 0))
+        ):
+            raise ValueError(
+                "GPU adaptive cooldown requires finite nonnegative weights/floor and a valid bounded ceiling"
+            )
+        constant = (ceiling >= 0.0) & (np.maximum(base, floor) >= ceiling)
+        ranking = np.zeros(len(scaled), dtype=bool)
+        if "n_positions" in keys:
+            ranking = score > 0.0
+            if ranking_coin_counts is not None:
+                count = ranking_coin_counts[side_index]
+                slots = np.rint(scaled[:, offset + keys.index("n_positions")])
+                ranking &= (count > 1) & (dynamic_wel_by_tradability | (count > slots))
+                # Match Rust's dormant scoring policy. Aggregated candles must
+                # never update a one-minute indicator that cannot be consumed.
+                scaled[~ranking, offset + keys.index("forager_score_weights_unilateralness")] = 0.0
+        adverse_demand = (adverse > 0.0) & ~constant
+        if cooldown_coin_overrides is not None:
+            # Override rows are unscaled base/floor/ceiling/adverse/WEL pins.
+            # Resolve against each candidate before deciding whether RMS is used.
+            adverse_demand = np.zeros(len(scaled), dtype=bool)
+            overrides = cooldown_coin_overrides[side_index]
+            # Avoid per-coin work when all adverse weights are disabled.
+            if np.any(adverse > 0.0) or np.any(overrides[:, 3] > 0.0):
+                for pins in overrides:
+                    effective_adverse = pins[3] if np.isfinite(pins[3]) else adverse
+                    if pins[4] == 0.0 or not np.any(effective_adverse > 0.0):
+                        continue
+                    effective_base = pins[0] if np.isfinite(pins[0]) else base
+                    effective_floor = pins[1] if np.isfinite(pins[1]) else floor
+                    effective_ceiling = pins[2] if np.isfinite(pins[2]) else ceiling
+                    effective_constant = (effective_ceiling >= 0.0) & (
+                        np.maximum(effective_base, effective_floor) >= effective_ceiling
+                    )
+                    adverse_demand |= (effective_adverse > 0.0) & ~effective_constant
+        rms = adverse_demand | ranking
+        rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit")] > 0.0
+        if np.any(rms) and interval_minutes != 1.0:
+            raise ValueError("GPU RMS directionality requires one-minute candles")
+        spans = scaled[:, span_col]
+        if np.any(rms & (~np.isfinite(spans) | (spans < 1.0) | (spans > 100000.0))):
+            raise ValueError(
+                "GPU unilateralness spans must be finite and between 1 and 100000"
+            )
+        scaled[:, offset + keys.index("unilateralness_window")] = np.ceil(20.0 * spans)
         for key in minute_keys:
-            scaled[:, offset + keys.index(key)] /= interval_minutes
+            column = offset + keys.index(key)
+            if key == "entry_cooldown_max_duration_minutes":
+                finite_ceiling = scaled[:, column] >= 0.0
+                scaled[finite_ceiling, column] /= interval_minutes
+            else:
+                scaled[:, column] /= interval_minutes
         for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
             _validate_unstuck_ema_spans(scaled[:, offset + keys.index(key)])
         if interval_minutes != 1.0:
@@ -531,9 +614,22 @@ def _scale_multicoin_coin_overrides(
         )
     interval_minutes = float(interval_minutes)
     if not np.isfinite(interval_minutes) or interval_minutes < 1.0:
-        raise ValueError("MPS candle interval must be finite and at least one minute")
-    for column in minute_columns | {hsl_start_column + 3}:
+        raise ValueError(
+            "MPS candle interval must be finite and at least one minute"
+        )
+    adaptive_start = expected_cols - 4
+    # RMS demand depends on the effective candidate plus these pins. Validate it
+    # when packing the candidate batch, not from incomplete overrides alone.
+    for column in minute_columns | {
+        hsl_start_column + 3,
+        adaptive_start,
+        adaptive_start + 1,
+        adaptive_start + 2,
+        adaptive_start + 3,
+    }:
         finite = np.isfinite(scaled[:, column])
+        if column == adaptive_start + 1:
+            finite &= scaled[:, column] >= 0.0
         scaled[finite, column] /= interval_minutes
     if interval_minutes != 1.0:
         hsl_span_column = hsl_start_column + 2
@@ -549,7 +645,7 @@ def _scale_multicoin_coin_overrides(
             interval_minutes * np.log(decay_1m[positive_decay])
         )
         scaled[finite, hsl_span_column] = 2.0 / alpha_per_candle - 1.0
-    _validate_unstuck_ema_spans(scaled[:, -2:], allow_unset=True)
+    _validate_unstuck_ema_spans(scaled[:, -6:-4], allow_unset=True)
     return np.ascontiguousarray(scaled, dtype=np.float32)
 
 
@@ -2112,6 +2208,17 @@ class MpsEmaAnchorMulticoinRunner:
                 f"({self.n_coins}, {self.coin_override_cols}), "
                 f"got {coin_overrides.shape}"
             )
+        wel_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+                      if self.coin_override_label == "Trailing Martingale"
+                      else EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN)
+        self.rms_ranking_coin_counts = (int(np.count_nonzero(coin_overrides[:, wel_column] != 0.0)),)
+        cooldown_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
+                           if self.coin_override_label == "Trailing Martingale"
+                           else EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN)
+        self.rms_cooldown_coin_overrides = (coin_overrides[:, [
+            cooldown_column, self.coin_override_cols - 4, self.coin_override_cols - 3,
+            self.coin_override_cols - 1, wel_column,
+        ]].copy(),)
         self.coin_hsl_may_enable = True
         if self.coin_override_label == "EMA":
             hsl_overrides = coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN]
@@ -2205,6 +2312,9 @@ class MpsEmaAnchorMulticoinRunner:
                 EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
                 sides=1,
                 interval_minutes=self.interval_minutes,
+                ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+                cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
+                dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
             ),
             dtype=np.float32,
         )
@@ -2674,6 +2784,14 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             self.coin_hsl_may_enable
             or np.any(np.isfinite(short_hsl_overrides) & (short_hsl_overrides > 0.5))
         )
+        self.rms_ranking_coin_counts += (int(np.count_nonzero(
+            short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+        )),)
+        self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
+            EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+            self.coin_override_cols - 4, self.coin_override_cols - 3,
+            self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+        ]].copy(),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
@@ -2719,6 +2837,9 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
                 sides=2,
                 interval_minutes=self.interval_minutes,
+                ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+                cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
+                dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
             ),
             dtype=np.float32,
         )
@@ -2920,6 +3041,9 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
             sides=1,
             interval_minutes=self.interval_minutes,
+            ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+            cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
+            dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
         )
         return _pack_tm_parameter_matrix(
             scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=1
@@ -3062,7 +3186,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         stop_k = int(end_steps.max().item())
         dispatch_count = 0
         max_dispatch_seconds = 0.0
-        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1)
+        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=chunk_bars)
         replay_started = time.perf_counter()
         next_progress = replay_started + 30.0
         # One SIMD-width group distributes independent, state-heavy replays
@@ -3087,18 +3211,20 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             # between temporal chunks even when profiling is disabled.
             synchronize()
             dispatch_count += 1
-            max_dispatch_seconds = max(
-                max_dispatch_seconds, time.perf_counter() - started
+            dispatch_seconds = time.perf_counter() - started
+            max_dispatch_seconds = max(max_dispatch_seconds, dispatch_seconds)
+            processed_bars = min(begin_k + chunk_bars, stop_k) - begin_k
+            record_replay_chunk(
+                batch_size, processed_bars, stop_k - 1, dispatch_seconds,
+                eligible=begin_k > 1 and processed_bars == chunk_bars,
             )
             now = time.perf_counter()
             completed_k = min(begin_k + chunk_bars, stop_k)
             if now >= next_progress and completed_k < stop_k:
-                replay_progress.log("progress", completed_k - 1, now - replay_started)
+                replay_progress.log("progress", completed_k - 1, now - replay_started, kernel_dispatches=dispatch_count)
                 next_progress = now + 30.0
         self.interrupt_check()
-        replay_progress.log(
-            "complete", stop_k - 1, time.perf_counter() - replay_started
-        )
+        replay_progress.log("complete", stop_k - 1, time.perf_counter() - replay_started, kernel_dispatches=dispatch_count)
         self._last_temporal_dispatch = {
             "dispatch_count": dispatch_count,
             "temporal_chunk_bars": chunk_bars,
@@ -3195,6 +3321,14 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 "expected fused multicoin Trailing Martingale short override "
                 f"matrix shaped {expected_shape}, got {short_coin_overrides.shape}"
             )
+        self.rms_ranking_coin_counts += (int(np.count_nonzero(
+            short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+        )),)
+        self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
+            TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
+            self.coin_override_cols - 4, self.coin_override_cols - 3,
+            self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+        ]].copy(),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
@@ -3236,6 +3370,9 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
             sides=2,
             interval_minutes=self.interval_minutes,
+            ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+            cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
+            dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
         )
         return _pack_tm_parameter_matrix(
             scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=2
@@ -3762,7 +3899,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             stop = effective_end_step - 1
             count = 0
             longest = 0.0
-            replay_progress = TemporalReplayProgress(batch_size, max(0, stop - begin))
+            replay_progress = TemporalReplayProgress(batch_size, max(0, stop - begin), history_chunk_bars=chunk_bars)
             replay_started = time.perf_counter()
             next_progress = replay_started + 30.0
             for first in range(begin, stop, chunk_bars):
@@ -3781,20 +3918,23 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                     group_size=(min(batch_size, 64), 1, 1),
                 )
                 synchronize()
-                longest = max(longest, time.perf_counter() - started)
+                dispatch_seconds = time.perf_counter() - started
+                longest = max(longest, dispatch_seconds)
+                processed_bars = min(first + chunk_bars, stop) - first
+                record_replay_chunk(
+                    batch_size, processed_bars, stop - begin, dispatch_seconds,
+                    eligible=first > begin and processed_bars == chunk_bars,
+                )
                 count += 1
                 now = time.perf_counter()
                 if now >= next_progress and first + chunk_bars < stop:
                     replay_progress.log(
-                        "progress",
-                        first + chunk_bars - begin,
-                        now - replay_started,
+                        "progress", first + chunk_bars - begin, now - replay_started,
+                        kernel_dispatches=count,
                     )
                     next_progress = now + 30.0
             self.interrupt_check()
-            replay_progress.log(
-                "complete", max(0, stop - begin), time.perf_counter() - replay_started
-            )
+            replay_progress.log("complete", max(0, stop - begin), time.perf_counter() - replay_started, kernel_dispatches=count)
             return {
                 "dispatch_count": count,
                 "temporal_chunk_bars": chunk_bars,

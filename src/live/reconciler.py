@@ -1472,6 +1472,23 @@ def _submitted_rust_input_context(
         raise FatalBotException(
             "Rust orchestrator validation missing corresponding symbol inputs"
         )
+    try:
+        adaptive = any(
+            any(s[side]["bot_params"].get("entry_cooldown_weights_minutes", {}).values())
+            or s[side]["bot_params"].get("entry_cooldown_min_duration_minutes", 0) != 0
+            or s[side]["bot_params"].get("entry_cooldown_max_duration_minutes") is not None
+            for s in symbols
+            for side in ("long", "short")
+        )
+        durations = None
+        if adaptive:
+            import passivbot_rust
+
+            durations = json.loads(
+                passivbot_rust.entry_cooldown_durations_json(json.dumps(orchestrator_input))
+            )
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise FatalBotException("Rust orchestrator has invalid submitted entry cooldown inputs") from exc
     valid_modes = {"normal", "panic", "graceful_stop", "tp_only", "manual"}
     modes: dict[tuple[int, str], object] = {}
     order_books: dict[int, tuple[float, float]] = {}
@@ -1674,6 +1691,11 @@ def _submitted_rust_input_context(
                 bot_params.get("risk_entry_cooldown_minutes", 0.0),
                 f"symbol input {input_idx} has invalid {pside} risk_entry_cooldown_minutes",
             )
+            cooldown_unavailable = (
+                durations is not None and durations[f"{symbol_idx}:{pside}"] is None
+            )
+            if durations is not None and not cooldown_unavailable:
+                cooldown_minutes = durations[f"{symbol_idx}:{pside}"]
             if cooldown_minutes < 0.0:
                 raise FatalBotException(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} risk_entry_cooldown_minutes"
@@ -1724,6 +1746,8 @@ def _submitted_rust_input_context(
                 )
             else:
                 entry_cooldown_active[(symbol_idx, pside)] = False
+            if cooldown_unavailable:
+                entry_cooldown_active[(symbol_idx, pside)] = True
             wallet_exposure_limit = _validated_rust_finite_number(
                 bot_params.get("wallet_exposure_limit"),
                 f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit",
@@ -2713,6 +2737,7 @@ def validate_rust_orchestrator_output(
         "volume_component",
         "ema_readiness_component",
         "volatility_component",
+        "unilateralness_component",
     )
     event_finite_fields = (
         "incumbent_score",

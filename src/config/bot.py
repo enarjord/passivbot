@@ -23,7 +23,12 @@ from .access import require_config_dict
 from .tree_ops import add_missing_keys_recursively
 from risk_limits import normalize_we_excess_allowance_mode
 
-DEFAULT_FORAGER_SCORE_WEIGHTS = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
+DEFAULT_FORAGER_SCORE_WEIGHTS = {
+    "volume": 0.0,
+    "ema_readiness": 0.0,
+    "volatility": 1.0,
+    "unilateralness": 0.0,
+}
 REQUIRED_BOT_KEYS = ()
 CLIFF_EDGE_THRESHOLD_KEYS = (
     "risk_wel_enforcer_threshold",
@@ -581,14 +586,19 @@ def ensure_optimize_bounds_for_bot(
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
         if "score_weights" not in forager_cfg:
-            weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
+            weights = {
+                "volume": 0.0,
+                "ema_readiness": 0.0,
+                "volatility": 1.0,
+                "unilateralness": 0.0,
+            }
             forager_cfg["score_weights"] = weights
             if tracker is not None:
                 tracker.add(["bot", pside, "forager", "score_weights"], weights)
 
 
 def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
-    required_weight_keys = {"volume", "ema_readiness", "volatility"}
+    required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
     if not isinstance(weights, dict):
         raise TypeError(f"{path} must be a dict")
     missing = sorted(required_weight_keys - set(weights))
@@ -600,7 +610,7 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
 
     normalized = {}
     total = 0.0
-    for key in ("volume", "ema_readiness", "volatility"):
+    for key in ("volume", "ema_readiness", "volatility", "unilateralness"):
         try:
             value = float(weights[key])
         except (TypeError, ValueError) as exc:
@@ -611,11 +621,11 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
         total += value
 
     if total <= 0.0:
-        return {"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0}
+        return {"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0}
 
     return {
         key: normalized[key] / total
-        for key in ("volume", "ema_readiness", "volatility")
+        for key in ("volume", "ema_readiness", "volatility", "unilateralness")
     }
 
 
@@ -628,7 +638,7 @@ def forager_score_weights_are_normalized(
     normalized = normalize_forager_score_weights(weights, path=path)
     return all(
         math.isclose(normalized[key], weights[key], rel_tol=0.0, abs_tol=abs_tol)
-        for key in ("volume", "ema_readiness", "volatility")
+        for key in ("volume", "ema_readiness", "volatility", "unilateralness")
     )
 
 
@@ -638,7 +648,7 @@ def normalize_bot_forager_config(
     verbose: bool = True,
     tracker: Optional[object] = None,
 ) -> None:
-    required_weight_keys = {"volume", "ema_readiness", "volatility"}
+    required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
         raw_drop_pct = forager_cfg["volume_drop_pct"]
@@ -659,6 +669,8 @@ def normalize_bot_forager_config(
         forager_cfg["volume_drop_pct"] = drop_pct
 
         weights = forager_cfg["score_weights"]
+        if isinstance(weights, dict):
+            weights.setdefault("unilateralness", 0.0)
         risk_cfg = get_bot_group(result["bot"][pside], "risk")
         normalized = normalize_forager_score_weights(
             weights, path=f"bot.{pside}.forager.score_weights"
@@ -926,7 +938,7 @@ def validate_forager_config(
         )
         raw_weight_total = sum(
             float(forager_cfg["score_weights"][key])
-            for key in ("volume", "ema_readiness", "volatility")
+            for key in ("volume", "ema_readiness", "volatility", "unilateralness")
         )
         if not forager_score_weights_are_normalized(
             forager_cfg["score_weights"],
@@ -988,7 +1000,9 @@ def format_bot_config(
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     from .migrations.entry_ema import migrate_entry_ema_spans
     from .migrations.unstuck_ema import migrate_unstuck_ema_spans
+    from .migrations.entry_cooldown import migrate_entry_cooldown
 
+    migrate_entry_cooldown(result, tracker=tracker)
     migrate_entry_ema_spans(result, tracker=tracker)
 
     migrate_unstuck_ema_spans(result, verbose=verbose, tracker=tracker)

@@ -176,11 +176,13 @@
         "score_weights": {
           "ema_readiness": 0.0,
           "volatility": 0.0,
-          "volume": 1.0
+          "volume": 1.0,
+          "unilateralness": 0.0
         },
         "volatility_ema_span_1m": 0,
         "volume_drop_pct": 0.0,
-        "volume_ema_span_1m": 1
+        "volume_ema_span_1m": 1,
+        "unilateralness_ema_span_1m": 60.0
       },
       "hsl": {
         "cooldown_minutes_after_red": 1.0,
@@ -191,7 +193,6 @@
         "restart_after_red_policy": "always"
       },
       "risk": {
-        "entry_cooldown_minutes": 24.1,
         "n_positions": 1,
         "position_exposure_enforcer_enabled": false,
         "position_exposure_enforcer_threshold": 1.0,
@@ -244,6 +245,15 @@
         "enabled": true,
         "loss_allowance_pct": 0.1,
         "threshold": 1.0
+      },
+      "entry_cooldown": {
+        "base_duration_minutes": 24.1,
+        "min_duration_minutes": 0.0,
+        "max_duration_minutes": null,
+        "weights_minutes": {
+          "exposure_ratio": 0.0,
+          "adverse_directionality": 0.0
+        }
       }
     },
     "short": {
@@ -251,11 +261,13 @@
         "score_weights": {
           "ema_readiness": 0.0,
           "volatility": 0.0,
-          "volume": 1.0
+          "volume": 1.0,
+          "unilateralness": 0.0
         },
         "volatility_ema_span_1m": 0,
         "volume_drop_pct": 0.0,
-        "volume_ema_span_1m": 0
+        "volume_ema_span_1m": 0,
+        "unilateralness_ema_span_1m": 60.0
       },
       "hsl": {
         "cooldown_minutes_after_red": 1.0,
@@ -266,7 +278,6 @@
         "restart_after_red_policy": "always"
       },
       "risk": {
-        "entry_cooldown_minutes": 0.0,
         "n_positions": 1,
         "position_exposure_enforcer_enabled": true,
         "position_exposure_enforcer_threshold": 0.8,
@@ -319,11 +330,20 @@
         "enabled": true,
         "loss_allowance_pct": 0.005,
         "threshold": 0.3
+      },
+      "entry_cooldown": {
+        "base_duration_minutes": 0.0,
+        "min_duration_minutes": 0.0,
+        "max_duration_minutes": null,
+        "weights_minutes": {
+          "exposure_ratio": 0.0,
+          "adverse_directionality": 0.0
+        }
       }
     }
   },
   "coin_overrides": {},
-  "config_version": "v8.5.0",
+  "config_version": "v8.6.0",
   "live": {
     "approved_coins": {
       "long": [],
@@ -473,11 +493,6 @@
           ]
         },
         "risk": {
-          "entry_cooldown_minutes": [
-            0,
-            60,
-            0.1
-          ],
           "n_positions": [
             7,
             7,
@@ -656,6 +671,13 @@
             0.9,
             0.001
           ]
+        },
+        "entry_cooldown": {
+          "base_duration_minutes": [
+            0,
+            60,
+            0.1
+          ]
         }
       },
       "short": {
@@ -709,11 +731,6 @@
           ]
         },
         "risk": {
-          "entry_cooldown_minutes": [
-            0,
-            60,
-            0.1
-          ],
           "n_positions": [
             5,
             5,
@@ -890,6 +907,13 @@
             0.4,
             0.9,
             0.001
+          ]
+        },
+        "entry_cooldown": {
+          "base_duration_minutes": [
+            0,
+            60,
+            0.1
           ]
         }
       }

@@ -1160,6 +1160,15 @@ fn run_backtest_core<'py>(
             backtest_params.equity_hard_stop_loss.hsl.is_some(),
         )?);
     }
+    if backtest_params.candle_interval_minutes != 1
+        && crate::unilateralness::backtest_enabled_sides(
+            &bot_params_vec, backtest_params.dynamic_wel_by_tradability,
+        ).iter().flatten().any(|enabled| *enabled)
+    {
+        return Err(PyValueError::new_err(
+            "RMS unilateralness requires completed one-minute candles",
+        ));
+    }
 
     let strategy_params_py_list_bound = strategy_params.downcast::<PyList>().map_err(|_| {
         PyValueError::new_err("strategy_params must be a list[dict] (one per coin)")
@@ -2185,7 +2194,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
     // Preserve zero here: per-symbol zero is the explicit side-disable sentinel.
     let wallet_exposure_limit = wallet_exposure_limit_raw;
 
-    Ok(BotParams {
+    let params = BotParams {
         close_grid_qty_pct: extract_optional_f64(dict, "close_grid_qty_pct")?,
         close_trailing_retracement_pct: extract_optional_f64(
             dict,
@@ -2255,6 +2264,30 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         ema_span_1: extract_optional_f64(dict, "ema_span_1")?,
         hsl_enabled: hsl.hsl_enabled,
         hsl_panic_close_order_type: hsl.hsl_panic_close_order_type,
+        entry_cooldown_min_duration_minutes: extract_optional_f64(
+            dict,
+            "entry_cooldown_min_duration_minutes",
+        )?,
+        entry_cooldown_max_duration_minutes: match dict
+            .get_item("entry_cooldown_max_duration_minutes")?
+        {
+            Some(v) if !v.is_none() => Some(v.extract()?),
+            _ => None,
+        },
+        entry_cooldown_weights_minutes: match dict.get_item("entry_cooldown_weights_minutes")? {
+            Some(v) => {
+                let w = v.downcast::<PyDict>()?;
+                crate::entry_cooldown::CooldownWeights {
+                    exposure_ratio: extract_value(w, "exposure_ratio")?,
+                    adverse_directionality: extract_value(w, "adverse_directionality")?,
+                }
+            }
+            None => Default::default(),
+        },
+        unilateralness_ema_span_1m: match dict.get_item("unilateralness_ema_span_1m")? {
+            Some(v) => v.extract()?,
+            None => 60.0,
+        },
         risk_entry_cooldown_minutes: extract_optional_f64(dict, "risk_entry_cooldown_minutes")?,
         n_positions,
         total_wallet_exposure_limit,
@@ -2287,7 +2320,11 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         unstuck_ema_span_1: extract_value(dict, "unstuck_ema_span_1")?,
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
         unstuck_threshold: extract_value(dict, "unstuck_threshold")?,
-    })
+    };
+    crate::entry_cooldown::validate(&params).map_err(PyValueError::new_err)?;
+    crate::unilateralness::warmup_returns(params.unilateralness_ema_span_1m)
+        .map_err(PyValueError::new_err)?;
+    Ok(params)
 }
 
 fn extract_forager_score_weights(dict: &PyDict) -> PyResult<ForagerScoreWeights> {
@@ -2306,6 +2343,7 @@ fn extract_forager_score_weights(dict: &PyDict) -> PyResult<ForagerScoreWeights>
         volume: extract_value(weights_dict, "volume")?,
         ema_readiness: extract_value(weights_dict, "ema_readiness")?,
         volatility: extract_value(weights_dict, "volatility")?,
+        unilateralness: extract_optional_f64(weights_dict, "unilateralness")?,
     };
     weights.canonicalize().map_err(PyValueError::new_err)
 }
@@ -3941,6 +3979,13 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
         })?;
     validate_orchestrator_account_risk_inputs(&input)?;
     validate_forager_score_weights_pair(&input.global.global_bot_params)?;
+    for symbol in &input.symbols {
+        for side in [&symbol.long, &symbol.short] {
+            crate::entry_cooldown::validate(&side.bot_params).map_err(PyValueError::new_err)?;
+            crate::unilateralness::warmup_returns(side.bot_params.unilateralness_ema_span_1m)
+                .map_err(PyValueError::new_err)?;
+        }
+    }
     validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
     validate_hsl_risk_unstuck_orchestrator_input(&input)?;
 

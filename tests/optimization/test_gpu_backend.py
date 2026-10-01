@@ -1154,6 +1154,12 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
         "close_retracement_volatility_1h_weight",
         "close_retracement_volatility_1m_weight",
         "risk_entry_cooldown_minutes",
+        "entry_cooldown_min_duration_minutes",
+        "entry_cooldown_max_duration_minutes",
+        "entry_cooldown_weights_minutes_exposure_ratio",
+        "entry_cooldown_weights_minutes_adverse_directionality",
+        "unilateralness_ema_span_1m",
+        "forager_score_weights_unilateralness",
         "risk_twel_enforcer_threshold",
         "risk_we_excess_allowance_pct",
         "risk_wel_enforcer_threshold",
@@ -1760,7 +1766,7 @@ def test_gpu_suite_inputs_accept_scenario_local_modeled_coin_overrides():
                 "bot": {
                     "long": {
                         "strategy": {"ema_anchor": {"offset": 0.012}},
-                        "risk": {"entry_cooldown_minutes": 15.0},
+                        "entry_cooldown": {"base_duration_minutes": 15.0},
                     }
                 }
             }
@@ -3545,8 +3551,8 @@ def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
             "bot": {
                 side: {
                     "strategy": {"ema_anchor": {"offset": 0.02, "ema_span_0": 90}},
+                    "entry_cooldown": {"base_duration_minutes": 15},
                     "risk": {
-                        "entry_cooldown_minutes": 15,
                         "we_excess_allowance_pct": 0.25,
                     },
                     "wallet_exposure_limit": 0.4,
@@ -3969,8 +3975,8 @@ def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
                             "close": {"qty_pct": 0.25},
                         }
                     },
+                    "entry_cooldown": {"base_duration_minutes": 15},
                     "risk": {
-                        "entry_cooldown_minutes": 15,
                         "we_excess_allowance_pct": 0.25,
                         "position_exposure_enforcer_enabled": True,
                         "position_exposure_enforcer_threshold": 0.8,
@@ -4365,7 +4371,7 @@ def test_gpu_multicoin_foundation_accepts_dual_side_coin_overrides():
                 },
                 "short": {
                     "strategy": {"ema_anchor": {"offset": 0.03}},
-                    "risk": {"entry_cooldown_minutes": 15},
+                    "entry_cooldown": {"base_duration_minutes": 15},
                 },
             }
         }
@@ -5688,21 +5694,14 @@ def test_proxy_parameters_include_canonical_pinned_ema_values():
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("step,sig_digits", [(0.01, 6), (None, 3)])
-@pytest.mark.parametrize("weights", [(0.31, 0.72, 0.18), (0.0, 0.0, 0.0)])
-def test_proxy_forager_weights_match_exact_vector_roundtrip(
-    side, step, sig_digits, weights
-):
+@pytest.mark.parametrize("weights", [(0.31, 0.72, 0.18, 0.4), (0.0, 0.0, 0.0, 0.0)])
+def test_proxy_forager_weights_match_exact_vector_roundtrip(side, step, sig_digits, weights):
     from config.bot import normalize_forager_score_weights
     from optimize import _canonicalize_optimizer_individual
 
-    keys = ("volume", "ema_readiness", "volatility")
-    paths = [
-        (
-            f"{side}_forager_score_weights_{key}",
-            ("bot", side, "forager", "score_weights", key),
-        )
-        for key in keys
-    ]
+    keys = ("volume", "ema_readiness", "volatility", "unilateralness")
+    paths = [(f"{side}_forager_score_weights_{key}",
+              ("bot", side, "forager", "score_weights", key)) for key in keys]
     bounds = [Bound(0.0, 1.0, step) for _ in keys]
     mapped = {name: (index, bounds[index]) for index, (name, _) in enumerate(paths)}
     active = [(name, index, bound) for name, (index, bound) in mapped.items()]
@@ -5727,7 +5726,7 @@ def test_proxy_forager_roundtrip_reapplies_fixed_and_mirrored_weights(fixed_volu
     from optimize import _canonicalize_optimizer_individual
 
     config = get_template_config()
-    keys = ("volume", "ema_readiness", "volatility")
+    keys = ("volume", "ema_readiness", "volatility", "unilateralness")
     paths = [
         (
             f"{side}_forager_score_weights_{key}",
@@ -5736,10 +5735,10 @@ def test_proxy_forager_roundtrip_reapplies_fixed_and_mirrored_weights(fixed_volu
         for side in ("long", "short")
         for key in keys
     ]
-    bounds = [Bound(0.0, 1.0, 0.01)] * 3 + [Bound(0.0, 1.0, 0.2)] * 3
+    bounds = [Bound(0.0, 1.0, 0.01)] * 4 + [Bound(0.0, 1.0, 0.2)] * 4
     mapped = {name: (index, bounds[index]) for index, (name, _) in enumerate(paths)}
     active = [(name, index, bound) for name, (index, bound) in mapped.items()]
-    weights = [0.31, 0.72, 0.18, 0.8, 0.4, 0.6]
+    weights = [0.31, 0.72, 0.18, 0.4, 0.8, 0.4, 0.6, 0.2]
     fixed = {}
     if fixed_volume:
         config["optimize"]["fixed_runtime_overrides"] = {
@@ -5783,7 +5782,7 @@ def test_proxy_forager_roundtrip_preserves_anchor_fixed_weights():
     config = get_template_config()
     prefix = "long_forager_score_weights_"
     path = ("bot", "long", "forager", "score_weights", "volume")
-    fixed = {"ema_readiness": 0.72, "volatility": 0.18}
+    fixed = {"ema_readiness": 0.72, "volatility": 0.18, "unilateralness": 0.4}
     config[ANCHOR_PLAN_KEY] = {
         "fixed_keys": [prefix + key for key in fixed],
         "tunable_keys": [prefix + "volume"],
@@ -5828,7 +5827,10 @@ def test_proxy_forager_roundtrip_preserves_anchor_fixed_weights():
     )[0]
     assert {key: proxy[prefix + key] for key in fixed} == fixed
     effective = normalize_forager_score_weights(
-        {key: proxy[prefix + key] for key in ("volume", "ema_readiness", "volatility")},
+        {
+            key: proxy[prefix + key]
+            for key in ("volume", "ema_readiness", "volatility", "unilateralness")
+        },
         path="proxy weights",
     )
     assert effective == pytest.approx(exact["bot"]["long"]["forager"]["score_weights"])
@@ -6009,7 +6011,7 @@ def test_gpu_fixed_bound_context_maps_effective_candidate_shadows():
     }
     effective = copy.deepcopy(config)
     effective["bot"]["long"]["strategy"]["ema_anchor"]["offset"] = 0.123
-    effective["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 17.0
+    effective["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 17.0
 
     bound_values, parameters = _gpu_fixed_bound_context(
         config,
@@ -7960,19 +7962,10 @@ def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(
     assert calls == expected_batches
     messages = [record.getMessage() for record in caplog.records]
     if len(expected_batches) == 1:
-        assert any(
-            "suite_pass=1/1 scenarios=first,second exchange=x stage=full" in m
-            for m in messages
-        )
+        assert any("group=1/1" in m and "scenarios=first,second exchange=x stage=full" in m for m in messages)
     else:
-        assert any(
-            "suite_pass=1/2 scenarios=first exchange=x stage=full" in m
-            for m in messages
-        )
-        assert any(
-            "suite_pass=2/2 scenarios=second exchange=x stage=full" in m
-            for m in messages
-        )
+        assert any("group=1/2" in m and "scenarios=first exchange=x stage=full" in m for m in messages)
+        assert any("group=2/2" in m and "scenarios=second exchange=x stage=full" in m for m in messages)
     assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-2,), (-5,)]
     assert candidates == [{}, {"value": 5}]
     assert sum(p.last_profile.get("count", 0) for p in [first, second]) == 4
@@ -8045,11 +8038,8 @@ def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(
     assert [c[0] for c in calls] == expected_labels
     messages = [record.getMessage() for record in caplog.records]
     for index, label in enumerate(expected_labels, start=1):
-        assert any(
-            f"suite_pass={index}/{len(expected_labels)} scenarios={label} "
-            f"exchange=x stage={'screening' if screening else 'full'}" in m
-            for m in messages
-        )
+        assert any(f"group={index}/{len(expected_labels)}" in m and f"scenarios={label} "
+                   f"exchange=x stage={'screening' if screening else 'full'}" in m for m in messages)
     assert calls[-1][2] == [3, 3]
     assert all(c[1] == {} for c in calls)
     assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-1,), (-2,)]
@@ -8092,4 +8082,91 @@ def test_screening_scenario_labels_survive_canonical_config_roundtrip():
     config = _long_only_ema_config()
     config["optimize"]["gpu"]["screening"]["scenarios"] = ["a", "b"]
     normalized = format_config(config, verbose=False)
-    assert _resolve_options(normalized)["screening"]["scenarios"] == ["a", "b"]
+    assert _resolve_options(normalized)['screening']['scenarios'] == ['a', 'b']
+
+
+def test_proxy_forager_roundtrip_retains_unsearched_unilateralness_weight():
+    from config.bot import normalize_forager_score_weights
+    from optimize import _canonicalize_optimizer_individual
+
+    config = get_template_config()
+    config["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.4
+    keys = ("volume", "ema_readiness", "volatility")
+    paths = [
+        (
+            f"long_forager_score_weights_{key}",
+            ("bot", "long", "forager", "score_weights", key),
+        )
+        for key in keys
+    ]
+    bounds = [Bound(0, 1, 0.01)] * 3
+    mapped = {name: (i, bounds[i]) for i, (name, _) in enumerate(paths)}
+    weights = [0.31, 0.72, 0.18]
+    exact = _canonicalize_optimizer_individual(
+        weights.copy(), config, bounds, 6, paths, []
+    )
+    proxy = _build_proxy_parameter_dicts(
+        weights,
+        mapped,
+        [(name, i, bound) for name, (i, bound) in mapped.items()],
+        np.array([weights]),
+        sig_digits=6,
+        base_forager_weights={
+            "long": config["bot"]["long"]["forager"]["score_weights"]
+        },
+    )[0]
+    actual = normalize_forager_score_weights(
+        {
+            key: proxy[f"long_forager_score_weights_{key}"]
+            for key in (*keys, "unilateralness")
+        },
+        path="proxy weights",
+    )
+    assert actual == pytest.approx(exact["bot"]["long"]["forager"]["score_weights"])
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_gpu_optional_adaptive_parameters_keep_configured_values_without_bounds(strategy):
+    from config.schema import get_template_config
+    from optimization.backends.gpu_backend import (
+        GPU_STRATEGY_BOUND_MAPS, _gpu_fixed_adaptive_parameters,
+    )
+
+    cfg = get_template_config()
+    cfg["bot"]["long"]["entry_cooldown"].update(
+        min_duration_minutes=2.0, max_duration_minutes=90.0,
+        weights_minutes={"exposure_ratio": 4.0, "adverse_directionality": 8.0},
+    )
+    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 3.25
+    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.75
+    mapped = {"long_entry_cooldown_exposure_weight": object()}
+    fixed = _gpu_fixed_adaptive_parameters(cfg, GPU_STRATEGY_BOUND_MAPS[strategy], mapped)
+    assert "long_entry_cooldown_exposure_weight" not in fixed
+    assert fixed["long_entry_cooldown_min_duration_minutes"] == 2.0
+    assert fixed["long_entry_cooldown_max_duration_minutes"] == 90.0
+    assert fixed["long_entry_cooldown_adverse_weight"] == 8.0
+    assert fixed["long_unilateralness_ema_span_1m"] == 3.25
+    assert fixed["long_forager_score_weights_unilateralness"] == 0.75
+    assert fixed["short_entry_cooldown_max_duration_minutes"] == -1.0
+    assert fixed["short_entry_cooldown_adverse_weight"] == 0.0
+
+
+def test_gpu_anchor_optional_adaptive_defaults_preserve_explicit_anchor_values():
+    from config.schema import get_template_config
+    from optimization.backends.gpu_backend import GPU_STRATEGY_BOUND_MAPS, _gpu_fixed_adaptive_parameters
+
+    cfg = get_template_config()
+    cfg[ANCHOR_PLAN_KEY] = {
+        "fixed_keys": ["long_entry_cooldown_weights_minutes_exposure_ratio"],
+        "anchors": [
+            {"fixed_values": [{"key": "long_entry_cooldown_weights_minutes_exposure_ratio", "value": 4.0}]},
+            {"fixed_values": [{"key": "long_entry_cooldown_weights_minutes_exposure_ratio", "value": 8.0}]},
+        ],
+    }
+    mapping = GPU_STRATEGY_BOUND_MAPS["trailing_martingale"]
+    fixed = _gpu_fixed_adaptive_parameters(cfg, mapping, {})
+    anchors, ranges = _build_anchor_parameter_context(cfg, mapping, fallback_parameters=fixed)
+    assert [a["long_entry_cooldown_exposure_weight"] for a in anchors] == [4.0, 8.0]
+    assert all(set(fixed) <= a.keys() for a in anchors)
+    assert all(a["long_entry_cooldown_max_duration_minutes"] == -1.0 for a in anchors)
+    assert ranges["long_entry_cooldown_weights_minutes_exposure_ratio"] == Bound(4.0, 8.0)

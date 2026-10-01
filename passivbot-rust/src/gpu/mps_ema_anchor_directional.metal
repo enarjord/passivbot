@@ -16,7 +16,10 @@ constant int SCALAR_COLS = 68;
 constant int SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 33;
+constant int SIDE_PARAMS = 40;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
+#endif
 
 inline int elapsed_fill_day_bucket(float k, float first_eq_k, float interval_ms) {
     const float fill_day_candles = 86400000.0f / interval_ms;
@@ -138,6 +141,8 @@ inline float float32_floor_nonnegative(float value) {
     return as_type<float>(as_type<uint>(value) - 1u);
 }
 
+// PASSIVBOT_ADAPTIVE_TIMING
+
 // PASSIVBOT_UNSTUCK_EMA_COMMON
 
 // PASSIVBOT_HSL_COMMON
@@ -217,6 +222,8 @@ struct EmaSide {
     float psize_weight;
     float w1h;
     float w1m;
+    AdaptiveTiming adaptive;
+    float cooldown_base;
     float cooldown_min;
     float twel;
     float base_wel;
@@ -295,6 +302,9 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.w1h = params[po + 6];
     side.w1m = params[po + 7];
     side.cooldown_min = ceil(params[po + 10]);
+    side.cooldown_base = params[po + 10];
+    side.adaptive = load_adaptive_timing(params, po + 33);
+    side.adaptive.score_weight = 0.0f; // One coin never requires Forager ranking.
     side.twel = params[po + 11];
     float allowance_pct = fmax(params[po + 12], 0.0f);
     bool legacy_raw_allowance = params[po + 13] > 0.5f;
@@ -866,7 +876,9 @@ inline void generate_long_orders(
     float e_qty = round_step(
         base_q * fmax(1.0f + fmax(swer, 0.0f) * side.ddf, 1.0f), qty_step
     );
-    bool cooldown = side.cooldown_min > 0.0f && side.last_inc_k >= 0.0f
+    side.cooldown_min = adaptive_duration(side.adaptive, side.cooldown_base,
+        current_cost_we / fmax(side.base_wel, 1.0e-12f), false);
+    bool cooldown = !isfinite(side.cooldown_min) || side.cooldown_min > 0.0f && side.last_inc_k >= 0.0f
         && kf < side.last_inc_k + side.cooldown_min;
     float cap = side.entry_cap - 1.0e-7f;
     float headroom = (cap * balance - side.psize * side.pprice * c_mult)
@@ -960,7 +972,9 @@ inline void generate_short_orders(
         ? min_entry_qty(price_now, qty_step, min_qty, min_cost, c_mult)
         : min_q;
     if (entry_market && e_qty < market_min_q) e_qty = market_min_q;
-    bool cooldown = side.cooldown_min > 0.0f && side.last_inc_k >= 0.0f
+    side.cooldown_min = adaptive_duration(side.adaptive, side.cooldown_base,
+        current_cost_we / fmax(side.base_wel, 1.0e-12f), true);
+    bool cooldown = !isfinite(side.cooldown_min) || side.cooldown_min > 0.0f && side.last_inc_k >= 0.0f
         && kf < side.last_inc_k + side.cooldown_min;
     float cap = side.entry_cap - 1.0e-7f;
     float headroom = (cap * balance - side.psize * side.pprice * c_mult)
@@ -1319,6 +1333,10 @@ inline void passivbot_single_coin_impl(
         const float log_range = bars[bo + 3];
         const float hour_lr = bars[bo + 4];
         const bool valid = flags[fo + 0] != 0;
+        if (valid) {
+            update_adaptive_rms(long_side.adaptive, bars, k, first_valid, 5, 2);
+            update_adaptive_rms(short_side.adaptive, bars, k, first_valid, 5, 2);
+        }
         const bool can_gen = flags[fo + 1] != 0;
         const int di = flags[fo + 2];
         const bool hour_valid = flags[fo + 3] != 0;
