@@ -3347,9 +3347,8 @@ def test_console_format_summarizes_trailing_status():
     )
 
     assert format_console_event(event) == (
-        "[trailing] succeeded cycle=cy_trailing entry/waiting_threshold mode=grid "
-        "gates=t:n/r:n threshold=1.2500%@98750 retracement=0.4000%@99145 cur=101000 "
-        "symbol=BTC/USDT:USDT pside=long"
+        "[trailing] symbol=BTC/USDT:USDT pside=long entry/waiting_threshold mode=grid "
+        "gates=t:n/r:n threshold=1.2500%@98750 retracement=0.4000%@99145 cur=101000"
     )
 
 
@@ -3383,9 +3382,8 @@ def test_console_format_compacts_trailing_status_with_long_identifiers():
     rendered = format_console_event(event)
 
     assert rendered == (
-        f"[trailing] succeeded cycle={cycle_id} close/armed mode=auto_reduce "
-        "gates=t:y/r:y threshold=-1.9649%@887.25 retracement=0.0212%@1049.58 cur=902.465 "
-        f"symbol={symbol} pside=long"
+        f"[trailing] symbol={symbol} pside=long close/armed mode=auto_reduce "
+        "gates=t:y/r:y threshold=-1.9649%@887.25 retracement=0.0212%@1049.58 cur=902.465"
     )
     assert len(rendered) <= 240
     assert event.data["current_vs_threshold_ratio"] == -0.140163

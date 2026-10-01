@@ -2581,10 +2581,13 @@ def _format_console_trailing_status(event: LiveEvent) -> str | None:
         return None
 
     parts = ["[trailing]"]
-    if event.status:
+    if event.symbol:
+        parts.append(f"symbol={_compact_trailing_console_label(event.symbol, limit=48)}")
+    if event.pside:
+        parts.append(f"pside={_compact_trailing_console_label(event.pside, limit=8)}")
+    # The strategy status already communicates success. Correlation stays durable.
+    if event.status and event.status != "succeeded":
         parts.append(event.status)
-    if event.cycle_id:
-        parts.append(f"cycle={_compact_trailing_console_label(event.cycle_id, limit=36)}")
 
     kind = _data_str(data, "kind")
     trailing_status = _data_str(data, "trailing_status")
@@ -2633,10 +2636,6 @@ def _format_console_trailing_status(event: LiveEvent) -> str | None:
     current_price = _data_number(data, "current_price")
     if current_price:
         parts.append(f"cur={current_price:g}")
-    if event.symbol:
-        parts.append(f"symbol={_compact_trailing_console_label(event.symbol, limit=48)}")
-    if event.pside:
-        parts.append(f"pside={_compact_trailing_console_label(event.pside, limit=8)}")
     return " ".join(parts)
 
 
