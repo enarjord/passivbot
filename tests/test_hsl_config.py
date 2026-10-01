@@ -372,3 +372,20 @@ def test_retired_recovery_controls_cannot_be_optimizer_parameters(field, section
     cfg["optimize"][section][f"live.{field}"] = [0, 1] if section == "bounds" else 1
     with pytest.raises(ValueError, match="removed HSL recovery control"):
         prepared(cfg)
+
+
+@pytest.mark.parametrize("mode", ["pside", "unified"])
+def test_aggregate_balance_override_constructor_rejects_before_credentials(
+    mode, monkeypatch
+):
+    import passivbot
+
+    config = prepared(source(mode))
+    config["live"]["balance_override"] = 1000.0
+    monkeypatch.setattr(
+        passivbot,
+        "load_user_info",
+        lambda *args: pytest.fail("unsupported override reached credentials"),
+    )
+    with pytest.raises(ValueError, match="does not support live.balance_override"):
+        passivbot.Passivbot(config)

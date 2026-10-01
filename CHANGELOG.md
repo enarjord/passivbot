@@ -18,6 +18,11 @@ since the latest release tag; these features may already be available when insta
   Validate public examples through effective optimizer policies; the BTC example now
   uses supported BTC equity peak-recovery hours for its 28-day recovery limit
   and the currency-independent realized loss/profit ratio metric.
+  Enforce the documented aggregate HSL balance-override restriction before live
+  credential lookup and capture. Reject explicit retired engine selectors; skip protective quote requests when HSL
+  is disabled. Preflight uses the active portfolio policy in unified mode, and
+  smoke/dashboard views consume scoped status observations with stale and omitted
+  evidence explicit.
   Remove retired replay diagnostic panels; offline HSL previews now read scoped
   observations and mark expired captures stale. GPU panic-loss ratios include completed,
   recovered and unfinished panic segments without consuming reporting state.

@@ -437,6 +437,16 @@
         ])
           .map(([key, value]) => `${key} ${value}`)
           .join(" · ");
+      case "hsl.status":
+        return compactEntries([
+          ["observation", payload.observation_status],
+          ["tier", payload.tier],
+          ["scopes", payload.scope_count],
+          ["sample", Array.isArray(payload.scopes) ? payload.scopes.map((scope) =>
+            `${scope.symbol || scope.signal_mode || "portfolio"}/${scope.pside || "all"} ${scope.action || scope.availability || "inactive"} raw ${fmtCompact(scope.raw, 4)} ema ${fmtCompact(scope.ema, 4)}`
+          ).join("; ") : null],
+          ["omitted", payload.omitted_scopes],
+        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
       case "hsl.transition":
         return compactEntries([
           ["tier", payload.tier],

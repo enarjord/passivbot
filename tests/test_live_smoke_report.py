@@ -9335,6 +9335,7 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
             {
                 "live": {"hsl_signal_mode": "unified"},
                 "bot": {
+                    "hsl": {"enabled": True},
                     "long": {"hsl": {"enabled": True}},
                     "short": {"hsl": {"enabled": False}},
                 },
@@ -9400,7 +9401,7 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
     assert issue["severity"] == "error"
     assert issue["account"] == "ebybitsub03"
     assert issue["hsl_signal_mode"] == "unified"
-    assert issue["enabled_psides"] == ["long"]
+    assert issue["enabled_scopes"] == ["portfolio"]
     assert issue["balance_override_active"] is True
     assert issue["balance_override_source"] == "argument"
     assert "balance_override" not in issue

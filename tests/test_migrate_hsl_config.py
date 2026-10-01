@@ -656,7 +656,6 @@ def test_scenario_dotted_path_uses_canonical_materialized_coin_shape(
     scenario = {f"coin_overrides.{coin}.bot.long.hsl.red_threshold": 0.3}
     cfg["backtest"]["scenarios"] = [{"label": "canonical", "overrides": scenario}]
     source = deepcopy(cfg)
-    source["live"]["hsl_engine"] = "hsl"
     canonical = parse_overrides(
         prepare_config(
             source,

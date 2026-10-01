@@ -1296,9 +1296,10 @@ class Passivbot:
 
     def __init__(self, config: dict):
         """Initialise the bot with configuration, user context, and runtime caches."""
-        from config.hsl import require_runtime_support
+        from config.hsl import require_runtime_support, require_live_balance_support
 
         require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+        require_live_balance_support(config)
         self.config = config
         try:
             lvl_raw = get_optional_config_value(config, "logging.level", 1)

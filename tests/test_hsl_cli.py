@@ -25,13 +25,21 @@ def test_removed_engine_selector_is_rejected(command, flag):
     assert "hsl_engine" not in parser.format_help()
 
 
-@pytest.mark.parametrize("selector", [None, "revised", "hsl"])
-def test_previous_current_engine_selector_is_removed_during_migration(selector):
-    config = get_template_config()
-    if selector is not None:
-        config["live"]["hsl_engine"] = selector
-    normalized = prepare_config(config, verbose=False, target="canonical", runtime=None)
+def test_absent_engine_selector_uses_the_sole_engine():
+    normalized = prepare_config(
+        get_template_config(), verbose=False, target="canonical", runtime=None
+    )
     assert "hsl_engine" not in normalized["live"]
+
+
+@pytest.mark.parametrize(
+    "selector", [None, "revised", "hsl", "legacy", "unknown", True, 0]
+)
+def test_explicit_engine_selectors_require_migration(selector):
+    config = get_template_config()
+    config["live"]["hsl_engine"] = selector
+    with pytest.raises(ValueError, match="migrate-hsl"):
+        prepare_config(config, verbose=False, target="canonical", runtime=None)
 
 
 def test_removed_engine_requires_explicit_migration():

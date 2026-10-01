@@ -157,7 +157,7 @@ async def test_fake_cycle_returns_bounded_pending_while_protection_keeps_running
         return True
 
     bot = SimpleNamespace(
-        config={"live": {"hsl_engine": "hsl"}},
+        config={"live": {}},
         refresh_protective_authoritative_state=refresh,
         _begin_live_event_cycle=lambda **kwargs: None,
     )
@@ -340,7 +340,7 @@ async def test_fake_cycle_settles_current_source_before_advancing_scenario(
 
     instance = SimpleNamespace(cycle=cycle, _ordinary=None, _source_task=reads)
     monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
-    bot = SimpleNamespace(config={"live": {"hsl_engine": "hsl"}})
+    bot = SimpleNamespace(config={"live": {}})
     result = await runner._run_fake_cycle_ready(bot)
     assert seen == [False, True]
     assert result["ordinary_executed"] and result["passes"] == 2
@@ -367,7 +367,7 @@ async def test_fake_cycle_raises_read_failure_that_finishes_during_final_pass(
 
     instance = SimpleNamespace(cycle=cycle, _ordinary=None, _fill_task=reads)
     monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
-    bot = SimpleNamespace(config={"live": {"hsl_engine": "hsl"}})
+    bot = SimpleNamespace(config={"live": {}})
     with pytest.raises(RuntimeError, match="unexpected history failure"):
         await runner._run_fake_cycle_ready(bot)
 
@@ -392,7 +392,7 @@ async def test_fake_cycle_raises_read_failure_in_last_bounded_wait(monkeypatch):
 
     instance = SimpleNamespace(cycle=cycle, _ordinary=None)
     monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
-    bot = SimpleNamespace(config={"live": {"hsl_engine": "hsl"}})
+    bot = SimpleNamespace(config={"live": {}})
     with pytest.raises(RuntimeError, match="last wait history failure"):
         await runner._run_fake_cycle_ready(bot)
     assert calls == 8

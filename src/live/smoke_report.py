@@ -5239,6 +5239,16 @@ def _risk_event_group(
         key: payload.get(key)
         for key in (
             "signal_mode",
+            "schema_version",
+            "observation_status",
+            "captured_at_ms",
+            "input_expires_at_ms",
+            "counts",
+            "scope_count",
+            "action_counts",
+            "raw_pending_scope_count",
+            "omitted_scopes",
+            "scopes",
             "tier",
             "previous_tier",
             "action",
@@ -5441,6 +5451,62 @@ def _summarize_hsl_flat_finalization_anchors(
     }
 
 
+def _hsl_scope_groups(group):
+    """Project bounded status samples for reports, never trading authority.
+
+    Old event tapes retain their previous top-level projection. Current tapes
+    preserve each scope; a portfolio score is never invented from coin scores.
+    """
+    data = group.get("latest_data") or {}
+    scopes = data.get("scopes")
+    if not isinstance(scopes, list):
+        yield group
+        return
+    for scope in scopes[:128]:
+        if not isinstance(scope, dict):
+            continue
+        raw, ema, threshold = (
+            _numeric_value(scope.get(key)) for key in ("raw", "ema", "threshold")
+        )
+        score = min(raw, ema) if raw is not None and ema is not None else None
+        available = (
+            scope.get("availability") == "available"
+            and data.get("observation_status") == "current"
+        )
+        projected = {
+            "signal_mode": scope.get("signal_mode", data.get("signal_mode")),
+            "tier": scope.get("tier"),
+            "action": scope.get("action"),
+            "flat_at": scope.get("flat_at"),
+            "red_at": scope.get("red_at"),
+            "availability": scope.get("availability"),
+            "observation_status": data.get("observation_status"),
+            "drawdown_raw": raw,
+            "drawdown_ema": ema,
+            "drawdown_score": score if available else None,
+            "red_threshold": threshold,
+            "dist_to_red": (
+                threshold - score
+                if available and score is not None and threshold is not None
+                else None
+            ),
+        }
+        yield {
+            **group,
+            "symbol": scope.get("symbol"),
+            "pside": scope.get("pside"),
+            "latest_data": projected,
+            "_current_raw_pending": bool(
+                available
+                and scope.get("action") == "normal"
+                and raw is not None
+                and threshold is not None
+                and raw > threshold
+                and score <= threshold
+            ),
+        }
+
+
 def _summarize_hsl_status(
     groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
@@ -5451,6 +5517,7 @@ def _summarize_hsl_status(
     signal_mode_counts: Counter[str] = Counter()
     closest: list[dict[str, Any]] = []
     cooldown_active: list[dict[str, Any]] = []
+    observations = []
     for group in groups.values():
         if group.get("event_type") != EventTypes.HSL_STATUS:
             continue
@@ -5461,9 +5528,6 @@ def _summarize_hsl_status(
         bot = group.get("bot")
         if bot not in (None, ""):
             bots.add(str(bot))
-        symbol = group.get("symbol")
-        if symbol not in (None, ""):
-            symbols[str(symbol)] += count
         latest_data = group.get("latest_data")
         data = latest_data if isinstance(latest_data, dict) else {}
         tier = data.get("tier")
@@ -5472,59 +5536,95 @@ def _summarize_hsl_status(
         signal_mode = data.get("signal_mode")
         if signal_mode not in (None, ""):
             signal_mode_counts[str(signal_mode)] += count
-        cooldown_until_ms = _non_negative_int(data.get("cooldown_until_ms"))
-        cooldown_remaining_seconds = _numeric_value(
-            data.get("cooldown_remaining_seconds")
-        )
-        if cooldown_until_ms is not None or cooldown_remaining_seconds is not None:
-            cooldown_active.append(
+        if isinstance(data.get("scopes"), list):
+            observations.append(
                 {
                     key: value
                     for key, value in {
                         "bot": bot,
-                        "symbol": symbol,
-                        "pside": group.get("pside"),
-                        "tier": str(tier) if tier not in (None, "") else None,
-                        "reason_code": group.get("reason_code"),
-                        "cooldown_remaining_seconds": cooldown_remaining_seconds,
-                        "cooldown_until_ms": cooldown_until_ms,
-                        "latest_ts": _non_negative_int(group.get("latest_ts")),
+                        "latest_ts": group.get("latest_ts"),
+                        "observation_status": data.get("observation_status"),
+                        "counts": data.get("counts"),
+                        "scope_count": data.get("scope_count"),
+                        "action_counts": data.get("action_counts"),
+                        "raw_pending_scope_count": data.get("raw_pending_scope_count"),
+                        "omitted_scopes": data.get("omitted_scopes"),
                     }.items()
-                    if value not in (None, "", {})
+                    if value is not None
                 }
             )
-        dist_to_red = _numeric_value(data.get("dist_to_red"))
-        if dist_to_red is None:
-            continue
-        red_threshold = _numeric_value(data.get("red_threshold"))
-        drawdown_score = _numeric_value(data.get("drawdown_score"))
-        red_proximity_pct = None
-        if red_threshold is not None and red_threshold > 0:
-            if drawdown_score is not None:
-                red_proximity_pct = round((drawdown_score / red_threshold) * 100.0, 3)
-            else:
-                red_proximity_pct = round(
-                    max(0.0, 1.0 - (dist_to_red / red_threshold)) * 100.0,
-                    3,
+        for scoped in _hsl_scope_groups(group):
+            data = scoped.get("latest_data") or {}
+            symbol = scoped.get("symbol")
+            if symbol not in (None, ""):
+                symbols[str(symbol)] += count
+            tier = data.get("tier")
+            cooldown_until_ms = _non_negative_int(data.get("cooldown_until_ms"))
+            cooldown_remaining_seconds = _numeric_value(
+                data.get("cooldown_remaining_seconds")
+            )
+            if (
+                (
+                    data.get("action") == "halted"
+                    and data.get("observation_status") == "current"
                 )
-        sample = {
-            key: value
-            for key, value in {
-                "bot": bot,
-                "symbol": symbol,
-                "pside": group.get("pside"),
-                "tier": str(tier) if tier not in (None, "") else None,
-                "signal_mode": (
-                    str(signal_mode) if signal_mode not in (None, "") else None
-                ),
-                "dist_to_red": dist_to_red,
-                "red_threshold": red_threshold,
-                "red_proximity_pct": red_proximity_pct,
-                "latest_ts": _non_negative_int(group.get("latest_ts")),
-            }.items()
-            if value not in (None, "", {})
-        }
-        closest.append(sample)
+                or cooldown_until_ms is not None
+                or cooldown_remaining_seconds is not None
+            ):
+                cooldown_active.append(
+                    {
+                        key: value
+                        for key, value in {
+                            "bot": bot,
+                            "symbol": symbol,
+                            "pside": scoped.get("pside"),
+                            "tier": str(tier) if tier not in (None, "") else None,
+                            "reason_code": group.get("reason_code"),
+                            "action": data.get("action"),
+                            "flat_at": data.get("flat_at"),
+                            "red_at": data.get("red_at"),
+                            "observation_status": data.get("observation_status"),
+                            "cooldown_remaining_seconds": cooldown_remaining_seconds,
+                            "cooldown_until_ms": cooldown_until_ms,
+                            "latest_ts": _non_negative_int(group.get("latest_ts")),
+                        }.items()
+                        if value not in (None, "", {})
+                    }
+                )
+            dist_to_red = _numeric_value(data.get("dist_to_red"))
+            if dist_to_red is None:
+                continue
+            red_threshold = _numeric_value(data.get("red_threshold"))
+            drawdown_score = _numeric_value(data.get("drawdown_score"))
+            red_proximity_pct = None
+            if red_threshold is not None and red_threshold > 0:
+                if drawdown_score is not None:
+                    red_proximity_pct = round(
+                        (drawdown_score / red_threshold) * 100.0, 3
+                    )
+                else:
+                    red_proximity_pct = round(
+                        max(0.0, 1.0 - (dist_to_red / red_threshold)) * 100.0,
+                        3,
+                    )
+            sample = {
+                key: value
+                for key, value in {
+                    "bot": bot,
+                    "symbol": symbol,
+                    "pside": scoped.get("pside"),
+                    "tier": str(tier) if tier not in (None, "") else None,
+                    "signal_mode": (
+                        str(signal_mode) if signal_mode not in (None, "") else None
+                    ),
+                    "dist_to_red": dist_to_red,
+                    "red_threshold": red_threshold,
+                    "red_proximity_pct": red_proximity_pct,
+                    "latest_ts": _non_negative_int(group.get("latest_ts")),
+                }.items()
+                if value not in (None, "", {})
+            }
+            closest.append(sample)
     if total <= 0:
         return {
             "total": 0,
@@ -5561,6 +5661,10 @@ def _summarize_hsl_status(
         "closest_to_red": closest_sorted[:5],
         "closest_to_red_truncated": max(0, len(closest_sorted) - 5),
     }
+    if observations:
+        observations.sort(key=lambda item: -int(item.get("latest_ts") or 0))
+        out["observations"] = observations[:5]
+        out["observations_truncated"] = max(0, len(observations) - 5)
     if cooldown_sorted:
         out["cooldown_active"] = cooldown_sorted[:5]
         out["cooldown_active_truncated"] = max(0, len(cooldown_sorted) - 5)
@@ -5575,8 +5679,13 @@ def _summarize_hsl_raw_red_pending(
     symbols: Counter[str] = Counter()
     signal_mode_counts: Counter[str] = Counter()
     pending: list[dict[str, Any]] = []
-    for group in groups.values():
-        if group.get("event_type") != EventTypes.HSL_RAW_RED_PENDING:
+    samples = (
+        sample for group in groups.values() for sample in _hsl_scope_groups(group)
+    )
+    for group in samples:
+        if group.get("event_type") != EventTypes.HSL_RAW_RED_PENDING and not group.get(
+            "_current_raw_pending"
+        ):
             continue
         count = int(group.get("count") or 0)
         if count <= 0:
@@ -5608,6 +5717,8 @@ def _summarize_hsl_raw_red_pending(
             and drawdown_score is not None
         ):
             red_proximity_pct = round((drawdown_score / red_threshold) * 100.0, 3)
+        if group.get("_current_raw_pending"):
+            data = {**data, "ema_gap_to_red": red_threshold - data["drawdown_ema"]}
         ema_gap_to_red = _numeric_value(data.get("ema_gap_to_red"))
         ema_gap_to_red_pct = None
         if (
@@ -5680,6 +5791,9 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
         )
         if hsl_status.get(key) is not None
     }
+    if isinstance(hsl_status.get("observations"), list):
+        out["observations"] = hsl_status["observations"][:5]
+        out["observations_truncated"] = hsl_status.get("observations_truncated", 0)
     closest = hsl_status.get("closest_to_red")
     if isinstance(closest, list):
         out["closest_to_red"] = [
@@ -5710,6 +5824,10 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
                     "pside",
                     "tier",
                     "reason_code",
+                    "action",
+                    "flat_at",
+                    "red_at",
+                    "observation_status",
                     "cooldown_remaining_seconds",
                     "cooldown_until_ms",
                     "latest_ts",
@@ -5820,6 +5938,10 @@ def _risk_attention_rank(group: dict[str, Any]) -> int:
         tier == "red" or reason_code == "cooldown_active"
     ):
         return 35
+    if event_type == EventTypes.HSL_STATUS and any(
+        sample.get("_current_raw_pending") for sample in _hsl_scope_groups(group)
+    ):
+        return 40
     if event_type == "risk.mode_changed" and "panic" in modes:
         return 30
     if level in {"error", "critical"}:
@@ -6856,11 +6978,21 @@ def _truthy_config_flag(value: Any) -> bool:
     return False
 
 
-def _smoke_hsl_enabled_psides(config: dict[str, Any]) -> list[str]:
+def _smoke_hsl_enabled_scopes(config: dict[str, Any]) -> list[str]:
     enabled: list[str] = []
     bot = config.get("bot")
     if not isinstance(bot, dict):
         return enabled
+    if (
+        _normalize_smoke_hsl_signal_mode(config.get("live", {}).get("hsl_signal_mode"))
+        == "unified"
+    ):
+        policy = bot.get("hsl")
+        return (
+            ["portfolio"]
+            if isinstance(policy, dict) and _truthy_config_flag(policy.get("enabled"))
+            else []
+        )
     for pside in ("long", "short"):
         side_config = bot.get(pside)
         if not isinstance(side_config, dict):
@@ -6940,9 +7072,9 @@ def _smoke_config_check_records(
             balance_override_source = "argument"
         elif _balance_override_active(config_balance_override):
             balance_override_source = "live.balance_override"
-        enabled_psides = _smoke_hsl_enabled_psides(config)
+        enabled_scopes = _smoke_hsl_enabled_scopes(config)
         if (
-            enabled_psides
+            enabled_scopes
             and balance_override_source is not None
             and signal_mode in ACCOUNT_LEVEL_HSL_SIGNAL_MODES
         ):
@@ -6962,7 +7094,7 @@ def _smoke_config_check_records(
                         else None
                     ),
                     "hsl_signal_mode": signal_mode,
-                    "enabled_psides": enabled_psides,
+                    "enabled_scopes": enabled_scopes,
                     "balance_override_active": True,
                     "balance_override_source": balance_override_source,
                 }

@@ -1483,7 +1483,7 @@ async def test_hsl_account_refresh_serializes_startup_and_protection(blocked_sta
         return True
 
     bot = SimpleNamespace(
-        config={"live": {"hsl_engine": "hsl"}},
+        config={"live": {}},
         stop_signal_received=False,
         positions={},
         _begin_authoritative_refresh_epoch=lambda: None,
@@ -1683,7 +1683,7 @@ async def test_failed_account_refresh_releases_hsl_transaction(monkeypatch):
     from live import state_refresh
     from ccxt.base.errors import NetworkError
 
-    bot = SimpleNamespace(config={"live": {"hsl_engine": "hsl"}})
+    bot = SimpleNamespace(config={"live": {}})
     calls = []
 
     async def refresh(bot, **kwargs):
@@ -2300,3 +2300,45 @@ async def test_disabled_hsl_owner_keeps_ordinary_fill_refresh_without_hsl_window
     owner.schedule_history()
     assert await owner._fill_task
     assert calls == [{"source": "hsl"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+async def test_disabled_hsl_protection_does_not_acquire_quotes(mode):
+    from test_hsl_runtime import bot, SYMBOL
+
+    value = bot(mode)
+    for side in ("long", "short"):
+        value.config["bot"][side]["hsl"]["enabled"] = False
+    if mode == "unified":
+        value.config["bot"]["hsl"]["enabled"] = False
+    value.open_orders = {SYMBOL: [{"id": "resting"}]}
+    instance = hsl_live.Owner(value)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("disabled HSL must not acquire protective quotes")
+
+    instance.acquire_quotes = forbidden
+    assert not await instance.protect()
+
+
+@pytest.mark.asyncio
+async def test_coin_override_keeps_protective_quote_acquisition_enabled():
+    from test_hsl_runtime import bot, SYMBOL
+
+    value = bot()
+    for side in ("long", "short"):
+        value.config["bot"][side]["hsl"]["enabled"] = False
+    value.coin_overrides[SYMBOL] = {"bot": {"long": {"hsl": {"enabled": True}}}}
+    instance = hsl_live.Owner(value)
+
+    class QuotesRequested(Exception):
+        pass
+
+    async def acquire(symbols):
+        assert SYMBOL in symbols
+        raise QuotesRequested
+
+    instance.acquire_quotes = acquire
+    with pytest.raises(QuotesRequested):
+        await instance.protect()

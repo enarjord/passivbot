@@ -295,6 +295,8 @@ class Owner:
         bot = self.bot
         if self._shutdown_requested():
             return False
+        if not runtime.enabled(bot):
+            return False
         symbols = {
             symbol
             for symbol, sides in bot.positions.items()

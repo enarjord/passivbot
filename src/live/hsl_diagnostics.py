@@ -62,11 +62,24 @@ def _row(scope, *, action=None, reason=None, decision=None):
     )
 
 
+def _raw_pending(row):
+    return (
+        row["action"] == "normal"
+        and row["raw"] is not None
+        and row["raw"] > row["threshold"]
+        and row["score"] <= row["threshold"]
+    )
+
+
 def _priority(row):
     rank = (
         0
         if row["tier"] == "red"
-        else 1 if row["availability"] == "unavailable" else 2 if row["estimated"] else 3
+        else (
+            1
+            if row["availability"] == "unavailable"
+            else 2 if _raw_pending(row) else 3 if row["estimated"] else 4
+        )
     )
     return rank, row["signal_mode"], row["pside"] or "", row["symbol"] or ""
 
@@ -102,6 +115,10 @@ def record(bot, wave):
             account_generation=wave.generation,
             counts=counts,
             scope_count=len(rows),
+            action_counts=dict(
+                Counter(row["action"] for row in rows if row["action"] is not None)
+            ),
+            raw_pending_scope_count=sum(_raw_pending(row) for row in rows),
             # Existing risk reports consume one aggregate tier. Keep RED visible
             # without fabricating a portfolio score from distinct coin signals.
             tier=(
@@ -150,6 +167,7 @@ def record(bot, wave):
                         r["availability"],
                         r["unavailable_reason"],
                         r["estimates"],
+                        _raw_pending(r),
                     )
                     for r in rows
                 ],

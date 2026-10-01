@@ -34,16 +34,16 @@ FIELDS = frozenset(
 
 
 def engine(config):
-    value = config.get("live", {}).get("hsl_engine", "hsl")
+    if "hsl_engine" not in config.get("live", {}):
+        return "hsl"
+    value = config["live"]["hsl_engine"]
     if isinstance(value, str) and value.strip().lower() == "legacy":
         raise ValueError(
             "legacy HSL has been removed; migrate this config with passivbot tool migrate-hsl and re-backtest before use"
         )
-    if not isinstance(value, str) or value.strip().lower() not in {"hsl", "revised"}:
-        raise ValueError(
-            "live.hsl_engine is obsolete; remove it from the config (HSL has one implementation)"
-        )
-    return "hsl"
+    raise ValueError(
+        "live.hsl_engine is obsolete; migrate this config with passivbot tool migrate-hsl and re-backtest before use"
+    )
 
 
 def _mode(config):
@@ -343,6 +343,31 @@ def normalize_hsl(config, template, *, verbose=True):
         )
         config["live"]["pnls_max_lookback_days"] = _number(
             value, "enabled HSL lookback days [1,90]", minimum=1, maximum=90
+        )
+
+
+def require_live_balance_support(config, override=None):
+    """Reject unsupported live account-level replay before account acquisition."""
+    mode = _mode(config)
+    if mode == "coin":
+        return
+    value = (
+        override
+        if override is not None
+        else config.get("live", {}).get("balance_override")
+    )
+    bot = config.get("bot", {})
+    enabled = (
+        bot.get("hsl", {}).get("enabled", False)
+        if mode == "unified"
+        else any(
+            bot.get(side, {}).get("hsl", {}).get("enabled", False)
+            for side in ("long", "short")
+        )
+    )
+    if enabled and value not in (None, ""):
+        raise ValueError(
+            "enabled unified/pside HSL does not support live.balance_override; remove the override, select coin mode, or disable HSL"
         )
 
 

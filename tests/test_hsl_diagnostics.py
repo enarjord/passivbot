@@ -713,3 +713,57 @@ def test_estimate_recovery_uses_a_valid_event_status_with_real_pipeline(observed
         assert durable.events[0].data["counts"]["estimated"] == 0
     finally:
         pipeline.close()
+
+
+def test_raw_pending_changes_emit_status_without_changing_green_permission(observed):
+    bot, owner, wave, events = observed()
+    native = json.loads(wave.decisions[0].payload)
+    native["decision"].update(
+        action="normal", red_at=None, flat_at=None, raw=0.02, ema=0.02
+    )
+    decision = replace(wave.decisions[0], action="normal", payload=json.dumps(native))
+    owner.report(replace(wave, decisions=(decision,)))
+    count = len(events)
+    native["decision"].update(raw=0.1, ema=0.02)
+    pending = replace(decision, payload=json.dumps(native))
+    owner.report(replace(wave, decisions=(pending,)))
+    assert len(events) == count + 1
+    data = events[-1][1]["data"]
+    assert data["action_counts"] == {"normal": 1}
+    assert data["raw_pending_scope_count"] == 1
+    assert data["scopes"][0]["action"] == "normal"
+    native["decision"]["raw"] = 0.11
+    owner.report(
+        replace(wave, decisions=(replace(pending, payload=json.dumps(native)),))
+    )
+    assert len(events) == count + 1
+    owner.report(replace(wave, decisions=(decision,)))
+    assert len(events) == count + 2
+    assert events[-1][1]["data"]["raw_pending_scope_count"] == 0
+
+
+def test_pending_scope_is_prioritized_before_estimated_green_samples(observed):
+    bot, owner, wave, events = observed()
+    native = json.loads(wave.decisions[0].payload)
+    native["decision"].update(
+        action="normal", red_at=None, flat_at=None, raw=0.01, ema=0.01
+    )
+    ordinary = replace(wave.decisions[0], action="normal", payload=json.dumps(native))
+    decisions = [
+        replace(ordinary, scope=Scope("coin", "long", f"A{i}/USDT:USDT"))
+        for i in range(10)
+    ]
+    native["decision"].update(raw=0.1, ema=0.02)
+    decisions.append(
+        replace(
+            ordinary,
+            scope=Scope("coin", "long", "Z/USDT:USDT"),
+            payload=json.dumps(native),
+        )
+    )
+    owner.report(replace(wave, decisions=tuple(decisions)))
+    data = events[-1][1]["data"]
+    assert data["raw_pending_scope_count"] == 1
+    assert data["action_counts"] == {"normal": 11}
+    assert data["scopes"][0]["symbol"] == "Z/USDT:USDT"
+    assert data["omitted_scopes"] == 8

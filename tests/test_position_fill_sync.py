@@ -84,7 +84,7 @@ def test_scope_dependency_for_both_create_and_cancel(mode, blocked):
     bot = SimpleNamespace(
         _position_fill_sync=sync,
         config={
-            "live": {"hsl_engine": "hsl", "hsl_signal_mode": mode},
+            "live": {"hsl_signal_mode": mode},
             "bot": {"hsl": {"enabled": True}, "long": {"hsl": {"enabled": True}}},
         },
     )
@@ -220,7 +220,7 @@ def test_disabled_aggregate_policy_keeps_only_own_coin_side_dependency(mode):
     bot = SimpleNamespace(
         _position_fill_sync=sync,
         config={
-            "live": {"hsl_engine": "hsl", "hsl_signal_mode": mode},
+            "live": {"hsl_signal_mode": mode},
             "bot": {"hsl": {"enabled": False}, "long": {"hsl": {"enabled": False}}},
         },
     )

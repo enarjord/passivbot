@@ -12,7 +12,7 @@ import math
 
 import passivbot_rust as pbr
 
-from config.hsl import FIELDS, engine
+from config.hsl import FIELDS, engine, require_live_balance_support
 from live.hsl_inputs import FillTape, capture_fills
 from passivbot_exceptions import FatalBotException
 
@@ -306,6 +306,7 @@ def capture(
         raise ValueError("invalid HSL capture clock")
     if not enabled(bot):
         return (), ()
+    require_live_balance_support(bot.config, getattr(bot, "balance_override", None))
     lookback_days = float(bot.config["live"]["pnls_max_lookback_days"])
     if not 1 <= lookback_days <= 90:
         raise ValueError("HSL requires 1..90 day lookback")

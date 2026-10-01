@@ -265,6 +265,17 @@ def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     return {"present": any(value is not None for value in values.values()), **values}
 
 
+def _hsl_policy_reports(config):
+    """Only policies active in the configured signal topology."""
+    live = config.get("live")
+    bot = config.get("bot")
+    live = live if isinstance(live, dict) else {}
+    bot = bot if isinstance(bot, dict) else {}
+    if _effective_hsl_signal_mode(live) == "unified":
+        return {"portfolio": _hsl_side_report({"hsl": bot.get("hsl", {})})}
+    return {side: _hsl_side_report(_bot_side_config(config, side)) for side in SIDES}
+
+
 def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     forager_values = {
         key: get_grouped_bot_value(side_config, flat_key, default=None)
@@ -685,7 +696,10 @@ def _cache_readiness_report(
 
     if _any_hsl_enabled(hsl_sides):
         hsl["evidence"].append(
-            {"code": "hsl_enabled", "message": "one or more HSL sides are enabled"}
+            {
+                "code": "hsl_enabled",
+                "message": "one or more effective HSL policies are enabled",
+            }
         )
         hsl["evidence"].append(
             {
@@ -736,7 +750,10 @@ def _cache_readiness_report(
     else:
         hsl["status"] = "disabled"
         hsl["evidence"].append(
-            {"code": "hsl_disabled", "message": "no HSL side is enabled in config"}
+            {
+                "code": "hsl_disabled",
+                "message": "no effective HSL policy is enabled in config",
+            }
         )
 
     surfaces = {
@@ -872,12 +889,8 @@ def build_live_config_diff_report(
     changes.extend(_universe_diff_changes(baseline, target, sample_size=sample_size))
     baseline_live = baseline["live"] if isinstance(baseline.get("live"), dict) else {}
     target_live = target["live"] if isinstance(target.get("live"), dict) else {}
-    baseline_hsl_sides = {
-        side: _hsl_side_report(_bot_side_config(baseline, side)) for side in SIDES
-    }
-    target_hsl_sides = {
-        side: _hsl_side_report(_bot_side_config(target, side)) for side in SIDES
-    }
+    baseline_hsl_sides = _hsl_policy_reports(baseline)
+    target_hsl_sides = _hsl_policy_reports(target)
     baseline_identity = _identity_report(baseline, baseline_live)
     target_identity = _identity_report(target, target_live)
     baseline_readiness = _cache_readiness_report(
@@ -1035,10 +1048,7 @@ def build_live_config_preflight_report(
     ]
     severity_counts = Counter(issue["severity"] for issue in issues)
     identity_report = _identity_report(parsed, live)
-    hsl_sides = {
-        side: _hsl_side_report(side_config)
-        for side, side_config in side_configs.items()
-    }
+    hsl_sides = _hsl_policy_reports(parsed)
     balance_override_report = _balance_override_report(
         live, override_value=balance_override
     )
@@ -1070,8 +1080,7 @@ def build_live_config_preflight_report(
                     "HSL signal modes 'unified' and 'pside' reconstruct "
                     "account-level equity history and are unsafe with an active "
                     "balance override; use hsl_signal_mode='coin', remove the "
-                    "balance override, disable HSL, or initialize an explicit "
-                    "HSL baseline/checkpoint before live trading"
+                    "balance override, or disable HSL before live trading"
                 ),
                 path=(
                     "argument.balance_override"
@@ -1090,7 +1099,11 @@ def build_live_config_preflight_report(
             "signal_mode": live.get("hsl_signal_mode"),
             "effective_signal_mode": hsl_signal_mode,
             "balance_override": balance_override_report,
-            "sides": hsl_sides,
+            "sides": {
+                side: _hsl_side_report(side_config)
+                for side, side_config in side_configs.items()
+            },
+            "policies": hsl_sides,
         },
         "universe": {
             "approved_coins": approved,

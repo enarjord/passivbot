@@ -436,7 +436,7 @@ does not produce a second console line.
 ## HSL Observations
 
 HSL emits `hsl.status` with `engine=hsl` and one bounded aggregate per
-qualitative scope/action/availability/estimate change, including stale/current observation recovery. This is passive observation, never a gate
+qualitative scope/action/availability/estimate or raw-RED/EMA-pending change, including stale/current observation recovery. This is passive observation, never a gate
 or retained trading permission. Numeric metrics refresh after each protective execution wave in the
 monitor snapshot even when no new status event is emitted. Sink/projection failure cannot inhibit
 risk evaluation or exchange execution.
@@ -452,7 +452,7 @@ native decision alongside explicit freshness.
 
 The hsl monitor `hsl` section has `schema_version=1`, `signal_mode`, `observation_status`,
 `captured_at_ms`, `age_ms`, current account availability, complete scope counts and up to 128 scoped
-rows. RED scopes come first, then unavailable and estimated scopes. `omitted_scopes` discloses
+rows. RED scopes come first, then unavailable, raw-RED/EMA-pending and estimated scopes. `omitted_scopes` discloses
 truncation. Status events carry at most three rows; console summaries carry counts. A top-level aggregate tier
 keeps RED visible to existing risk reports and startup previews without inventing an aggregate
 drawdown score for independent scopes. Rows identify
@@ -461,6 +461,14 @@ raw/EMA/selected drawdown, configured threshold, RED/flat evidence times and app
 There is one portfolio scope in unified mode; side and coin modes retain their native topology.
 Unavailable input is never displayed as GREEN. Removed legacy tiers do not reappear in hsl
 payloads.
+
+Smoke reports and dashboard event summaries consume these scoped status rows directly,
+including current raw-RED/EMA-pending loss and halted terminal timestamps. Complete
+`action_counts` and `raw_pending_scope_count` accompany sampled rows; omitted scope
+counts remain explicit, so samples do not imply complete per-symbol coverage. Expired
+observations are retained as historical evidence but do not advertise active cooldown,
+current proximity or pending RED. Historical event tapes may still be read in their old
+schema; the current controller does not emit the retired event lifecycle.
 
 An observation becomes visibly stale when its captured input TTL expires (including the exact
 retained position timestamp used by evaluation), account confirmation is

@@ -35,6 +35,11 @@ def _sample_config() -> dict:
             "api_key": "super-secret-api-key",
         },
         "bot": {
+            "hsl": {
+                "enabled": True,
+                "red_threshold": 0.05,
+                "restart_after_red_policy": "always",
+            },
             "long": {
                 "risk": {"n_positions": 3},
                 "forager": {"volume_drop_pct": 0.02},
@@ -655,3 +660,22 @@ def test_live_config_preflight_cli_zero_balance_override_returns_nonzero(
     assert report["hsl"]["balance_override"]["active"] is True
     assert "balance_override_invalid" in issue_codes
     assert "hsl_balance_override_account_level_replay_unsafe" in issue_codes
+
+
+@pytest.mark.parametrize("portfolio_enabled", [False, True])
+def test_unified_preflight_uses_only_portfolio_policy(tmp_path, portfolio_enabled):
+    config = _sample_config()
+    config["live"]["balance_override"] = 1000
+    config["bot"]["hsl"]["enabled"] = portfolio_enabled
+    for side in ("long", "short"):
+        config["bot"][side]["hsl"]["enabled"] = not portfolio_enabled
+    path = tmp_path / "config.json"
+    _write_config(path, config)
+    report = live_config_preflight.build_live_config_preflight_report(path)
+    assert report["hsl"]["policies"]["portfolio"]["enabled"] is portfolio_enabled
+    errors = [
+        i
+        for i in report["issues"]
+        if i["code"] == "hsl_balance_override_account_level_replay_unsafe"
+    ]
+    assert bool(errors) is portfolio_enabled

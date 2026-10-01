@@ -27,7 +27,9 @@ episode's flatten timestamp, not from the time the evidence changed.
 HSL does not infer transfer intent or maintain an authoritative transfer ledger. Re-backtest
 policy changes, inspect current diagnostics and treat changes to live risk settings as
 operational decisions. TWEL does not scale HSL's balance budget. Aggregate modes do not
-support a live balance override; use the actual account balance.
+support a live balance override; live startup and capture reject that combination. Use
+the actual account balance, select coin mode, or disable HSL. A local baseline or checkpoint
+does not make the aggregate override supported.
 
 ## Execution and coverage
 

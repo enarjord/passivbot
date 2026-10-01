@@ -1331,8 +1331,8 @@ def test_flat_unselected_coin_override_still_requires_hsl_history_window():
         run(value)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-def test_explicit_balance_override_is_the_current_hsl_budget(mode):
+def test_explicit_balance_override_is_the_current_coin_hsl_budget():
+    mode = "coin"
     """Overrides change the budget; they do not require a persisted replay baseline."""
     from passivbot import Passivbot
     from types import MethodType
@@ -1352,3 +1352,91 @@ def test_explicit_balance_override_is_the_current_hsl_budget(mode):
     (decision,) = run(value)[0]
     assert decision.action == "normal"
     assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(0.01)
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
+    # A 100 realized loss leaves flat UPNL. Fixed budget 1000 means peak
+    # budget-equity 1100, whereas the actual remaining balance 900 implies 1000.
+    value = bot(
+        mode,
+        events=[
+            event(
+                id="open",
+                timestamp=NOW - 120_000,
+                qty=20.0,
+                price=100.0,
+                fee_paid=0.0,
+                c_mult=1.0,
+            ),
+            event(
+                id="partial",
+                timestamp=NOW - 60_000,
+                side="sell",
+                qty=-10.0,
+                price=90.0,
+                pnl=-100.0,
+                fee_paid=0.0,
+                c_mult=1.0,
+            ),
+        ],
+    )
+    policy = (
+        value.config["bot"]["hsl"]
+        if mode == "unified"
+        else value.config["bot"]["long"]["hsl"]
+    )
+    policy.update(ema_span_minutes=1.0, red_threshold=0.095)
+    marks = {SYMBOL: replace(quotes()[SYMBOL], bid=100.0, ask=100.0, last=100.0)}
+    tape = capture_candles(
+        [
+            dict(ts=NOW - 120_000, o=100.0, h=100.0, l=100.0, c=100.0),
+            dict(ts=NOW - 60_000, o=100.0, h=100.0, l=100.0, c=100.0),
+        ],
+        minutes=1,
+        observed_at=NOW,
+    )
+    sources = {SYMBOL: Sources((tape,), (), 0)}
+    value.get_raw_balance = lambda: 1000.0
+    decision = run(value, marks, sources)[0][0]
+    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(100 / 1100)
+    assert decision.action == "normal"
+    value.get_raw_balance = lambda: 900.0
+    decision = run(value, marks, sources)[0][0]
+    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(0.1)
+    assert decision.action == "panic"
+
+
+@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("source", ["config", "runtime"])
+def test_aggregate_live_override_rejected_before_history_or_account_capture(
+    mode, source
+):
+    value = bot(mode)
+    if source == "config":
+        value.config["live"]["balance_override"] = 1000.0
+    else:
+        value.balance_override = 1000.0
+
+    def forbidden(*args, **kwargs):
+        pytest.fail(
+            "unsupported override must fail before acquiring account/history facts"
+        )
+
+    value._ensure_freshness_ledger = forbidden
+    value.get_raw_balance = forbidden
+    value._pnls_manager.get_events = forbidden
+    with pytest.raises(ValueError, match="does not support live.balance_override"):
+        run(value)
+
+
+@pytest.mark.parametrize("mode", ["pside", "unified"])
+def test_disabled_aggregate_hsl_does_not_restrict_balance_override(mode):
+    value = bot(mode)
+    value.config["live"]["balance_override"] = 1000.0
+    if mode == "unified":
+        value.config["bot"]["hsl"]["enabled"] = False
+    else:
+        for side in ("long", "short"):
+            value.config["bot"][side]["hsl"]["enabled"] = False
+    assert run(value) == ((), ())
