@@ -840,7 +840,8 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   The controller uses median throughput, trials at most a doubling/halving within the original
   ceiling, requires a 5% gain for larger batches, and accepts smaller ones within 2% of previous
   throughput. It waits one evidence window after acceptance and three after rejection before another
-  trial. Memory headroom gates growth. No additional replay or GPU synchronization is introduced.
+  trial, consuming at most one decision or cooldown window per completed candidate batch.
+  Correlated temporal chunks cannot compress that cooldown into a single replay. Memory headroom gates growth. No additional replay or GPU synchronization is introduced.
   Candidate order, evaluation coverage, exact Rust validation, and drift checks remain unchanged.
   Estimates are advisory: changing candidate costs and thermal state can affect measurements, and
   a width adjustment must still wait for the current complete candidate replay to finish.

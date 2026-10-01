@@ -136,6 +136,7 @@ class BatchController:
         self.cooldown = 0
 
     def observe(self, count, seconds, *, evidence_seconds=None):
+        """Return true when a complete evidence window has been consumed."""
         # Remainders and cold first use of each allocation shape are not evidence.
         if count != self.width or not math.isfinite(seconds) or seconds <= 0:
             return
@@ -168,21 +169,21 @@ class BatchController:
                 self.width = old_width
                 self.direction *= -1
                 self.cooldown = 3
-            return
+            return True
         self.save(self.width, rate, evidence_seconds)
         if self.cooldown:
             self.cooldown -= 1
-            return
+            return True
         trial = (
             min(self.ceiling, self.width * 2) if self.direction > 0 else max(1, self.width // 2)
         )
         if trial == self.width:
             self.direction *= -1
             self.cooldown = 1
-            return
+            return True
         if trial > self.width and not self.can_grow():
             self.cooldown = 1
-            return
+            return True
         self.baseline = (self.width, rate)
         self.width = trial
         logging.info(
@@ -191,6 +192,7 @@ class BatchController:
             self.baseline[0],
             rate,
         )
+        return True
 
 
 class ProxyBatchTuner:
@@ -347,12 +349,15 @@ def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=time.perf_
                 for count, seconds, evidence_seconds in samples:
                     # Scratch-limited runners may split one outer batch. Convert
                     # their per-candidate rate to the outer controller's width.
-                    controller.observe(
+                    consumed = controller.observe(
                         len(chunk), seconds * overhead * len(chunk) / count,
                         evidence_seconds=evidence_seconds,
                     )
-                    if controller.width != len(chunk):
-                        break  # A trial starts at the next complete candidate batch.
+                    if consumed:
+                        # At most one decision/cooldown window per successful
+                        # candidate batch. Correlated temporal samples must not
+                        # exhaust the retry cooldown within a single replay.
+                        break
             else:
                 controller.observe(len(chunk), clock() - started)
         start += len(chunk)

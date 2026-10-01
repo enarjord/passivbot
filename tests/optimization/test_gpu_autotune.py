@@ -402,6 +402,36 @@ def test_long_replay_tunes_after_one_complete_batch_without_extra_work(tmp_path)
     batches.close()
 
 
+def test_temporal_replay_consumes_only_one_retry_cooldown_window(tmp_path):
+    item = proxy()
+    item.batch_tuner = tuner(tmp_path, item=item)
+    batches = tune.proxy_batches(item, list(range(4096)), 512)
+    next(batches)
+    controller = next(iter(item.batch_tuner.controllers.values()))
+
+    def complete(width):
+        # Enough correlated samples to fill five windows in one replay.
+        for _ in range(128):
+            tune.record_replay_chunk(width, 4096, 2538000, 2.0)
+        return next(batches)
+
+    assert len(complete(512)[1]) == 256
+    assert len(complete(256)[1]) == 512
+    assert controller.cooldown == 3
+    for remaining in (2, 1, 0):
+        assert len(complete(512)[1]) == 512
+        assert controller.cooldown == remaining
+        assert controller.baseline is None
+    # Reaching the ceiling reverses direction, still only once per replay.
+    assert len(complete(512)[1]) == 512
+    assert controller.cooldown == 1
+    assert len(complete(512)[1]) == 512
+    assert controller.cooldown == 0
+    assert len(complete(512)[1]) == 256
+    assert controller.baseline is not None
+    batches.close()
+
+
 def test_abandoned_temporal_evidence_is_discarded_and_context_restored(tmp_path):
     item = proxy()
     item.batch_tuner = tuner(tmp_path, item=item)
