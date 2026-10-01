@@ -488,3 +488,235 @@ def test_old_root_file_backed_hsl_requires_migration_before_hydration(
     assert result["config_version"] == "v8.6.0"
     assert not any(key.startswith("_hsl") for key in result)
     assert prepare_config(result, verbose=False)["config_version"] == "v8.6.0"
+
+
+@pytest.mark.parametrize("policy", ["always", "never"])
+@pytest.mark.parametrize("location", ["root", "scenario"])
+def test_old_legacy_coin_flag_file_requires_migration(tmp_path, policy, location):
+    from config.overrides import parse_overrides
+    from tools.migrate_hsl_config import migrate
+
+    cfg = source(enabled=False)
+    cfg["config_version"] = "v8.5.0"
+    cfg["optimize"]["fixed_runtime_overrides"] = {}
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
+    (tmp_path / "coin.json").write_text(
+        json.dumps(
+            {
+                "bot": {
+                    "long": {
+                        "hsl": {
+                            "enabled": True,
+                            "restart_after_red_policy": policy,
+                        }
+                    }
+                }
+            }
+        )
+    )
+    flags = {"live": {"coin_flags": {"TEST": "-lc coin.json"}}}
+    if location == "root":
+        cfg["live"].update(flags["live"])
+    else:
+        cfg["backtest"]["scenarios"] = [{"label": "legacy", "overrides": flags}]
+    base_path = str(tmp_path / "base.json")
+    with pytest.raises(ValueError, match="migrate-hsl"):
+        prepare_config(cfg, base_config_path=base_path, verbose=False)
+    if location == "root":
+        converted = migrate(cfg, base_config_path=base_path)
+        assert prepared(converted)["config_version"] == "v8.6.0"
+        assert (
+            parse_overrides(converted, verbose=False)["coin_overrides"]["TEST"]["bot"][
+                "long"
+            ]["hsl"]["restart_after_red_policy"]
+            == policy
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["backtest", "optimize"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("policy", ["always", "never"])
+async def test_cli_external_suite_old_hsl_rejected_before_preparation(
+    tmp_path,
+    monkeypatch,
+    command,
+    wrapped,
+    policy,
+):
+    import importlib
+
+    module = importlib.import_module(command)
+    cfg = source(enabled=False)
+    cfg["config_version"] = "v8.5.0"
+    cfg["optimize"]["fixed_runtime_overrides"] = {}
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
+    path = tmp_path / "base.json"
+    path.write_text(json.dumps({"config": cfg} if wrapped else cfg))
+    suite_path = tmp_path / "suite.json"
+    suite_path.write_text(
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "label": "external",
+                        "overrides": {
+                            "bot.long.hsl.enabled": True,
+                            "bot.long.hsl.restart_after_red_policy": policy,
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    def unexpected_prepare(*args, **kwargs):
+        pytest.fail(
+            "old external HSL must be checked before preparation erases schema origin"
+        )
+
+    monkeypatch.setattr(module, "prepare_config", unexpected_prepare)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [f"passivbot {command}", str(path), "--suite-config", str(suite_path)],
+    )
+    with pytest.raises(ValueError, match="migrate-hsl"):
+        await module.main()
+
+
+@pytest.mark.parametrize("version", ["v8.5.0", "v8.6.0"])
+@pytest.mark.parametrize("patch_kind", ["inline", "file", "legacy_file", "non_hsl"])
+def test_external_suite_loader_uses_raw_base_schema_and_resolves_files(
+    tmp_path,
+    version,
+    patch_kind,
+):
+    from suite_runner import load_suite_override_config
+    from tools.migrate_hsl_config import migrate
+
+    cfg = source(enabled=False)
+    cfg["config_version"] = version
+    cfg["optimize"]["fixed_runtime_overrides"] = {}
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
+    hsl = {
+        "bot": {"long": {"hsl": {"enabled": True, "restart_after_red_policy": "never"}}}
+    }
+    (tmp_path / "coin.json").write_text(json.dumps(hsl))
+    patches = {
+        "inline": hsl,
+        "file": {"coin_overrides": {"TEST": {"override_config_path": "coin.json"}}},
+        "legacy_file": {"live.coin_flags.TEST": "-lc coin.json"},
+        "non_hsl": {"live.minimum_coin_age_days": 30},
+    }
+    suite = {
+        "backtest": {
+            "suite": {
+                "scenarios": [{"label": "external", "overrides": patches[patch_kind]}]
+            }
+        }
+    }
+    path = tmp_path / "suite.json"
+    path.write_text(json.dumps(suite))
+    kwargs = {"source_config": cfg, "base_config_path": str(tmp_path / "base.json")}
+    if version == "v8.5.0" and patch_kind != "non_hsl":
+        with pytest.raises(ValueError, match="migrate-hsl"):
+            load_suite_override_config(path, **kwargs)
+        kwargs["source_config"] = migrate(
+            cfg, base_config_path=kwargs["base_config_path"]
+        )
+    loaded = load_suite_override_config(path, **kwargs)
+    assert loaded["scenarios"] == suite["backtest"]["suite"]["scenarios"]
+
+
+@pytest.mark.parametrize(
+    "entrypoint", ["ensure_suite_config", "run_backtest_suite_sync"]
+)
+def test_external_suite_file_helpers_gate_before_hydration(
+    tmp_path, monkeypatch, entrypoint
+):
+    import optimize_suite
+    import suite_runner
+
+    cfg = source(enabled=False)
+    cfg["config_version"] = "v8.5.0"
+    cfg["optimize"]["fixed_runtime_overrides"] = {}
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps(cfg))
+    suite = tmp_path / "suite.json"
+    suite.write_text(
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "label": "external",
+                        "overrides": {
+                            "bot.long.hsl.enabled": True,
+                            "bot.long.hsl.restart_after_red_policy": "always",
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    def unexpected_prepare(*args, **kwargs):
+        pytest.fail("suite helper must gate old HSL before hydration")
+
+    module = optimize_suite if entrypoint == "ensure_suite_config" else suite_runner
+    monkeypatch.setattr(module, "prepare_config", unexpected_prepare)
+    with pytest.raises(ValueError, match="migrate-hsl"):
+        if entrypoint == "ensure_suite_config":
+            module.ensure_suite_config(base, suite)
+        else:
+            module.run_backtest_suite_sync(base, suite_config_path=suite)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["backtest", "optimize"])
+async def test_cli_current_external_suite_reaches_preparation(
+    tmp_path, monkeypatch, command
+):
+    import importlib
+
+    module = importlib.import_module(command)
+    cfg = source(enabled=False)
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps(cfg))
+    suite = tmp_path / "suite.json"
+    suite.write_text(
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "label": "external",
+                        "overrides": {
+                            "bot.long.hsl.enabled": True,
+                            "bot.long.hsl.restart_after_red_policy": "never",
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    class PreparedOnly(Exception):
+        pass
+
+    def capture_prepare(source, **kwargs):
+        assert source["config_version"] == "v8.6.0"
+        raise PreparedOnly
+
+    monkeypatch.setattr(module, "prepare_config", capture_prepare)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [f"passivbot {command}", str(base), "--suite-config", str(suite)],
+    )
+    with pytest.raises(PreparedOnly):
+        await module.main()

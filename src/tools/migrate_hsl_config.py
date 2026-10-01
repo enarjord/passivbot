@@ -12,7 +12,11 @@ from config.hsl import _mode, validate_parameter_path, validate_optimizer_metric
 from config.load import load_input_config
 from config.migrations import migrate_config_version
 from config.optimize_bounds import flatten_optimize_bounds
-from config.overrides import normalize_coin_override_keys, parse_overrides
+from config.overrides import (
+    normalize_coin_override_keys,
+    parse_overrides,
+    parse_old_coin_flags,
+)
 from config.param_paths import (
     require_existing_config_path,
     resolve_bound_selectors,
@@ -135,6 +139,10 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
         block["restart_after_red_policy"] = policy
         path = ("bot", "hsl") if scope == "portfolio" else ("bot", scope, "hsl")
         chosen_paths[(*path, "restart_after_red_policy")] = policy
+    # Materialize legacy file references before normalization retires coin_flags.
+    # Match the ordinary override parser's fallback precedence.
+    if not result.get("coin_overrides"):
+        result["coin_overrides"] = parse_old_coin_flags(result)
     # This command is the explicit semantic migration boundary. Validate and
     # upgrade the schema here before the ordinary loader checks old HSL inputs;
     # never bypass malformed/future/unsupported schema rejection.

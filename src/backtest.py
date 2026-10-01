@@ -3198,6 +3198,16 @@ async def main():
     update_config_with_args(
         source_config, args, verbose=True, allowed_keys=allowed_config_keys
     )
+    # External suite patches share the raw base's schema contract. Load and
+    # gate them before preparation upgrades that schema and erases provenance.
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        suite_override = load_suite_override_config(
+            args.suite_config,
+            source_config=source_config,
+            base_config_path=base_config_path,
+        )
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,
@@ -3231,11 +3241,6 @@ async def main():
         config["backtest"]["cm_remote_fetch_bar"] = True
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     config = parse_overrides(config, verbose=True)
-
-    suite_override = None
-    if args.suite_config:
-        logging.info("loading suite config %s", args.suite_config)
-        suite_override = load_suite_override_config(args.suite_config)
 
     suite_cfg = extract_suite_config(config, suite_override)
 

@@ -60,34 +60,47 @@ def _requires_hsl_migration(node, path=""):
     return False
 
 
-def require_current_hsl_schema(config, *, base_config_path=""):
-    """Check raw root and referenced overrides before hydration loses origin."""
+def require_current_hsl_schema(config, *, base_config_path="", additional_inputs=()):
+    """Check raw root, attached inputs and referenced files before hydration."""
     from .migrations.legacy_v7 import _parse_version_tuple
 
     version = _parse_version_tuple(config.get("config_version"))
     if version is not None and version >= (8, 6, 0):
         return
     message = "pre-v8.6 HSL configuration requires explicit migration with passivbot tool migrate-hsl and re-backtesting before use"
-    if _requires_hsl_migration(config):
+    inputs = (config, *additional_inputs)
+    if any(_requires_hsl_migration(node) for node in inputs):
         raise ValueError(message)
-    from .overrides import load_override_config
+    from .overrides import load_override_config, parse_old_coin_flags
     from .parse import load_raw_config
 
     # Use the normal resolver (root-relative path, then cwd), but inspect the
     # authored file without first merging it into a current-schema template.
-    for path, value in _authored_paths(config):
-        if "coin_overrides" not in path or not path.endswith("override_config_path"):
-            continue
-        context = {
-            "coin_overrides": {"input": {"override_config_path": value}},
-            "live": {
-                "base_config_path": base_config_path
-                or config.get("live", {}).get("base_config_path", "")
-            },
-        }
-        authored = load_override_config(context, "input", config_loader=load_raw_config)
-        if _requires_hsl_migration(authored):
-            raise ValueError(message)
+    for node in inputs:
+        for path, value in _authored_paths(node):
+            if "coin_overrides" in path and path.endswith("override_config_path"):
+                reference = value
+            elif "coin_flags." in path and isinstance(value, str):
+                # Reuse the actual legacy flag parser rather than guessing how
+                # -lc and its path are represented, including scenario patches.
+                flags = parse_old_coin_flags({"live": {"coin_flags": {"input": value}}})
+                reference = flags["input"].get("override_config_path")
+                if reference is None:
+                    continue
+            else:
+                continue
+            context = {
+                "coin_overrides": {"input": {"override_config_path": reference}},
+                "live": {
+                    "base_config_path": base_config_path
+                    or config.get("live", {}).get("base_config_path", "")
+                },
+            }
+            authored = load_override_config(
+                context, "input", config_loader=load_raw_config
+            )
+            if _requires_hsl_migration(authored):
+                raise ValueError(message)
 
 
 def engine(config):

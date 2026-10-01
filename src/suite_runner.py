@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
-from config import load_prepared_config
+from config.load import load_input_config, prepare_config
+from config.hsl import require_current_hsl_schema
+from config_utils import effective_config_payload
 from config.access import require_config_value, require_live_value
 from config.metrics import canonicalize_metric_name
 from config.overrides import parse_overrides
@@ -214,13 +216,17 @@ def _suite_override_from_section(
     return suite_override
 
 
-def load_suite_override_config(suite_config_path: str | Path) -> Dict[str, Any]:
+def load_suite_override_config(
+    suite_config_path: str | Path, *, source_config=None, base_config_path=""
+) -> Dict[str, Any]:
     """
     Load a suite override file without normalizing it as a full bot config.
 
     External suite files are intentionally partial: they may contain only
     backtest.scenarios/backtest.reducer or a legacy backtest.suite wrapper.
-    Full config flavor detection is therefore the wrong boundary here.
+    Full config flavor detection is therefore the wrong boundary here. File
+    entry points pass their still-raw base as source_config so old HSL policies
+    are gated before schema hydration; parsing-only callers may omit it.
     """
 
     raw = load_raw_config(str(suite_config_path), log_errors=True)
@@ -229,13 +235,21 @@ def load_suite_override_config(suite_config_path: str | Path) -> Dict[str, Any]:
     source_label = str(suite_config_path)
     backtest = raw.get("backtest")
     if isinstance(backtest, dict) and ("scenarios" in backtest or "suite" in backtest):
-        return _suite_override_from_section(backtest, source_label=source_label)
-    if "scenarios" in raw or "suite" in raw:
-        return _suite_override_from_section(raw, source_label=source_label)
-    raise ValueError(
-        f"Suite config {suite_config_path} must define backtest.scenarios "
-        "or legacy backtest.suite."
-    )
+        override = _suite_override_from_section(backtest, source_label=source_label)
+    elif "scenarios" in raw or "suite" in raw:
+        override = _suite_override_from_section(raw, source_label=source_label)
+    else:
+        raise ValueError(
+            f"Suite config {suite_config_path} must define backtest.scenarios "
+            "or legacy backtest.suite."
+        )
+    if source_config is not None:
+        require_current_hsl_schema(
+            effective_config_payload(source_config),
+            base_config_path=base_config_path,
+            additional_inputs=(override,),
+        )
+    return override
 
 
 def _normalize_scenario_label(raw_label: Any, index: int) -> str:
@@ -2282,12 +2296,16 @@ def run_backtest_suite_sync(
     config_path_str = str(config_path)
     if config_path_str in {"", "."}:
         config_path_str = None
-    config = load_prepared_config(config_path_str, verbose=False)
-    config = parse_overrides(config, verbose=False)
-
+    source, base_path, raw = load_input_config(config_path_str)
     suite_override = None
     if suite_config_path:
-        suite_override = load_suite_override_config(suite_config_path)
+        suite_override = load_suite_override_config(
+            suite_config_path, source_config=source, base_config_path=base_path
+        )
+    config = prepare_config(
+        source, base_config_path=base_path, raw_snapshot=raw, verbose=False
+    )
+    config = parse_overrides(config, verbose=False)
 
     suite_cfg = extract_suite_config(config, suite_override)
     if not suite_cfg.get("scenarios"):

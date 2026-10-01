@@ -3740,6 +3740,16 @@ async def main():
             verbose=True,
             allowed_keys={"optimize.limits"},
         )
+    # External suite patches share the raw base's schema contract. Load and
+    # gate them before preparation upgrades that schema and erases provenance.
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        suite_override = load_suite_override_config(
+            args.suite_config,
+            source_config=source_config,
+            base_config_path=base_config_path,
+        )
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,
@@ -3768,14 +3778,10 @@ async def main():
         TEMPLATE_CONFIG_MODE,
         ",".join(objective_metric_names(config)),
     )
-    suite_override = None
-    if args.suite_config:
-        logging.info("loading suite config %s", args.suite_config)
-        suite_override = load_suite_override_config(args.suite_config)
-        if _suite_config_implies_suite_mode(args):
-            recursive_config_update(
-                config, "backtest.suite_enabled", True, verbose=True
-            )
+    if _suite_config_implies_suite_mode(args):
+        recursive_config_update(
+            config, "backtest.suite_enabled", True, verbose=True
+        )
     suite_cfg = extract_suite_config(config, suite_override)
 
     # Handle --scenarios filter (implies --suite y)

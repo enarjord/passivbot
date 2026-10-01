@@ -46,6 +46,9 @@ Thresholds and saved fitness from older HSL versions are not interchangeable.
 Migrate and re-backtest configurations before upgrading. Pre-v8.6 inputs with
 HSL enabled or an authored `always`/`never` restart choice require explicit
 `passivbot tool migrate-hsl` conversion even when `live.hsl_engine` is absent.
+This check includes file-backed coin overrides, legacy `-lc` references and
+external `--suite-config` scenarios, evaluated against the raw base schema before
+normalization. Moving an old HSL policy into an external file is not migration.
 Disabled old policies without a restart choice can be hydrated, but enabling HSL
 later still requires an explicit restart choice.
 
