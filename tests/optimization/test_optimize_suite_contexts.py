@@ -149,7 +149,9 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
         for mss in contexts[0].msss.values():
             assert mss["HYPE"]["warmup_minutes"] == 3
             assert mss["HYPE"]["trade_start_index"] == 3
-            assert mss["__meta__"]["warmup_minutes_requested"] == 1201
+            # Searching RMS scores cannot create competition for one eligible
+            # coin, so requested history remains the non-RMS strategy warmup.
+            assert mss["__meta__"]["warmup_minutes_requested"] == 3
 
 
 def test_suite_evaluator_close_releases_context_and_master_attachments():
