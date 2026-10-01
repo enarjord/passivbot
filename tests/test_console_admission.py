@@ -230,3 +230,5 @@ def test_long_trailing_records_fit_exchange_user_prefix_without_losing_fields():
                for _, line in logger.lines)
     assert 'symbol=BTC/USDT:USDT' in ' '.join(line for _, line in logger.lines)
     assert 'pside=long' in ' '.join(line for _, line in logger.lines)
+    assert not any(line == '[trailing] pside=long' for _, line in logger.lines)
+    assert len(logger.lines) == 1
