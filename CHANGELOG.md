@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix slow GPU automatic batch calibration on long histories: preserve the existing bounded
+  dispatch width and gather rolling evidence from completed temporal chunks, applying trials
+  between successful full candidate replays rather than waiting for dozens of full-history batches.
+
 - Reduce optimizer console noise with minute-spaced Pareto and GPU replay summaries,
   replay percentage, throughput and ETA, and exact seed-validation progress. Aggregate
   seed-clamp warnings and retain per-candidate metrics and clamp details at DEBUG. Resumed
