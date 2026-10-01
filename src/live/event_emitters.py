@@ -2415,6 +2415,7 @@ def _forager_top_score_sample(
             "volume_component",
             "ema_readiness_component",
             "volatility_component",
+            "unilateralness_component",
         ):
             value = _safe_float(item.get(key))
             if value is not None:

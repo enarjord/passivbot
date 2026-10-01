@@ -1124,9 +1124,15 @@ def build_backtest_payload(
             )
         requested_start_idx = max(0, min(total_steps, requested_start_idx))
 
-    warmup_map = compute_per_coin_warmup_minutes(config)
+    warmup_map = compute_per_coin_warmup_minutes(
+        config, for_trade_activation=True, include_rms=False
+    )
     default_warm = int(warmup_map.get("__default__", 0))
-    global_warmup_minutes = compute_backtest_warmup_minutes(config)
+    global_warmup_minutes = compute_backtest_warmup_minutes(
+        config, for_trade_activation=True, include_rms=False
+    )
+    # RMS readiness belongs to each consuming Rust side/order branch; it must
+    # not delay other sides or coins through shared activation metadata.
     first_valid_indices = []
     last_valid_indices = []
     warmup_minutes = []
@@ -1161,11 +1167,14 @@ def build_backtest_payload(
             last_idx = 0
         first_valid_indices.append(first_idx)
         last_valid_indices.append(last_idx)
-        # warmup_minutes stay in minutes (Rust adjusts based on interval)
-        warm = max(
-            int(coin_meta.get("warmup_minutes", warmup_map.get(coin, default_warm))),
-            int(global_warmup_minutes),
-        )
+        # Only producer-tagged history budgets may be replaced with a local
+        # activation budget. Optimizer activation stamps and untyped external
+        # metadata remain authoritative, independent of candidate RMS settings.
+        activation_warm = max(int(warmup_map.get(coin, default_warm)), global_warmup_minutes)
+        metadata_warm = int(coin_meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        if coin_meta.get("warmup_minutes_source") == "history":
+            metadata_warm = activation_warm
+        warm = max(metadata_warm, int(global_warmup_minutes))
         warmup_minutes.append(warm)
         # trade_start_idx is in candle units, adjust warm from minutes to candle periods
         warm_bars = (
@@ -1186,6 +1195,16 @@ def build_backtest_payload(
         global_warmup_bars = int(math.ceil(global_warmup_minutes / candle_interval))
     else:
         global_warmup_bars = int(global_warmup_minutes)
+    if global_warmup_bars == 0:
+        from config.entry_cooldown import uses_adverse_rms
+        if any(
+            p["entry_eligible"] and p["n_positions"] > 0
+            and p["total_wallet_exposure_limit"] > 0 and uses_adverse_rms(p)
+            for pair in bot_params_list for p in pair.values()
+        ):
+            # Python has explicitly calculated a zero non-RMS activation budget.
+            # Send Rust's minimum active budget rather than its automatic sentinel.
+            global_warmup_bars = 1
     backtest_params["global_warmup_bars"] = global_warmup_bars
 
     warmup_requested = int(
@@ -2093,6 +2112,7 @@ def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
         if warmup_map:
             # Warmup from current config must override any historical cached metadata.
             warm_minutes = int(warmup_map.get(coin, default_warm))
+            meta["warmup_minutes_source"] = "history"
         else:
             warm_minutes = int(meta.get("warmup_minutes", 0))
         meta["warmup_minutes"] = warm_minutes

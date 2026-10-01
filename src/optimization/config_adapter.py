@@ -13,11 +13,12 @@ from config.param_paths import (
     OPTIMIZABLE_BOT_KEY_PATHS,
     canonical_optimizer_key,
     resolve_optimizer_key_path,
+    require_existing_config_path,
 )
 from config.optimize_bounds import flatten_optimize_bounds
 from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
-from config.strategy import normalize_strategy_kind
+from config.strategy import merge_runtime_bot_side, normalize_strategy_kind
 from config.strategy_spec import (
     get_strategy_spec,
     strategy_optimize_key_path_map,
@@ -31,29 +32,8 @@ from optimizer_overrides import (
 
 def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
     strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-    has_flat_keys = any(
-        isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
-        for key in optimize_bounds
-    )
-    if not has_flat_keys:
-        return flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
+    return flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
 
-    flat_bounds = {
-        key: value
-        for key, value in optimize_bounds.items()
-        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
-    }
-    nested_bounds = {
-        key: value
-        for key, value in optimize_bounds.items()
-        if not (isinstance(key, str) and key.startswith(("long_", "short_", "hsl_")))
-    }
-    if nested_bounds:
-        flat_bounds = {
-            **flatten_optimize_bounds(nested_bounds, strategy_kind=strategy_kind),
-            **flat_bounds,
-        }
-    return flat_bounds
 
 
 def _flatten_required_optimize_bounds(config: dict) -> dict:
@@ -81,6 +61,7 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
     bot_config = config.get("bot") or get_template_config()["bot"]
     optimize_bounds = _flatten_bounds_for_config(config, optimize_bounds)
     strategy_path_map = _strategy_path_map(config)
+    cooldown_ranges = {}
     for bound_key in optimize_bounds:
         if not isinstance(bound_key, str):
             continue
@@ -100,6 +81,31 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
                 for endpoint in (bound.low, bound.high):
                     _number(endpoint, f"optimize.bounds.{bound_key}", **constraints[name])
+        adaptive_domain = {
+            ("forager", "unilateralness_ema_span_1m"): (1.0, 100_000.0),
+            ("forager", "score_weights", "unilateralness"): (0.0, math.inf),
+            ("entry_cooldown", "weights_minutes", "exposure_ratio"): (0.0, math.inf),
+            ("entry_cooldown", "weights_minutes", "adverse_directionality"): (0.0, math.inf),
+            ("entry_cooldown", "base_duration_minutes"): (0.0, math.inf),
+            ("entry_cooldown", "min_duration_minutes"): (0.0, math.inf),
+            ("entry_cooldown", "max_duration_minutes"): (0.0, math.inf),
+        }.get(resolved[2:])
+        if adaptive_domain is not None:
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            minimum, maximum = adaptive_domain
+            if any(
+                not math.isfinite(value) or not minimum <= value <= maximum
+                for value in (bound.low, bound.high)
+            ):
+                raise ValueError(
+                    f"optimize.bounds.{bound_key} endpoints must be finite and in "
+                    f"[{minimum}, {maximum}]"
+                )
+        if resolved[2:] in (
+            ("entry_cooldown", "min_duration_minutes"),
+            ("entry_cooldown", "max_duration_minutes"),
+        ):
+            cooldown_ranges[resolved[1], resolved[-1]] = bound
         if resolved[:2] == ("bot", "hsl"):
             value = bot_config["hsl"].get(resolved[-1])
             if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -148,6 +154,46 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 path="optimize.bounds.short_unstuck_ema_dist upper bound",
                 pside="short",
             )
+
+    # Independently sampled dimensions must be valid at every corner, not just
+    # the all-low/all-high configurations used to estimate warmup.
+    fixed_cooldowns = {"long": {}, "short": {}}
+    for dotted_path, value in (config.get("optimize", {}).get("fixed_runtime_overrides") or {}).items():
+        path = require_existing_config_path(config, dotted_path)
+        if len(path) == 4 and path[0] == "bot" and path[1] in fixed_cooldowns and path[2] == "entry_cooldown":
+            fixed_cooldowns[path[1]][path[3]] = value
+    for pside in ("long", "short"):
+        floor_bound = cooldown_ranges.get((pside, "min_duration_minutes"))
+        ceiling_bound = cooldown_ranges.get((pside, "max_duration_minutes"))
+        if floor_bound is None and ceiling_bound is None:
+            continue
+        # Apply the independently reachable corner first, then the same coin
+        # patches used at runtime: a pinned override wins over a searched gene.
+        corner = flatten_shared_bot_side(bot_config[pside])
+        if floor_bound:
+            corner["entry_cooldown_min_duration_minutes"] = floor_bound.high
+        if ceiling_bound:
+            corner["entry_cooldown_max_duration_minutes"] = ceiling_bound.low
+        corner = merge_runtime_bot_side(
+            corner, pside=pside,
+            override_side={"entry_cooldown": fixed_cooldowns[pside]},
+        )
+        effective_sides = [("bot", corner)]
+        for coin, patch in (config.get("coin_overrides") or {}).items():
+            override_side = patch.get("bot", {}).get(pside, {})
+            effective_sides.append((
+                f"coin_overrides.{coin}.bot",
+                merge_runtime_bot_side(corner, pside=pside, override_side=override_side),
+            ))
+        for source, effective in effective_sides:
+            highest_floor = effective["entry_cooldown_min_duration_minutes"]
+            lowest_ceiling = effective["entry_cooldown_max_duration_minutes"]
+            if lowest_ceiling is not None and highest_floor > lowest_ceiling:
+                raise ValueError(
+                    f"optimize.bounds.{pside}.entry_cooldown ({source}.{pside}): "
+                    f"highest min_duration_minutes ({highest_floor}) must not exceed "
+                    f"lowest max_duration_minutes ({lowest_ceiling})"
+                )
 
 
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:

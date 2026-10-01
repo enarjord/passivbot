@@ -334,6 +334,7 @@ def _raw_forager_selection(**overrides) -> dict:
                 "volume_component": 1.0,
                 "ema_readiness_component": 1.0,
                 "volatility_component": 1.0,
+                "unilateralness_component": 0.0,
                 "selected": True,
                 "incumbent": True,
             }

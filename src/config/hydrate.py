@@ -122,6 +122,15 @@ def sync_with_template(
             elif existing_base != base_config_path:
                 tracker.update(["live", "base_config_path"], existing_base, base_config_path)
     template_with_extras = deepcopy(template)
+    from .optimize_bounds import preserve_optional_adaptive_bounds, set_flat_optimize_bound
+
+    # Canonicalize legacy leaves before template pruning; a mixed dictionary
+    # may contain both these leaves and explicit nested adaptive dimensions.
+    bounds = result["optimize"]["bounds"]
+    for key in list(bounds):
+        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_")):
+            set_flat_optimize_bound(bounds, result["live"]["strategy_kind"], key, bounds.pop(key))
+    preserve_optional_adaptive_bounds(template_with_extras, result)
     # Keep only explicitly supplied revised portfolio authority and its search bounds.
     if result["live"].get("hsl_engine") == "revised":
         for section in (("bot",), ("optimize", "bounds")):

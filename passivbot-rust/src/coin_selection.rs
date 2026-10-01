@@ -11,6 +11,7 @@ pub struct CoinFeature {
     pub enabled: bool,
     pub volume_score: f64,
     pub volatility_score: f64,
+    pub unilateralness_score: f64,
     pub ema_readiness_score: f64,
 }
 
@@ -48,6 +49,7 @@ pub struct ForagerCandidate {
     pub enabled: bool,
     pub volume_score: f64,
     pub volatility_score: f64,
+    pub unilateralness_score: f64,
     pub bid: f64,
     pub ask: f64,
     pub ema_lower: f64,
@@ -73,6 +75,7 @@ pub struct ForagerScoredCandidate {
     pub volume_component: f64,
     pub ema_readiness_component: f64,
     pub volatility_component: f64,
+    pub unilateralness_component: f64,
     pub selected: bool,
     pub incumbent: bool,
     pub rank: usize,
@@ -249,6 +252,7 @@ fn build_coin_features(
                     enabled: false,
                     volume_score: 0.0,
                     volatility_score: 0.0,
+                    unilateralness_score: 0.0,
                     ema_readiness_score: 0.0,
                 });
             }
@@ -270,6 +274,11 @@ fn build_coin_features(
             } else {
                 candidate.volatility_score
             };
+            let unilateralness_score = if cfg.require_forager && cfg.weights.unilateralness > 0.0 {
+                validate_unit_pct("unilateralness_score", candidate.unilateralness_score)?
+            } else {
+                0.0
+            };
             let ema_readiness_score = if require_ema_readiness {
                 compute_ema_readiness_score(candidate, cfg)?
             } else {
@@ -280,6 +289,7 @@ fn build_coin_features(
                 enabled: candidate.enabled,
                 volume_score,
                 volatility_score,
+                unilateralness_score,
                 ema_readiness_score,
             })
         })
@@ -354,19 +364,34 @@ pub fn select_coins_with_diagnostics(
 
     let slots_to_fill = cfg.slots_to_fill.max(1);
     prune_low_volume_tail(
-        features,
         &mut enabled_pos,
         cfg.volume_drop().expect("invalid forager_volume_drop_pct"),
         slots_to_fill,
+        |pos| (features[pos].volume_score, features[pos].index),
     );
     score_forager_candidates(features, &enabled_pos, cfg, slots_to_fill)
 }
 
+/// Positions whose scores can affect selection after deterministic volume pruning.
+/// Shares the exact keep count and tie break with final coin selection.
+pub(crate) fn forager_scoring_positions(
+    candidates: &[ForagerCandidate],
+    cfg: &ForagerSelectionConfig,
+) -> Result<Vec<usize>, ForagerSelectionError> {
+    let mut positions: Vec<usize> = candidates.iter().enumerate()
+        .filter_map(|(pos, candidate)| candidate.enabled.then_some(pos)).collect();
+    if cfg.require_forager {
+        prune_low_volume_tail(&mut positions, cfg.volume_drop()?, cfg.slots_to_fill.max(1),
+            |pos| (candidates[pos].volume_score, candidates[pos].index));
+    }
+    Ok(positions)
+}
+
 fn prune_low_volume_tail(
-    features: &[CoinFeature],
     positions: &mut Vec<usize>,
     volume_drop_pct: f64,
     slots_to_fill: usize,
+    volume_and_index: impl Fn(usize) -> (f64, usize),
 ) {
     if positions.is_empty() {
         return;
@@ -382,9 +407,9 @@ fn prune_low_volume_tail(
     }
 
     let cmp_volume = |pa: &usize, pb: &usize| {
-        let a = &features[*pa];
-        let b = &features[*pb];
-        compare_desc(a.volume_score, b.volume_score, a.index, b.index)
+        let (a_volume, a_index) = volume_and_index(*pa);
+        let (b_volume, b_index) = volume_and_index(*pb);
+        compare_desc(a_volume, b_volume, a_index, b_index)
     };
     positions.select_nth_unstable_by(keep.saturating_sub(1), cmp_volume);
     positions.truncate(keep);
@@ -423,19 +448,31 @@ fn score_forager_candidates(
             .collect::<Vec<f64>>(),
     );
 
+    let unilateralness_scores = if cfg.weights.unilateralness > 0.0 {
+        normalize_lower_is_better(
+            &positions
+                .iter()
+                .map(|&pos| features[pos].unilateralness_score)
+                .collect::<Vec<f64>>(),
+        )
+    } else {
+        vec![0.0; positions.len()]
+    };
     let mut scored: Vec<ScoredPosition> = positions
         .iter()
         .enumerate()
         .map(|(i, &pos)| {
             let score = cfg.weights.volume * volume_scores[i]
                 + cfg.weights.ema_readiness * ema_readiness_scores[i]
-                + cfg.weights.volatility * volatility_scores[i];
+                + cfg.weights.volatility * volatility_scores[i]
+                + cfg.weights.unilateralness * unilateralness_scores[i];
             ScoredPosition {
                 pos,
                 score,
                 volume_component: volume_scores[i],
                 ema_readiness_component: ema_readiness_scores[i],
                 volatility_component: volatility_scores[i],
+                unilateralness_component: unilateralness_scores[i],
             }
         })
         .collect();
@@ -478,6 +515,7 @@ fn score_forager_candidates(
                 volume_component: item.volume_component,
                 ema_readiness_component: item.ema_readiness_component,
                 volatility_component: item.volatility_component,
+                unilateralness_component: item.unilateralness_component,
                 selected: selected_set.contains(&index),
                 incumbent: cfg.incumbent_indices.contains(&index),
                 rank: rank + 1,
@@ -498,6 +536,7 @@ struct ScoredPosition {
     volume_component: f64,
     ema_readiness_component: f64,
     volatility_component: f64,
+    unilateralness_component: f64,
 }
 
 fn apply_score_hysteresis(
@@ -639,6 +678,7 @@ pub struct CoinFeatureInput {
     pub enabled: bool,
     pub volume_score: f64,
     pub volatility_score: f64,
+    pub unilateralness_score: f64,
     pub ema_readiness_score: f64,
 }
 
@@ -654,6 +694,7 @@ impl<'source> FromPyObject<'source> for CoinFeatureInput {
             enabled,
             volume_score,
             volatility_score,
+            unilateralness_score: optional_feature(ob, "unilateralness_score")?,
             ema_readiness_score,
         })
     }
@@ -662,6 +703,7 @@ impl<'source> FromPyObject<'source> for CoinFeatureInput {
 impl From<CoinFeatureInput> for CoinFeature {
     fn from(value: CoinFeatureInput) -> Self {
         CoinFeature {
+            unilateralness_score: value.unilateralness_score,
             index: value.index,
             enabled: value.enabled,
             volume_score: value.volume_score,
@@ -677,6 +719,7 @@ impl<'source> FromPyObject<'source> for ForagerScoreWeights {
             volume: ob.get_item("volume")?.extract::<f64>()?,
             ema_readiness: ob.get_item("ema_readiness")?.extract::<f64>()?,
             volatility: ob.get_item("volatility")?.extract::<f64>()?,
+            unilateralness: optional_score(ob, "unilateralness")?,
         })
     }
 }
@@ -688,6 +731,7 @@ impl<'source> FromPyObject<'source> for ForagerCandidate {
             enabled: ob.get_item("enabled")?.extract::<bool>()?,
             volume_score: ob.get_item("volume_score")?.extract::<f64>()?,
             volatility_score: ob.get_item("volatility_score")?.extract::<f64>()?,
+            unilateralness_score: optional_feature(ob, "unilateralness_score")?,
             bid: ob.get_item("bid")?.extract::<f64>()?,
             ask: ob.get_item("ask")?.extract::<f64>()?,
             ema_lower: ob.get_item("ema_lower")?.extract::<f64>()?,
@@ -721,6 +765,12 @@ pub fn select_coin_indices_py(
         score_hysteresis_pct: 0.0,
         incumbent_indices: HashSet::new(),
     };
+    if require_forager && cfg.weights.unilateralness > 0.0 {
+        for f in features.iter().filter(|f| f.enabled) {
+            validate_unit_pct("unilateralness_score", f.unilateralness_score)
+                .map_err(|err| pyo3::exceptions::PyValueError::new_err(format!("{err:?}")))?;
+        }
+    }
     Ok(select_coins(&features, &cfg))
 }
 
@@ -785,6 +835,7 @@ mod tests {
         ask: f64,
     ) -> ForagerCandidate {
         ForagerCandidate {
+            unilateralness_score: 0.0,
             index,
             enabled: true,
             volume_score: volume,
@@ -797,8 +848,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn rms_scoring_set_matches_volume_pruning_with_ties_and_disabled_candidates() {
+        let mut candidates: Vec<_> = [7, 3, 9, 0].iter()
+            .map(|&index| make_candidate(index, 100.0, 1.0, 100.0, 100.0)).collect();
+        candidates[3].enabled = false;
+        for slots in [1, 2, 3] {
+            for drop in [0.0, 0.5, 1.0] {
+                let cfg = ForagerSelectionConfig {
+                    slots_to_fill: slots,
+                    volume_drop_pct: drop,
+                    ..default_forager_config(ForagerPositionSide::Long)
+                };
+                let mut expected: Vec<_> = forager_scoring_positions(&candidates, &cfg)
+                    .unwrap().iter().map(|&pos| candidates[pos].index).collect();
+                let mut actual: Vec<_> = select_forager_candidates_with_diagnostics(&candidates, &cfg)
+                    .unwrap().scored.iter().map(|item| item.index).collect();
+                expected.sort_unstable();
+                actual.sort_unstable();
+                assert_eq!(expected, actual);
+            }
+        }
+    }
+
     fn make_feature(index: usize, volume: f64, volatility: f64, ema_readiness: f64) -> CoinFeature {
         CoinFeature {
+            unilateralness_score: 0.0,
             index,
             enabled: true,
             volume_score: volume,
@@ -834,6 +909,7 @@ mod tests {
     fn returns_enabled_indices_when_not_forager() {
         let features = vec![
             CoinFeature {
+                unilateralness_score: 0.0,
                 index: 0,
                 enabled: true,
                 volume_score: 0.1,
@@ -841,6 +917,7 @@ mod tests {
                 ema_readiness_score: 0.1,
             },
             CoinFeature {
+                unilateralness_score: 0.0,
                 index: 1,
                 enabled: false,
                 volume_score: 1.0,
@@ -848,6 +925,7 @@ mod tests {
                 ema_readiness_score: 1.0,
             },
             CoinFeature {
+                unilateralness_score: 0.0,
                 index: 2,
                 enabled: true,
                 volume_score: 0.2,
@@ -908,6 +986,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
+                unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
                 volatility: 0.0,
@@ -937,6 +1016,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 2,
             weights: ForagerScoreWeights {
+                unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 0.0,
                 volatility: 0.0,
@@ -956,6 +1036,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 2,
             weights: ForagerScoreWeights {
+                unilateralness: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
                 volatility: 0.0,
@@ -975,6 +1056,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
+                unilateralness: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
                 volatility: 0.0,
@@ -1005,6 +1087,7 @@ mod tests {
         let cfg = SelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
+                unilateralness: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
                 volatility: 0.0,
@@ -1031,6 +1114,7 @@ mod tests {
         let cfg = ForagerSelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
+                unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
                 volatility: 0.0,
@@ -1052,6 +1136,7 @@ mod tests {
         let cfg = ForagerSelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
+                unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
                 volatility: 0.0,
@@ -1073,6 +1158,7 @@ mod tests {
         let cfg = ForagerSelectionConfig {
             slots_to_fill: 1,
             weights: ForagerScoreWeights {
+                unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
                 volatility: 0.0,
@@ -1086,5 +1172,21 @@ mod tests {
                 index: 0,
             })
         );
+    }
+}
+
+fn optional_score(ob: &PyAny, key: &str) -> PyResult<f64> {
+    let dict = ob.downcast::<pyo3::types::PyDict>()?;
+    match dict.get_item(key)? {
+        Some(v) => v.extract(),
+        None => Ok(0.0),
+    }
+}
+
+fn optional_feature(ob: &PyAny, key: &str) -> PyResult<f64> {
+    let dict = ob.downcast::<pyo3::types::PyDict>()?;
+    match dict.get_item(key)? {
+        Some(v) => v.extract(),
+        None => Ok(f64::NAN),
     }
 }

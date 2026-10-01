@@ -51,7 +51,7 @@ def test_resume_ignores_candidate_values_but_rejects_fixed_bot_policy():
 
     config = _config()
     old = _record(config)
-    old["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 37.0
+    old["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 37.0
     assert _resume_config_mismatches(old, config) == []
     config["bot"]["long"]["hsl"]["enabled"] = not config["bot"]["long"]["hsl"][
         "enabled"
@@ -106,7 +106,7 @@ def test_resume_validates_all_anchor_fixed_values_and_rejects_unprovable_legacy(
             {"source": "first.json", "fixed_values": [{"path": path, "value": 0.01}]},
             {"source": "second.json", "fixed_values": [{"path": path, "value": 0.02}]},
         ],
-        "key_paths": [["bot", "long", "risk", "entry_cooldown_minutes"]],
+        "key_paths": [["bot", "long", "entry_cooldown", "base_duration_minutes"]],
     }
     old = _record(config)
     old["optimizer_anchor"] = {"id": 0}
@@ -154,7 +154,7 @@ def test_result_writers_persist_contract_before_candidate_projection(
     config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     metrics = {"suite_metrics": {"scenario": {}}} if suite else {}
     candidate = deepcopy(config)
-    candidate["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 37.0
+    candidate["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 37.0
     build = lambda *args, **kwargs: deepcopy(candidate)
     if backend == "pymoo":
         entry = build_pymoo_record_entry(
@@ -243,7 +243,7 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
             {"fixed_values": [{"path": fixed_path, "value": 0.01}]},
             {"fixed_values": [{"path": fixed_path, "value": 0.02}]},
         ],
-        "key_paths": [["bot", "long", "risk", "entry_cooldown_minutes"]],
+        "key_paths": [["bot", "long", "entry_cooldown", "base_duration_minutes"]],
         "tunable_keys": ["long_entry_cooldown_minutes"],
     }
     entry = build_pymoo_record_entry(
@@ -260,7 +260,7 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
         ]
         == 0.02
     )
-    assert entry["bot"]["long"]["risk"]["entry_cooldown_minutes"] == 37.0
+    assert entry["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 37.0
     assert _resume_config_mismatches(entry, config) == []
     config[ANCHOR_PLAN_KEY]["anchors"][0]["fixed_values"][0]["value"] = 0.03
     assert any(
@@ -393,8 +393,8 @@ async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload
     def execute_and_capture(payload, candidate):
         assert payload.bot_params_list[0]["long"]["risk_entry_cooldown_minutes"] == 37.0
         assert (
-            candidate["coin_overrides"]["BTC"]["bot"]["long"]["risk"][
-                "entry_cooldown_minutes"
+            candidate["coin_overrides"]["BTC"]["bot"]["long"]["entry_cooldown"][
+                "base_duration_minutes"
             ]
             == 37.0
         )
@@ -598,7 +598,7 @@ def test_uniform_compressed_contract_history_allows_candidate_changes(tmp_path):
     config = _config()
     first = _record(config)
     second = deepcopy(first)
-    second["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 37.0
+    second["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 37.0
     second["metrics"] = {"objectives": {"w_0": 0.5}}
     packer = msgpack.Packer(use_bin_type=True)
     (tmp_path / "all_results.bin").write_bytes(

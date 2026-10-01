@@ -835,6 +835,13 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "strategy_pnl_peak"
             ]
             self._bp_defaults = {
+                "entry_cooldown_min_duration_minutes": 0.0,
+                "entry_cooldown_max_duration_minutes": None,
+                "entry_cooldown_weights_minutes": {
+                    "exposure_ratio": 0.0,
+                    "adverse_directionality": 0.0,
+                },
+                "unilateralness_ema_span_1m": 60.0,
                 "ema_span_0": 1.0,
                 "ema_span_1": 2.0,
                 "entry_volatility_ema_span_1h": 0.0,
@@ -857,6 +864,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "close_trailing_retracement_pct": 0.0,
                 "close_trailing_threshold_pct": 0.0,
                 "forager_score_weights": {
+                    "unilateralness": 0.0,
                     "volume": 0.0,
                     "ema_readiness": 0.0,
                     "volatility": 1.0,
@@ -878,6 +886,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "filter_volatility_ema_span_1m": 0.0,
                 "forager_volume_drop_pct": 0.0,
                 "forager_score_weights": {
+                    "unilateralness": 0.0,
                     "volume": 0.0,
                     "ema_readiness": 0.0,
                     "volatility": 1.0,

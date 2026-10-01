@@ -2,8 +2,8 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 61;
-constant int OVERRIDE_COLS = 49;
+constant int PARAM_COLS = 68;
+constant int OVERRIDE_COLS = 53;
 constant int UNSTUCK_EMA_OVERRIDE_START = 47;
 constant int HSL_OVERRIDE_START = 34;
 constant int GATE_INITIAL_OVERRIDE_COL = 44;
@@ -32,6 +32,8 @@ constant int GAP_BINS = 128;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
+
+// PASSIVBOT_ADAPTIVE_TIMING
 
 // PASSIVBOT_UNSTUCK_EMA_COMMON
 
@@ -483,6 +485,8 @@ struct TrailingMartingaleMulticoinSideState {
     float ema2[MAX_COINS];
     float volatility_1m[MAX_COINS];
     float volatility_1h[MAX_COINS];
+    AdaptiveTiming adaptive[MAX_COINS];
+    float effective_cooldown[MAX_COINS];
     float forager_volume[MAX_COINS];
     float forager_volatility[MAX_COINS];
     float psize[MAX_COINS];
@@ -582,6 +586,7 @@ struct TrailingMartingaleMulticoinSideConfig {
     float close_retracement_base;
     float close_retracement_v1h;
     float close_retracement_v1m;
+    AdaptiveTiming adaptive;
     float cooldown_min;
     float twel;
     bool gate_initial;
@@ -883,9 +888,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
         bool first_passive_reachable = short_side
             ? first[c].ticks <= fill_ticks[tick_offset + 0]
             : first[c].ticks > fill_ticks[tick_offset + 1];
-        float cooldown = coin_override_or(
-            coin_overrides, c, 23, config.cooldown_min
-        );
+        float cooldown = side.effective_cooldown[c];
         if (!first_passive_reachable || cooldown != 0.0f) continue;
 
         float new_psize = round_step(
@@ -2260,9 +2263,7 @@ inline bool process_tm_multicoin_side_fills(
                     ? max(sim_touch_tick, candidate.ticks)
                     : min(sim_touch_tick, candidate.ticks);
                 if (rung == 0 && !first_entry_passive_reachable) break;
-                if (coin_override_or(
-                        coin_overrides, c, 23, config.cooldown_min
-                    ) != 0.0f) break;
+                if (side.effective_cooldown[c] != 0.0f) break;
             }
             entry_qty[c] = 0.0f;
         } else if (filled_entry) {
@@ -2336,7 +2337,8 @@ load_trailing_martingale_multicoin_side_config(
     config.close_retracement_base = params[po + 20];
     config.close_retracement_v1h = params[po + 21];
     config.close_retracement_v1m = params[po + 22];
-    config.cooldown_min = ceil(params[po + 23]);
+    config.cooldown_min = params[po + 23];
+    config.adaptive = load_adaptive_timing(params, po + 61);
     config.twel = params[po + 24];
     config.gate_initial = params[po + 25] > 0.5f;
     config.gate_reentry = params[po + 26] > 0.5f;
@@ -2346,11 +2348,12 @@ load_trailing_martingale_multicoin_side_config(
     config.w_volume = params[po + 30];
     config.w_ready = params[po + 31];
     config.w_volatility = params[po + 32];
-    float weight_sum = config.w_volume + config.w_ready + config.w_volatility;
+    float weight_sum = config.w_volume + config.w_ready + config.w_volatility + config.adaptive.score_weight;
     if (weight_sum > 0.0f) {
         config.w_volume /= weight_sum;
         config.w_ready /= weight_sum;
         config.w_volatility /= weight_sum;
+        config.adaptive.score_weight /= weight_sum;
     } else {
         config.w_volume = 0.0f;
         config.w_ready = 1.0f;
@@ -2413,6 +2416,14 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.volatility_1h[c] = 0.0f;
         side.forager_volume[c] = seed_volume;
         side.forager_volatility[c] = 0.0f;
+        side.adaptive[c] = config.adaptive;
+        side.effective_cooldown[c] = 0.0f;
+        if (c < coin_count) {
+            side.adaptive[c].minimum = coin_override_or(coin_overrides, c, 49, config.adaptive.minimum);
+            side.adaptive[c].maximum = coin_override_or(coin_overrides, c, 50, config.adaptive.maximum);
+            side.adaptive[c].exposure_weight = coin_override_or(coin_overrides, c, 51, config.adaptive.exposure_weight);
+            side.adaptive[c].adverse_weight = coin_override_or(coin_overrides, c, 52, config.adaptive.adverse_weight);
+        }
         side.psize[c] = 0.0f;
         side.pprice[c] = 0.0f;
         side.last_increase_k[c] = -1.0e20f;
@@ -2575,6 +2586,7 @@ inline void update_tm_multicoin_side_indicators(
             );
         }
         if (!valid) continue;
+        update_adaptive_rms(side.adaptive[c], bars, k, first_valid, coin_count * 4, c * 4 + 2);
         float log_range = log(high / low);
         update_unstuck_ema_band(side.unstuck_ema[c], close);
         side.ema0[c] = fma(
@@ -3080,6 +3092,12 @@ inline void update_tm_multicoin_side_selection(
         enabled_count -= 1;
         slots -= 1;
     }
+    if (enabled_count <= slots) {
+        for (int c = 0; c < coin_count; ++c) {
+            if (survivor[c]) selected[c] = true;
+        }
+        return;
+    }
     int keep = int(floor(
         float(enabled_count) * (1.0f - config.volume_drop) + 0.5f
     ));
@@ -3102,6 +3120,13 @@ inline void update_tm_multicoin_side_selection(
         }
     }
 
+    if (config.adaptive.score_weight > 0.0f) {
+        for (int c = 0; c < coin_count; ++c) {
+            if (survivor[c] && !isfinite(side.adaptive[c].score)) return;
+        }
+    }
+    float unilateral_min = INFINITY;
+    float unilateral_max = -INFINITY;
     float volume_min = INFINITY;
     float volume_max = -INFINITY;
     float ready_min = INFINITY;
@@ -3125,6 +3150,10 @@ inline void update_tm_multicoin_side_selection(
                 ? 1.0f - close / threshold
                 : close / threshold - 1.0f)
             : INFINITY;
+        if (config.adaptive.score_weight > 0.0f) {
+            unilateral_min = fmin(unilateral_min, fabs(side.adaptive[c].score));
+            unilateral_max = fmax(unilateral_max, fabs(side.adaptive[c].score));
+        }
         volume_min = fmin(volume_min, forager_volume[c]);
         volume_max = fmax(volume_max, forager_volume[c]);
         ready_min = fmin(ready_min, readiness);
@@ -3160,9 +3189,16 @@ inline void update_tm_multicoin_side_selection(
             ? (forager_volatility[c] - volatility_min)
                 / (volatility_max - volatility_min)
             : 1.0f;
+        float unilateral_component = 0.0f;
+        if (config.adaptive.score_weight > 0.0f) {
+            unilateral_component = unilateral_max > unilateral_min
+                ? (unilateral_max - fabs(side.adaptive[c].score)) / (unilateral_max - unilateral_min)
+                : 1.0f;
+        }
         score[c] = config.w_volume * volume_component
             + config.w_ready * ready_component
-            + config.w_volatility * volatility_component;
+            + config.w_volatility * volatility_component
+            + config.adaptive.score_weight * unilateral_component;
     }
     for (int pick = 0; pick < slots; ++pick) {
         int best = -1;
@@ -4005,9 +4041,12 @@ inline void generate_tm_multicoin_side_orders(
         float coin_close_retracement_v1m = coin_override_or(
             coin_overrides, c, 22, close_retracement_v1m
         );
-        float coin_cooldown_min = ceil(coin_override_or(
-            coin_overrides, c, 23, cooldown_min
-        ));
+        float coin_cooldown_min = adaptive_duration(
+            side.adaptive[c], coin_override_or(coin_overrides, c, 23, cooldown_min),
+            psize[c] > 0.0f && balance > 0.0f
+                ? psize[c] * pprice[c] * c_mult / balance / fmax(coin_wel, 1.0e-12f) : 0.0f,
+            short_side);
+        side.effective_cooldown[c] = coin_cooldown_min;
         int touch_down = touch_ticks[tick_offset + 0];
         int touch_up = touch_ticks[tick_offset + 1];
         int entry_touch = short_side ? touch_up : touch_down;
@@ -4141,7 +4180,7 @@ inline void generate_tm_multicoin_side_orders(
         int candidate_entry_tick = flat || partial
             ? initial_tick : reentry_tick;
         float entry_price = float(candidate_entry_tick) * price_step;
-        bool cooldown = coin_cooldown_min > 0.0f
+        bool cooldown = !isfinite(coin_cooldown_min) || coin_cooldown_min > 0.0f
             && last_increase_k[c] > -1.0e19f
             && float(k) < last_increase_k[c] + coin_cooldown_min;
         bool initial_entry_allowed = !flat
