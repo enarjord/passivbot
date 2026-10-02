@@ -769,8 +769,9 @@ The backend is hybrid rather than a replacement backtester:
 
 `optimize.iters` remains the number of evolutionary exact Rust validations. Any exact seed-
 bootstrap evaluations are additional and are reported separately. GPU screening counts and
-throughput are also logged separately. `n_cpus` controls the exact-validation worker pool; MPS
-device scheduling is managed by Metal.
+throughput are also logged separately. Exact CPU worker sizing and tuning are automatic by
+default. Set `optimize.gpu.exact_workers` to a positive count to fix the pool, or to `0` to
+inherit `optimize.n_cpus` (the `-c` CLI setting). MPS device scheduling is managed by Metal.
 
 GPU-specific settings live under `optimize.gpu`:
 
