@@ -47,7 +47,8 @@ sides do not invent a divisor. Aggregate budgets use raw balance. TWEL does not 
 Use minute closes in live and backtest reconstruction. Historical coarser candles use the
 shared deterministic OHLC expansion; remaining gaps forward-fill then backfill a missing
 prefix. Current held exposure requires fresh usable marks, positions and balance.
-An unquoted, candle-free, history-free flat pair needs no mark or contract multiplier;
+An unquoted, candle-free flat pair with no usable retained fills needs no mark or contract multiplier;
+reason-only damaged rows remain diagnostics, not valuation inputs.
 preserve its scope for panic retirement without blocking aggregate protection. Fresh complete account
 positions prove flatness even with unknown or skewed fill capture, which remains
 explicit in diagnostics. Retained usable history is never discarded by this rule.

@@ -28,6 +28,7 @@ import tools.run_fake_live as runner
         "slow_sink",
         "scoped_quotes",
         "flat_order_quote_gap",
+        "flat_order_reason_gap",
     ],
 )
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
@@ -90,7 +91,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
                 )
             )
         bot.market_snapshot_provider._cache.clear()
-        if path == "flat_order_quote_gap":
+        if path in {"flat_order_quote_gap", "flat_order_reason_gap"}:
             # A separate flat scope has no history, metadata or market quote.
             # Its ordinary resting order must not block the held scope's RED.
             bot.cca._load_boot_order(
@@ -104,13 +105,13 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
                 )
             )
         await bot.refresh_protective_authoritative_state(require_balance=True)
-        if path == "flat_order_quote_gap":
+        if path in {"flat_order_quote_gap", "flat_order_reason_gap"}:
             await bot.refresh_protective_authoritative_state(require_balance=True)
         instance = hsl_live.owner(bot)
         instance.poll_inputs()
         instance.sources.clear()  # Exercise total historical loss after startup.
         bot._pnls_manager = None
-        if path == "flat_order_quote_gap":
+        if path in {"flat_order_quote_gap", "flat_order_reason_gap"}:
             from ccxt.base.errors import NetworkError
 
             original_quotes = bot._get_orchestrator_market_snapshots
@@ -121,6 +122,15 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
                 return await original_quotes(symbols)
 
             bot._get_orchestrator_market_snapshots = scoped_quote_gap
+            if path == "flat_order_reason_gap":
+                from types import SimpleNamespace
+                from test_hsl_inputs import event
+
+                bot._pnls_manager = SimpleNamespace(
+                    get_events=lambda **_: [
+                        event(symbol="RETIRED/USDT:USDT", position_side=side, timestamp=0)
+                    ]
+                )
         if path in {"recovered_before_write", "malformed_before_write"}:
             from live import market_data
             from live.hsl_runtime import InvalidHslOutput
@@ -171,6 +181,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
             "slow_sink",
             "scoped_quotes",
             "flat_order_quote_gap",
+            "flat_order_reason_gap",
         }:
             report_calls = []
             clock_offset = [0]
@@ -220,7 +231,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
                     bot._emit_live_event = slow_report
                 bot._hsl_diagnostic_event = None
             assert await instance.protect()
-            if path == "flat_order_quote_gap":
+            if path in {"flat_order_quote_gap", "flat_order_reason_gap"}:
                 # Cancelling the now-unneeded flat-scope order invalidates the
                 # account receipt. Reconfirm before the held-scope close write.
                 for _ in range(4):
@@ -2469,8 +2480,9 @@ async def test_hsl_completed_pass_does_not_complete_pending_ordinary_work(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("damage", ["empty", "undated", "unidentified"])
 async def test_flat_unselected_order_only_panic_is_retired_by_protective_executor(
-    tmp_path, monkeypatch, side
+    tmp_path, monkeypatch, side, damage
 ):
     from copy import deepcopy
     from passivbot_rust import order_type_snake_to_id
@@ -2537,8 +2549,22 @@ async def test_flat_unselected_order_only_panic_is_retired_by_protective_executo
 
         instance.quotes.clear()
         instance.acquire_quotes = no_quotes
+        if damage != "empty":
+            from types import SimpleNamespace
+            from test_hsl_inputs import event
+
+            row = event(
+                symbol=symbol,
+                position_side=side,
+                timestamp=0 if damage == "undated" else int(bot.get_exchange_time()) - 1000,
+                id="" if damage == "unidentified" else "undated-row",
+            )
+            bot._pnls_manager = SimpleNamespace(get_events=lambda **_: [row])
         wave = instance.capture()
         assert wave.permission(symbol, side)[0] == "normal", wave.unavailable
+        assert ("unidentified_or_undated_fill" in wave.decisions[0].reasons) == (
+            damage != "empty"
+        )
         assert bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0) == 0.0
         assert "resting-panic" in bot.cca.open_orders
         creates_before = sum(

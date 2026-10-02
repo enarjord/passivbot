@@ -47,3 +47,47 @@ def test_removed_engine_requires_explicit_migration():
     config["live"]["hsl_engine"] = "legacy"
     with pytest.raises(ValueError, match="migrate-hsl"):
         prepare_config(config, verbose=False, target="canonical", runtime=None)
+
+
+@pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
+@pytest.mark.parametrize("version", ["v8.5.0", "v8.6.0"])
+def test_runtime_schema_override_is_rejected_before_any_config_mutation(command, version):
+    from copy import deepcopy
+    from config.hsl import generated_template
+    from config_utils import update_config_with_args
+
+    config = generated_template(get_template_config())
+    config["config_version"] = version
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    original = deepcopy(config)
+    parser = argparse.ArgumentParser()
+    keys = add_config_arguments(
+        parser,
+        project_template_config_for_cli(get_template_config(), command),
+        command=command,
+        help_all=True,
+    )
+    args = parser.parse_args(
+        ["--fee-pct-fallback", "0.123", "--config_version", "v8.6.0"]
+    )
+    with pytest.raises(
+        ValueError, match="config_version.*cannot be overridden.*migrate-hsl"
+    ):
+        update_config_with_args(config, args, allowed_keys=keys)
+    assert config == original
+
+
+def test_fake_hsl_example_preserves_automatic_exact_sizing():
+    import json
+    from pathlib import Path
+
+    example = json.loads(
+        (Path(__file__).parents[1] / "configs/examples/fake_live_hsl.json").read_text()
+    )
+    policy = example["optimize"]["gpu"]
+    effective = prepare_config(
+        example, verbose=False, target="canonical", runtime=None
+    )["optimize"]["gpu"]
+    canonical = get_template_config()["optimize"]["gpu"]
+    for field in ("exact_workers", "max_pending_exact"):
+        assert policy[field] == effective[field] == canonical[field] is None

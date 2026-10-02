@@ -934,9 +934,9 @@
       "drift_probes": 4,
       "drift_rank_halt": null,
       "drift_window": 128,
-      "exact_workers": 0,
+      "exact_workers": null,
       "max_dispatch_candidate_bars": null,
-      "max_pending_exact": 0,
+      "max_pending_exact": null,
       "population_size": null,
       "screening": {
         "min_survivors": 64,

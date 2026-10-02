@@ -466,7 +466,7 @@ def capture(
                 size == 0
                 and quote is None
                 and (source is None or not any(t.candles for t in source.tapes))
-                and (history is None or (not history.fills and not history.reasons))
+                and (history is None or not history.fills)
             ):
                 # A fresh complete position snapshot proves flatness. With no
                 # usable retained history this pair contributes no cashflows or
@@ -486,6 +486,8 @@ def capture(
                         history_start=start,
                     )
                 reasons = global_reasons | _source_reasons(source)
+                if history is not None:
+                    reasons.update(history.reasons)
                 if fills_started_ms is None or fills_completed_ms is None:
                     reasons.add("fill_capture_unknown")
                 elif fills_completed_ms != position_state.updated_ms:

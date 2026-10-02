@@ -32,11 +32,13 @@ since the latest release tag; these features may already be available when insta
   Enforce the documented aggregate HSL balance-override restriction before live
   credential lookup and capture. Reject explicit retired engine selectors and pre-v8.6 HSL inputs that omit them;
   require explicit semantic migration before schema hydration, including referenced
-  file-backed coin overrides and legacy `-lc` references. External suite files use
+  file-backed coin overrides and legacy `-lc` references. Reject runtime schema-version
+  overrides before any CLI mutation. External suite files use
   the raw base schema for the same migration gate before normalization. Explicit
   migration materializes legacy root coin flags so their file policies survive conversion. Include resting
   orders in HSL scopes so flat, unselected coins can retire stale panic orders
-  without ordinary planning or history-free flat-symbol quotes. Restore account-change
+  without ordinary planning or flat-symbol quotes when only unusable history rows remain;
+  retain their diagnostics. Keep the fake HSL example on automatic GPU exact sizing. Restore account-change
   reporting after protection without letting slow diagnostics block subsequent passes.
   Skip protective quote requests when HSL
   is disabled. Preflight uses the active portfolio policy in unified mode, and

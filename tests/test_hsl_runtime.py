@@ -584,7 +584,7 @@ def test_simultaneous_flat_empty_observation_needs_no_invented_mark_or_metadata(
 
 
 @pytest.mark.parametrize("changes", [dict(qty=None), dict(timestamp=0)])
-def test_damaged_retained_fill_cannot_supply_empty_flat_proof(changes):
+def test_damaged_flat_fill_preserves_usable_history_or_quality_diagnostics(changes):
     value = bot(
         events=(
             [event(timestamp=NOW - 60_000, c_mult=1.0, **changes)]
@@ -603,7 +603,8 @@ def test_damaged_retained_fill_cannot_supply_empty_flat_proof(changes):
         result, unavailable = run(
             value, {}, fills_started_ms=NOW - 300, fills_completed_ms=NOW - 200
         )
-        assert not result and unavailable
+        assert not unavailable and result[0].action == "normal"
+        assert "unidentified_or_undated_fill" in result[0].reasons
     else:
         assert not unavailable
         assert {"flat_historical_fill_price", "invalid_fill_quantity"} <= set(
@@ -1467,14 +1468,21 @@ def test_order_only_unselected_flat_pair_gets_current_hsl_decision(side):
 
 
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-def test_flat_order_only_pair_without_quote_cannot_block_current_protection(mode):
+@pytest.mark.parametrize("damage", ["empty", "undated", "unidentified"])
+def test_flat_order_only_pair_without_quote_cannot_block_current_protection(mode, damage):
     value = bot(mode)
     flat = "RETIRED/USDT:USDT"
     if mode == "coin":
         value.positions = {}
     value.open_orders = {flat: [{"position_side": "long", "side": "sell"}]}
+    if damage != "empty":
+        row = event(symbol=flat, timestamp=0 if damage == "undated" else NOW - 60_000)
+        if damage == "unidentified":
+            row = replace(row, id="")
+        value._pnls_manager.get_events = lambda **_: [row]
     decisions, unavailable = run(value, symbols={"long": [], "short": []})
     assert not unavailable
+    assert ("unidentified_or_undated_fill" in decisions[0].reasons) == (damage != "empty")
     if mode == "coin":
         assert [(d.scope.symbol, d.action) for d in decisions] == [(flat, "normal")]
     else:

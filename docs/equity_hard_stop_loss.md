@@ -49,6 +49,8 @@ HSL enabled or an authored `always`/`never` restart choice require explicit
 This check includes file-backed coin overrides, legacy `-lc` references and
 external `--suite-config` scenarios, evaluated against the raw base schema before
 normalization. Moving an old HSL policy into an external file is not migration.
+`config_version` records the source file schema and cannot be overridden at runtime;
+changing its CLI value is not a supported migration path.
 Disabled old policies without a restart choice can be hydrated, but enabling HSL
 later still requires an explicit restart choice.
 

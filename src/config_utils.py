@@ -1676,7 +1676,10 @@ CLI_HELP_OVERRIDES = {
         "Terminal metric visibility config. null uses optimize scoring/limits; "
         "[] shows all; a list adds named metrics. Full analysis is still saved."
     ),
-    "config_version": f"Config schema version. Canonical V8 configs use {CONFIG_SCHEMA_VERSION}.",
+    "config_version": (
+        f"Source config schema version ({CONFIG_SCHEMA_VERSION} for canonical V8). "
+        "Cannot be overridden at runtime; use explicit migration tools."
+    ),
 }
 
 for _pside in ("long", "short"):
@@ -2314,6 +2317,11 @@ def update_config_with_args(
     supplied = {key: value for key, value in vars(args).items()
                 if (value is not None or key in nullable_cooldown_ceilings)
                 and (key in allowed_keys if allowed_keys is not None else "." in key)}
+    if "config_version" in supplied:
+        raise ValueError(
+            "config_version is source schema metadata and cannot be overridden at runtime; "
+            "use the explicit migration tools (migrate-hsl for HSL) and revalidate the configuration"
+        )
     validate_override_paths(config, supplied, allow_engine=True)
     changed_keys = []
     diffs = []
