@@ -291,10 +291,11 @@ class ProxyBatchTuner(CalibrationCache):
         self.proxy = proxy
         self.mode = mode
         self.hardware = hardware
+        self.worker_count = context.get("workers")
         self.identity = _digest(
             dict(
                 hardware=hardware,
-                context=context,
+                context={k: v for k, v in context.items() if k != "workers"},
                 execution=workload_contract(proxy.checkpoint_contract),
                 overrides=getattr(proxy, "coin_override_contract", {}),
                 metrics=sorted(proxy.needed_metrics),
@@ -304,6 +305,14 @@ class ProxyBatchTuner(CalibrationCache):
         self.controllers = OrderedDict()
         self.allow_trial = lambda: True
         self.revision = 0
+
+    def set_worker_count(self, workers):
+        if self.worker_count == workers:
+            return
+        self.retire_trials()
+        self.controllers.clear()
+        self.worker_count = workers
+        self.revision += 1
 
     def _headroom(self):
         torch = self.proxy._torch
@@ -333,6 +342,7 @@ class ProxyBatchTuner(CalibrationCache):
             [
                 CACHE_VERSION,
                 self.identity,
+                self.worker_count,
                 ceiling,
                 demand,
                 end_step,
@@ -428,6 +438,89 @@ def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=time.perf_
         start += len(chunk)
 
 
+class SingleCoinScratchPolicy:
+    """Keep one completed single-coin replay's scratch resident per suite.
+
+    Extra history capacity comes from current free memory, with room retained
+    for CPU validators and GPU output/workspace allocations. It never changes
+    candles, history capacity, candidate parameters, or the dispatch work cap.
+    """
+
+    def __init__(self, hardware):
+        self.hardware = hardware
+        self.active = None
+        self.torch = None
+        self.warned = False
+
+    def release(self):
+        if self.active is None:
+            return
+        self.active.release_replay_scratch()
+        self.active = None
+        if self.hardware["device"] == "cuda":
+            self.torch.cuda.empty_cache()
+        else:
+            self.torch.mps.empty_cache()
+
+    def activate(self, proxy):
+        if self.active is proxy.runner:
+            return
+        torch = proxy._torch
+        if self.active is not None:
+            # Host metrics from the previous group are complete before another
+            # proxy can enter this method; no returned GPU views remain live.
+            self.release()
+        self.torch = torch
+        runner = proxy.runner
+        if self.hardware["device"] == "cuda":
+            available = int(torch.cuda.mem_get_info()[0])
+        else:
+            from optimization.gpu.exact_autotune import resource_snapshot, psutil
+
+            device_available = max(
+                0,
+                torch.mps.recommended_max_memory() * 0.7
+                - torch.mps.driver_allocated_memory(),
+            )
+            try:
+                host_available = resource_snapshot()["available"]
+            except (OSError, psutil.Error) as error:
+                if not self.warned:
+                    logging.warning(
+                        "GPU auto-tune host memory hint unavailable: %s", error
+                    )
+                    self.warned = True
+                host_available = runner.hsl_scratch_budget_bytes / 0.35
+            available = min(host_available, device_available)
+        budget = max(
+            runner._hsl_bytes_per_candidate(), min(2 * 1024**3, int(available * 0.35))
+        )
+        # Never shrink an allocation still owned by an active replay.
+        runner.hsl_scratch_budget_bytes = budget
+        ceiling = min(
+            proxy.auto_dispatch_ceiling,
+            max(1, budget // runner._hsl_bytes_per_candidate()),
+        )
+        if ceiling < proxy.auto_dispatch_ceiling:
+            # Stable memory classes keep ordinary RAM noise from resetting
+            # rolling evidence/cache identity on each suite pass.
+            ceiling = 1 << (ceiling.bit_length() - 1)
+        previous_ceiling = getattr(proxy, "dispatch_batch_size", None)
+        proxy.dispatch_batch_size = ceiling
+        tuner = getattr(proxy, "batch_tuner", None)
+        if tuner is not None and previous_ceiling != ceiling:
+            tuner.revision += 1
+        self.active = runner
+        memory_class = (ceiling, budget.bit_length())
+        changed = getattr(proxy, "_scratch_memory_class", None) != memory_class
+        proxy._scratch_memory_class = memory_class
+        (logging.info if changed else logging.debug)(
+            "GPU auto-tune memory | scratch_mib=%d batch_ceiling=%d",
+            budget // 1024**2,
+            proxy.dispatch_batch_size,
+        )
+
+
 def configure_batch_tuning(proxies, config, options):
     requested = (config.get("optimize", {}).get("gpu") or {}).get("batch_size")
     if options["tuning_mode"] == "off" or not is_auto(requested):
@@ -450,7 +543,36 @@ def configure_batch_tuning(proxies, config, options):
         MIN_SECONDS,
         options["tuning_mode"],
     )
+    scratch_proxies = [
+        p
+        for p in proxies
+        if getattr(getattr(p, "runner", None), "hsl_capacity", 0)
+        and hasattr(p.runner, "release_replay_scratch")
+    ]
+    scratch_policy = SingleCoinScratchPolicy(hardware)
     for proxy in proxies:
+        runner = getattr(proxy, "runner", None)
+        if proxy in scratch_proxies:
+            proxy.auto_dispatch_ceiling = proxy.dispatch_batch_size
+            proxy.scratch_policy = scratch_policy
+        if runner is not None and hasattr(runner, "tuning_chunk_bars"):
+            # Hidden scratch splits otherwise leave long full-history kernels
+            # without temporal evidence. Use the actual allocation ceiling and
+            # gather a bounded window from production replay, including one cold
+            # dispatch and its final remainder. No calibration replay is added.
+            runner.tuning_chunk_bars = (
+                min(32768, max(1, runner.n // (WINDOW + 3)))
+                if runner.n > 65536
+                else None
+            )
+            if runner.hsl_capacity:
+                scratch_limit = (
+                    runner.hsl_scratch_budget_bytes // runner._hsl_bytes_per_candidate()
+                )
+                proxy.dispatch_batch_size = min(
+                    proxy.dispatch_batch_size, max(1, scratch_limit)
+                )
+            runner.interrupt_check = getattr(proxy, "interrupt_check", lambda: None)
         proxy.batch_tuner = ProxyBatchTuner(
             proxy, mode=options["tuning_mode"], hardware=hardware, context=context
         )

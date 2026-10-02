@@ -1,6 +1,7 @@
 """Offline synthetic timing fixture for the internal hsl GPU runners."""
 
 import argparse
+import hashlib
 import json
 import statistics
 
@@ -33,15 +34,22 @@ def main():
     parser.add_argument("--lookback-days", type=int, default=1)
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--threshold", type=float, default=0.02)
+    parser.add_argument(
+        "--scratch-mib",
+        type=int,
+        default=None,
+        help="Single-coin HSL scratch ceiling; compare complete output digests",
+    )
     args = parser.parse_args()
     if (
         args.minutes < 3
         or args.candidates < 1
         or args.runs < 1
         or not 1 <= args.coins <= 8
+        or (args.scratch_mib is not None and (args.scratch_mib <= 0 or args.coins != 1))
     ):
         parser.error(
-            "minutes >= 3, candidates >= 1 and runs >= 1 and coins in [1,8] required"
+            "minutes >= 3, candidates >= 1, runs >= 1, coins in [1,8]; scratch requires one coin and positive MiB"
         )
     from rust_utils import verify_loaded_runtime_extension
 
@@ -87,10 +95,17 @@ def main():
             run, data, pnl_lookback_bars=args.lookback_days * 1440
         )
     timings = []
+    if args.scratch_mib is not None:
+        runner.hsl_scratch_budget_bytes = args.scratch_mib * 1024**2
     for iteration in range(args.runs + 1):
         output = runner.run(matrix, profile=True)
         if iteration:
             timings.append(runner.last_profile["kernel_seconds"])
+    digest = hashlib.sha256()
+    for key, value in sorted(output.items()):
+        array = value.cpu().numpy()
+        digest.update(json.dumps([key, str(array.dtype), list(array.shape)]).encode())
+        digest.update(array.tobytes())
     print(
         json.dumps(
             dict(
@@ -100,6 +115,8 @@ def main():
                 mode=args.mode,
                 candidates=args.candidates,
                 lookback_days=args.lookback_days,
+                scratch_mib=args.scratch_mib,
+                result_sha256=digest.hexdigest(),
                 warm_kernel_seconds=timings,
                 median_kernel_seconds=statistics.median(timings),
                 fills=float(output["fill_count"].sum()),

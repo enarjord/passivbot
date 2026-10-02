@@ -380,6 +380,37 @@ def test_real_mps_automatic_startup_device_identity():
     assert hardware["memory"] > 0
 
 
+@pytest.mark.parametrize("batch", [None, "auto", 1024])
+@pytest.mark.parametrize("bars", [1000, 869761])
+def test_auto_single_coin_evidence_uses_actual_scratch_ceiling(
+    monkeypatch, batch, bars
+):
+    from config_utils import get_template_config
+    from optimization.backends.gpu_backend import _resolve_options
+
+    item = proxy()
+    item._torch = object()
+    item.dispatch_batch_size = 1024
+    item.runner = SimpleNamespace(
+        tuning_chunk_bars=None,
+        n=bars,
+        hsl_capacity=43202,
+        hsl_scratch_budget_bytes=512,
+        _hsl_bytes_per_candidate=lambda: 2,
+    )
+    monkeypatch.setattr(
+        tune, "hardware_identity", lambda _: {"device": "cuda", "name": "test"}
+    )
+    config = get_template_config()
+    config["optimize"]["gpu"]["batch_size"] = batch
+    tune.configure_batch_tuning([item], config, _resolve_options(config))
+    automatic = batch != 1024
+    assert item.dispatch_batch_size == (256 if automatic else 1024)
+    assert item.runner.tuning_chunk_bars == (
+        32213 if automatic and bars > 65536 else None
+    )
+
+
 def test_long_replay_tunes_after_one_complete_batch_without_extra_work(tmp_path):
     item = proxy()
     item.batch_tuner = tuner(tmp_path, item=item)
@@ -549,3 +580,195 @@ def test_low_memory_start_is_bounded_and_cache_cannot_bypass_headroom(tmp_path, 
     item.controller(512, 1024, None).save(64, 100, 60)
     pressure[0] = True
     assert constrained_tuner().controller(512, 1024, None).width == 64
+
+
+@pytest.mark.parametrize("device", ["cuda", "mps"])
+def test_suite_scratch_policy_releases_only_completed_transient_state(
+    monkeypatch, device
+):
+    from optimization.gpu import exact_autotune
+
+    events = []
+    free = [4 * 1024**3]
+    monkeypatch.setattr(
+        exact_autotune, "resource_snapshot", lambda: {"available": free[0]}
+    )
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            mem_get_info=lambda: (free[0], 8 * 1024**3),
+            empty_cache=lambda: events.append("empty"),
+        ),
+        mps=SimpleNamespace(
+            recommended_max_memory=lambda: 8 * 1024**3,
+            driver_allocated_memory=lambda: 0,
+            empty_cache=lambda: events.append("empty"),
+        ),
+    )
+
+    def make_proxy(label):
+        return SimpleNamespace(
+            _torch=torch,
+            auto_dispatch_ceiling=1024,
+            runner=SimpleNamespace(
+                release_replay_scratch=lambda: events.append(label),
+                _hsl_bytes_per_candidate=lambda: 2 * 1024**2,
+            ),
+        )
+
+    first, second = make_proxy("first"), make_proxy("second")
+    policy = tune.SingleCoinScratchPolicy({"device": device})
+    policy.activate(first)
+    assert not events
+    assert first.dispatch_batch_size == 512
+    budget = first.runner.hsl_scratch_budget_bytes
+    free[0] //= 4
+    policy.activate(first)
+    assert first.runner.hsl_scratch_budget_bytes == budget  # live buffers unchanged
+    policy.activate(second)
+    assert events == ["first", "empty"]
+    assert second.runner.hsl_scratch_budget_bytes == int(free[0] * 0.35)
+    policy.activate(first)
+    assert events == ["first", "empty", "second", "empty"]
+    policy.release()
+    assert policy.active is None
+    assert events[-2:] == ["first", "empty"]
+    count = len(events)
+    policy.release()
+    assert len(events) == count
+
+
+def test_scratch_policy_optional_host_hint_failure_preserves_bounded_budget(
+    monkeypatch, caplog
+):
+    from optimization.gpu import exact_autotune
+
+    def unavailable():
+        raise OSError("fixture unavailable")
+
+    monkeypatch.setattr(exact_autotune, "resource_snapshot", unavailable)
+    torch = SimpleNamespace(
+        mps=SimpleNamespace(
+            recommended_max_memory=lambda: 8 * 1024**3,
+            driver_allocated_memory=lambda: 0,
+            empty_cache=lambda: None,
+        )
+    )
+    runner = SimpleNamespace(
+        hsl_scratch_budget_bytes=512 * 1024**2,
+        _hsl_bytes_per_candidate=lambda: 1024**2,
+        release_replay_scratch=lambda: None,
+    )
+    item = SimpleNamespace(runner=runner, auto_dispatch_ceiling=1024, _torch=torch)
+    policy = tune.SingleCoinScratchPolicy({"device": "mps"})
+    policy.activate(item)
+    policy.release()
+    policy.activate(item)
+    assert item.dispatch_batch_size == 512
+    assert runner.hsl_scratch_budget_bytes == 512 * 1024**2
+    assert caplog.text.count("host memory hint unavailable") == 1
+
+
+def test_scratch_policy_does_not_exceed_dispatch_cap_or_two_gib():
+    runner = SimpleNamespace(
+        _hsl_bytes_per_candidate=lambda: 1024, release_replay_scratch=lambda: None
+    )
+    item = SimpleNamespace(
+        runner=runner,
+        auto_dispatch_ceiling=17,
+        _torch=SimpleNamespace(
+            cuda=SimpleNamespace(mem_get_info=lambda: (100 * 1024**3, 100 * 1024**3)),
+        ),
+    )
+    tune.SingleCoinScratchPolicy({"device": "cuda"}).activate(item)
+    assert runner.hsl_scratch_budget_bytes == 2 * 1024**3
+    assert item.dispatch_batch_size == 17
+
+
+def test_worker_pool_changes_invalidate_gpu_evidence_and_cache_class(tmp_path):
+    item = tuner(tmp_path)
+    item.set_worker_count(2)
+    old = item.controller(512, 1024, None)
+    old.save(256, 100, 60)
+    window(old)
+    assert old.baseline is not None
+    before = item.revision
+    item.set_worker_count(3)
+    assert item.revision > before and not item.controllers
+    assert old.baseline is None
+    assert item.controller(512, 1024, None).width == 512
+    item.set_worker_count(2)
+    assert item.controller(512, 1024, None).width == 512  # window saved stable 512
+
+
+@pytest.mark.parametrize("device", ["cuda", "mps"])
+def test_scratch_ceiling_change_invalidates_cpu_windows_and_bounds_info(
+    tmp_path, monkeypatch, caplog, device
+):
+    from optimization.gpu import exact_autotune
+    import logging
+
+    free = [4 * 1024**3]
+    monkeypatch.setattr(
+        exact_autotune, "resource_snapshot", lambda: {"available": free[0], "cores": 8}
+    )
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            mem_get_info=lambda: (free[0], 8 * 1024**3), empty_cache=lambda: None
+        ),
+        mps=SimpleNamespace(
+            recommended_max_memory=lambda: 8 * 1024**3,
+            driver_allocated_memory=lambda: 0,
+            empty_cache=lambda: None,
+        ),
+    )
+    proxy = SimpleNamespace(
+        _torch=torch,
+        auto_dispatch_ceiling=1024,
+        dispatch_batch_size=512,
+        checkpoint_contract={},
+        needed_metrics=[],
+        batch_tuner=SimpleNamespace(revision=0, controllers={}),
+        runner=SimpleNamespace(
+            _hsl_bytes_per_candidate=lambda: 2 * 1024**2,
+            release_replay_scratch=lambda: None,
+        ),
+    )
+    queue = exact_autotune.ExactQueueController(
+        2, 8, [proxy], cache_dir=tmp_path, hardware={"device": "fixture"}
+    )
+    workers = exact_autotune.ExactWorkerController(
+        2,
+        7,
+        [proxy],
+        per_worker=512 * 1024**2,
+        cache_dir=tmp_path,
+    )
+    policy = tune.SingleCoinScratchPolicy({"device": device})
+    with caplog.at_level(logging.DEBUG):
+        policy.activate(proxy)
+        queue.record(10, 0, 0, 10, epoch=queue.epoch, admission_stall=(0, 0))
+        workers.record(10, 0, 0, 10, epoch=workers.epoch, admission_stall=(0, 0))
+        policy.release()
+        free[0] -= 1024**2  # Ordinary free-memory noise retains the class.
+        policy.activate(proxy)
+        queue.update(1)
+        workers.update()
+        assert queue.samples and workers.samples and proxy.batch_tuner.revision == 0
+        old_epochs = (queue.epoch, workers.epoch)
+        policy.release()
+        free[0] //= 4
+        policy.activate(proxy)
+        assert proxy.dispatch_batch_size == 128 and proxy.batch_tuner.revision == 1
+        queue.update(1)
+        workers.update()
+        assert not queue.samples and not workers.samples
+        assert queue.epoch > old_epochs[0] and workers.epoch > old_epochs[1]
+        for item, epoch in zip((queue, workers), old_epochs):
+            item.record(10, 0, 10, 20, epoch=epoch)
+            assert not item.samples  # Late old-dispatch completions cannot re-enter.
+    memory_logs = [r for r in caplog.records if "GPU auto-tune memory" in r.message]
+    assert [r.levelno for r in memory_logs] == [
+        logging.INFO,
+        logging.DEBUG,
+        logging.INFO,
+    ]

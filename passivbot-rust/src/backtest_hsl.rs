@@ -215,28 +215,15 @@ impl Backtest<'_> {
                 if !mark.is_finite() || mark <= 0.0 {
                     return Err("invalid current backtest HSL valuation".into());
                 }
-                let mut candles = Vec::new();
+                let mut closes = Vec::new();
                 for j in first_row..=k {
                     let end = close_time(j)?;
-                    let candle_start = end - 60_000;
                     if end < start || end > now || !self.coin_is_valid_at(idx, j) {
                         continue;
                     }
-                    candles.push(prices::Candle {
-                        start: candle_start,
-                        minutes: 1,
-                        open: None,
-                        high: None,
-                        low: None,
-                        close: Some(self.hlcvs_value(j, idx, CLOSE)),
-                        available_at: Some(end),
-                    });
+                    closes.push((end, self.hlcvs_value(j, idx, CLOSE)));
                 }
-                let projected = prices::minute_prices(&prices::Input {
-                    start,
-                    end: now,
-                    candles,
-                })?;
+                let projected = prices::minute_prices_from_ordered_closes(start, now, &closes)?;
                 reasons.extend(projected.reasons);
                 let projected: BTreeMap<_, _> = projected
                     .rows

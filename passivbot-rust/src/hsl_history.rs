@@ -275,6 +275,16 @@ fn round_quantity(
 }
 
 pub fn reconstruct(input: &Input) -> Result<History, String> {
+    reconstruct_with_prices(input, &input.prices, input.end)
+}
+
+/// Borrow the selected snapshot's immutable price source. Reconstruction still
+/// owns its sequential rows; avoid duplicating the full search tree beforehand.
+pub(crate) fn reconstruct_with_prices(
+    input: &Input,
+    source_prices: &BTreeMap<i64, f64>,
+    prices_end: i64,
+) -> Result<History, String> {
     input.position.validate()?;
     if input.start > input.end {
         return Err("reversed HSL history interval".into());
@@ -473,15 +483,28 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     };
     // Input keys are already ordered and unique. Preserve that order without
     // allocating a second search tree for a sequential reconstruction pass.
-    let mut prices = Vec::with_capacity(input.prices.len() + 1);
-    for (&t, &price) in &input.prices {
-        if t < input.start || t > input.end {
-            continue;
-        }
-        if price.is_finite() && price > 0.0 {
-            prices.push((t, price));
-        } else {
-            reasons.insert("invalid_historical_price".into());
+    let upper = input.end.min(prices_end);
+    let count = if input.start > upper {
+        0
+    } else if source_prices
+        .first_key_value()
+        .is_none_or(|(&t, _)| t >= input.start)
+        && source_prices
+            .last_key_value()
+            .is_none_or(|(&t, _)| t <= upper)
+    {
+        source_prices.len()
+    } else {
+        source_prices.range(input.start..=upper).count()
+    };
+    let mut prices = Vec::with_capacity(count + 1);
+    if input.start <= upper {
+        for (&t, &price) in source_prices.range(input.start..=upper) {
+            if price.is_finite() && price > 0.0 {
+                prices.push((t, price));
+            } else {
+                reasons.insert("invalid_historical_price".into());
+            }
         }
     }
     if prices.last().is_some_and(|(t, _)| *t == input.end) {
@@ -598,5 +621,52 @@ mod tests {
         assert_eq!(h.samples.len(), 1);
         assert_eq!(h.samples[0].upnl, -40.0);
         assert_eq!(h.samples[0].basis, 100.0);
+    }
+    #[test]
+    fn borrowed_prices_match_clipped_owned_reconstruction() {
+        for inverse in [false, true] {
+            for side in [PositionSide::Long, PositionSide::Short] {
+                for capture in [-1, 0, 60_000, 120_000, 180_000, 240_000] {
+                    let prices = BTreeMap::from([
+                        (-60_000, 11.0),
+                        (0, 100.0),
+                        (60_000, f64::NAN),
+                        (120_000, 70.0),
+                        (180_000, 80.0),
+                        (240_000, 200.0),
+                    ]);
+                    let input = Input {
+                        fills_before_same_time_price: true,
+                        start: 0,
+                        end: 180_000,
+                        position: Position {
+                            size: if side == PositionSide::Long {
+                                2.0
+                            } else {
+                                -2.0
+                            },
+                            basis: 100.0,
+                            mark: 90.0,
+                            multiplier: 1.0,
+                            quantity_step: None,
+                            inverse,
+                            pside: side,
+                        },
+                        fills: vec![],
+                        prices: prices
+                            .iter()
+                            .filter(|(t, _)| 0 <= **t && **t <= capture.min(180_000))
+                            .map(|(t, p)| (*t, *p))
+                            .collect(),
+                    };
+                    let expected = reconstruct(&input).unwrap();
+                    let actual = reconstruct_with_prices(&input, &prices, capture).unwrap();
+                    assert_eq!(
+                        serde_json::to_value(expected).unwrap(),
+                        serde_json::to_value(actual).unwrap()
+                    );
+                }
+            }
+        }
     }
 }

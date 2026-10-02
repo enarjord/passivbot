@@ -171,6 +171,32 @@ def test_unified_short_owner_mirrors_finalized_signal(name):
     assert values[7:] == [0, 1, 0, 0, 1]
 
 
+@pytest.mark.parametrize("name", _KERNELS)
+@pytest.mark.parametrize("mode", [0, 1, 2])
+@pytest.mark.parametrize("balance", [0.0, -100.0, float("nan")])
+def test_terminal_cash_exhaustion_leaves_liquidation_to_kernel(name, mode, balance):
+    # Closing losses exhaust raw cash before the end-of-bar liquidation sample.
+    # A non-finite budget is still unavailable, rather than an ordinary loss.
+    probe = _PROBE.replace(
+        "if (finished) {",
+        "output[7] = owner.hsl_valid; output[8] = owner.hsl.last_observed; return;\n"
+        "    if (finished) {",
+    )
+    library = torch.mps.compile_shader(_source(name) + probe)
+    params = torch.tensor([1, 0.1, 1, 60, 0, mode, 1], device="mps")
+    trees = torch.empty((36, 32), dtype=torch.uint8, device="mps")
+    rows = torch.empty(256, dtype=torch.int32, device="mps")
+    output = torch.zeros(12, device="mps")
+    library.episode_boundary_probe(
+        params, trees, rows, output, 0, 0, 1000.0 - balance, 0, threads=1
+    )
+    values = output.cpu().tolist()
+    assert values[1] == 1
+    assert values[4] == 0  # No invented terminal RED/cooldown event.
+    assert values[7] == int(balance == balance)
+    assert values[8] == 1  # No observation with a depleted or unusable budget.
+
+
 @pytest.mark.parametrize("finish", ["flat", "green", "censored"])
 def test_panic_loss_report_finishes_segments_without_retaining_panic(finish):
     probe = r"""

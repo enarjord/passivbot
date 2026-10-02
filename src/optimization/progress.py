@@ -1,5 +1,7 @@
 """Transient operator progress; never checkpointed or used for selection."""
+from collections import deque
 import logging
+import statistics
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -107,6 +109,30 @@ class OptimizerProgress:
             ])
             if delivered:
                 self.last_log = now
+
+
+class GenerationMilestone:
+    """Scoped estimate from recent finished ask/tell generations only."""
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.started = None
+        self.completed = deque(maxlen=5)
+
+    def begin(self):
+        self.started = self.clock()
+
+    def finish(self):
+        if self.started is not None:
+            self.completed.append(max(0.0, self.clock() - self.started))
+            self.started = None
+
+    def eta(self):
+        if self.started is None or not self.completed:
+            return "unknown"
+        remaining = statistics.median(self.completed) - (self.clock() - self.started)
+        # An overrun is new evidence, not a perpetually false zero-second ETA.
+        return duration(remaining) if remaining >= 1 else "unknown"
 
 
 class DriftProgress:

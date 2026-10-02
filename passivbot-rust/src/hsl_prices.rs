@@ -176,6 +176,53 @@ fn minute_prices_from_candles(
         }
     }
     drop(candidates);
+    project_selected(start, end, window, selected, reasons)
+}
+
+/// Simulator closes are already unique and ordered. Keep the same minute-grid
+/// carrying and diagnostics without candle transport, sorting, or arbitration.
+pub(crate) fn minute_prices_from_ordered_closes(
+    start: i64,
+    end: i64,
+    closes: &[(i64, f64)],
+) -> Result<Prices, String> {
+    let window = end
+        .checked_sub(start)
+        .filter(|v| (0..=MAX_WINDOW).contains(v))
+        .ok_or("invalid HSL price interval (maximum 90 days)")?;
+    let mut selected = Vec::with_capacity(closes.len());
+    let mut reasons = BTreeSet::new();
+    let mut previous = None;
+    for &(timestamp, close) in closes {
+        if previous.is_some_and(|t| t >= timestamp) {
+            return Err("HSL simulator closes must be unique and ordered".into());
+        }
+        previous = Some(timestamp);
+        if timestamp < start || timestamp > end {
+            continue;
+        }
+        if !close.is_finite() || close <= 0.0 {
+            reasons.insert("unusable_historical_candle".into());
+            continue;
+        }
+        selected.push(Price {
+            timestamp,
+            close,
+            resolution_minutes: 1,
+            source_end: timestamp,
+            carried: false,
+        });
+    }
+    project_selected(start, end, window, selected, reasons)
+}
+
+fn project_selected(
+    start: i64,
+    end: i64,
+    window: i64,
+    selected: Vec<Price>,
+    mut reasons: BTreeSet<String>,
+) -> Result<Prices, String> {
     let mut rows = Vec::with_capacity((window / MINUTE + 1) as usize);
     if let Some(first) = selected.first() {
         let first_time = first.timestamp;
@@ -327,6 +374,56 @@ pub fn hsl_native_price_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordered_simulator_closes_preserve_general_projection() {
+        for start in [-60_000, 0, 1, 60_000, 120_000] {
+            for end in [120_000, 180_000, 240_000, 300_000] {
+                for invalid in [false, true] {
+                    let closes = [
+                        (-60_000, 1.0),
+                        (60_000, 100.0),
+                        (120_000, if invalid { f64::NAN } else { 90.0 }),
+                        (240_000, if invalid { 0.0 } else { 80.0 }),
+                        (360_000, 70.0),
+                    ];
+                    let candles = closes
+                        .iter()
+                        .map(|&(t, close)| Candle {
+                            start: t - MINUTE,
+                            minutes: 1,
+                            open: None,
+                            high: None,
+                            low: None,
+                            close: Some(close),
+                            available_at: Some(t),
+                        })
+                        .collect();
+                    let expected = minute_prices(&Input {
+                        start,
+                        end,
+                        candles,
+                    })
+                    .unwrap();
+                    let actual = minute_prices_from_ordered_closes(start, end, &closes).unwrap();
+                    assert_eq!(actual.rows, expected.rows);
+                    assert_eq!(actual.reasons, expected.reasons);
+                }
+            }
+        }
+        for closes in [vec![], vec![(60_000, f64::NAN)]] {
+            assert!(minute_prices_from_ordered_closes(0, 120_000, &closes)
+                .unwrap()
+                .reasons
+                .contains("no_historical_candles"));
+        }
+        for closes in [
+            vec![(0, 100.0), (0, 100.0)],
+            vec![(60_000, 100.0), (0, 90.0)],
+        ] {
+            assert!(minute_prices_from_ordered_closes(0, 120_000, &closes).is_err());
+        }
+    }
 
     #[test]
     fn reused_source_rechecks_observation_clock_and_interval() {

@@ -206,6 +206,7 @@ class ExactQueueController:
         self.cooldown = 0
         self.warmed = False
         self.epoch = 0
+        self.allow_trial = lambda: True
         if mode != "refresh":
             cached = self.cache.read(self.key, "max_pending_exact", self.floor, self.ceiling)
             if cached is not None:
@@ -367,6 +368,8 @@ class ExactQueueController:
         if self.cooldown:
             self.cooldown -= 1
             return
+        if not self.allow_trial():
+            return
         trial = max(self.floor, min(self.ceiling, self.limit + self.direction * self.step))
         if trial == self.limit:
             self.direction *= -1
@@ -381,3 +384,235 @@ class ExactQueueController:
             self.baseline[0],
             rate,
         )
+
+
+class ExactWorkerController:
+    """Propose pool sizes from complete jobs; the caller drains before resizing."""
+
+    def __init__(
+        self,
+        workers,
+        ceiling,
+        proxies,
+        *,
+        per_worker,
+        mode="auto",
+        context=None,
+        hardware=None,
+        cache_dir=None,
+    ):
+        self.workers = self.target = workers
+        self.ceiling = max(1, ceiling)
+        self.proxies = proxies
+        self.per_worker = per_worker
+        self.cache = CalibrationCache(cache_dir)
+        self.key = _digest(
+            dict(
+                kind="exact_workers_v2",
+                hardware=hardware,
+                context=context,
+                ceiling=self.ceiling,
+                worker_memory_class=(per_worker + 128 * MIB - 1) // (128 * MIB),
+                workloads=[
+                    dict(
+                        execution=workload_contract(p.checkpoint_contract),
+                        metrics=sorted(p.needed_metrics),
+                    )
+                    for p in proxies
+                ],
+            )
+        )
+        self.samples = deque(maxlen=WINDOW)
+        self.epoch = 0
+        self.revision = self.proxy_state()[0]
+        self.queue_epoch = lambda: None
+        self.queue_revision = None
+        self.blocked = False
+        self.baseline = None
+        self.warmed = False
+        self.cooldown = 0
+        self.direction = 1 if workers < self.ceiling else -1
+        self.allow_trial = lambda: True
+        if mode != "refresh":
+            cached = self.cache.read(self.key, "exact_workers", 1, self.ceiling)
+            if cached is not None and (
+                cached <= workers or self.can_grow(cached, startup=True)
+            ):
+                self.workers = self.target = cached
+        self.direction = 1 if self.workers < self.ceiling else -1
+        self.reset()
+
+    def proxy_state(self):
+        revisions, trials = [], False
+        for proxy in self.proxies:
+            tuner = getattr(proxy, "batch_tuner", None)
+            revisions.append(getattr(tuner, "revision", 0))
+            trials |= any(
+                c.baseline is not None
+                for c in getattr(tuner, "controllers", {}).values()
+            )
+        return tuple(revisions), trials
+
+    def reset(self):
+        self.samples.clear()
+        self.work_seconds = 0.0
+
+    def can_grow(self, count, *, startup=False):
+        try:
+            resources = resource_snapshot()
+            available = resources["available"]
+            if count > max(1, resources.get("cores", self.ceiling + 1) - 1):
+                return False
+        except (OSError, psutil.Error):
+            return False
+        if startup:
+            # No existing workers are resident yet. Preserve the same host/GPU
+            # reserve as initial sizing when an advisory cache requests more.
+            return count * self.per_worker <= int(available * 0.6)
+        return available >= max(
+            2 * self.per_worker, (count - self.workers + 1) * self.per_worker
+        )
+
+    def record(
+        self,
+        work,
+        wait,
+        started,
+        finished,
+        *,
+        epoch,
+        admission_stall=None,
+        queue_epoch=None,
+    ):
+        if (
+            epoch != self.epoch
+            or self.target != self.workers
+            or queue_epoch != self.queue_epoch()
+        ):
+            return
+        if (
+            not all(math.isfinite(v) for v in (work, started, finished))
+            or work <= 0
+            or finished <= started
+        ):
+            return
+        if admission_stall is not None and not (
+            len(admission_stall) == 2
+            and all(math.isfinite(v) for v in admission_stall)
+            and admission_stall[0] <= admission_stall[1] <= started
+        ):
+            return
+        self.samples.append((work, started, finished, admission_stall))
+        self.work_seconds += work
+
+    def update(self):
+        revision, gpu_trial = self.proxy_state()
+        queue_revision = self.queue_epoch()
+        changed = revision != self.revision or queue_revision != self.queue_revision
+        blocked = gpu_trial or not self.allow_trial()
+        if blocked or changed:
+            if not self.blocked or changed:
+                self.reset()
+                self.epoch += 1
+                if changed and self.baseline is not None:
+                    # Retire incomparable trials toward the smaller pool;
+                    # future growth still requires current memory headroom.
+                    self.target = min(self.workers, self.baseline[0])
+                    self.baseline = None
+                    logging.info(
+                        "GPU exact worker auto-tune trial retired | workers=%d reason=%s",
+                        self.target,
+                        (
+                            "queue_epoch_changed"
+                            if queue_revision != self.queue_revision
+                            else "gpu_revision_changed"
+                        ),
+                    )
+            self.blocked = blocked
+            self.revision = revision
+            self.queue_revision = queue_revision
+            return
+        self.blocked = False
+        if self.target != self.workers or not self.samples:
+            return
+        active = sorted((s[1], s[2]) for s in self.samples)
+        intervals = sorted(active + [s[3] for s in self.samples if s[3] is not None])
+        elapsed, end = 0.0, float("-inf")
+        for begin, stop in intervals:
+            elapsed += max(0.0, stop - max(begin, end))
+            end = max(end, stop)
+        median = statistics.median(s[0] for s in self.samples)
+        regular = (
+            len(self.samples) >= WINDOW
+            and self.work_seconds >= MIN_SECONDS * self.workers
+        )
+        active_seconds, end = 0.0, float("-inf")
+        for begin, stop in active:
+            active_seconds += max(0.0, stop - max(begin, end))
+            end = max(end, stop)
+        expensive = (
+            len(self.samples) >= max(4, 2 * self.workers)
+            and median >= MIN_SECONDS
+            and active_seconds >= LONG_WINDOW_SECONDS
+        )
+        if not (regular or expensive):
+            return
+        rate = len(self.samples) / elapsed
+        self.reset()
+        if not self.warmed:
+            self.warmed = True
+            return
+        if self.baseline is not None:
+            previous, old_rate = self.baseline
+            self.baseline = None
+            accepted = rate >= old_rate * (0.98 if self.workers < previous else 1.05)
+            if accepted:
+                self.cache.write(self.key, "exact_workers", self.workers, rate, elapsed)
+                self.cooldown = 1
+            else:
+                self.target = (
+                    previous
+                    if previous <= self.workers or self.can_grow(previous)
+                    else self.workers
+                )
+                self.direction *= -1
+                self.cooldown = 3
+            logging.info(
+                "GPU exact worker auto-tune %s | workers=%d validations/s=%.3f previous_validations/s=%.3f",
+                "accepted" if accepted else "retained",
+                self.target,
+                rate,
+                old_rate,
+            )
+        else:
+            self.cache.write(self.key, "exact_workers", self.workers, rate, elapsed)
+            if self.cooldown:
+                self.cooldown -= 1
+                return
+            trial = max(1, min(self.ceiling, self.workers + self.direction))
+            if trial == self.workers:
+                self.direction *= -1
+                self.cooldown = 1
+                return
+            if trial > self.workers and not self.can_grow(trial):
+                self.direction = -1
+                self.cooldown = 1
+                return
+            self.baseline = (self.workers, rate)
+            self.target = trial
+            logging.info(
+                "GPU exact worker auto-tune trial | workers=%d previous=%d validations/s=%.3f",
+                trial,
+                self.workers,
+                rate,
+            )
+        if self.target != self.workers:
+            self.epoch += 1
+
+    def applied(self):
+        self.workers = self.target
+        self.revision = self.proxy_state()[0]
+        self.queue_revision = self.queue_epoch()
+        self.epoch += 1
+        self.reset()
+        self.warmed = False  # The replacement pool's first window is cold.

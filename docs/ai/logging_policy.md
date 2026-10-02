@@ -192,7 +192,10 @@ completed candidate batches and candidate-scenario evaluations; with adaptive ba
 invent a total batch count. Group context identifies scenarios sharing a compatible evaluation pass.
 Replay and group INFO progress are at most once per minute; intermediate replay updates are DEBUG.
 Use readable durations and explicitly scoped estimates: `eta_batch`, `eta_group`, and `eta_seed`;
-none is a whole-run estimate. Exact seed validation reports minute-spaced completed/in-flight/queued counts
+none is a whole-run estimate. `eta_generation` estimates the current ask/tell generation
+from the median of up to five completed generations in this invocation. It is unknown for the first
+generation, outside an active generation, and after an overrun; it does not predict CPU admission
+waits or the whole optimization. Include the currently applied exact-worker count. Exact seed validation reports minute-spaced completed/in-flight/queued counts
 while waiting, and immediate start/completion. Its ETA uses only completions in the current run;
 without such evidence it is unknown. Auto-tune logs distinguish requested/effective batch limits,
 starting batch/source, trial/retained/accepted width, throughput evidence and reason. Proxy drift

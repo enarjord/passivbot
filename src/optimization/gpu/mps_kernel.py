@@ -1224,13 +1224,23 @@ def _require_available_held_valuation(scalars):
     # Metal writes -2 and returns immediately if a held coin has no price.
     if bool((scalars[:, 9] == -3.0).any()):
         raise RuntimeError("GPU auto-unstuck PnL history overflow")
+    invalid_hsl = scalars[:, 9] == -4.0
+    if bool(invalid_hsl.any()):
+        indices = invalid_hsl.nonzero().flatten()
+        rows = indices[:8].cpu().tolist()
+        suffix = f" (+{indices.numel() - 8} more)" if indices.numel() > 8 else ""
+        raise ValueError(
+            f"GPU proxy unavailable HSL controller inputs; candidate rows {rows}{suffix}"
+        )
     invalid = scalars[:, 9] == -2.0
     if bool(invalid.any()):
-        rows = invalid.nonzero().flatten().cpu().tolist()
+        indices = invalid.nonzero().flatten()
+        rows = indices[:8].cpu().tolist()
+        suffix = f" (+{indices.numel() - 8} more)" if indices.numel() > 8 else ""
         raise ValueError(
-            "MPS proxy unavailable held-position valuation: candle outside its declared "
+            "GPU proxy unavailable held-position valuation: candle outside its declared "
             "valid range or missing finite positive H/L/C; "
-            f"candidate rows {rows}"
+            f"candidate rows {rows}{suffix}"
         )
 
 
@@ -1815,6 +1825,22 @@ class MpsEmaAnchorRunner:
             if np.any(params[unified, i] != params[unified, width + i]):
                 raise ValueError("Unified GPU HSL requires one shared policy")
 
+    def release_replay_scratch(self):
+        """Release completed replay buffers, retaining invariant market tensors."""
+        for name in (
+            "_hsl_scratch_buffers",
+            "_buffers",
+            "_recovery_buffers",
+            "_equity_balance_diff_buffers",
+            "_entry_interval_stat_buffers",
+            "_entry_interval_count_buffers",
+            "_replay_states",
+            "_replay_state_sizes",
+        ):
+            buffers = getattr(self, name, None)
+            if buffers is not None:
+                buffers.clear()
+
     def _hsl_bytes_per_candidate(self):
         tree_size, storage_nodes = _hsl_layout(self.hsl_capacity)
         return 2 * (storage_nodes * 32 + self.hsl_capacity * 8)
@@ -1870,7 +1896,7 @@ class MpsEmaAnchorRunner:
         tree_size, storage_nodes = _hsl_layout(self.hsl_capacity)
         nbytes = batch_size * self._hsl_bytes_per_candidate()
         if nbytes > self.hsl_scratch_budget_bytes:
-            raise ValueError("HSL GPU batch exceeds its 512 MiB scratch budget")
+            raise ValueError("HSL GPU batch exceeds its configured scratch budget")
         if batch_size not in self._hsl_scratch_buffers:
             self._hsl_scratch_buffers = {
                 batch_size: (
@@ -3455,9 +3481,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         if max_dispatch_candidate_bars is not None:
             if max_dispatch_candidate_bars <= 0:
                 raise ValueError("max_dispatch_candidate_bars must be positive")
-            if not (self.long_enabled and self.short_enabled):
-                raise ValueError("single-coin temporal replay requires both sides")
         self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
+        self.tuning_chunk_bars = None
         self.interrupt_check = interrupt_check or (lambda: None)
         self._replay_state_sizes = {}
         self._replay_states = {}
@@ -3825,6 +3850,10 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.max_dispatch_candidate_bars is not None
             and batch_size * 2 * (effective_end_step - max(0, effective_history_start))
             > self.max_dispatch_candidate_bars
+        ) or (
+            self.tuning_chunk_bars is not None
+            and effective_end_step - max(0, effective_history_start)
+            > self.tuning_chunk_bars
         )
         loader, library_args = self._shader_library_cache_call(
             dispatch_features, temporal_chunking=temporal_chunking
@@ -3872,7 +3901,12 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 return {"dispatch_count": 1}
             chunk_bars = min(
                 MPS_TM_SINGLE_COIN_CHUNK_BARS,
-                self.max_dispatch_candidate_bars // (batch_size * 2),
+                (
+                    self.max_dispatch_candidate_bars // (batch_size * 2)
+                    if self.max_dispatch_candidate_bars is not None
+                    else MPS_TM_SINGLE_COIN_CHUNK_BARS
+                ),
+                self.tuning_chunk_bars or MPS_TM_SINGLE_COIN_CHUNK_BARS,
             )
             if chunk_bars < 1:
                 raise ValueError(
