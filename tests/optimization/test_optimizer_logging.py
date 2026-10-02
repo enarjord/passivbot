@@ -25,7 +25,7 @@ def test_pareto_reports_every_accepted_member_without_throttling_persistence(tmp
     assert len(list((tmp_path / "pareto").glob("*.json"))) == 100
     assert len(store.get_front()) == 100
     assert "eval=100 front=100 feasible=100 changes=+1/-0" in caplog.text
-    assert "metric1=0 metric2=2*" in caplog.records[-1].getMessage()
+    assert "metric1=[0,99] metric2=[2*,101]" in caplog.records[-1].getMessage()
     assert all(len(record.getMessage()) <= 240 for record in caplog.records)
     store.flush_now()
     assert len(caplog.records) == 200
@@ -134,7 +134,7 @@ def test_resumed_pareto_summaries_exclude_reconstructed_history(tmp_path, caplog
     assert len(list((tmp_path / "pareto").glob("*.json"))) == 7
 
 
-def test_pareto_all_objective_bests_goals_tradeoffs_and_resume(tmp_path, caplog):
+def test_pareto_all_objective_ranges_goals_tradeoffs_and_resume(tmp_path, caplog):
     from config.scoring import ObjectiveSpec
 
     caplog.set_level(logging.INFO)
@@ -154,9 +154,9 @@ def test_pareto_all_objective_bests_goals_tradeoffs_and_resume(tmp_path, caplog)
     assert store.add_entry(candidate(0, [1, 4, 1, 1, 1, 1, 1]))
     caplog.clear()
     assert store.add_entry(candidate(1, [3, 2, 2, 2, 2, 2, 2]))
-    assert "adg_strategy_eq=3* adg_strategy_eq_w=4" in caplog.text
+    assert "adg_strategy_eq=[1,3*] adg_strategy_eq_w=[2,4]" in caplog.text
     for spec in specs[2:]:
-        assert f"{spec.metric}=1" in caplog.text
+        assert f"{spec.metric}=[1,2]" in caplog.text
     assert "+5 metrics" not in caplog.text
     assert all(len(r.getMessage()) <= 240 for r in caplog.records)
     caplog.clear()
@@ -170,7 +170,7 @@ def test_pareto_all_objective_bests_goals_tradeoffs_and_resume(tmp_path, caplog)
     assert resumed.progress_snapshot()["pareto_added"] == 0
     assert resumed.progress_snapshot()["last_pareto_age"] == "unknown"
     assert resumed.add_entry(candidate(3, [4, 2, 2, 2, 2, 2, 2]))
-    assert "adg_strategy_eq=4* adg_strategy_eq_w=4" in caplog.text
+    assert "adg_strategy_eq=[1,4*] adg_strategy_eq_w=[2,4]" in caplog.text
     assert "changes=+1/-1" in caplog.text
 
 
@@ -185,7 +185,65 @@ def test_pareto_labels_infeasible_then_feasible_front(tmp_path, caplog):
     caplog.clear()
     assert store.add_entry(entry(1))
     assert "best_scope=feasible_front" in caplog.text
-    assert "metric1=1* metric2=100*" in caplog.text
+    assert "metric1=[1*,1] metric2=[100*,100]" in caplog.text
+
+
+def test_pareto_marks_best_endpoints_only_when_ranges_change(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    store = ParetoStore(str(tmp_path))
+
+    def candidate(index, gain, drawdown, underwater):
+        result = entry(index)
+        result["optimize"] = {"scoring": [
+            {"metric": "adg_strategy_eq", "goal": "max"},
+            {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+            {"metric": "strategy_eq_underwater_pct_mean", "goal": "min"},
+        ]}
+        result["metrics"]["objectives"] = {
+            "adg_strategy_eq": gain, "drawdown_worst_strategy_eq": drawdown,
+            "strategy_eq_underwater_pct_mean": underwater,
+        }
+        return result
+
+    assert store.add_entry(candidate(0, 1, 2, 1))
+    assert "adg_strategy_eq=[1,1*]" in caplog.text
+    assert "drawdown_worst_strategy_eq=[2*,2]" in caplog.text
+    caplog.clear()
+    assert store.add_entry(candidate(1, 2, 3, 3))
+    assert "adg_strategy_eq=[1,2*]" in caplog.text
+    assert "drawdown_worst_strategy_eq=[2,3]" in caplog.text
+    caplog.clear()
+    assert store.add_entry(candidate(2, .5, 1, 4))
+    assert "adg_strategy_eq=[0.5,2]" in caplog.text
+    assert "drawdown_worst_strategy_eq=[1*,3]" in caplog.text
+    caplog.clear()
+    # This point widens the worse drawdown endpoint but improves no best.
+    assert store.add_entry(candidate(3, 1.5, 4, 2))
+    assert "quality=unchanged_tradeoff" in caplog.text
+    assert "adg_strategy_eq=[0.5,2]" in caplog.text
+    assert "drawdown_worst_strategy_eq=[1,4]" in caplog.text
+    assert "strategy_eq_underwater_pct_mean=[1,4]" in caplog.text
+    assert not any("*" in record.getMessage() for record in caplog.records)
+
+
+def test_pareto_range_scope_excludes_infeasible_outliers(tmp_path, caplog):
+    from config.scoring import ObjectiveSpec
+
+    caplog.set_level(logging.INFO)
+    store = ParetoStore(str(tmp_path))
+    store.scoring_specs = [ObjectiveSpec("adg_strategy_eq", "max"),
+                           ObjectiveSpec("drawdown_worst_strategy_eq", "min")]
+    store.scoring_keys = [spec.metric for spec in store.scoring_specs]
+    # Exercise scope selection directly with infeasible outliers at both ends.
+    store._front = ["first", "second", "infeasible"]
+    store._objectives = {"first": (2, 2), "second": (3, 3), "infeasible": (999, -1)}
+    store._violations = {"first": 0, "second": 0, "infeasible": 1}
+    store._log_front_state(added=1, removed=0)
+    assert "best_scope=feasible_front" in caplog.text
+    assert "adg_strategy_eq=[2,3*]" in caplog.text
+    assert "drawdown_worst_strategy_eq=[2*,3]" in caplog.text
+    assert "999" not in caplog.text
+    assert "[-1" not in caplog.text
 
 
 def test_console_failure_does_not_prevent_pareto_persistence(tmp_path):

@@ -6,6 +6,17 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Show each Pareto objective's full range at INFO in ascending `[min,max]` order, with `*` on
+  an improved goal-directed best endpoint. Keep new tradeoffs visible when no best improves,
+  and derive both endpoints from the same feasible or explicitly labelled infeasible front.
+
+- GPU optimization now defaults to hardware/RAM-aware initial exact-validation worker sizing and
+  continuous exact-queue tuning for omitted, null, or `"auto"` worker/queue settings. Queue trials
+  use bounded evidence windows including queue-induced admission stalls, adapt sooner for expensive
+  validations, coordinate with GPU batch tuning, and reuse compatible local measurements. Worker
+  sizing includes lazy suite views and physical cores within CPU affinity; unfinished one-shot GPU
+  trials cannot block queue calibration. Positive numbers remain fixed; explicit zero retains legacy sizing.
+
 - Replace legacy HSL with one Rust-owned, best-effort equity-drawdown controller
   for live, fake, backtest and optimizer paths. Current RED authorizes panic;
   recovery cancels it. Terminal RED starts cooldown, renewed exposure clears it,

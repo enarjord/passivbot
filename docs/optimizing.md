@@ -790,8 +790,8 @@ GPU-specific settings live under `optimize.gpu`:
       "drift_min_samples": 32,
       "drift_probes": 4,
       "drift_window": 128,
-      "exact_workers": 0,
-      "max_pending_exact": 0,
+      "exact_workers": null,
+      "max_pending_exact": null,
       "population_size": null,
       "seed_bootstrap": {
         "max_exact": 128,
@@ -858,8 +858,8 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   logs a warning and leaves optimization running with dispatch-plan/in-memory sizing.
   Tuning state is advisory and separate from search checkpoints: resume relearns or reuses local
   measurements without changing population, validation allocation, candidate RNG, or drift policy.
-  CPU worker counts, exact queue limits, validations per generation, and dispatch work envelopes
-  retain their existing resolution in this version. Existing Apple M3 population pre-sizing remains.
+  Population, validations per generation and dispatch work envelopes retain their existing
+  policies. CPU sizing and exact-queue tuning are described below.
 - `batch_size` is the requested upper bound on candidates per MPS dispatch. Because Apple Silicon
   shares the GPU with WindowServer, the backend transparently splits a batch when its
   candidates-by-candles-by-coins-by-enabled-sides workload would make one Metal command buffer too
@@ -972,13 +972,51 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   rolling front gate. `drift_probes` must remain below
   `validate_per_generation` so each generation requests proxy-front safety evidence. A partial
   final validation batch scales its reserved probe count down proportionally.
-- `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
-- `max_pending_exact: 0` defaults to twice the larger of the exact-worker count and
-  `validate_per_generation`. This leaves room for the next validation batch while CPU workers
-  finish the previous one. Explicit positive queue limits keep their configured size.
-  It must be at least `validate_per_generation` so throttling cannot change the configured
-  proxy-front/broad-probe evidence allocation; the backend waits for that capacity before
-  screening another generation.
+- `exact_workers` defaults to `null`; omitted, `null`, and `"auto"` values select initial
+  hardware/RAM-aware sizing. It counts physical cores within CPU affinity (including SMT siblings),
+  and uses cgroup-v2 CPU/memory limits
+  when available, reserves one core for GPU orchestration, and budgets 60% of available RAM using
+  a conservative worker estimate from process RSS before GPU proxy allocation plus twice the
+  largest prepared candle view
+  (at least 512 MiB per worker). Suite scenarios sharing data are not summed as independent
+  copies. A positive fixed queue limit also bounds automatic worker sizing. This is a sizing
+  estimate, not an OOM guarantee or an empirical optimum. Worker count stays fixed during a run.
+  Resource-detection failures warn and inherit `optimize.n_cpus`.
+  Explicit `0` retains the legacy rule of inheriting `optimize.n_cpus`; positive numbers stay fixed.
+- `max_pending_exact` also defaults to `null`; omitted, `null`, or `"auto"` values enable
+  continuous exact-validation queue tuning. It starts at twice the larger of workers and
+  `validate_per_generation`, or a compatible cached size. Trials move by that larger count,
+  between one and four times it. Decisions normally require at least 24 completed timings and
+  accumulated worker time equivalent to 30 seconds at full pool capacity. Expensive validations
+  can instead provide at least four timings with a 30-second median duration and a 120-second
+  active validation window. There is no minimum generation count; the first eligible window
+  excludes cold worker startup. Completed worker intervals supply a bounded rolling throughput
+  estimate with median worker/queue times. Queue backpressure intervals, through the next
+  admission's GPU pass, also count so smaller queues cannot hide the CPU idle gaps they cause.
+  Unrelated GPU pauses and collection delays remain excluded.
+  Larger limits require a 5% gain; smaller limits are accepted within 2% of
+  previous throughput. Acceptance waits one evidence window; rejection waits three.
+  CPU collectors only gather timings. Changes happen on the main thread between exact seed
+  admission batches or before the next generation's admission, never cancel submitted work, and
+  always reserve complete validation allocations. Existing work drains naturally after a shrink.
+  An unfinished seed-stage trial
+  returns to its preceding limit before evolution so it cannot block GPU batch tuning.
+  GPU batch and queue trials are coordinated; queue evidence resets when GPU batch sizing changes
+  or a batch trial resolves, including acceptance at the same width. Unfinished GPU trials return
+  to the preceding measured width when their workload class changes or seed screening ends,
+  so a one-shot seed workload cannot block CPU queue tuning. Trials for the same active class
+  can still gather evidence across consecutive replay calls.
+  Admission epochs exclude
+  jobs queued before a queue change or GPU trial from subsequent timing evidence.
+  Population, candidate order,
+  proxy-front/probe allocation, drift gates and exact results retain their existing contracts.
+  Compatible hardware/implementation, workload, bounds and worker-count classes reuse bounded
+  advisory records under `caches/gpu_autotune/`. Timings are removed before result persistence
+  and are not search-checkpoint state.
+  Explicit `0` retains the legacy fixed limit of twice the larger of workers and validations;
+  positive numbers stay fixed and must be at least `validate_per_generation`.
+  `tuning_mode=refresh` ignores saved queue measurements. `off` disables queue tuning and makes
+  automatic workers/queue use the legacy rules without inspecting resources or tuning caches.
 - Completed exact CPU results are recorded in submission order while the next GPU proxy pass
    runs, with structured `exact_progress` events after each collected batch. A collector failure
    reaches the main thread when the current proxy pass returns; no next generation or additional
