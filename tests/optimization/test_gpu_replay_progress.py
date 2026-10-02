@@ -133,3 +133,79 @@ def test_generation_eta_is_scoped_bounded_and_unknown_on_overrun():
     estimate.begin()
     tick[0] += 10
     assert estimate.eta() == "50s"
+
+
+def test_exact_progress_distinguishes_finished_jobs_behind_a_straggler():
+    from optimization.progress import ExactValidationProgress
+
+    class Job:
+        finished = False
+
+        def ready(self):
+            return self.finished
+
+        def get(self):
+            pytest.fail("progress must not consume a result")
+
+    tick = [0.0]
+    progress = ExactValidationProgress(clock=lambda: tick[0])
+    first, second = Job(), Job()
+    progress.submitted(first)
+    progress.submitted(second)
+    second.finished = True
+    tick[0] = 60
+    snapshot = progress.snapshot()
+    assert snapshot["exact_unfinished"] == 1
+    assert snapshot["exact_ready_unrecorded"] == 1
+    assert snapshot["oldest_exact_age"] == "1m00s"
+    assert snapshot["eta_next_exact"] == "unknown"
+    # Completion latency comes from workers, not this late collector's clock.
+    for _ in range(4):
+        sample = Job()
+        progress.submitted(sample)
+        progress.completed(sample, worker_seconds=100, queue_seconds=20)
+    assert progress.snapshot()["eta_next_exact"] == "1m00s"
+    tick[0] = 121
+    assert progress.snapshot()["eta_next_exact"] == "unknown"
+    first.finished = True
+    assert progress.snapshot()["eta_next_exact"] == "0s"
+    progress.completed(first, worker_seconds=100, queue_seconds=0)
+    progress.completed(second, worker_seconds=100, queue_seconds=0)
+    assert progress.snapshot() == {}
+
+
+def test_exact_progress_rejects_invalid_timing_and_keeps_a_bounded_window():
+    from optimization.progress import ExactValidationProgress
+
+    progress = ExactValidationProgress()
+    for work, wait in [(float("nan"), 0), (1, float("inf")), (0, 1), (1, -1)]:
+        result = object()
+        progress.submitted(result)
+        progress.completed(result, worker_seconds=work, queue_seconds=wait)
+    assert not progress.latencies
+    for _ in range(100):
+        result = object()
+        progress.submitted(result)
+        progress.completed(result, worker_seconds=1, queue_seconds=2)
+    assert len(progress.latencies) == 24
+    progress.reset_estimate()
+    assert not progress.latencies
+
+
+def test_phase_elapsed_resets_without_increasing_console_cadence(monkeypatch, caplog):
+    from optimization import progress as module
+
+    tick = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: tick[0])
+    caplog.set_level(logging.INFO)
+    progress = module.OptimizerProgress(lambda: {"gen": 1})
+    progress.transition("gpu_proxy")
+    tick[0] = 60
+    progress.transition("exact_wait")
+    assert "phase_elapsed=0s run_elapsed=1m00s" in caplog.messages[-1]
+    tick[0] = 119
+    progress.report()
+    assert len(caplog.messages) == 2
+    tick[0] = 120
+    progress.report()
+    assert "phase_elapsed=1m00s run_elapsed=2m00s" in caplog.messages[-1]

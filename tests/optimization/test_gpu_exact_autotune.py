@@ -172,6 +172,20 @@ def test_worker_detection_failure_is_observable(monkeypatch, caplog):
     assert "auto-sizing unavailable" in caplog.text
 
 
+def test_nullable_cpu_count_sizes_workers_and_has_a_safe_detection_fallback(monkeypatch):
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: dict(
+        cores=4, available=8 * 1024**3, rss=256 * tune.MIB,
+    ))
+    assert tune.initial_workers(None, None, SimpleNamespace(), mode="auto") == 3
+    assert tune.initial_workers(None, None, SimpleNamespace(), mode="off") == 1
+
+    def fail():
+        raise OSError("unavailable")
+
+    monkeypatch.setattr(tune, "resource_snapshot", fail)
+    assert tune.initial_workers(None, None, SimpleNamespace(), mode="auto") == 1
+
+
 def test_worker_sizing_excludes_gpu_coordinator_rss_but_uses_remaining_ram(monkeypatch):
     rss = [512 * tune.MIB]
     monkeypatch.setattr(tune.psutil, "Process", lambda: SimpleNamespace(

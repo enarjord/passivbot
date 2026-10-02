@@ -1,6 +1,7 @@
 """Transient operator progress; never checkpointed or used for selection."""
 from collections import deque
 import logging
+import math
 import statistics
 import time
 from contextlib import contextmanager
@@ -81,6 +82,7 @@ class OptimizerProgress:
     def __init__(self, snapshot):
         self.snapshot = snapshot
         self.started = time.monotonic()
+        self.phase_started = self.started
         self.last_log = None
         self.phase = "startup"
         self._lock = RLock()
@@ -89,6 +91,7 @@ class OptimizerProgress:
         with self._lock:
             if phase != self.phase:
                 self.phase = phase
+                self.phase_started = time.monotonic()
                 self.report(force=True)
 
     def report(self, *, force=False):
@@ -105,10 +108,65 @@ class OptimizerProgress:
                 snapshot = dict(snapshot="unavailable", error_type=type(error).__name__)
             delivered = log_tokens(f"GPU optimizer progress | gen={generation} phase={self.phase} |", [
                 *(f"{key}={value}" for key, value in snapshot.items()),
+                f"phase_elapsed={duration(now - self.phase_started)}",
                 f"run_elapsed={duration(now - self.started)}",
             ])
             if delivered:
                 self.last_log = now
+
+
+class ExactValidationProgress:
+    """Show CPU queue activity without changing durable submission order.
+
+    Estimates use worker-reported completion latency, excluding time a finished
+    result waits behind another result or while the coordinator runs a GPU pass.
+    An overdue job has an unknown ETA rather than a misleading zero-second ETA.
+    """
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.pending = {}
+        self.latencies = deque(maxlen=24)
+        self._lock = RLock()
+
+    def submitted(self, result):
+        with self._lock:
+            self.pending[result] = self.clock()
+
+    def completed(self, result, *, worker_seconds, queue_seconds):
+        with self._lock:
+            if result not in self.pending:
+                return
+            del self.pending[result]
+            if (
+                math.isfinite(worker_seconds) and worker_seconds > 0
+                and math.isfinite(queue_seconds) and queue_seconds >= 0
+            ):
+                self.latencies.append(worker_seconds + queue_seconds)
+
+    def reset_estimate(self):
+        with self._lock:
+            self.latencies.clear()
+
+    def snapshot(self):
+        with self._lock:
+            pending = list(self.pending.items())
+            typical = statistics.median(self.latencies) if len(self.latencies) >= 4 else None
+        if not pending:
+            return {}
+        now = self.clock()
+        ready = [result.ready() for result, _ in pending]
+        age = max(0.0, now - pending[0][1])
+        remaining = typical - age if typical is not None else None
+        eta = "0s" if ready[0] else (
+            duration(remaining) if remaining is not None and remaining >= 1 else "unknown"
+        )
+        return {
+            "exact_unfinished": len(ready) - sum(ready),
+            "exact_ready_unrecorded": sum(ready),
+            "oldest_exact_age": duration(age),
+            "eta_next_exact": eta,
+        }
 
 
 class GenerationMilestone:
