@@ -408,11 +408,11 @@ class ExactWorkerController:
         self.cache = CalibrationCache(cache_dir)
         self.key = _digest(
             dict(
-                kind="exact_workers_v1",
+                kind="exact_workers_v2",
                 hardware=hardware,
                 context=context,
                 ceiling=self.ceiling,
-                per_worker=per_worker,
+                worker_memory_class=(per_worker + 128 * MIB - 1) // (128 * MIB),
                 workloads=[
                     dict(
                         execution=workload_contract(p.checkpoint_contract),
@@ -433,8 +433,11 @@ class ExactWorkerController:
         self.allow_trial = lambda: True
         if mode != "refresh":
             cached = self.cache.read(self.key, "exact_workers", 1, self.ceiling)
-            if cached is not None and (cached <= workers or self.can_grow(cached)):
+            if cached is not None and (
+                cached <= workers or self.can_grow(cached, startup=True)
+            ):
                 self.workers = self.target = cached
+        self.direction = 1 if self.workers < self.ceiling else -1
         self.reset()
 
     def proxy_state(self):
@@ -452,7 +455,7 @@ class ExactWorkerController:
         self.samples.clear()
         self.work_seconds = 0.0
 
-    def can_grow(self, count):
+    def can_grow(self, count, *, startup=False):
         try:
             resources = resource_snapshot()
             available = resources["available"]
@@ -460,6 +463,10 @@ class ExactWorkerController:
                 return False
         except (OSError, psutil.Error):
             return False
+        if startup:
+            # No existing workers are resident yet. Preserve the same host/GPU
+            # reserve as initial sizing when an advisory cache requests more.
+            return count * self.per_worker <= int(available * 0.6)
         return available >= max(
             2 * self.per_worker, (count - self.workers + 1) * self.per_worker
         )

@@ -6301,6 +6301,8 @@ def run_backend(
         while exact_done < budget:
             interrupt_check()
             consume_ready()
+            if exact_done >= budget:
+                break
             if worker_controller is not None:
                 worker_controller.update()
                 if worker_controller.target != workers:
@@ -6439,6 +6441,7 @@ def run_backend(
             )
             tell_started = time.perf_counter() if profile_enabled else 0.0
             algorithm.tell(infills=population)
+            generation_milestone.finish()
             tell_seconds = (
                 time.perf_counter() - tell_started if profile_enabled else 0.0
             )
@@ -6576,7 +6579,6 @@ def run_backend(
                     exact_inflight=len(pending),
                 )
 
-            generation_milestone.finish()
             progress.transition("generation_complete")
             maybe_save_checkpoint(force=True)
 

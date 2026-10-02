@@ -28,6 +28,8 @@ from test_hsl_offline_runtime import deny_network, offline_cli_config
         "seeded_screened",
         "worker_resize",
         "worker_resize_failure",
+        "worker_resize_budget",
+        "milestone_wait",
     ],
 )
 async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatch, stop_kind, capsys):
@@ -102,7 +104,12 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
                     self.completed += 1
 
             def update(self):
-                if self.completed >= 2 and not self.resized:
+                threshold = (
+                    cfg["optimize"]["iters"]
+                    if stop_kind == "worker_resize_budget"
+                    else 2
+                )
+                if self.completed >= threshold and not self.resized:
                     self.target = 2
                     self.epoch += 1
 
@@ -126,13 +133,43 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
     cfg["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.01, 0.2]
 
     state = SimpleNamespace(
-        resuming=seeded or resizing,
+        resuming=seeded or resizing or stop_kind == "milestone_wait",
         proxy_calls=0,
         pools=[],
         submissions=[],
         records=[],
         scopes=[],
+        waited=False,
+        milestones=[],
+        finished=[],
+        tick=0.0,
     )
+    if stop_kind == "milestone_wait":
+        from optimization.progress import GenerationMilestone
+
+        class Milestone(GenerationMilestone):
+            def __init__(self):
+                super().__init__(clock=lambda: state.tick)
+                state.milestones.append(self)
+
+            def finish(self):
+                if self.started is not None:
+                    state.finished.append(state.tick - self.started)
+                super().finish()
+
+        monkeypatch.setattr(gpu_backend, "GenerationMilestone", Milestone)
+        select = gpu_backend._select_exact_validations
+
+        def wait_for_front(*args, **kwargs):
+            if state.submissions and not state.waited:
+                state.waited = True
+                state.tick += (
+                    3600  # A long CPU wait after the GPU ask/tell transaction.
+                )
+                raise gpu_backend._ProxyFrontValidationPending
+            return select(*args, **kwargs)
+
+        monkeypatch.setattr(gpu_backend, "_select_exact_validations", wait_for_front)
     oldest_ready = threading.Event()
     recorded = threading.Event()
     original_record = optimize.ResultRecorder.record
@@ -150,6 +187,8 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
             self.payload, self.index = payload, index
 
         def ready(self):
+            if stop_kind == "milestone_wait" and not state.waited:
+                return False
             # The second job finishes first. Nothing may be persisted ahead of
             # the oldest submission, even though that second payload is ready.
             return state.resuming or self.index > 0 or oldest_ready.is_set()
@@ -287,9 +326,16 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
             assert state.pools[0].terminated
         else:
             assert stopped.value.code == 0
-            assert [p.processes for p in state.pools] == [1, 2]
+            assert [p.processes for p in state.pools] == (
+                [1] if stop_kind == "worker_resize_budget" else [1, 2]
+            )
             assert len(records) == cfg["optimize"]["iters"]
             assert len(set(state.submissions)) == len(records)
+        return
+    if stop_kind == "milestone_wait":
+        assert stopped.value.code == 0 and state.waited
+        assert len(state.records) == cfg["optimize"]["iters"]
+        assert state.finished and max(state.finished) == 0
         return
     if seeded:
         assert stopped.value.code == 0

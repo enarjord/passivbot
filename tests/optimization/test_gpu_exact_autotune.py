@@ -683,3 +683,42 @@ def test_worker_invalid_stall_is_not_evidence(tmp_path, monkeypatch):
     for stall in ((2, 1), (0, 11), (float("nan"), 1)):
         item.record(10, 0, 0, 10, epoch=item.epoch, admission_stall=stall)
     assert not item.samples and item.work_seconds == 0
+
+
+def test_worker_cache_reuses_page_noise_but_guards_full_startup_pool(
+    tmp_path, monkeypatch
+):
+    memory = [8 * 1024 * tune.MIB]
+    monkeypatch.setattr(
+        tune, "resource_snapshot", lambda: {"available": memory[0], "cores": 8}
+    )
+
+    def make(estimate):
+        return tune.ExactWorkerController(
+            2,
+            7,
+            [],
+            per_worker=estimate,
+            hardware={"implementation": "fixture"},
+            cache_dir=tmp_path,
+        )
+
+    first = make(700 * tune.MIB + 4096)
+    first.cache.write(first.key, "exact_workers", 4, 1.0, 120)
+    noisy = make(700 * tune.MIB + 12288)
+    assert noisy.key == first.key and noisy.workers == 4
+    assert make(900 * tune.MIB).key != first.key
+    memory[0] = 4 * 1024 * tune.MIB
+    constrained = make(700 * tune.MIB + 12288)
+    assert constrained.can_grow(
+        4
+    )  # Incremental growth would fit once two workers exist.
+    assert not constrained.can_grow(4, startup=True)
+    assert constrained.workers == 2
+
+
+def test_cached_ceiling_starts_with_shrink_direction(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch)
+    item.cache.write(item.key, "exact_workers", 4, 1.0, 120)
+    cached = worker_controller(tmp_path, monkeypatch)
+    assert cached.workers == 4 and cached.direction == -1

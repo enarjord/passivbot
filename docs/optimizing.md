@@ -1008,7 +1008,9 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   headroom. Admitted results are drained and durably collected in order before replacing
   the pool; no validation is cancelled or repeated to resize it. Changing worker count
   invalidates GPU/queue evidence and admission epochs. Compatible local measurements
-  are advisory starting points. Resource-detection failures warn and inherit `optimize.n_cpus`.
+  are advisory starting points. Worker-cache memory estimates use 128 MiB classes to tolerate
+  ordinary RSS noise; a cached increase still checks the entire startup pool against the
+  current 60% RAM budget. Resource-detection failures warn and inherit `optimize.n_cpus`.
   Explicit `0` retains the legacy rule of inheriting `optimize.n_cpus`; positive numbers stay fixed.
 - `max_pending_exact` also defaults to `null`; omitted, `null`, or `"auto"` values enable
   continuous exact-validation queue tuning. It starts at twice the larger of workers and
