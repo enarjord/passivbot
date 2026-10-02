@@ -186,6 +186,11 @@ def test_nullable_cpu_count_sizes_workers_and_has_a_safe_detection_fallback(monk
     assert tune.initial_workers(None, None, SimpleNamespace(), mode="auto") == 1
 
 
+def test_explicit_workers_do_not_parse_an_unused_inherited_count(monkeypatch):
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: pytest.fail("hardware queried"))
+    assert tune.initial_workers(2, "unused", None, mode="auto") == 2
+
+
 def test_worker_sizing_excludes_gpu_coordinator_rss_but_uses_remaining_ram(monkeypatch):
     rss = [512 * tune.MIB]
     monkeypatch.setattr(tune.psutil, "Process", lambda: SimpleNamespace(
