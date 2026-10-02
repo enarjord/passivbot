@@ -34,6 +34,7 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_contract import CONTRACT_KEY, recorded_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.replay_progress import suite_replay_context
+from optimization.gpu.residency import cuda_suite_residency_scope
 from optimization.progress import (
     DriftProgress,
     OptimizerProgress,
@@ -4513,6 +4514,7 @@ def _recover_durable_seed_bootstrap(
     return payloads, recovered, drift_pairs
 
 
+@cuda_suite_residency_scope
 def run_backend(
     *,
     config: dict[str, Any],

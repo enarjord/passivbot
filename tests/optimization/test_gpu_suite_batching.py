@@ -11,6 +11,7 @@ torch = pytest.importorskip("torch")
 from config.schema import get_template_config
 from optimization.backends.gpu_backend import _evaluate_gpu_suite_proxies
 from optimization.gpu.service import MpsMulticoinProxy
+from optimization.gpu.residency import cuda_suite_residency_scope, current_cuda_residency
 from tools.gpu_proxy_benchmark import _synthetic_hlcvs
 
 
@@ -19,7 +20,19 @@ from tools.gpu_proxy_benchmark import _synthetic_hlcvs
     reason="Apple MPS and NVIDIA CUDA unavailable",
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_suite_batches_preserve_metrics_defaults_and_dispatch_bounds(side):
+@pytest.mark.parametrize("storage", ["eager", "disk"])
+def test_suite_batches_preserve_metrics_defaults_and_dispatch_bounds(side, storage):
+    if storage == "disk":
+        if not torch.cuda.is_available():
+            pytest.skip("Disk residency is CUDA-specific")
+        expected = _check_suite_batches(side)
+        actual = cuda_suite_residency_scope(_check_suite_batches)(side)
+        np.testing.assert_equal(actual, expected)
+    else:
+        _check_suite_batches(side)
+
+
+def _check_suite_batches(side):
     count = 9001
     values, timestamps = _synthetic_hlcvs(count, 3, 7)
     coins = ["BTC", "ETH", "SOL"]
@@ -85,13 +98,47 @@ def test_suite_batches_preserve_metrics_defaults_and_dispatch_bounds(side):
         Suite(), scenarios, candidates,
         batch_compatible_scenarios=False,
     )
+    if current_cuda_residency() is not None:
+        # Separate evaluations share packed inputs but must not accumulate
+        # one runner/scratch allocation per scenario.
+        assert all(not item[1][0][1].runners for item in scenarios[:-1])
+        assert scenarios[-1][1][0][1].runners
     batched = _evaluate_gpu_suite_proxies(
         Suite(), scenarios, candidates,
         batch_compatible_scenarios=True,
     )
     np.testing.assert_equal(batched, separate)
+    if current_cuda_residency() is not None:
+        # Full batching changes representatives without changing dataset identity.
+        assert scenarios[0][1][0][1].runners
+        assert all(not item[1][0][1].runners for item in scenarios[1:])
     assert candidates == original
     profiles = [item[1][0][1].last_profile for item in scenarios]
     assert profiles[0]["actual_dispatch_batch_sizes"] == [64, 41]
     assert all(not profile for profile in profiles[1:])
     assert profiles[0]["dispatch_count"] > 2  # temporal chunks remain bounded
+    manager = current_cuda_residency()
+    if manager is not None:
+        owner = scenarios[0][1][0][1]
+        identity = owner.suite_batch_key()
+        other_config = copy.deepcopy(config)
+        other_config["backtest"]["coins"] = {"bybit": coins[:2]}
+        other_markets = {coin: markets[coin] for coin in coins[:2]}
+        other_markets["__meta__"] = markets["__meta__"]
+        other = MpsMulticoinProxy(
+            config=other_config, hlcvs=values[:, :2], mss=other_markets,
+            btc=np.full(count, 50000.0), timestamps=timestamps,
+            exchange="bybit", batch_size=64, max_dispatch_candidate_bars=1600000,
+            needed_metrics=needed, prepared_data_cache=cache,
+        )
+        assert other.evaluate([]) == []
+        assert not other.runners
+        other.evaluate(candidates[:1])
+        assert all(not item[1][0][1].runners for item in scenarios)
+        reloaded = _evaluate_gpu_suite_proxies(
+            Suite(), scenarios, candidates, batch_compatible_scenarios=True,
+        )
+        np.testing.assert_equal(reloaded, batched)
+        assert not other.runners
+        assert owner.suite_batch_key() == identity
+    return batched
