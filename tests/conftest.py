@@ -66,101 +66,6 @@ def _install_passivbot_rust_stub():
     stub.calc_min_entry_qty = lambda *args, **kwargs: 0.0
     stub.calc_min_entry_qty_py = stub.calc_min_entry_qty
 
-    def _hsl_no_restart_triggered(
-        restart_after_red_policy, drawdown_raw, drawdown_ema, no_restart_drawdown_threshold
-    ):
-        # Mirrors ehsl::no_restart_triggered exactly (max(raw, ema) contract).
-        if restart_after_red_policy == "always":
-            return False
-        if restart_after_red_policy == "threshold":
-            return max(float(drawdown_raw), float(drawdown_ema)) >= float(
-                no_restart_drawdown_threshold
-            )
-        if restart_after_red_policy == "never":
-            return True
-        raise ValueError(
-            "hsl_restart_after_red_policy must be one of always, threshold, never; "
-            f"got {restart_after_red_policy!r}"
-        )
-
-    stub.hsl_no_restart_triggered = _hsl_no_restart_triggered
-
-    def _hsl_coin_drawdown_signal(
-        *, balance, n_positions, peak_realized, last_realized, current_upnl
-    ):
-        balance = float(balance)
-        n_positions = int(n_positions)
-        peak_realized = float(peak_realized)
-        last_realized = float(last_realized)
-        current_upnl = float(current_upnl)
-        if not math.isfinite(balance) or balance <= 0.0:
-            raise ValueError("balance must be finite and > 0")
-        if n_positions <= 0:
-            raise ValueError("n_positions must be > 0")
-        for name, value in (
-            ("peak_realized", peak_realized),
-            ("last_realized", last_realized),
-            ("current_upnl", current_upnl),
-        ):
-            if not math.isfinite(value):
-                raise ValueError(f"{name} must be finite")
-        slot_budget = balance / n_positions
-        drawdown_usd = max(0.0, peak_realized - (last_realized + current_upnl))
-        return {
-            "slot_budget": slot_budget,
-            "drawdown_usd": drawdown_usd,
-            "drawdown_raw": drawdown_usd / slot_budget,
-        }
-
-    stub.hsl_coin_drawdown_signal = _hsl_coin_drawdown_signal
-
-    def _hsl_red_episode_finalization(
-        *,
-        restart_after_red_policy,
-        stop_timestamp_ms,
-        stop_equity,
-        stop_peak_strategy_equity,
-        previous_no_restart_peak_strategy_equity,
-        drawdown_ema,
-        red_threshold,
-        no_restart_drawdown_threshold,
-        cooldown_minutes_after_red,
-    ):
-        if not (0.0 < float(red_threshold) <= float(no_restart_drawdown_threshold) <= 1.0):
-            raise ValueError(
-                "no_restart_drawdown_threshold must satisfy red_threshold <= threshold <= 1"
-            )
-        peak = max(
-            float(previous_no_restart_peak_strategy_equity),
-            float(stop_peak_strategy_equity),
-            float(stop_equity),
-        )
-        raw = max(0.0, 1.0 - float(stop_equity) / peak)
-        no_restart = _hsl_no_restart_triggered(
-            restart_after_red_policy,
-            raw,
-            drawdown_ema,
-            no_restart_drawdown_threshold,
-        )
-        cooldown_until_ms = None
-        if not no_restart and float(cooldown_minutes_after_red) > 0.0:
-            cooldown_ms = max(1, round(float(cooldown_minutes_after_red) * 60_000.0))
-            cooldown_until_ms = int(stop_timestamp_ms) + int(cooldown_ms)
-        return {
-            "no_restart_peak_strategy_equity": peak,
-            "no_restart_drawdown_raw": raw,
-            "no_restart_latched": no_restart,
-            "cooldown_until_ms": cooldown_until_ms,
-            "disposition": (
-                "no_restart"
-                if no_restart
-                else "cooldown"
-                if cooldown_until_ms is not None
-                else "halted_no_cooldown"
-            ),
-        }
-
-    stub.hsl_red_episode_finalization = _hsl_red_episode_finalization
     stub.round_ = _round
     stub.round_dn = _round_dn
     stub.round_up = _round_up
@@ -168,14 +73,18 @@ def _install_passivbot_rust_stub():
     stub.round_dynamic_up = _identity
     stub.round_dynamic_dn = _identity
     stub.calc_pnl_long = (
-        lambda entry_price, close_price, qty, c_mult=1.0: (close_price - entry_price) * qty
+        lambda entry_price, close_price, qty, c_mult=1.0: (close_price - entry_price)
+        * qty
     )
     stub.calc_pnl_short = (
-        lambda entry_price, close_price, qty, c_mult=1.0: (entry_price - close_price) * qty
+        lambda entry_price, close_price, qty, c_mult=1.0: (entry_price - close_price)
+        * qty
     )
     stub.calc_pprice_diff_int = lambda *args, **kwargs: 0
 
-    def _calc_auto_unstuck_allowance(balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last):
+    def _calc_auto_unstuck_allowance(
+        balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last
+    ):
         balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last)
         drop_since_peak_pct = balance / balance_peak - 1.0
         return max(0.0, balance_peak * (loss_allowance_pct + drop_since_peak_pct))
@@ -187,7 +96,9 @@ def _install_passivbot_rust_stub():
     stub.cost_to_qty = lambda cost, price, c_mult=1.0: (
         0.0 if price == 0 else cost / (price * (c_mult if c_mult else 1.0))
     )
-    stub.qty_to_cost = lambda qty, price, c_mult=1.0: qty * price * (c_mult if c_mult else 1.0)
+    stub.qty_to_cost = (
+        lambda qty, price, c_mult=1.0: qty * price * (c_mult if c_mult else 1.0)
+    )
 
     stub.hysteresis = _identity
     stub.calc_entries_long_py = lambda *args, **kwargs: []
@@ -307,9 +218,7 @@ def _install_passivbot_rust_stub():
                     opposite = "short" if pside == "long" else "long"
                     if (
                         not hedge_mode
-                        and float(
-                            symbol[opposite].get("position", {}).get("size", 0.0)
-                        )
+                        and float(symbol[opposite].get("position", {}).get("size", 0.0))
                         != 0.0
                     ):
                         continue
@@ -331,9 +240,9 @@ def _install_passivbot_rust_stub():
                     else input_mode
                 )
                 wallet_exposure_limit = float(
-                    symbol[pside].get("bot_params", {}).get(
-                        "wallet_exposure_limit", 0.0
-                    )
+                    symbol[pside]
+                    .get("bot_params", {})
+                    .get("wallet_exposure_limit", 0.0)
                 )
                 side_params = global_bot_params.get(pside, {})
                 global_side_enabled = (
@@ -341,8 +250,7 @@ def _install_passivbot_rust_stub():
                     and int(side_params.get("n_positions", 0)) > 0
                 )
                 symbol_side_eligible = (
-                    bool(symbol.get("tradable", False))
-                    and wallet_exposure_limit != 0.0
+                    bool(symbol.get("tradable", False)) and wallet_exposure_limit != 0.0
                 )
                 active = (
                     symbol_side_eligible
@@ -352,8 +260,7 @@ def _install_passivbot_rust_stub():
                     effective_mode = "manual"
                 opposite = "short" if pside == "long" else "long"
                 one_way_blocked = not hedge_mode and (
-                    float(symbol[opposite].get("position", {}).get("size", 0.0))
-                    != 0.0
+                    float(symbol[opposite].get("position", {}).get("size", 0.0)) != 0.0
                     or (
                         not has_position
                         and pside == "short"

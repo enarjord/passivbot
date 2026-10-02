@@ -86,8 +86,14 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [
         {"label": "base"},
-        {"label": "long_only", "overrides": {"bot.short.total_wallet_exposure_limit": 0}},
-        {"label": "short_only", "overrides": {"bot.long.total_wallet_exposure_limit": 0}},
+        {
+            "label": "long_only",
+            "overrides": {"bot.short.total_wallet_exposure_limit": 0},
+        },
+        {
+            "label": "short_only",
+            "overrides": {"bot.long.total_wallet_exposure_limit": 0},
+        },
     ]
     config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
     config["live"]["ignored_coins"] = {"long": [], "short": []}
@@ -132,7 +138,9 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
         "format_approved_ignored_coins",
         fake_format_approved_ignored_coins,
     )
-    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
+    monkeypatch.setattr(
+        optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
+    )
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     # One eligible coin cannot require ranking, even while RMS weights are searched.
@@ -233,7 +241,9 @@ def test_suite_evaluator_pickle_strips_attached_and_cached_arrays():
 
 
 @pytest.mark.asyncio
-async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_coins(monkeypatch):
+async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_coins(
+    monkeypatch,
+):
     config = get_template_config()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -272,7 +282,9 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
         "format_approved_ignored_coins",
         fake_format_approved_ignored_coins,
     )
-    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
+    monkeypatch.setattr(
+        optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
+    )
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
@@ -323,7 +335,9 @@ async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkey
         "format_approved_ignored_coins",
         fake_format_approved_ignored_coins,
     )
-    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
+    monkeypatch.setattr(
+        optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
+    )
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
@@ -400,7 +414,9 @@ async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_da
 
 
 @pytest.mark.asyncio
-async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(monkeypatch):
+async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
+    monkeypatch,
+):
     _stub_market_identity_validation(monkeypatch)
     config = get_template_config()
     config["backtest"]["start_date"] = "2024-01-01"
@@ -430,7 +446,9 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(monk
         "format_approved_ignored_coins",
         fake_format_approved_ignored_coins,
     )
-    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
+    monkeypatch.setattr(
+        optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
+    )
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     with pytest.raises(ValueError, match="requests unavailable exchange"):
@@ -442,7 +460,9 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(monk
 
 
 @pytest.mark.asyncio
-async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(monkeypatch):
+async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
+    monkeypatch,
+):
     config = get_template_config()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -461,7 +481,11 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(monk
         return None
 
     async def fake_prepare_master_datasets(*_args, **_kwargs):
-        return {"combined": _make_lazy_dataset(coins=("HYPE",), available_exchanges=["binance"])}
+        return {
+            "combined": _make_lazy_dataset(
+                coins=("HYPE",), available_exchanges=["binance"]
+            )
+        }
 
     monkeypatch.setattr(optimize_suite, "load_markets", fake_load_markets)
     monkeypatch.setattr(
@@ -469,7 +493,9 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(monk
         "format_approved_ignored_coins",
         fake_format_approved_ignored_coins,
     )
-    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
+    monkeypatch.setattr(
+        optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
+    )
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     with pytest.raises(ValueError, match="missing_coin could not be prepared"):
@@ -604,6 +630,8 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
     # A prepared run uses its frozen policy even after the source file changes/disappears.
     path.unlink()
     evaluator = object.__new__(SuiteEvaluator)
+    evaluator.base = SimpleNamespace(scoring_specs=[], limit_checks=[])
+    evaluator.objective_bases = []
     candidate = evaluator.build_scenario_candidate_config(previous, old_ctx)
     assert (
         candidate["coin_overrides"]["HYPE"]["bot"]["long"]["entry_cooldown"][

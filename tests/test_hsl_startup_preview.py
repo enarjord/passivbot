@@ -21,7 +21,6 @@ def _sample_config() -> dict:
             "user": "binance_01",
             "exchange": "binance",
             "hsl_signal_mode": "coin",
-            "hsl_position_during_cooldown_policy": "panic",
             "api_key": "super-secret-api-key",
         },
         "bot": {
@@ -30,11 +29,9 @@ def _sample_config() -> dict:
                     "enabled": True,
                     "red_threshold": 0.10,
                     "cooldown_minutes_after_red": 45,
-                    "no_restart_drawdown_threshold": 0.20,
                     "ema_span_minutes": 120,
-                    "tier_ratios": {"yellow": 0.5, "orange": 0.8},
-                    "orange_tier_mode": "tp_only",
                     "panic_close_order_type": "limit",
+                    "restart_after_red_policy": "always",
                 }
             },
             "short": {
@@ -93,80 +90,110 @@ def _write_ndjson(path, rows):
     )
 
 
-def test_hsl_startup_preview_reports_config_and_latest_local_hsl_status(tmp_path):
+@pytest.mark.parametrize(
+    "now,expected",
+    [(3000, "red"), (4000, "stale_or_unavailable"), (62000, "stale_or_unavailable")],
+)
+def test_hsl_startup_preview_reports_current_scopes_and_marks_expired_observations(
+    tmp_path, now, expected
+):
     config_path = tmp_path / "live.json"
     monitor_root = tmp_path / "monitor"
     _write_config(config_path, _sample_config())
+    rows = [
+        _monitor_row(
+            event_type="hsl.status",
+            reason_code=None,
+            symbol=None,
+            pside=None,
+            seq=1,
+            ts=1000,
+            data={
+                "signal_mode": "coin",
+                "tier": "green",
+                "observation_status": "current",
+                "captured_at_ms": 1000,
+                "input_expires_at_ms": 2000,
+            },
+        ),
+        _monitor_row(
+            event_type="hsl.status",
+            reason_code=None,
+            symbol=None,
+            pside=None,
+            seq=2,
+            ts=2000,
+            data={
+                "signal_mode": "coin",
+                "tier": "red",
+                "observation_status": "current",
+                "captured_at_ms": 2000,
+                "input_expires_at_ms": 4000,
+                "scope_count": 1,
+                "counts": {"red": 1, "green": 0, "secret": "must-not-render"},
+                "scopes": [
+                    {
+                        "symbol": "SOL/USDT:USDT",
+                        "pside": "long",
+                        "tier": "red",
+                        "action": "panic",
+                        "raw": 0.12,
+                        "ema": 0.11,
+                        "score": 0.11,
+                        "threshold": 0.1,
+                        "secret": "nested-must-not-render",
+                    }
+                ],
+                "secret": "must-not-render",
+            },
+        ),
+    ]
     _write_ndjson(
-        monitor_root / "binance" / "binance_01" / "events" / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.status",
-                seq=1,
-                ts=1_000,
-                reason_code="yellow",
-                symbol="SOL/USDT:USDT",
-                pside="long",
-                data={
-                    "signal_mode": "coin",
-                    "tier": "yellow",
-                    "drawdown_raw": 0.03,
-                    "drawdown_ema": 0.04,
-                    "drawdown_score": 0.04,
-                    "dist_to_red": 0.06,
-                    "red_threshold": 0.10,
-                    "cooldown_remaining": {"secret": "nested-must-not-render"},
-                    "slot_budget": 25.0,
-                    "realized_pnl": -1.0,
-                    "peak_realized_pnl": 2.0,
-                    "unrealized_pnl": -0.5,
-                    "secret": "must-not-render",
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.status",
-                seq=2,
-                ts=2_000,
-                reason_code="red",
-                symbol="SOL/USDT:USDT",
-                pside="long",
-                data={
-                    "signal_mode": "coin",
-                    "tier": "red",
-                    "drawdown_raw": 0.11,
-                    "drawdown_ema": 0.09,
-                    "drawdown_score": 0.09,
-                    "dist_to_red": 0.01,
-                    "red_threshold": 0.10,
-                    "cooldown_until_ms": 122_000,
-                    "cooldown_remaining_seconds": 120.0,
-                },
-            ),
-        ],
+        monitor_root / "binance" / "binance_01" / "events" / "current.ndjson", rows
     )
-
     report = hsl_startup_preview.build_hsl_startup_preview_report(
-        config_path,
-        monitor_root=monitor_root,
-        now_ms=62_000,
+        config_path, monitor_root=monitor_root, now_ms=now
     )
-    rendered = json.dumps(report, sort_keys=True)
-
     assert report["ok"] is True
-    assert report["config"]["hsl"]["signal_mode"] == "coin"
     assert report["config"]["hsl"]["sides"]["long"]["enabled"] is True
     assert report["inputs"]["monitor_events"]["hsl_events_seen"] == 2
-    assert report["hsl_status"]["counts_by_status"] == {"red": 1}
+    assert report["hsl_status"]["counts_by_status"] == {expected: 1}
     latest = report["hsl_status"]["latest_by_target"][0]
-    assert latest["symbol"] == "SOL/USDT:USDT"
-    assert latest["status"] == "red"
-    assert latest["drawdown_to_red"]["value"] == 0.01
+    assert latest["last_observed_tier"] == "red"
+    assert latest["latest_data"]["scopes"][0]["score"] == 0.11
     assert latest["current_drawdown"]["available"] is False
-    assert latest["cooldown"]["remaining_seconds_at_preview"] == pytest.approx(60.0)
+    assert latest["cooldown"]["available"] is False
     assert report["startup_panic_orders"]["available"] is False
-    assert "super-secret-api-key" not in rendered
-    assert "must-not-render" not in rendered
-    assert "nested-must-not-render" not in rendered
+    assert "must-not-render" not in json.dumps(report)
+    assert "super-secret-api-key" not in json.dumps(report)
+
+
+def test_hsl_preview_degraded_capture_never_becomes_current_by_timestamp():
+    result = hsl_startup_preview._status_record_preview(
+        {
+            "latest_data": {
+                "captured_at_ms": 1000,
+                "input_expires_at_ms": 4000,
+                "tier": "green",
+                "observation_status": "unavailable",
+            }
+        },
+        now_ms=2000,
+    )
+    assert result["status"] == "stale_or_unavailable"
+
+
+def test_hsl_preview_portfolio_policy_uses_explicit_block():
+    config = _sample_config()
+    config["live"]["hsl_signal_mode"] = "unified"
+    config["bot"]["hsl"] = {
+        "enabled": True,
+        "red_threshold": 0.25,
+        "secret": "do-not-render",
+    }
+    report = hsl_startup_preview._config_report(config)
+    assert report["hsl"]["portfolio"]["red_threshold"] == 0.25
+    assert "do-not-render" not in json.dumps(report)
 
 
 def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
@@ -175,11 +202,9 @@ def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
         "hsl_enabled": True,
         "hsl_red_threshold": 0.10,
         "hsl_cooldown_minutes_after_red": 45,
-        "hsl_no_restart_drawdown_threshold": 0.20,
         "hsl_ema_span_minutes": 120,
-        "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.8},
-        "hsl_orange_tier_mode": "tp_only",
         "hsl_panic_close_order_type": "limit",
+        "hsl_restart_after_red_policy": "always",
     }
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
@@ -196,11 +221,9 @@ def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
         "enabled": True,
         "red_threshold": 0.10,
         "cooldown_minutes_after_red": 45,
-        "no_restart_drawdown_threshold": 0.20,
         "ema_span_minutes": 120,
-        "tier_ratios": {"yellow": 0.5, "orange": 0.8},
-        "orange_tier_mode": "tp_only",
         "panic_close_order_type": "limit",
+        "restart_after_red_policy": "always",
     }
 
 
@@ -268,9 +291,7 @@ def test_hsl_startup_preview_tool_dispatch_forwards_module_and_prog(monkeypatch)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert (
-        cli_main.main(
-            ["tool", "hsl-startup-preview", "configs/live.json", "--compact"]
-        )
+        cli_main.main(["tool", "hsl-startup-preview", "configs/live.json", "--compact"])
         == 0
     )
 

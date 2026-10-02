@@ -13,32 +13,33 @@ from live.event_bus import EventTypes, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_query import discover_event_files
 from live.smoke_report import _user_safe_display_path
 
-
 SIDES = ("long", "short")
-HSL_EVENT_TYPES = {
-    EventTypes.HSL_STATUS,
-    EventTypes.HSL_RED_TRIGGERED,
-    EventTypes.HSL_COOLDOWN_STARTED,
-    EventTypes.HSL_COOLDOWN_ENDED,
-}
+HSL_EVENT_TYPES = {EventTypes.HSL_STATUS}
 HSL_DATA_KEYS = (
     "signal_mode",
     "tier",
-    "previous_tier",
-    "drawdown_score",
-    "drawdown_raw",
-    "drawdown_ema",
-    "dist_to_red",
-    "red_threshold",
-    "cooldown_until_ms",
-    "cooldown_remaining",
-    "cooldown_remaining_seconds",
-    "last_red_ts",
-    "pending_red_since_ms",
-    "slot_budget",
-    "realized_pnl",
-    "peak_realized_pnl",
-    "unrealized_pnl",
+    "observation_status",
+    "captured_at_ms",
+    "input_expires_at_ms",
+    "scope_count",
+    "omitted_scopes",
+)
+HSL_SCOPE_KEYS = (
+    "signal_mode",
+    "symbol",
+    "pside",
+    "action",
+    "tier",
+    "availability",
+    "unavailable_reason",
+    "estimated",
+    "raw",
+    "ema",
+    "score",
+    "threshold",
+    "red_at",
+    "flat_at",
+    "omitted_estimates",
 )
 
 
@@ -66,7 +67,9 @@ def _unavailable(reason: str) -> dict[str, Any]:
     }
 
 
-def _load_config(config_path: str | Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+def _load_config(
+    config_path: str | Path,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     path = Path(config_path).expanduser()
     try:
         raw = path.read_text(encoding="utf-8")
@@ -103,41 +106,15 @@ def _section(value: Any) -> dict[str, Any]:
 
 
 def _hsl_side_config(config: dict[str, Any], pside: str) -> dict[str, Any]:
+    from config.hsl import FIELDS
+
     bot = _section(config.get("bot"))
     side_config = _section(bot.get(pside))
-    hsl_values = {
-        key: get_grouped_bot_value(side_config, flat_key, default=None)
-        for key, flat_key in (
-            ("enabled", "hsl_enabled"),
-            ("red_threshold", "hsl_red_threshold"),
-            ("cooldown_minutes_after_red", "hsl_cooldown_minutes_after_red"),
-            ("no_restart_drawdown_threshold", "hsl_no_restart_drawdown_threshold"),
-            ("restart_after_red_policy", "hsl_restart_after_red_policy"),
-            ("ema_span_minutes", "hsl_ema_span_minutes"),
-            ("tier_ratios", "hsl_tier_ratios"),
-            ("orange_tier_mode", "hsl_orange_tier_mode"),
-            ("panic_close_order_type", "hsl_panic_close_order_type"),
-        )
+    values = {
+        key: get_grouped_bot_value(side_config, f"hsl_{key}", default=None)
+        for key in FIELDS
     }
-    tier_ratios = (
-        hsl_values["tier_ratios"] if isinstance(hsl_values.get("tier_ratios"), dict) else {}
-    )
-    present = any(value is not None for value in hsl_values.values())
-    return {
-        "present": present,
-        "enabled": hsl_values["enabled"],
-        "red_threshold": hsl_values["red_threshold"],
-        "cooldown_minutes_after_red": hsl_values["cooldown_minutes_after_red"],
-        "no_restart_drawdown_threshold": hsl_values["no_restart_drawdown_threshold"],
-        "ema_span_minutes": hsl_values["ema_span_minutes"],
-        "tier_ratios": {
-            key: tier_ratios[key]
-            for key in ("yellow", "orange")
-            if key in tier_ratios
-        },
-        "orange_tier_mode": hsl_values["orange_tier_mode"],
-        "panic_close_order_type": hsl_values["panic_close_order_type"],
-    }
+    return {"present": any(value is not None for value in values.values()), **values}
 
 
 def _config_report(config: dict[str, Any]) -> dict[str, Any]:
@@ -151,8 +128,17 @@ def _config_report(config: dict[str, Any]) -> dict[str, Any]:
         },
         "hsl": {
             "signal_mode": live.get("hsl_signal_mode"),
-            "cooldown_position_policy": live.get("hsl_position_during_cooldown_policy"),
             "sides": {pside: _hsl_side_config(config, pside) for pside in SIDES},
+            "portfolio": _hsl_side_config(
+                {
+                    "bot": {
+                        "portfolio": {
+                            "hsl": _section(_section(config.get("bot")).get("hsl"))
+                        }
+                    }
+                },
+                "portfolio",
+            ),
         },
     }
 
@@ -187,23 +173,41 @@ def _bot_key(live_event: dict[str, Any], row: dict[str, Any]) -> str:
 
 
 def _bounded_hsl_data(live_event: dict[str, Any]) -> dict[str, Any]:
-    data = live_event.get("data")
-    payload = data if isinstance(data, dict) else {}
-    out: dict[str, Any] = {}
-    for key in HSL_DATA_KEYS:
-        value = payload.get(key)
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            out[key] = value
-        elif isinstance(value, int):
-            out[key] = value
-        elif isinstance(value, float):
-            if value == value and value not in (float("inf"), float("-inf")):
-                out[key] = value
-        elif isinstance(value, str):
-            out[key] = value[:160] + "...<truncated>" if len(value) > 160 else value
-    return out
+    """Project the current observation schema; never expose arbitrary nested payloads."""
+    import math
+
+    data = _section(live_event.get("data"))
+
+    def scalar(value):
+        if isinstance(value, (bool, int)):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if isinstance(value, str):
+            return value[:160]
+        return None
+
+    def fields(value, keys):
+        return {
+            key: scalar(value[key])
+            for key in keys
+            if key in value and scalar(value[key]) is not None
+        }
+
+    result = fields(data, HSL_DATA_KEYS)
+    counts = _section(data.get("counts"))
+    result["counts"] = {
+        key: value
+        for key in ("green", "red", "inactive", "unavailable", "estimated")
+        if type(value := counts.get(key)) is int and value >= 0
+    }
+    scopes = data.get("scopes")
+    result["scopes"] = (
+        [fields(row, HSL_SCOPE_KEYS) for row in scopes[:128] if isinstance(row, dict)]
+        if isinstance(scopes, list)
+        else []
+    )
+    return result
 
 
 def _target_key(record: dict[str, Any]) -> tuple[str, str, str]:
@@ -214,83 +218,34 @@ def _target_key(record: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def _status_from_event(record: dict[str, Any]) -> str:
-    data = record.get("latest_data") if isinstance(record.get("latest_data"), dict) else {}
-    tier = data.get("tier")
-    if tier not in (None, ""):
-        return str(tier)
-    reason_code = record.get("reason_code")
-    if reason_code in {"green", "yellow", "orange", "red", "cooldown_active"}:
-        return "red" if reason_code == "cooldown_active" else str(reason_code)
-    event_type = record.get("event_type")
-    if event_type in {EventTypes.HSL_RED_TRIGGERED, EventTypes.HSL_COOLDOWN_STARTED}:
-        return "red"
-    return "unknown"
-
-
-def _cooldown_preview(data: dict[str, Any], *, now_ms: int) -> dict[str, Any]:
-    cooldown_until_ms = data.get("cooldown_until_ms")
-    remaining_seconds = data.get("cooldown_remaining_seconds")
-    if cooldown_until_ms is None and remaining_seconds is None and data.get("cooldown_remaining") is None:
-        return _unavailable("no cooldown fields were present in the latest local HSL event")
-    out: dict[str, Any] = {
-        "available": True,
-        "source": "latest_local_hsl_event",
-    }
-    if cooldown_until_ms is not None:
-        try:
-            until_ms = int(cooldown_until_ms)
-            out["cooldown_until_ms"] = until_ms
-            out["remaining_seconds_at_preview"] = max(0.0, (until_ms - int(now_ms)) / 1000.0)
-            out["status_at_preview"] = "active" if int(now_ms) < until_ms else "elapsed_by_wall_clock"
-        except (TypeError, ValueError):
-            out["cooldown_until_ms"] = cooldown_until_ms
-            out["status_at_preview"] = "unknown_invalid_timestamp"
-    if remaining_seconds is not None:
-        out["last_observed_remaining_seconds"] = remaining_seconds
-    if data.get("cooldown_remaining") is not None:
-        out["last_observed_remaining"] = data.get("cooldown_remaining")
-    return out
-
-
 def _status_record_preview(record: dict[str, Any], *, now_ms: int) -> dict[str, Any]:
-    data = record.get("latest_data") if isinstance(record.get("latest_data"), dict) else {}
-    status = _status_from_event(record)
-    drawdown_to_red = (
-        {
-            "available": True,
-            "source": "latest_local_hsl_event",
-            "value": data["dist_to_red"],
-            "note": "last observed distance to red; not recomputed from current exchange state",
-        }
-        if data.get("dist_to_red") is not None
-        else _unavailable("latest local HSL event did not include dist_to_red")
+    data = _section(record.get("latest_data"))
+    expiry = data.get("input_expires_at_ms")
+    captured = data.get("captured_at_ms")
+    timestamp_valid = (
+        type(expiry) in (int, float)
+        and type(captured) in (int, float)
+        and captured <= now_ms < expiry
     )
-    current_drawdown = _unavailable(
-        "offline preview does not contact exchanges or replay fresh fill/account state"
+    observation = data.get("observation_status")
+    status = (
+        data.get("tier", "unknown")
+        if timestamp_valid and observation == "current"
+        else "stale_or_unavailable"
     )
-    last_observed_drawdown = {
-        key: data[key]
-        for key in ("drawdown_raw", "drawdown_ema", "drawdown_score", "red_threshold")
-        if data.get(key) is not None
-    }
     return {
-        key: value
-        for key, value in {
-            "bot": record.get("bot"),
-            "pside": record.get("pside"),
-            "symbol": record.get("symbol"),
-            "status": status,
-            "event_type": record.get("event_type"),
-            "reason_code": record.get("reason_code"),
-            "latest_ts": record.get("latest_ts"),
-            "last_observed_drawdown": last_observed_drawdown,
-            "drawdown_to_red": drawdown_to_red,
-            "current_drawdown": current_drawdown,
-            "cooldown": _cooldown_preview(data, now_ms=now_ms),
-            "latest_data": data,
-        }.items()
-        if value not in (None, {}, [])
+        "bot": record.get("bot"),
+        "status": status,
+        "event_type": record.get("event_type"),
+        "latest_ts": record.get("latest_ts"),
+        "last_observed_tier": data.get("tier"),
+        "latest_data": data,
+        "current_drawdown": _unavailable(
+            "offline observations do not prove current exchange state"
+        ),
+        "cooldown": _unavailable(
+            "current cooldown requires fresh exchange facts and Rust evaluation"
+        ),
     }
 
 
@@ -391,7 +346,9 @@ def _scan_hsl_events(
                 }
                 key = _target_key(record)
                 existing = latest.get(key)
-                if existing is None or _event_sort_key(record) > _event_sort_key(existing):
+                if existing is None or _event_sort_key(record) > _event_sort_key(
+                    existing
+                ):
                     latest[key] = record
 
     latest_by_target = sorted(
@@ -490,7 +447,7 @@ def build_hsl_startup_preview_report(
                 "not loaded; this tool is local/offline and does not contact exchanges"
             ),
             "fill_history": _unavailable(
-                "not replayed in this first slice; latest local HSL events are reported when present"
+                "not reconstructed; latest local HSL observations are reported when present"
             ),
             "current_drawdown": _unavailable(
                 "requires fresh balance, positions, fills, and unrealized PnL"
@@ -510,14 +467,18 @@ def build_hsl_startup_preview_report(
             "available": False,
             "would_emit": None,
             "reason": (
-                "offline first-slice preview does not predict panic orders without "
+                "offline preview does not predict panic orders without "
                 "current exchange/account state and order planning"
             ),
         },
         "issues": issues,
         "summary": {
-            "error_count": sum(1 for issue in issues if issue.get("severity") == "error"),
-            "warning_count": sum(1 for issue in issues if issue.get("severity") == "warning"),
+            "error_count": sum(
+                1 for issue in issues if issue.get("severity") == "error"
+            ),
+            "warning_count": sum(
+                1 for issue in issues if issue.get("severity") == "warning"
+            ),
             "hsl_targets_with_local_status": len(statuses),
             "status_counts": dict(status_counts.most_common()),
         },
@@ -578,7 +539,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.since_ms is not None and args.until_ms is not None and args.since_ms > args.until_ms:
+    if (
+        args.since_ms is not None
+        and args.until_ms is not None
+        and args.since_ms > args.until_ms
+    ):
         parser.error("--since-ms must be <= --until-ms")
     report = build_hsl_startup_preview_report(
         args.config_path,

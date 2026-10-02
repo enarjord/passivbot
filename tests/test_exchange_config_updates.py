@@ -98,7 +98,9 @@ async def test_binance_already_set_margin_mode_is_successful_noop(caplog):
 
 
 @pytest.mark.asyncio
-async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch, caplog):
+async def test_update_exchange_configs_marks_only_successful_symbols(
+    monkeypatch, caplog
+):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -119,8 +121,12 @@ async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch
                 raise RuntimeError("SECRET")
 
         _is_rate_limit_like_exception = pb_mod.Passivbot._is_rate_limit_like_exception
-        _exchange_config_backoff_seconds = pb_mod.Passivbot._exchange_config_backoff_seconds
-        _exchange_config_success_pause_seconds = pb_mod.Passivbot._exchange_config_success_pause_seconds
+        _exchange_config_backoff_seconds = (
+            pb_mod.Passivbot._exchange_config_backoff_seconds
+        )
+        _exchange_config_success_pause_seconds = (
+            pb_mod.Passivbot._exchange_config_success_pause_seconds
+        )
         _shutdown_requested = lambda self: False
 
     async def fake_sleep(_seconds):
@@ -234,11 +240,11 @@ async def test_update_exchange_configs_does_not_mark_invalid_kucoin_leverage_cap
     bot._health_rate_limits = 0
     bot.max_leverage = {"BTC/USDT:USDT": 0}
     bot.config_get = lambda path, *, symbol=None: 5
-    bot._is_rate_limit_like_exception = pb_mod.Passivbot._is_rate_limit_like_exception.__get__(
-        bot
+    bot._is_rate_limit_like_exception = (
+        pb_mod.Passivbot._is_rate_limit_like_exception.__get__(bot)
     )
-    bot._exchange_config_backoff_seconds = pb_mod.Passivbot._exchange_config_backoff_seconds.__get__(
-        bot
+    bot._exchange_config_backoff_seconds = (
+        pb_mod.Passivbot._exchange_config_backoff_seconds.__get__(bot)
     )
     bot._exchange_config_success_pause_seconds = (
         pb_mod.Passivbot._exchange_config_success_pause_seconds.__get__(bot)
@@ -255,7 +261,9 @@ async def test_update_exchange_configs_does_not_mark_invalid_kucoin_leverage_cap
 
 
 @pytest.mark.asyncio
-async def test_update_exchange_configs_rate_limit_breaks_and_defers_remaining(monkeypatch):
+async def test_update_exchange_configs_rate_limit_breaks_and_defers_remaining(
+    monkeypatch,
+):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -276,8 +284,12 @@ async def test_update_exchange_configs_rate_limit_breaks_and_defers_remaining(mo
                 raise RateLimitExceeded("bybit retCode 10006 rate limit")
 
         _is_rate_limit_like_exception = pb_mod.Passivbot._is_rate_limit_like_exception
-        _exchange_config_backoff_seconds = pb_mod.Passivbot._exchange_config_backoff_seconds
-        _exchange_config_success_pause_seconds = pb_mod.Passivbot._exchange_config_success_pause_seconds
+        _exchange_config_backoff_seconds = (
+            pb_mod.Passivbot._exchange_config_backoff_seconds
+        )
+        _exchange_config_success_pause_seconds = (
+            pb_mod.Passivbot._exchange_config_success_pause_seconds
+        )
         _shutdown_requested = lambda self: False
 
     async def fake_sleep(_seconds):
@@ -319,8 +331,12 @@ async def test_update_exchange_configs_retries_failed_symbol_after_backoff(monke
                 raise Exception("boom")
 
         _is_rate_limit_like_exception = pb_mod.Passivbot._is_rate_limit_like_exception
-        _exchange_config_backoff_seconds = pb_mod.Passivbot._exchange_config_backoff_seconds
-        _exchange_config_success_pause_seconds = pb_mod.Passivbot._exchange_config_success_pause_seconds
+        _exchange_config_backoff_seconds = (
+            pb_mod.Passivbot._exchange_config_backoff_seconds
+        )
+        _exchange_config_success_pause_seconds = (
+            pb_mod.Passivbot._exchange_config_success_pause_seconds
+        )
         _shutdown_requested = lambda self: False
 
     async def fake_sleep(_seconds):
@@ -431,8 +447,12 @@ async def test_update_exchange_configs_accepts_symbol_subset(monkeypatch):
             self.calls.append(symbols[0])
 
         _is_rate_limit_like_exception = pb_mod.Passivbot._is_rate_limit_like_exception
-        _exchange_config_backoff_seconds = pb_mod.Passivbot._exchange_config_backoff_seconds
-        _exchange_config_success_pause_seconds = pb_mod.Passivbot._exchange_config_success_pause_seconds
+        _exchange_config_backoff_seconds = (
+            pb_mod.Passivbot._exchange_config_backoff_seconds
+        )
+        _exchange_config_success_pause_seconds = (
+            pb_mod.Passivbot._exchange_config_success_pause_seconds
+        )
         _shutdown_requested = lambda self: False
 
     async def fake_sleep(_seconds):
@@ -469,8 +489,12 @@ async def test_update_exchange_configs_stops_after_shutdown_signal(monkeypatch):
             self.stop_signal_received = True
 
         _is_rate_limit_like_exception = pb_mod.Passivbot._is_rate_limit_like_exception
-        _exchange_config_backoff_seconds = pb_mod.Passivbot._exchange_config_backoff_seconds
-        _exchange_config_success_pause_seconds = pb_mod.Passivbot._exchange_config_success_pause_seconds
+        _exchange_config_backoff_seconds = (
+            pb_mod.Passivbot._exchange_config_backoff_seconds
+        )
+        _exchange_config_success_pause_seconds = (
+            pb_mod.Passivbot._exchange_config_success_pause_seconds
+        )
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
     async def fake_sleep(_seconds):
@@ -500,10 +524,14 @@ async def test_exchange_update_config_reraises_hedge_mode_failures(
     module = __import__(module_name, fromlist=[class_name])
     bot_cls = getattr(module, class_name)
     bot = bot_cls.__new__(bot_cls)
-    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(side_effect=RuntimeError("SECRET")))
+    bot.cca = SimpleNamespace(
+        set_position_mode=AsyncMock(side_effect=RuntimeError("SECRET"))
+    )
     if class_name == "BitgetBot":
         # Bitget probes the UTA account mode before setting hedge mode.
-        bot.cca.private_uta_get_v3_account_assets = AsyncMock(return_value={"code": "00000"})
+        bot.cca.private_uta_get_v3_account_assets = AsyncMock(
+            return_value={"code": "00000"}
+        )
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError, match="SECRET"):
@@ -517,8 +545,16 @@ async def test_exchange_update_config_reraises_hedge_mode_failures(
 @pytest.mark.parametrize(
     ("module_name", "class_name", "response"),
     [
-        ("exchanges.bitget", "BitgetBot", {"code": "00000", "data": {"posMode": "hedge_mode"}}),
-        ("exchanges.kucoin", "KucoinBot", {"code": "200000", "data": {"positionMode": 1}}),
+        (
+            "exchanges.bitget",
+            "BitgetBot",
+            {"code": "00000", "data": {"posMode": "hedge_mode"}},
+        ),
+        (
+            "exchanges.kucoin",
+            "KucoinBot",
+            {"code": "200000", "data": {"positionMode": 1}},
+        ),
     ],
 )
 async def test_exchange_update_config_accepts_live_same_mode_success(
@@ -530,7 +566,9 @@ async def test_exchange_update_config_accepts_live_same_mode_success(
     bot.cca = SimpleNamespace(set_position_mode=AsyncMock(return_value=response))
     if class_name == "BitgetBot":
         # Bitget probes the UTA account mode before setting hedge mode.
-        bot.cca.private_uta_get_v3_account_assets = AsyncMock(return_value={"code": "00000"})
+        bot.cca.private_uta_get_v3_account_assets = AsyncMock(
+            return_value={"code": "00000"}
+        )
 
     await bot.update_exchange_config()
 
@@ -578,7 +616,9 @@ async def test_bybit_update_config_reraises_unknown_bad_request():
     from exchanges.bybit import BybitBot
 
     bot = BybitBot.__new__(BybitBot)
-    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(side_effect=BadRequest("boom")))
+    bot.cca = SimpleNamespace(
+        set_position_mode=AsyncMock(side_effect=BadRequest("boom"))
+    )
 
     with pytest.raises(BadRequest, match="boom"):
         await bot.update_exchange_config()
@@ -605,7 +645,9 @@ async def test_okx_detect_account_config_reraises_unknown_failure():
         private_get_account_config=AsyncMock(side_effect=RuntimeError("cfg boom"))
     )
 
-    with pytest.raises(RuntimeError, match="Unable to detect OKX account configuration"):
+    with pytest.raises(
+        RuntimeError, match="Unable to detect OKX account configuration"
+    ):
         await bot._detect_account_config()
 
 
@@ -673,7 +715,12 @@ async def test_okx_update_config_verified_net_mode_fails_loudly():
 
 
 @pytest.mark.asyncio
-async def test_okx_already_gone_cancel_does_not_log_raw_exception(caplog, capsys):
+async def test_okx_already_gone_cancel_does_not_log_raw_exception(
+    caplog, capsys, monkeypatch
+):
+    from live.hsl_live import Owner
+
+    monkeypatch.setattr(Owner, "admit", lambda self, order: True)
     from exchanges.okx import OKXBot
 
     markers = []
@@ -883,7 +930,10 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
         "skipped 1 exposure-increasing order creates" in record.message
         for record in caplog.records
     )
-    assert any("allowing 1 cancellations and 0 protective creates" in record.message for record in caplog.records)
+    assert any(
+        "allowing 1 cancellations and 0 protective creates" in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -1511,7 +1561,7 @@ async def test_execute_order_plan_defers_replacement_until_cancel_confirmation()
 
 
 @pytest.mark.asyncio
-async def test_execute_order_plan_blocks_pending_hsl_entry_and_defers_close_after_cancel():
+async def test_execute_order_plan_defers_creations_after_cancel():
     import passivbot as pb_mod
 
     class FakeBot:
@@ -1531,14 +1581,11 @@ async def test_execute_order_plan_blocks_pending_hsl_entry_and_defers_close_afte
         config = {"live": {}, "_raw_effective": {"live": {}}}
 
         def __init__(self):
-            self._live_event_current_cycle_id = "cy_hsl_replay_pending"
+            self._live_event_current_cycle_id = "cy_hsl_current"
             self._live_event_sink = ListEventSink()
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[self._live_event_sink], monitor_sinks=[]
             )
-            self._equity_hard_stop_coin_replay_pending_pairs = {
-                ("long", "BTC/USDT:USDT")
-            }
             self.cancelled_orders = None
             self.config_symbols = None
             self.created_orders = None
@@ -1628,21 +1675,13 @@ async def test_execute_order_plan_blocks_pending_hsl_entry_and_defers_close_afte
     assert bot.created_orders is None
     assert bot.execution_scheduled is True
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
-    skipped = [
-        event
-        for event in bot._live_event_sink.events
-        if event.reason_code == ReasonCodes.HSL_REPLAY_PENDING
-    ]
-    assert len(skipped) == 1
-    assert skipped[0].data["order_count"] == 1
-    assert skipped[0].data["pending_pairs_count"] == 1
     barriers = [
         event
         for event in bot._live_event_sink.events
         if event.reason_code == ReasonCodes.ACCOUNT_CANCEL_FIRST_BARRIER
     ]
     assert len(barriers) == 1
-    assert barriers[0].data["order_count"] == 1
+    assert barriers[0].data["order_count"] == 2
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

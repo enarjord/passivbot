@@ -87,9 +87,7 @@ _BTC_PER_EXPOSURE_METRICS = {
     for side in ("long", "short")
 }
 
-BTC_ACCOUNT_METRICS = frozenset(
-    _BTC_ACCOUNT_METRICS | _BTC_PER_EXPOSURE_METRICS
-)
+BTC_ACCOUNT_METRICS = frozenset(_BTC_ACCOUNT_METRICS | _BTC_PER_EXPOSURE_METRICS)
 
 # Keep the public proxy surface deliberately narrow. Exact Rust evaluations
 # still emit the normal complete metric set; this list governs only which
@@ -190,9 +188,7 @@ _GPU_PROXY_METRIC_CANDIDATES = (
     *_USD_PER_EXPOSURE_METRICS,
     *sorted(BTC_ACCOUNT_METRICS),
     *sorted(
-        metric
-        for metric in EQUITY_BALANCE_DIFF_METRICS
-        if metric.endswith("_usd")
+        metric for metric in EQUITY_BALANCE_DIFF_METRICS if metric.endswith("_usd")
     ),
 )
 
@@ -219,6 +215,7 @@ def validate_gpu_metric_names(metric_names) -> frozenset[str]:
             "use supported metrics or the CPU optimizer"
         )
     return canonical
+
 
 # Metrics backed by additional per-fill aggregates emitted by Metal.
 EXTRA_KERNEL_METRICS = ("loss_profit_ratio",)
@@ -302,6 +299,8 @@ _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
     "strategy_eq_recovery_days_mean_worst_5pct",
     "strategy_eq_recovery_days_mean_worst_1pct",
 }
+
+
 def _loss_profit_ratio(loss_sum: torch.Tensor, profit_sum: torch.Tensor):
     """Match Rust's capped gross close-fill loss/profit ratio contract."""
 
@@ -330,12 +329,12 @@ def _directional_pnl_metrics(out: dict) -> dict:
         values[f"loss_profit_ratio_{side}"] = _loss_profit_ratio(
             out[f"loss_sum_{side}"], out[f"profit_sum_{side}"]
         )
-    long_pnl = out["profit_sum_long"].to(torch.float64) - out[
-        "loss_sum_long"
-    ].to(torch.float64)
-    short_pnl = out["profit_sum_short"].to(torch.float64) - out[
-        "loss_sum_short"
-    ].to(torch.float64)
+    long_pnl = out["profit_sum_long"].to(torch.float64) - out["loss_sum_long"].to(
+        torch.float64
+    )
+    short_pnl = out["profit_sum_short"].to(torch.float64) - out["loss_sum_short"].to(
+        torch.float64
+    )
     pnl_sum = long_pnl + short_pnl
     long_short_ratio = torch.where(
         pnl_sum != 0.0,
@@ -344,6 +343,8 @@ def _directional_pnl_metrics(out: dict) -> dict:
     )
     values["pnl_ratio_long_short"] = long_short_ratio
     return values
+
+
 # Metal classifies gaps with float32 logarithms. Expand the decoded boundary
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
 # this minimizing proxy optimistic.
@@ -352,10 +353,7 @@ _GAP_HIST_UPPER_STEPS = tuple(
     max(
         0,
         math.ceil(
-            (
-                math.exp((index + 1) * _GAP_HIST_LOG_MAX / 127.0)
-                - 1.0
-            )
+            (math.exp((index + 1) * _GAP_HIST_LOG_MAX / 127.0) - 1.0)
             * (1.0 + _GAP_HIST_EDGE_MARGIN)
         )
         - 1,
@@ -467,10 +465,8 @@ def _gain_quality_metrics(day_eq, active, requested):
     compact_eq = day_eq.gather(1, compact_order)
     compact_active = indices < counts.unsqueeze(1)
     valid_equity = (
-        (~compact_active | (torch.isfinite(compact_eq) & (compact_eq > 0.0)))
-        .all(dim=1)
-        & (counts >= 2)
-    )
+        ~compact_active | (torch.isfinite(compact_eq) & (compact_eq > 0.0))
+    ).all(dim=1) & (counts >= 2)
     safe_eq = torch.where(
         compact_active & (compact_eq > 0.0) & torch.isfinite(compact_eq),
         compact_eq,
@@ -491,7 +487,8 @@ def _gain_quality_metrics(day_eq, active, requested):
         positive_squares_sum = (positive * positive).sum(dim=1)
         participation = torch.where(
             valid_equity & (positive_squares_sum > torch.finfo(day_eq.dtype).eps),
-            positive_sum * positive_sum
+            positive_sum
+            * positive_sum
             / (
                 n_intervals.to(day_eq.dtype)
                 * positive_squares_sum.clamp(min=torch.finfo(day_eq.dtype).eps)
@@ -544,9 +541,8 @@ def _gain_quality_metrics(day_eq, active, requested):
                 window_mask, -log_growth, torch.full_like(log_growth, float("-inf"))
             )
             window_count = window_mask.sum(dim=1).clamp(min=1)
-            log_harmonic_growth = (
-                window_count.to(day_eq.dtype).log()
-                - torch.logsumexp(inverse_log_growth, dim=1)
+            log_harmonic_growth = window_count.to(day_eq.dtype).log() - torch.logsumexp(
+                inverse_log_growth, dim=1
             )
             daily_log_growth_sum += torch.where(
                 include,
@@ -624,12 +620,8 @@ def _equity_shape_metrics(day_eq, active):
         jerkiness = zeros
     else:
         triples = active[:, :-2] & active[:, 1:-1] & active[:, 2:]
-        numerator = (
-            day_eq[:, 2:] - 2.0 * day_eq[:, 1:-1] + day_eq[:, :-2]
-        ).abs()
-        denominator = (
-            day_eq[:, :-2] + day_eq[:, 1:-1] + day_eq[:, 2:]
-        ) / 3.0
+        numerator = (day_eq[:, 2:] - 2.0 * day_eq[:, 1:-1] + day_eq[:, :-2]).abs()
+        denominator = (day_eq[:, :-2] + day_eq[:, 1:-1] + day_eq[:, 2:]) / 3.0
         terms = torch.where(
             triples & (denominator.abs() >= epsilon),
             numerator / denominator.abs().clamp(min=epsilon),
@@ -660,9 +652,7 @@ def _equity_shape_metrics(day_eq, active):
         active, residual * residual, torch.zeros_like(residual)
     ).sum(dim=1) / count_float.clamp(min=1.0)
     invalid_fit = (
-        (counts < 2)
-        | (fit_denominator == 0.0)
-        | (active & (day_eq <= 0.0)).any(dim=1)
+        (counts < 2) | (fit_denominator == 0.0) | (active & (day_eq <= 0.0)).any(dim=1)
     )
     fit_error = torch.where(
         invalid_fit, torch.full_like(fit_error, float("inf")), fit_error
@@ -791,11 +781,7 @@ def _fill_gap_metrics(out, run):
         & torch.isfinite(last_eq_ts)
         & (last_eq_ts >= first_eq_ts)
     )
-    has_fill = (
-        has_equity
-        & torch.isfinite(first_fill_ts)
-        & torch.isfinite(last_fill_ts)
-    )
+    has_fill = has_equity & torch.isfinite(first_fill_ts) & torch.isfinite(last_fill_ts)
     # Metal exports integer candle indices multiplied by interval_ms through a
     # float32 scalar buffer. Recover the indices before subtracting so rounding
     # of large millisecond offsets cannot make a boundary gap optimistic.
@@ -823,16 +809,12 @@ def _fill_gap_metrics(out, run):
 
     lead_hours = torch.where(
         has_fill,
-        (first_fill_step - first_eq_step).clamp(min=0.0)
-        * interval_ms
-        / 3_600_000.0,
+        (first_fill_step - first_eq_step).clamp(min=0.0) * interval_ms / 3_600_000.0,
         span_ms / 3_600_000.0,
     )
     trail_hours = torch.where(
         has_fill,
-        (last_eq_step - last_fill_step).clamp(min=0.0)
-        * interval_ms
-        / 3_600_000.0,
+        (last_eq_step - last_fill_step).clamp(min=0.0) * interval_ms / 3_600_000.0,
         torch.zeros_like(span_ms),
     )
     boundary_values = torch.stack((lead_hours, trail_hours), dim=1)
@@ -846,9 +828,7 @@ def _fill_gap_metrics(out, run):
     values = torch.cat((gap_values, boundary_values), dim=1)
     counts = torch.cat((gap_counts, boundary_counts), dim=1)
     total = counts.sum(dim=1).clamp(min=1).to(torch.float64)
-    weighted_values = torch.where(
-        counts > 0, values, torch.zeros_like(values)
-    )
+    weighted_values = torch.where(counts > 0, values, torch.zeros_like(values))
     mean = (weighted_values * counts.to(values.dtype)).sum(dim=1) / total
     span_hours = span_ms / 3_600_000.0
     time_weighted_mean = torch.where(
@@ -898,9 +878,7 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
     )
     missing = [name for name in required if name not in out]
     if missing:
-        raise RuntimeError(
-            "MPS entry-interval output is missing " + ", ".join(missing)
-        )
+        raise RuntimeError("MPS entry-interval output is missing " + ", ".join(missing))
     total_steps = out["entry_interval_sum_steps"].to(torch.float64)
     counts_float = out["entry_interval_count"].to(torch.float64)
     max_steps = out["entry_interval_max_steps"].to(torch.float64)
@@ -924,9 +902,7 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
     if bool(
         (
             (torch.abs(counts_float - rounded_counts) > 1.0e-4)
-            | (torch.abs(histogram_float - rounded_histogram) > 1.0e-4).any(
-                dim=1
-            )
+            | (torch.abs(histogram_float - rounded_histogram) > 1.0e-4).any(dim=1)
         ).any()
     ):
         raise RuntimeError("MPS entry-interval output contains fractional counts")
@@ -958,15 +934,9 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
     maximum = torch.where(counts > 0, max_steps * interval_hours, zeros)
     return {
         "entry_interval_hours_mean": mean,
-        "entry_interval_hours_median": _weighted_percentile(
-            values, histogram, 0.50
-        ),
-        "entry_interval_hours_p95": _weighted_percentile(
-            values, histogram, 0.95
-        ),
-        "entry_interval_hours_p99": _weighted_percentile(
-            values, histogram, 0.99
-        ),
+        "entry_interval_hours_median": _weighted_percentile(values, histogram, 0.50),
+        "entry_interval_hours_p95": _weighted_percentile(values, histogram, 0.95),
+        "entry_interval_hours_p99": _weighted_percentile(values, histogram, 0.99),
         "entry_interval_hours_max": maximum,
     }
 
@@ -989,9 +959,7 @@ def _weighted_subset_context(
             timestamps,
             timestamps - timestamp_origin,
         )
-        return torch.floor(relative_ms / float(interval_ms_int) + 0.5).to(
-            torch.long
-        )
+        return torch.floor(relative_ms / float(interval_ms_int) + 0.5).to(torch.long)
 
     first_eq_steps = relative_steps(first_eq_ts)
     last_eq_steps = relative_steps(last_eq_ts)
@@ -1003,9 +971,7 @@ def _weighted_subset_context(
     eligible = finite_timestamps & (sample_count >= 2)
     subsets = [active]
     subset_start_steps = [first_eq_steps]
-    subset_start_timestamps = [
-        first_eq_steps * interval_ms_int + timestamp_origin_int
-    ]
+    subset_start_timestamps = [first_eq_steps * interval_ms_int + timestamp_origin_int]
     first_day = timestamp_origin_int // 86_400_000
     day_ids = torch.arange(active.shape[1], device=active.device) + first_day
     for index in range(1, 10):
@@ -1014,14 +980,11 @@ def _weighted_subset_context(
             sample_count.to(first_eq_ts.dtype) * (1.0 - fraction) + 0.5
         ).to(torch.long)
         subset_start_step = first_eq_steps + start_position
-        subset_start_ts = (
-            subset_start_step * interval_ms_int + timestamp_origin_int
-        )
-        subset_start_day = torch.div(
-            subset_start_ts, 86_400_000, rounding_mode="floor"
-        )
+        subset_start_ts = subset_start_step * interval_ms_int + timestamp_origin_int
+        subset_start_day = torch.div(subset_start_ts, 86_400_000, rounding_mode="floor")
         subsets.append(
-            active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
+            active
+            & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
             & (subset_start_step <= last_eq_steps).unsqueeze(1)
         )
         subset_start_steps.append(subset_start_step)
@@ -1069,9 +1032,7 @@ def _weighted_adg(
         first_timestamp,
         interval_ms,
     )
-    total = torch.zeros(
-        day_eq.shape[0], dtype=day_eq.dtype, device=day_eq.device
-    )
+    total = torch.zeros(day_eq.shape[0], dtype=day_eq.dtype, device=day_eq.device)
     for subset in subsets:
         total += torch.where(
             eligible, _smoothed_adg(day_eq, subset), torch.zeros_like(total)
@@ -1137,9 +1098,9 @@ def _weighted_daily_series_metrics(
         last_fill_ts,
         last_fill_ts - timestamp_origin,
     )
-    last_fill_steps = torch.floor(
-        relative_last_fill_ms / float(interval_ms) + 0.5
-    ).to(torch.long)
+    last_fill_steps = torch.floor(relative_last_fill_ms / float(interval_ms) + 0.5).to(
+        torch.long
+    )
     # Equity-only suffixes remain evaluable after the last fill. The full
     # run still needs actual fill evidence, and empty sample windows do not
     # contribute to the denominator.
@@ -1180,9 +1141,7 @@ def _weighted_daily_series_metrics(
                     subset_start_ts, 86_400_000, rounding_mode="floor"
                 )
                 at_day_boundary = subset_start_ts.remainder(86_400_000) == 0
-                complete_day_mask = (
-                    day_ids.unsqueeze(0) > subset_start_day.unsqueeze(1)
-                )
+                complete_day_mask = day_ids.unsqueeze(0) > subset_start_day.unsqueeze(1)
                 complete_day_mask |= at_day_boundary.unsqueeze(1) & (
                     day_ids.unsqueeze(0) == subset_start_day.unsqueeze(1)
                 )
@@ -1203,8 +1162,10 @@ def _weighted_daily_series_metrics(
                 torch.zeros_like(totals["volume_pct_per_day_avg_w"]),
             )
             totals["volume_pct_per_day_avg_w"] += torch.where(
-                subset_eligible & finite_last_fill
-                & (last_fill_steps >= subset_start_step) & (fill_days > 0),
+                subset_eligible
+                & finite_last_fill
+                & (last_fill_steps >= subset_start_step)
+                & (fill_days > 0),
                 value,
                 torch.zeros_like(value),
             )
@@ -1216,7 +1177,10 @@ def _weighted_daily_series_metrics(
                     subset_eligible, value, torch.zeros_like(value)
                 )
     count = torch.stack([subset.any(dim=1) for subset in subsets]).sum(dim=0)
-    result = {name: value / count.clamp(min=1).to(value.dtype) for name, value in totals.items()}
+    result = {
+        name: value / count.clamp(min=1).to(value.dtype)
+        for name, value in totals.items()
+    }
     # Preserve the exact no-fill Analysis defaults.
     for name in shape_names:
         result[name] = torch.where(
@@ -1258,8 +1222,7 @@ def _weighted_strategy_eq_metrics(
         requested & {"mdg_strategy_eq_w", "omega_ratio_strategy_eq_w"}
     )
     need_min_changes = bool(
-        requested
-        & {"sharpe_ratio_strategy_eq_w", "sortino_ratio_strategy_eq_w"}
+        requested & {"sharpe_ratio_strategy_eq_w", "sortino_ratio_strategy_eq_w"}
     )
     need_drawdowns = bool(
         requested & {"calmar_ratio_strategy_eq_w", "sterling_ratio_strategy_eq_w"}
@@ -1274,9 +1237,7 @@ def _weighted_strategy_eq_metrics(
             if "mdg_strategy_eq_w" in requested:
                 values["mdg_strategy_eq_w"] = _masked_median(returns, return_mask)
             if "omega_ratio_strategy_eq_w" in requested:
-                values["omega_ratio_strategy_eq_w"] = _omega_ratio(
-                    returns, return_mask
-                )
+                values["omega_ratio_strategy_eq_w"] = _omega_ratio(returns, return_mask)
         if need_min_changes:
             min_returns, min_return_mask = _pct_change(day_min_eq, subset)
             sharpe, sortino = _sharpe_sortino(min_returns, min_return_mask, adg)
@@ -1285,33 +1246,32 @@ def _weighted_strategy_eq_metrics(
             if "sortino_ratio_strategy_eq_w" in requested:
                 values["sortino_ratio_strategy_eq_w"] = sortino
         if need_drawdowns:
-            drawdown_worst = torch.where(
-                subset, day_max_dd, torch.zeros_like(day_max_dd)
-            ).max(dim=1).values
+            drawdown_worst = (
+                torch.where(subset, day_max_dd, torch.zeros_like(day_max_dd))
+                .max(dim=1)
+                .values
+            )
             if "calmar_ratio_strategy_eq_w" in requested:
                 values["calmar_ratio_strategy_eq_w"] = adg / drawdown_worst.clamp(
                     min=1e-12
                 )
             if "sterling_ratio_strategy_eq_w" in requested:
-                worst_one_pct = _mean_worst_one_pct_largest(
-                    day_max_dd, subset
-                )
+                worst_one_pct = _mean_worst_one_pct_largest(day_max_dd, subset)
                 values["sterling_ratio_strategy_eq_w"] = adg / worst_one_pct.clamp(
                     min=1e-12
                 )
         for name, value in values.items():
-            totals[name] += torch.where(
-                eligible, value, torch.zeros_like(value)
-            )
+            totals[name] += torch.where(eligible, value, torch.zeros_like(value))
     count = torch.stack([subset.any(dim=1) for subset in subsets]).sum(dim=0)
-    return {name: value / count.clamp(min=1).to(value.dtype) for name, value in totals.items()}
+    return {
+        name: value / count.clamp(min=1).to(value.dtype)
+        for name, value in totals.items()
+    }
 
 
 def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
     finite_mask = (
-        mask
-        & torch.isfinite(day_net_pnl)
-        & torch.isfinite(day_last_fill_balance)
+        mask & torch.isfinite(day_net_pnl) & torch.isfinite(day_last_fill_balance)
     )
     ratios = torch.where(
         finite_mask,
@@ -1345,8 +1305,7 @@ def _analysis_duration_days(out: dict, run) -> torch.Tensor:
     last_eq_step = torch.round(last_eq_ts / interval_ms)
     return torch.where(
         has_span,
-        (last_eq_step - first_eq_step).clamp(min=0.0) * interval_ms
-        / 86_400_000.0,
+        (last_eq_step - first_eq_step).clamp(min=0.0) * interval_ms / 86_400_000.0,
         torch.zeros_like(first_eq_ts),
     )
 
@@ -1377,6 +1336,7 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
         fill_count / duration_days.clamp(min=1.0e-9),
         torch.zeros_like(fill_count),
     )
+
     def per_day(count):
         return torch.where(
             duration_days > 0.0,
@@ -1400,8 +1360,7 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
         "fills_count_entry": fills_count_entry,
         "fills_count_long": fills_count_long,
         "fills_count_short": fills_count_short,
-        "fills_entry_per_close": fills_count_entry
-        / fills_count_close.clamp(min=1.0),
+        "fills_entry_per_close": fills_count_entry / fills_count_close.clamp(min=1.0),
         "fills_per_day": fills_per_day,
         "fills_per_day_close": fills_per_day_close,
         "fills_per_day_entry": fills_per_day_entry,
@@ -1466,9 +1425,7 @@ def _weighted_pnl_metrics(
         first_timestamp,
         interval_ms,
     )
-    fill_count = torch.where(
-        active, day_fill_count, torch.zeros_like(day_fill_count)
-    )
+    fill_count = torch.where(active, day_fill_count, torch.zeros_like(day_fill_count))
     eligible = fill_count.sum(dim=1) > 0.0
     totals = {
         name: torch.zeros(
@@ -1499,7 +1456,10 @@ def _weighted_pnl_metrics(
                 include, values[name], torch.zeros_like(values[name])
             )
     count = torch.stack([subset.any(dim=1) for subset in subsets]).sum(dim=0)
-    return {name: value / count.clamp(min=1).to(value.dtype) for name, value in totals.items()}
+    return {
+        name: value / count.clamp(min=1).to(value.dtype)
+        for name, value in totals.items()
+    }
 
 
 def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
@@ -1553,12 +1513,7 @@ def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
         "hard_stop_restarts_per_year_short": restarts_short * per_year_scale,
         "hard_stop_restarts_long": restarts_long,
         "hard_stop_restarts_short": restarts_short,
-        "hard_stop_time_in_yellow_pct": value("hsl_tier_samples_yellow")
-        / total_samples,
-        "hard_stop_time_in_orange_pct": value("hsl_tier_samples_orange")
-        / total_samples,
-        "hard_stop_time_in_red_pct": value("hsl_tier_samples_red")
-        / total_samples,
+        "hard_stop_time_in_red_pct": value("hsl_tier_samples_red") / total_samples,
         "hard_stop_duration_minutes_mean": torch.where(
             duration_count > 0.0,
             value("hsl_duration_sum_steps") / duration_count * minutes_per_step,
@@ -1655,12 +1610,12 @@ def _hard_stop_raw_drawdown_metrics(out: dict) -> dict:
             "results: " + ", ".join(sorted(missing))
         )
     return {
-        "drawdown_worst_strategy_eq_long": out[
-            "hsl_drawdown_raw_max_long"
-        ].to(torch.float64),
-        "drawdown_worst_strategy_eq_short": out[
-            "hsl_drawdown_raw_max_short"
-        ].to(torch.float64),
+        "drawdown_worst_strategy_eq_long": out["hsl_drawdown_raw_max_long"].to(
+            torch.float64
+        ),
+        "drawdown_worst_strategy_eq_short": out["hsl_drawdown_raw_max_short"].to(
+            torch.float64
+        ),
         "drawdown_worst_mean_1pct_strategy_eq_long": out[
             "hsl_drawdown_raw_mean_worst_1pct_long"
         ].to(torch.float64),
@@ -1703,12 +1658,8 @@ def _hard_stop_strategy_eq_recovery_metrics(out: dict) -> dict:
             "MPS directional HSL strategy-equity recovery outputs are missing from proxy results: "
             + ", ".join(sorted(missing))
         )
-    long_recovery_ms = out["hsl_strategy_eq_recovery_max_ms_long"].to(
-        torch.float64
-    )
-    short_recovery_ms = out["hsl_strategy_eq_recovery_max_ms_short"].to(
-        torch.float64
-    )
+    long_recovery_ms = out["hsl_strategy_eq_recovery_max_ms_long"].to(torch.float64)
+    short_recovery_ms = out["hsl_strategy_eq_recovery_max_ms_short"].to(torch.float64)
     return {
         "peak_recovery_hours_strategy_eq_long": long_recovery_ms / 3_600_000.0,
         "peak_recovery_hours_strategy_eq_short": short_recovery_ms / 3_600_000.0,
@@ -1746,13 +1697,9 @@ def _daily_peak_recovery_ms(day_end_eq, active):
         dtype=day_end_eq.dtype,
         device=day_end_eq.device,
     )
-    peak_day = torch.zeros(
-        batch_size, dtype=torch.long, device=day_end_eq.device
-    )
+    peak_day = torch.zeros(batch_size, dtype=torch.long, device=day_end_eq.device)
     recovery_days = torch.zeros_like(peak)
-    started = torch.zeros(
-        batch_size, dtype=torch.bool, device=day_end_eq.device
-    )
+    started = torch.zeros(batch_size, dtype=torch.bool, device=day_end_eq.device)
     for day in range(day_count):
         valid = active[:, day]
         value = day_end_eq[:, day]
@@ -1764,9 +1711,7 @@ def _daily_peak_recovery_ms(day_end_eq, active):
             recovery_days,
         )
         peak = torch.where(new_high, value, peak)
-        peak_day = torch.where(
-            new_high, torch.full_like(peak_day, day), peak_day
-        )
+        peak_day = torch.where(new_high, torch.full_like(peak_day, day), peak_day)
         # Count the still-unrecovered interval through every valid sample.
         recovery_days = torch.where(
             valid & started,
@@ -1825,25 +1770,26 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         ]
         if missing:
             raise RuntimeError(
-                "MPS synchronized BTC-risk output is missing "
-                + ", ".join(missing)
+                "MPS synchronized BTC-risk output is missing " + ", ".join(missing)
             )
         risk_day_end_btc = out["btc_day_end_eq"].to(torch.float64)
         risk_day_min_btc = out["btc_day_min_eq"].to(torch.float64)
         risk_day_max_dd_btc = out["btc_day_max_dd"].to(torch.float64)
 
-    missing = [
-        key for key in ("btc_day_end_price", "btc_prices") if key not in data
-    ]
+    missing = [key for key in ("btc_day_end_price", "btc_prices") if key not in data]
     if missing:
         raise RuntimeError(
             "MPS BTC account metric context is missing " + ", ".join(missing)
         )
-    day_end_price = torch.as_tensor(
-        data["btc_day_end_price"],
-        dtype=torch.float64,
-        device=day_end_usd.device,
-    ).reshape(1, -1).expand(day_end_usd.shape[0], -1)
+    day_end_price = (
+        torch.as_tensor(
+            data["btc_day_end_price"],
+            dtype=torch.float64,
+            device=day_end_usd.device,
+        )
+        .reshape(1, -1)
+        .expand(day_end_usd.shape[0], -1)
+    )
     if day_end_price.shape[1] != day_end_usd.shape[1]:
         raise RuntimeError(
             "MPS BTC account metric day grid disagrees with Metal output"
@@ -1862,9 +1808,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         last_eq_ts,
         last_eq_ts - float(origin_ms),
     )
-    last_step = torch.floor(
-        relative_last_ms / float(interval_ms) + 0.5
-    ).to(torch.long)
+    last_step = torch.floor(relative_last_ms / float(interval_ms) + 0.5).to(torch.long)
     safe_last_step = last_step.clamp(min=0, max=max(len(btc_prices) - 1, 0))
     last_day = (
         torch.div(
@@ -1874,9 +1818,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         )
         - origin_ms // 86_400_000
     )
-    safe_last_day = last_day.clamp(
-        min=0, max=max(day_end_usd.shape[1] - 1, 0)
-    )
+    safe_last_day = last_day.clamp(min=0, max=max(day_end_usd.shape[1] - 1, 0))
     valid_endpoint = (
         active.any(dim=1)
         & torch.isfinite(last_eq_ts)
@@ -1885,12 +1827,9 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         & (last_day >= 0)
         & (last_day < day_end_usd.shape[1])
     )
-    final_day_mask = (
-        torch.arange(day_end_usd.shape[1], device=day_end_usd.device)
-        .unsqueeze(0)
-        .eq(safe_last_day.unsqueeze(1))
-        & valid_endpoint.unsqueeze(1)
-    )
+    final_day_mask = torch.arange(
+        day_end_usd.shape[1], device=day_end_usd.device
+    ).unsqueeze(0).eq(safe_last_day.unsqueeze(1)) & valid_endpoint.unsqueeze(1)
     endpoint_price = btc_prices.gather(0, safe_last_step).unsqueeze(1)
     day_end_price = torch.where(final_day_mask, endpoint_price, day_end_price)
     day_end_btc = torch.where(
@@ -1910,9 +1849,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "omega_ratio_btc": omega,
     }
     btc_equity_balance_metrics = {
-        metric
-        for metric in EQUITY_BALANCE_DIFF_METRICS
-        if metric.endswith("_btc")
+        metric for metric in EQUITY_BALANCE_DIFF_METRICS if metric.endswith("_btc")
     }
     if requested & btc_equity_balance_metrics:
         differences = _equity_balance_diff_values(out, suffix="_btc")
@@ -1927,16 +1864,10 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
     if risk_requested:
         _risk_gain, risk_adg = _smoothed_gain_adg(risk_day_end_btc, active)
         min_changes, min_change_mask = _pct_change(risk_day_min_btc, active)
-        sharpe, sortino = _sharpe_sortino(
-            min_changes, min_change_mask, risk_adg
-        )
-        expected_shortfall = _mean_worst_one_pct_abs(
-            min_changes, min_change_mask
-        )
+        sharpe, sortino = _sharpe_sortino(min_changes, min_change_mask, risk_adg)
+        expected_shortfall = _mean_worst_one_pct_abs(min_changes, min_change_mask)
         max_dd = risk_day_max_dd_btc.max(dim=1).values
-        worst_one_pct = _mean_worst_one_pct_largest(
-            risk_day_max_dd_btc, active
-        )
+        worst_one_pct = _mean_worst_one_pct_largest(risk_day_max_dd_btc, active)
         values.update(
             {
                 "calmar_ratio_btc": risk_adg / max_dd.clamp(min=1e-12),
@@ -1945,8 +1876,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
                 "expected_shortfall_1pct_btc": expected_shortfall,
                 "sharpe_ratio_btc": sharpe,
                 "sortino_ratio_btc": sortino,
-                "sterling_ratio_btc": risk_adg
-                / worst_one_pct.clamp(min=1e-12),
+                "sterling_ratio_btc": risk_adg / worst_one_pct.clamp(min=1e-12),
             }
         )
     drawdown_defaults = {
@@ -1979,9 +1909,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
             "exponential_fit_error_btc": "exponential_fit_error_usd",
         }
         for name, source in shape_sources.items():
-            values[name] = torch.where(
-                has_fill, shape[source], torch.ones_like(adg)
-            )
+            values[name] = torch.where(has_fill, shape[source], torch.ones_like(adg))
 
     safe_weighted_sources = {
         "adg_w_btc": "adg_strategy_eq_w",
@@ -1989,9 +1917,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "omega_ratio_w_btc": "omega_ratio_strategy_eq_w",
     }
     wanted_safe_weighted_sources = {
-        source
-        for name, source in safe_weighted_sources.items()
-        if name in requested
+        source for name, source in safe_weighted_sources.items() if name in requested
     }
     if requested & {
         "adg_w_per_exposure_long_btc",
@@ -2018,18 +1944,14 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         )
         for name, source in safe_weighted_sources.items():
             if source in safe_weighted:
-                values[name] = torch.where(
-                    enough_fills, safe_weighted[source], zeros
-                )
+                values[name] = torch.where(enough_fills, safe_weighted[source], zeros)
     weighted_shape_sources = {
         "equity_choppiness_w_btc": "equity_choppiness_w_usd",
         "equity_jerkiness_w_btc": "equity_jerkiness_w_usd",
         "exponential_fit_error_w_btc": "exponential_fit_error_w_usd",
     }
     wanted_weighted_shape_sources = {
-        source
-        for name, source in weighted_shape_sources.items()
-        if name in requested
+        source for name, source in weighted_shape_sources.items() if name in requested
     }
     if wanted_weighted_shape_sources:
         weighted_shape = _weighted_daily_series_metrics(
@@ -2067,9 +1989,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
     }
     for name, denominator in exposure_denominators.items():
         if name in requested:
-            ratio = adg / out[denominator].to(torch.float64).abs().clamp(
-                min=1e-12
-            )
+            ratio = adg / out[denominator].to(torch.float64).abs().clamp(min=1e-12)
             values[name] = torch.where(has_fill, ratio, zeros)
 
     per_exposure_sources = {
@@ -2084,9 +2004,9 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
             name = f"{metric}_per_exposure_{side}_btc"
             if name not in requested:
                 continue
-            denominator = out[
-                f"candidate_total_wallet_exposure_limit_{side}"
-            ].to(torch.float64)
+            denominator = out[f"candidate_total_wallet_exposure_limit_{side}"].to(
+                torch.float64
+            )
             values[name] = torch.where(
                 has_fill & (denominator > 0.0),
                 source / denominator.clamp(min=1e-12),
@@ -2105,20 +2025,22 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     day_has_fill = out["day_has_fill"]
     active = _daily_series_masks(out["day_min_eq"])
     requested = set(SUPPORTED_METRICS if needed is None else needed)
-    requested_sources = requested | {
-        source
-        for alias, source in _USD_STRATEGY_EQ_ALIASES.items()
-        if alias in requested
-    } | {
-        source
-        for metric, (source, _side) in _USD_PER_EXPOSURE_METRICS.items()
-        if metric in requested
-    }
+    requested_sources = (
+        requested
+        | {
+            source
+            for alias, source in _USD_STRATEGY_EQ_ALIASES.items()
+            if alias in requested
+        }
+        | {
+            source
+            for metric, (source, _side) in _USD_PER_EXPOSURE_METRICS.items()
+            if metric in requested
+        }
+    )
 
     gain, adg = _smoothed_gain_adg(day_end_eq, active)
-    gain_quality_metrics = _gain_quality_metrics(
-        day_end_eq, active, requested_sources
-    )
+    gain_quality_metrics = _gain_quality_metrics(day_end_eq, active, requested_sources)
     daily_changes, change_mask = _pct_change(day_end_eq, active)
     mdg = _masked_median(daily_changes, change_mask)
     omega = _omega_ratio(daily_changes, change_mask)
@@ -2296,9 +2218,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         has_equity, gap_longest_days, torch.zeros_like(gap_longest_days)
     )
     fill_gap_metrics = (
-        _fill_gap_metrics(out, run)
-        if requested & _FILL_GAP_HISTOGRAM_METRICS
-        else {}
+        _fill_gap_metrics(out, run) if requested & _FILL_GAP_HISTOGRAM_METRICS else {}
     )
     fill_activity_metrics = (
         _fill_activity_metrics(out, run, requested)
@@ -2401,9 +2321,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "volume_pct_per_day_avg": volume_pct,
     }
     usd_equity_balance_metrics = {
-        metric
-        for metric in EQUITY_BALANCE_DIFF_METRICS
-        if metric.endswith("_usd")
+        metric for metric in EQUITY_BALANCE_DIFF_METRICS if metric.endswith("_usd")
     }
     if requested & usd_equity_balance_metrics:
         differences = _equity_balance_diff_values(out)
@@ -2414,14 +2332,12 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
             )
         objectives["paper_loss_ratio_usd"] = torch.where(
             has_fills,
-            adg
-            / differences["equity_balance_diff_neg_max"].clamp(min=1e-12),
+            adg / differences["equity_balance_diff_neg_max"].clamp(min=1e-12),
             torch.zeros_like(adg),
         )
         objectives["paper_loss_mean_ratio_usd"] = torch.where(
             has_fills,
-            adg
-            / differences["equity_balance_diff_neg_mean"].clamp(min=1e-12),
+            adg / differences["equity_balance_diff_neg_mean"].clamp(min=1e-12),
             torch.zeros_like(adg),
         )
     objectives.update(hard_stop_ema_drawdown_metrics)
@@ -2460,9 +2376,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
                 min=1e-12
             )
     if {"position_unchanged_days_max", "position_unchanged_hours_max"} & requested:
-        position_unchanged_hours_max = (
-            out["position_unchanged_max_ms"] / 3_600_000.0
-        )
+        position_unchanged_hours_max = out["position_unchanged_max_ms"] / 3_600_000.0
         objectives["position_unchanged_hours_max"] = position_unchanged_hours_max
         objectives["position_unchanged_days_max"] = position_unchanged_hours_max / 24.0
     for side in ("long", "short"):
@@ -2482,9 +2396,9 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
         if name not in requested:
             continue
-        denominator = out[
-            f"candidate_total_wallet_exposure_limit_{side}"
-        ].to(torch.float64)
+        denominator = out[f"candidate_total_wallet_exposure_limit_{side}"].to(
+            torch.float64
+        )
         objectives[name] = torch.where(
             denominator > 0.0,
             objectives[source] / denominator,

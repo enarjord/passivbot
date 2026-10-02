@@ -42,7 +42,9 @@ def _flatten_required_optimize_bounds(config: dict) -> dict:
         raise TypeError("config.optimize.bounds must be a non-empty dict")
     optimize_bounds = _flatten_bounds_for_config(config, raw_bounds)
     if not optimize_bounds:
-        raise ValueError("config.optimize.bounds must contain at least one optimizer bound")
+        raise ValueError(
+            "config.optimize.bounds must contain at least one optimizer bound"
+        )
     return optimize_bounds
 
 
@@ -51,7 +53,9 @@ def _strategy_path_map(config: dict) -> dict[str, Tuple[str, ...]]:
     return strategy_optimize_key_path_map(strategy_kind)
 
 
-def resolve_optimization_bound_path(config: dict, bound_key: str) -> Tuple[str, ...] | None:
+def resolve_optimization_bound_path(
+    config: dict, bound_key: str
+) -> Tuple[str, ...] | None:
     return resolve_optimizer_key_path(config, bound_key)
 
 
@@ -70,13 +74,18 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             continue
         resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
-            raise KeyError(f"optimize bound {bound_key} does not map to a known bot parameter")
-        if config.get("live", {}).get("hsl_engine") == "revised" and "hsl" in resolved:
-            from config.hsl_revised import _number
+            raise KeyError(
+                f"optimize bound {bound_key} does not map to a known bot parameter"
+            )
+        if "hsl" in resolved:
+            from config.hsl import _number
+
             name = resolved[-1]
-            constraints = {"red_threshold": dict(minimum=0, maximum=1, strict=True),
-                           "ema_span_minutes": dict(minimum=1),
-                           "cooldown_minutes_after_red": dict(minimum=0)}
+            constraints = {
+                "red_threshold": dict(minimum=0, maximum=1, strict=True),
+                "ema_span_minutes": dict(minimum=1),
+                "cooldown_minutes_after_red": dict(minimum=0),
+            }
             if name in constraints:
                 bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
                 for endpoint in (bound.low, bound.high):
@@ -109,21 +118,32 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
         if resolved[:2] == ("bot", "hsl"):
             value = bot_config["hsl"].get(resolved[-1])
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise KeyError(f"optimize bound {bound_key} must map to a numeric portfolio HSL parameter")
+                raise KeyError(
+                    f"optimize bound {bound_key} must map to a numeric portfolio HSL parameter"
+                )
             continue
-        if canonical_key in strategy_path_map or canonical_key in OPTIMIZABLE_BOT_KEY_PATHS:
+        if (
+            canonical_key in strategy_path_map
+            or canonical_key in OPTIMIZABLE_BOT_KEY_PATHS
+        ):
             continue
         try:
             pside = resolved[1]
         except IndexError as exc:
-            raise KeyError(f"optimize bound {bound_key} resolved to invalid path {resolved!r}") from exc
+            raise KeyError(
+                f"optimize bound {bound_key} resolved to invalid path {resolved!r}"
+            ) from exc
         flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
         key = canonical_key.split("_", 1)[1] if "_" in canonical_key else canonical_key
         if key not in flat_pside_cfg:
-            raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
+            raise KeyError(
+                f"optimize bound {bound_key} does not map to bot.{pside}.{key}"
+            )
         value = flat_pside_cfg[key]
         if isinstance(value, dict):
-            raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
+            raise KeyError(
+                f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}"
+            )
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise KeyError(
                 f"optimize bound {bound_key} must map to a numeric bot.{pside}.{key}, "
@@ -231,9 +251,13 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
             continue
         flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
         if key not in flat_pside_cfg:
-            raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
+            raise KeyError(
+                f"optimize bound {bound_key} does not map to bot.{pside}.{key}"
+            )
         if isinstance(flat_pside_cfg[key], dict):
-            raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
+            raise KeyError(
+                f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}"
+            )
         key_paths.append((bound_key, resolved))
     return key_paths
 
@@ -263,7 +287,9 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
         )
 
     for bound_key, path in key_paths:
-        assert bound_key in optimize_bounds, f"bound {bound_key} missing from optimize.bounds"
+        assert (
+            bound_key in optimize_bounds
+        ), f"bound {bound_key} missing from optimize.bounds"
         bound_vals = Bound.from_config(bound_key, optimize_bounds[bound_key])
         if len(path) >= 2 and path[:2] == ("bot", "long"):
             if pside_enabled["long"]:

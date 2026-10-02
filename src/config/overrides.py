@@ -22,7 +22,9 @@ from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
 
 
-def apply_allowed_modifications(src, modifications, allowed_overrides, return_full=True):
+def apply_allowed_modifications(
+    src, modifications, allowed_overrides, return_full=True
+):
     if return_full:
         result = deepcopy(src)
         target = result
@@ -70,13 +72,9 @@ CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
         "hsl.cooldown_minutes_after_red",
         "hsl.ema_span_minutes",
         "hsl.enabled",
-        "hsl.no_restart_drawdown_threshold",
-        "hsl.orange_tier_mode",
         "hsl.panic_close_order_type",
         "hsl.red_threshold",
         "hsl.restart_after_red_policy",
-        "hsl.tier_ratios.orange",
-        "hsl.tier_ratios.yellow",
     }
 )
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
@@ -118,8 +116,7 @@ def _flat_bot_side_modification_policy(
         flat_key: (
             f"{group_name}.{local_key}" in active_paths
             or any(
-                path.startswith(f"{group_name}.{local_key}.")
-                for path in active_paths
+                path.startswith(f"{group_name}.{local_key}.") for path in active_paths
             )
         )
         for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
@@ -152,6 +149,7 @@ _UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS = {
     "entry_weight_volatility_1m",
     "entry_we_weight",
 } | TRAILING_GRID_V7_FLAT_ONLY_KEYS
+
 
 def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
     if not isinstance(overrides, dict):
@@ -253,7 +251,11 @@ def set_nested_value_safe(d: dict, p: list, v: object, create_missing=False):
 
 def nested_update(base_dict, update_dict):
     for key, value in update_dict.items():
-        if key in base_dict and isinstance(base_dict[key], dict) and isinstance(value, dict):
+        if (
+            key in base_dict
+            and isinstance(base_dict[key], dict)
+            and isinstance(value, dict)
+        ):
             nested_update(base_dict[key], value)
         else:
             base_dict[key] = value
@@ -309,11 +311,16 @@ def _extract_allowed_patch(
                 continue
             if not isinstance(side, dict):
                 raise TypeError(f"{source}.bot.{pside} must be a dict")
+            from .hsl import validate_override_paths
+
+            validate_override_paths(
+                {"live": {"hsl_signal_mode": hsl_signal_mode}}, {"bot": {pside: side}}
+            )
             hsl_group = side.get("hsl")
             hsl_flat_keys = set(BOT_GROUP_FIELD_MAP["hsl"].values())
-            has_hsl_patch = (
-                isinstance(hsl_group, dict) and bool(hsl_group)
-            ) or any(key in side for key in hsl_flat_keys)
+            has_hsl_patch = (isinstance(hsl_group, dict) and bool(hsl_group)) or any(
+                key in side for key in hsl_flat_keys
+            )
             if has_hsl_patch and hsl_signal_mode != "coin":
                 path = _format_override_path(coin, ("bot", pside, "hsl"))
                 message = (
@@ -327,9 +334,7 @@ def _extract_allowed_patch(
                 group_name, local_key = removed_path.split(".", 1)
                 flat_key = BOT_GROUP_FIELD_MAP[group_name][local_key]
                 group = side.get(group_name)
-                if flat_key in side or (
-                    isinstance(group, dict) and local_key in group
-                ):
+                if flat_key in side or (isinstance(group, dict) and local_key in group):
                     path = _format_override_path(
                         coin, ("bot", pside, group_name, local_key)
                     )
@@ -403,10 +408,13 @@ def _extract_allowed_patch(
         if root_patch:
             patch[root] = root_patch
     if strict:
-        unknown_roots = sorted(set(source_doc) - {"bot", "live", "override_config_path"})
+        unknown_roots = sorted(
+            set(source_doc) - {"bot", "live", "override_config_path"}
+        )
         if unknown_roots:
             raise ValueError(
-                f"coin_overrides.{coin} has unsupported key(s): " + ", ".join(unknown_roots)
+                f"coin_overrides.{coin} has unsupported key(s): "
+                + ", ".join(unknown_roots)
             )
     return patch
 
@@ -462,9 +470,13 @@ def _validate_patch_leaf_types(
                     try:
                         expand_PB_mode(value)
                     except Exception as exc:
-                        raise ValueError(f"{display_path} has invalid mode {value!r}") from exc
+                        raise ValueError(
+                            f"{display_path} has invalid mode {value!r}"
+                        ) from exc
             elif not isinstance(reference, str):
-                raise TypeError(f"{display_path} must be numeric or boolean, not a string")
+                raise TypeError(
+                    f"{display_path} must be numeric or boolean, not a string"
+                )
             continue
         raise TypeError(
             f"{display_path} must be a scalar value; got {type(value).__name__}"
@@ -480,9 +492,7 @@ def _validate_patch_leaf_types(
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise TypeError(f"{display_path} must be numeric")
             if not math.isfinite(float(value)) or float(value) < 0.0:
-                raise ValueError(
-                    f"{display_path} must be finite and >= 0.0"
-                )
+                raise ValueError(f"{display_path} must be finite and >= 0.0")
     leverage = patch.get("live", {}).get("leverage")
     if leverage is not None and float(leverage) <= 0.0:
         raise ValueError(
@@ -496,7 +506,6 @@ def _validate_effective_coin_config(
     *,
     coin: str,
     origin: str,
-    retain_derived_hsl_dependents: bool = False,
 ) -> dict:
     effective = deepcopy(config)
     for metadata_key in (
@@ -513,7 +522,8 @@ def _validate_effective_coin_config(
             path_prefix=("bot", pside),
             seed_missing_groups=False,
         )
-    from .hsl_revised import normalization_template, validate_override_paths
+    from .hsl import normalization_template, validate_override_paths
+
     validate_override_paths(effective, patch)
     validation_input = normalization_template(get_template_config(), effective)
     nested_update(validation_input, effective)
@@ -544,7 +554,9 @@ def _validate_effective_coin_config(
     try:
         prepared = prepare_config(
             effective,
-            base_config_path=str(effective.get("live", {}).get("base_config_path") or ""),
+            base_config_path=str(
+                effective.get("live", {}).get("base_config_path") or ""
+            ),
             live_only=False,
             verbose=False,
             log_config_transforms=False,
@@ -559,7 +571,11 @@ def _validate_effective_coin_config(
         if normalized_value is _MISSING:
             # wallet_exposure_limit is a per-coin runtime value calculated after
             # canonical config preparation, so it has no canonical global leaf.
-            if len(path) == 3 and path[0] == "bot" and path[2] == "wallet_exposure_limit":
+            if (
+                len(path) == 3
+                and path[0] == "bot"
+                and path[2] == "wallet_exposure_limit"
+            ):
                 normalized_value = original_value
             else:
                 raise ValueError(
@@ -571,25 +587,6 @@ def _validate_effective_coin_config(
             deepcopy(normalized_value),
             create_missing=True,
         )
-    for pside in ("long", "short") if retain_derived_hsl_dependents and effective.get("live", {}).get("hsl_engine") != "revised" else ():
-        hsl_patch = patch.get("bot", {}).get(pside, {}).get("hsl")
-        if not isinstance(hsl_patch, dict) or not hsl_patch:
-            continue
-        dependent_path = (
-            "bot",
-            pside,
-            "hsl",
-            "no_restart_drawdown_threshold",
-        )
-        normalized_value = _get_nested_value(prepared, dependent_path)
-        base_value = _get_nested_value(canonical_base, dependent_path)
-        if normalized_value != base_value:
-            set_nested_value_safe(
-                normalized_patch,
-                list(dependent_path),
-                deepcopy(normalized_value),
-                create_missing=True,
-            )
     return normalized_patch
 
 
@@ -603,7 +600,9 @@ def load_override_config(
     if path is None:
         return {}
     if not isinstance(path, str) or not path.strip():
-        raise TypeError(f"coin_overrides.{coin}.override_config_path must be a non-empty string")
+        raise TypeError(
+            f"coin_overrides.{coin}.override_config_path must be a non-empty string"
+        )
     path = path.strip()
     candidates = []
     if os.path.isabs(path):
@@ -613,7 +612,9 @@ def load_override_config(
         if base_config_path:
             candidates.append(os.path.join(os.path.dirname(base_config_path), path))
         candidates.append(path)
-    resolved_path = next((candidate for candidate in candidates if os.path.isfile(candidate)), None)
+    resolved_path = next(
+        (candidate for candidate in candidates if os.path.isfile(candidate)), None
+    )
     if resolved_path is None:
         attempted = ", ".join(os.path.abspath(candidate) for candidate in candidates)
         raise FileNotFoundError(
@@ -663,7 +664,11 @@ def parse_old_coin_flags(config) -> dict:
         "WE_limit_short": ["bot", "short", "wallet_exposure_limit"],
         "leverage": ["live", "leverage"],
     }
-    if not isinstance(config, dict) or "live" not in config or "coin_flags" not in config["live"]:
+    if (
+        not isinstance(config, dict)
+        or "live" not in config
+        or "coin_flags" not in config["live"]
+    ):
         return {}
     flags = config["live"]["coin_flags"]
     if not isinstance(flags, dict):
@@ -684,11 +689,15 @@ def parse_old_coin_flags(config) -> dict:
             )
         for key, value in keysvals.items():
             if value and key in key_map:
-                set_nested_value_safe(result[coin], key_map[key], value, create_missing=True)
+                set_nested_value_safe(
+                    result[coin], key_map[key], value, create_missing=True
+                )
     return result
 
 
-def normalize_coin_override_keys(coin_overrides, *, symbol_normalizer=None, verbose=True):
+def normalize_coin_override_keys(
+    coin_overrides, *, symbol_normalizer=None, verbose=True
+):
     """Normalize authored keys without loading files or changing patch precedence."""
     if not isinstance(coin_overrides, dict):
         raise TypeError("coin_overrides must be a dict")
@@ -700,7 +709,9 @@ def normalize_coin_override_keys(coin_overrides, *, symbol_normalizer=None, verb
         if not isinstance(coin, str):
             raise TypeError("coin_overrides keys must be strings")
         formatted_coin = (
-            coin if looks_like_exact_market_identifier(coin) else symbol_normalizer(coin)
+            coin
+            if looks_like_exact_market_identifier(coin)
+            else symbol_normalizer(coin)
         )
         if not formatted_coin:
             raise ValueError(f"coin_overrides.{coin} is not a valid coin or symbol")
@@ -814,7 +825,6 @@ def parse_overrides(
             parsed_overrides,
             coin=coin,
             origin="file and inline precedence resolution",
-            retain_derived_hsl_dependents=True,
         )
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
         log_config_message(

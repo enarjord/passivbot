@@ -9,7 +9,7 @@ from .bot import (
     validate_bot_config,
     validate_forager_config,
 )
-from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal_mode
+from .coerce import normalize_hsl_signal_mode
 from .param_paths import require_existing_config_path
 from .shared_bot import get_grouped_bot_value
 from .schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
@@ -26,7 +26,8 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
     overrides = config.get("optimize", {}).get("fixed_runtime_overrides")
     if not isinstance(overrides, dict):
         raise TypeError("config.optimize.fixed_runtime_overrides must be a dict")
-    from .hsl_revised import validate_override_paths
+    from .hsl import validate_override_paths
+
     validate_override_paths(config, overrides)
     resolved_sources: dict[tuple[str, ...], str] = {}
     for dotted_path in overrides:
@@ -86,7 +87,9 @@ def validate_limit_order_fill_buffer_pct(value) -> float:
         or not math.isfinite(value)
         or not 0.0 <= value < 1.0
     ):
-        raise ValueError("backtest.limit_order_fill_buffer_pct must be finite and in [0, 1)")
+        raise ValueError(
+            "backtest.limit_order_fill_buffer_pct must be finite and in [0, 1)"
+        )
     return float(value)
 
 
@@ -96,14 +99,17 @@ def validate_config(
     from analysis_visibility import validate_visible_metrics_config
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
 
-    from .hsl_revised import normalize_revised
+    from .hsl import normalize_hsl
     from .schema import get_template_config
-    normalize_revised(config, get_template_config(), verbose=verbose)
+
+    normalize_hsl(config, get_template_config(), verbose=verbose)
     if not isinstance(config["backtest"]["hsl_detailed_report"], bool):
         raise ValueError("backtest.hsl_detailed_report must be a boolean")
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
         raise ValueError("backtest.offline must be a boolean")
-    validate_limit_order_fill_buffer_pct(config["backtest"]["limit_order_fill_buffer_pct"])
+    validate_limit_order_fill_buffer_pct(
+        config["backtest"]["limit_order_fill_buffer_pct"]
+    )
     require_config_dict(config, "monitor")
     _validate_fixed_runtime_overrides(config)
     fixed_runtime = {
@@ -179,7 +185,9 @@ def validate_config(
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
             path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
         )
-        active_strategy = get_active_strategy_side(bot_side, strategy_kind=strategy_kind, pside=pside)
+        active_strategy = get_active_strategy_side(
+            bot_side, strategy_kind=strategy_kind, pside=pside
+        )
         if not isinstance(active_strategy, dict) or not active_strategy:
             raise ValueError(
                 f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
@@ -205,7 +213,10 @@ def validate_config(
                         ),
                     )
                 risk_cfg = override_side.get("risk")
-                if isinstance(risk_cfg, dict) and "we_excess_allowance_mode" in risk_cfg:
+                if (
+                    isinstance(risk_cfg, dict)
+                    and "we_excess_allowance_mode" in risk_cfg
+                ):
                     normalize_we_excess_allowance_mode(
                         risk_cfg.get("we_excess_allowance_mode"),
                         path=(
@@ -214,10 +225,6 @@ def validate_config(
                         ),
                     )
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
-    if config["live"].get("hsl_engine", "legacy") != "revised":
-        normalize_hsl_cooldown_position_policy(
-            config["live"]["hsl_position_during_cooldown_policy"]
-        )
     _validate_startup_phase_budgets(config["live"])
     ticker_strategy = str(
         config["live"].get("market_snapshot_ticker_strategy", "auto")
@@ -284,7 +291,9 @@ def validate_config(
             "config.live.max_active_candle_tail_gap_minutes must be finite and > 0.0"
         )
     try:
-        forager_refresh_seconds = float(config["live"]["max_forager_candle_refresh_seconds"])
+        forager_refresh_seconds = float(
+            config["live"]["max_forager_candle_refresh_seconds"]
+        )
     except (TypeError, ValueError) as exc:
         raise TypeError(
             "config.live.max_forager_candle_refresh_seconds must be numeric"
@@ -327,23 +336,13 @@ def validate_config(
     try:
         fee_conversion_max_age_ms = int(fee_conversion_max_age_ms_raw)
     except (TypeError, ValueError) as exc:
-        raise TypeError("config.live.fee_conversion_max_age_ms must be an integer") from exc
+        raise TypeError(
+            "config.live.fee_conversion_max_age_ms must be an integer"
+        ) from exc
     if str(fee_conversion_max_age_ms_raw).strip() != str(fee_conversion_max_age_ms):
         raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
     if fee_conversion_max_age_ms < 0:
         raise ValueError("config.live.fee_conversion_max_age_ms must be >= 0")
-    hsl_grace = config["live"]["hsl_unavailable_grace_seconds"]
-    if isinstance(hsl_grace, bool) or not isinstance(hsl_grace, (int, float)):
-        raise TypeError("config.live.hsl_unavailable_grace_seconds must be numeric")
-    if not math.isfinite(hsl_grace) or hsl_grace < 0.0:
-        raise ValueError("config.live.hsl_unavailable_grace_seconds must be finite and >= 0")
-    if hsl_grace >= 2**64 / 1000:
-        raise ValueError("config.live.hsl_unavailable_grace_seconds must fit unsigned milliseconds")
-    risk_attempts = config["live"]["risk_input_max_attempts"]
-    if isinstance(risk_attempts, bool) or not isinstance(risk_attempts, int):
-        raise TypeError("config.live.risk_input_max_attempts must be an integer")
-    if risk_attempts < 1:
-        raise ValueError("config.live.risk_input_max_attempts must be >= 1")
     exchange_symbol_cooldown_raw = config["live"][
         "exchange_symbol_unavailable_cooldown_hours"
     ]
@@ -365,10 +364,7 @@ def validate_config(
         raise ValueError(
             "config.live.exchange_symbol_unavailable_cooldown_hours must be >= 0"
         )
-    if (
-        exchange_symbol_cooldown_hours
-        > MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
-    ):
+    if exchange_symbol_cooldown_hours > MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS:
         raise ValueError(
             "config.live.exchange_symbol_unavailable_cooldown_hours must be <= "
             f"{MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS:g}"

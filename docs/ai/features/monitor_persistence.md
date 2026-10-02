@@ -36,7 +36,7 @@ Event sequences are monotonic within a monitor root, including across unclean re
 watermark is the maximum of the manifest and checksummed segment recovery metadata. Never infer an
 envelope sequence from payload bytes or an invalid row.
 
-Revised-HSL account and health equity are passive observations of fresh committed balance and
+HSL account and health equity are passive observations of fresh committed balance and
 positions plus cached held-symbol quotes. Missing or stale inputs produce `null` equity rather
 than a startup placeholder or a partial portfolio sum; reporting performs no exchange I/O.
 

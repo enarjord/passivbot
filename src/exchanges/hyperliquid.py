@@ -16,7 +16,7 @@ from live.balance_composition import (
     normalize_hyperliquid_unified_balance_composition,
 )
 from passivbot import logging
-from live import hsl_revised_live
+from live import hsl_live
 from passivbot_exceptions import FatalBotException
 from utils import MarketIdentifierResolutionError, symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
@@ -134,8 +134,12 @@ class HyperliquidBot(CCXTBot):
         """Fetch and cache the Hyperliquid account abstraction mode."""
         wallet_address = str(self.user_info.get("wallet_address") or "")
         if not wallet_address:
-            raise ValueError(f"user {self.user!r} missing wallet_address for Hyperliquid abstraction")
-        raw = await self.cca.publicPostInfo({"type": "userAbstraction", "user": wallet_address})
+            raise ValueError(
+                f"user {self.user!r} missing wallet_address for Hyperliquid abstraction"
+            )
+        raw = await self.cca.publicPostInfo(
+            {"type": "userAbstraction", "user": wallet_address}
+        )
         abstraction = self._normalize_hl_user_abstraction(raw)
         self._hl_user_abstraction = abstraction
         self._hl_unified_enabled = self._hl_abstraction_is_unified_like(abstraction)
@@ -184,7 +188,9 @@ class HyperliquidBot(CCXTBot):
             self.ccp.options["fetchMarkets"] = fetch_markets_config
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
-            logging.info("Skipping Hyperliquid websocket session due to custom endpoint override.")
+            logging.info(
+                "Skipping Hyperliquid websocket session due to custom endpoint override."
+            )
         self.cca = getattr(ccxt_async, self.exchange)(creds)
         self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
@@ -198,7 +204,9 @@ class HyperliquidBot(CCXTBot):
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
-                10.0 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+                10.0
+                if elm["limits"]["cost"]["min"] is None
+                else elm["limits"]["cost"]["min"]
             )
             self.min_costs[symbol] = pbr.round_(self.min_costs[symbol] * 1.01, 0.01)
             self.qty_steps[symbol] = elm["precision"]["amount"]
@@ -223,7 +231,9 @@ class HyperliquidBot(CCXTBot):
                 )
             else:
                 self.max_leverage[symbol] = (
-                    int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
+                    int(elm["info"]["maxLeverage"])
+                    if "maxLeverage" in elm["info"]
+                    else 0
                 )
         self.n_decimal_places = 6
         self.n_significant_figures = 5
@@ -239,7 +249,10 @@ class HyperliquidBot(CCXTBot):
         raw_mode = str(info.get("marginMode") or "").strip()
         raw_mode_l = raw_mode.lower()
         only_isolated = bool(info.get("onlyIsolated") or info.get("isolatedOnly"))
-        cross_capable = not only_isolated and raw_mode_l not in {"strictisolated", "nocross"}
+        cross_capable = not only_isolated and raw_mode_l not in {
+            "strictisolated",
+            "nocross",
+        }
         if isinstance(margin_modes, dict) and margin_modes.get("cross") is False:
             cross_capable = False
         return {
@@ -330,7 +343,8 @@ class HyperliquidBot(CCXTBot):
         return sorted(
             symbol
             for symbol in tracked
-            if symbol in getattr(self, "markets_dict", {}) and self._get_hl_dex_for_symbol(symbol)
+            if symbol in getattr(self, "markets_dict", {})
+            and self._get_hl_dex_for_symbol(symbol)
         )
 
     def _get_hl_hip3_dex_names(self) -> list[str]:
@@ -354,7 +368,9 @@ class HyperliquidBot(CCXTBot):
         """Return True when the next HIP-3 refresh for a surface should sweep every dex."""
         if bool(getattr(self, "_hl_force_full_dex_sweep", False)):
             return True
-        if surface in set(getattr(self, "_hl_force_full_dex_sweep_surfaces", set()) or set()):
+        if surface in set(
+            getattr(self, "_hl_force_full_dex_sweep_surfaces", set()) or set()
+        ):
             return True
         last_full_map = getattr(self, "_hl_last_full_dex_sweep_ms_by_surface", {}) or {}
         last_full = int(last_full_map.get(surface, 0) or 0)
@@ -365,7 +381,11 @@ class HyperliquidBot(CCXTBot):
     def _hl_select_dex_names_for_state(self, surface: str) -> tuple[list[str], bool]:
         """Choose HIP-3 dexes for the next authoritative state query for one surface."""
         full_sweep = self._hl_should_force_full_dex_sweep(surface)
-        dexes = self._get_hl_hip3_dex_names() if full_sweep else self._get_hl_active_dex_names()
+        dexes = (
+            self._get_hl_hip3_dex_names()
+            if full_sweep
+            else self._get_hl_active_dex_names()
+        )
         if not hasattr(self, "_hl_last_dex_scope_by_surface"):
             self._hl_last_dex_scope_by_surface = {}
         self._hl_last_dex_scope_by_surface[surface] = {
@@ -383,7 +403,9 @@ class HyperliquidBot(CCXTBot):
         return dexes, full_sweep
 
     def _hl_last_dex_scope_summary(self, surface: str) -> str:
-        scope = (getattr(self, "_hl_last_dex_scope_by_surface", {}) or {}).get(surface) or {}
+        scope = (getattr(self, "_hl_last_dex_scope_by_surface", {}) or {}).get(
+            surface
+        ) or {}
         dexes = tuple(scope.get("dexes") or ())
         label = "full" if bool(scope.get("full_sweep", False)) else "active"
         return f"{surface}_scope={label} {surface}_dexes={len(dexes)}"
@@ -474,7 +496,9 @@ class HyperliquidBot(CCXTBot):
         self._hl_mark_dex_scope_consumed("positions", full_sweep=full_sweep)
         for fetch_spec, fetched in zip(fetch_specs, fetched_batches):
             if include_raw:
-                raw_payloads.append({"fetch_spec": deepcopy(fetch_spec), "response": deepcopy(fetched)})
+                raw_payloads.append(
+                    {"fetch_spec": deepcopy(fetch_spec), "response": deepcopy(fetched)}
+                )
             for position in fetched:
                 normalized = self._normalize_ccxt_position(position)
                 if not self._get_hl_dex_for_symbol(normalized["symbol"]):
@@ -508,11 +532,20 @@ class HyperliquidBot(CCXTBot):
         approved = set()
         for syms in getattr(self, "approved_coins_minus_ignored_coins", {}).values():
             approved.update(syms)
-        approved_hip3 = sorted(symbol for symbol in approved if self._get_hl_dex_for_symbol(symbol))
+        approved_hip3 = sorted(
+            symbol for symbol in approved if self._get_hl_dex_for_symbol(symbol)
+        )
         if approved_hip3:
             unsupported.append(
                 "approved_coins="
-                + ",".join(sorted({symbol.split("/")[0] if "/" in symbol else symbol for symbol in approved_hip3}))
+                + ",".join(
+                    sorted(
+                        {
+                            symbol.split("/")[0] if "/" in symbol else symbol
+                            for symbol in approved_hip3
+                        }
+                    )
+                )
             )
         for symbol in sorted(
             set(getattr(self, "positions", {})) | set(getattr(self, "open_orders", {}))
@@ -532,7 +565,9 @@ class HyperliquidBot(CCXTBot):
                 position_symbols.add(symbol)
             if has_orders:
                 open_order_symbols.add(symbol)
-            isolated_live_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol) == "isolated"
+            isolated_live_mode = (
+                getattr(self, "_hl_live_margin_modes", {}).get(symbol) == "isolated"
+            )
             isolated_only = self._requires_isolated_margin(symbol)
             if isolated_only:
                 isolated_only_symbols.add(symbol)
@@ -601,9 +636,9 @@ class HyperliquidBot(CCXTBot):
                             semantics_source == "authoritative_open_order_snapshot"
                             or self._hl_ws_order_has_fill_progress(order)
                         ):
-                            order[
-                                "_pb_order_update_requires_authoritative_refresh"
-                            ] = True
+                            order["_pb_order_update_requires_authoritative_refresh"] = (
+                                True
+                            )
                     try:
                         order["qty"] = order["amount"]
                     except (KeyError, TypeError, ValueError) as exc:
@@ -631,9 +666,9 @@ class HyperliquidBot(CCXTBot):
                             semantics_source == "authoritative_open_order_snapshot"
                             or self._hl_ws_order_has_fill_progress(order)
                         ):
-                            order[
-                                "_pb_order_update_requires_authoritative_refresh"
-                            ] = True
+                            order["_pb_order_update_requires_authoritative_refresh"] = (
+                                True
+                            )
                         try:
                             order["qty"] = order["amount"]
                         except (KeyError, TypeError, ValueError) as retry_exc:
@@ -662,7 +697,9 @@ class HyperliquidBot(CCXTBot):
                             len(untrusted),
                             self._log_symbols(sorted(symbols), limit=8),
                         )
-                        self._hl_untrusted_order_ws_last_warning_monotonic = now_monotonic
+                        self._hl_untrusted_order_ws_last_warning_monotonic = (
+                            now_monotonic
+                        )
                     self._mark_account_critical_state_dirty(
                         reason="order_ws_semantics_unavailable",
                         symbols=symbols,
@@ -672,7 +709,9 @@ class HyperliquidBot(CCXTBot):
                 if normalized:
                     for order in normalized:
                         if self._hl_ws_order_has_fill_progress(order):
-                            order["_pb_order_update_requires_authoritative_refresh"] = True
+                            order["_pb_order_update_requires_authoritative_refresh"] = (
+                                True
+                            )
                     self.handle_order_update(normalized)
             except asyncio.CancelledError:
                 break
@@ -680,7 +719,7 @@ class HyperliquidBot(CCXTBot):
                 self._health_ws_reconnects += 1
                 self._health_rate_limits += 1
                 _ws_consecutive_rate_limits += 1
-                backoff = min(30, 2 ** _ws_consecutive_rate_limits) + random.uniform(0, 1)
+                backoff = min(30, 2**_ws_consecutive_rate_limits) + random.uniform(0, 1)
                 self._log_ws_reconnect(
                     reconnect_no=self._health_ws_reconnects,
                     retry_delay_s=backoff,
@@ -688,7 +727,9 @@ class HyperliquidBot(CCXTBot):
                     rate_limited=True,
                 )
                 await asyncio.sleep(backoff)
-                logging.debug("[ws] %s: reconnecting after rate limit...", self.exchange)
+                logging.debug(
+                    "[ws] %s: reconnecting after rate limit...", self.exchange
+                )
             except Exception as e:
                 self._health_ws_reconnects += 1
                 _ws_consecutive_rate_limits = 0
@@ -781,8 +822,8 @@ class HyperliquidBot(CCXTBot):
         self, order: dict
     ) -> tuple[str, bool, str] | None:
         """Recover sparse semantics from exchange truth, then local create acknowledgement."""
-        snapshot_state, recovered = (
-            self._hl_open_snapshot_ws_order_semantics_evidence(order)
+        snapshot_state, recovered = self._hl_open_snapshot_ws_order_semantics_evidence(
+            order
         )
         if recovered is not None:
             return (*recovered, "authoritative_open_order_snapshot")
@@ -844,8 +885,8 @@ class HyperliquidBot(CCXTBot):
         self, order: dict
     ) -> tuple[str, bool] | None:
         """Compatibility wrapper returning only valid snapshot semantics."""
-        _snapshot_state, recovered = (
-            self._hl_open_snapshot_ws_order_semantics_evidence(order)
+        _snapshot_state, recovered = self._hl_open_snapshot_ws_order_semantics_evidence(
+            order
         )
         return recovered
 
@@ -1185,7 +1226,9 @@ class HyperliquidBot(CCXTBot):
         return self._normalize_open_orders(fetched)
 
     def _hl_balance_payload_is_unified(self, balance_payload: dict) -> bool:
-        info = balance_payload.get("info", {}) if isinstance(balance_payload, dict) else {}
+        info = (
+            balance_payload.get("info", {}) if isinstance(balance_payload, dict) else {}
+        )
         return isinstance(info, dict) and isinstance(info.get("balances"), list)
 
     def _hl_extract_unified_total(self, balance_payload: dict) -> float:
@@ -1197,15 +1240,23 @@ class HyperliquidBot(CCXTBot):
                 )
             return total
 
-        total = balance_payload.get("total", {}) if isinstance(balance_payload, dict) else {}
+        total = (
+            balance_payload.get("total", {})
+            if isinstance(balance_payload, dict)
+            else {}
+        )
         if isinstance(total, dict) and total.get(self.quote) is not None:
             return _validate_total(total[self.quote])
-        info = balance_payload.get("info", {}) if isinstance(balance_payload, dict) else {}
+        info = (
+            balance_payload.get("info", {}) if isinstance(balance_payload, dict) else {}
+        )
         balances = info.get("balances", []) if isinstance(info, dict) else []
         for row in balances or []:
             if str(row.get("coin") or "") == self.quote:
                 return _validate_total(row.get("total"))
-        raise KeyError(f"unified Hyperliquid balance payload missing total for {self.quote}")
+        raise KeyError(
+            f"unified Hyperliquid balance payload missing total for {self.quote}"
+        )
 
     def _normalize_balance_diagnostics(self, fetched: object) -> dict:
         """Expose only bounded totals from a proven unified balance payload."""
@@ -1240,11 +1291,15 @@ class HyperliquidBot(CCXTBot):
         timings_ms = {}
         started = utc_ms()
         balance_task = asyncio.create_task(
-            self._timed_authoritative_fetch("balance", self.cca.fetch_balance(), timings_ms)
+            self._timed_authoritative_fetch(
+                "balance", self.cca.fetch_balance(), timings_ms
+            )
         )
         hip3_positions_task = asyncio.create_task(
             self._timed_authoritative_fetch(
-                "hip3_positions", self._fetch_hip3_positions(include_raw=True), timings_ms
+                "hip3_positions",
+                self._fetch_hip3_positions(include_raw=True),
+                timings_ms,
             )
         )
         speculative_core_positions_task = None
@@ -1275,7 +1330,9 @@ class HyperliquidBot(CCXTBot):
                     self._record_hl_live_margin_mode(
                         normalized["symbol"], normalized.get("margin_mode")
                     )
-                    positions[(normalized["symbol"], normalized["position_side"])] = normalized
+                    positions[(normalized["symbol"], normalized["position_side"])] = (
+                        normalized
+                    )
                     unified_core_upnl += self._hl_position_unrealized_pnl(position)
                 # Unified `total[USDC]` is the cross-margined account equity: it already
                 # includes perp uPNL for core *and* every HIP-3 dex (all perp margin is held
@@ -1311,7 +1368,9 @@ class HyperliquidBot(CCXTBot):
                 if speculative_core_positions_task is not None:
                     if not speculative_core_positions_task.done():
                         speculative_core_positions_task.cancel()
-                    await asyncio.gather(speculative_core_positions_task, return_exceptions=True)
+                    await asyncio.gather(
+                        speculative_core_positions_task, return_exceptions=True
+                    )
             hip3_raw, hip3_positions = await hip3_positions_task
             for position in hip3_positions:
                 positions[(position["symbol"], position["position_side"])] = position
@@ -1321,7 +1380,9 @@ class HyperliquidBot(CCXTBot):
                     for raw_position in hip3_payload.get("response") or []:
                         if not self._get_hl_dex_for_symbol(raw_position.get("symbol")):
                             continue
-                        unified_hip3_upnl += self._hl_position_unrealized_pnl(raw_position)
+                        unified_hip3_upnl += self._hl_position_unrealized_pnl(
+                            raw_position
+                        )
                 balance = unified_total - unified_core_upnl - unified_hip3_upnl
             raw_snapshot = {
                 "balance": deepcopy(info),
@@ -1343,11 +1404,23 @@ class HyperliquidBot(CCXTBot):
             )
             return raw_snapshot, list(positions.values()), balance
         except Exception:
-            for task in (speculative_core_positions_task, hip3_positions_task, balance_task):
+            for task in (
+                speculative_core_positions_task,
+                hip3_positions_task,
+                balance_task,
+            ):
                 if task is not None and not task.done():
                     task.cancel()
             await asyncio.gather(
-                *[task for task in (speculative_core_positions_task, hip3_positions_task, balance_task) if task is not None],
+                *[
+                    task
+                    for task in (
+                        speculative_core_positions_task,
+                        hip3_positions_task,
+                        balance_task,
+                    )
+                    if task is not None
+                ],
                 return_exceptions=True,
             )
             raise
@@ -1386,7 +1459,9 @@ class HyperliquidBot(CCXTBot):
 
     async def capture_positions_snapshot(self) -> tuple[list, list]:
         my_gen = self._hl_cache_generation
-        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(
+            my_gen
+        )
         self._last_hl_balance = balance
         self._hl_balance_consumed = False
         return deepcopy(raw_snapshot["positions"]), deepcopy(positions)
@@ -1405,13 +1480,19 @@ class HyperliquidBot(CCXTBot):
 
     async def capture_balance_snapshot(self) -> tuple[dict, float]:
         my_gen = self._hl_cache_generation
-        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(
+            my_gen
+        )
         return deepcopy(raw_snapshot["balance"]), float(balance)
 
-    async def _capture_positions_balance_staged_snapshot(self) -> tuple[dict, list, float]:
+    async def _capture_positions_balance_staged_snapshot(
+        self,
+    ) -> tuple[dict, list, float]:
         """Fetch Hyperliquid positions+balance once for staged authoritative refresh."""
         my_gen = self._hl_cache_generation
-        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(
+            my_gen
+        )
         self._last_hl_balance = balance
         self._hl_balance_consumed = False
         return deepcopy(raw_snapshot), deepcopy(positions), float(balance)
@@ -1460,12 +1541,16 @@ class HyperliquidBot(CCXTBot):
         elif "positions" in plan:
             tasks["positions"] = asyncio.create_task(
                 self._timed_authoritative_fetch(
-                    "positions", self._fetch_protective_positions(), timings_ms,
+                    "positions",
+                    self._fetch_protective_positions(),
+                    timings_ms,
                 )
             )
         if "open_orders" in plan:
             tasks["open_orders"] = asyncio.create_task(
-                self._timed_authoritative_fetch("open_orders", self.fetch_open_orders(), timings_ms)
+                self._timed_authoritative_fetch(
+                    "open_orders", self.fetch_open_orders(), timings_ms
+                )
             )
         if "fills" in plan:
             tasks["fills"] = asyncio.create_task(
@@ -1490,8 +1575,10 @@ class HyperliquidBot(CCXTBot):
                 if "balance" in plan:
                     out["balance"] = balance
                     try:
-                        out["balance_composition"] = self._normalize_balance_diagnostics(
-                            _raw_snapshot["balance"]
+                        out["balance_composition"] = (
+                            self._normalize_balance_diagnostics(
+                                _raw_snapshot["balance"]
+                            )
                         )
                     except Exception:
                         out["balance_composition"] = malformed_balance_composition(
@@ -1554,18 +1641,24 @@ class HyperliquidBot(CCXTBot):
             if dex or info.get("hip3"):
                 dex = str(dex or info.get("dex") or "").strip()
                 if not dex:
-                    raise ValueError(f"Hyperliquid HIP-3 symbol {symbol} missing dex metadata")
+                    raise ValueError(
+                        f"Hyperliquid HIP-3 symbol {symbol} missing dex metadata"
+                    )
                 hip3_by_dex.setdefault(dex, []).append(symbol)
             else:
                 vanilla_symbols.append(symbol)
         if vanilla_symbols:
             bulk = await self.fetch_tickers()
-            out.update({symbol: bulk[symbol] for symbol in vanilla_symbols if symbol in bulk})
+            out.update(
+                {symbol: bulk[symbol] for symbol in vanilla_symbols if symbol in bulk}
+            )
         for dex, dex_symbols in hip3_by_dex.items():
             out.update(await self._fetch_hip3_tickers_for_symbols(dex, dex_symbols))
         return out
 
-    async def _fetch_hip3_tickers_for_symbols(self, dex: str, symbols: list[str]) -> dict:
+    async def _fetch_hip3_tickers_for_symbols(
+        self, dex: str, symbols: list[str]
+    ) -> dict:
         response = await self.cca.fetch(
             self._hl_info_url(),
             method="POST",
@@ -1573,8 +1666,12 @@ class HyperliquidBot(CCXTBot):
             body=json.dumps({"type": "metaAndAssetCtxs", "dex": dex}),
         )
         if not isinstance(response, list) or len(response) < 2:
-            raise ValueError(f"unexpected Hyperliquid HIP-3 meta response for dex={dex}")
-        universe = response[0].get("universe", []) if isinstance(response[0], dict) else []
+            raise ValueError(
+                f"unexpected Hyperliquid HIP-3 meta response for dex={dex}"
+            )
+        universe = (
+            response[0].get("universe", []) if isinstance(response[0], dict) else []
+        )
         asset_ctxs = response[1] if isinstance(response[1], list) else []
         name_to_symbol = {}
         for symbol in symbols:
@@ -1598,7 +1695,11 @@ class HyperliquidBot(CCXTBot):
             symbol = name_to_symbol.get(str(asset.get("name") or ""))
             if symbol is None:
                 continue
-            ctx = asset_ctxs[idx] if idx < len(asset_ctxs) and isinstance(asset_ctxs[idx], dict) else {}
+            ctx = (
+                asset_ctxs[idx]
+                if idx < len(asset_ctxs) and isinstance(asset_ctxs[idx], dict)
+                else {}
+            )
             ticker = self._hip3_ticker_from_asset_ctx(symbol, ctx)
             if ticker is not None:
                 out[symbol] = ticker
@@ -1618,8 +1719,10 @@ class HyperliquidBot(CCXTBot):
         if isinstance(impact, list) and len(impact) >= 2:
             bid = _positive(impact[0])
             ask = _positive(impact[1])
-        last = _positive(ctx.get("midPx")) or _positive(ctx.get("markPx")) or _positive(
-            ctx.get("oraclePx")
+        last = (
+            _positive(ctx.get("midPx"))
+            or _positive(ctx.get("markPx"))
+            or _positive(ctx.get("oraclePx"))
         )
         source = "hyperliquid_hip3_asset_ctx"
         if bid is None:
@@ -1693,7 +1796,9 @@ class HyperliquidBot(CCXTBot):
     async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
         """Return canonical fill events for Hyperliquid (draft placeholder)."""
         events = []
-        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+        fills = await self.fetch_pnls(
+            start_time=start_time, end_time=end_time, limit=limit
+        )
         for fill in fills:
             events.append(
                 {
@@ -1719,17 +1824,23 @@ class HyperliquidBot(CCXTBot):
         if start_time is None:
             fetched = await self.cca.fetch_my_trades(limit=limit)
         else:
-            fetched = await self.cca.fetch_my_trades(since=max(1, int(start_time)), limit=limit)
+            fetched = await self.cca.fetch_my_trades(
+                since=max(1, int(start_time)), limit=limit
+            )
         for elm in fetched:
             elm["pnl"] = float(elm["info"]["closedPnl"])
-            elm["position_side"] = "long" if "long" in elm["info"]["dir"].lower() else "short"
+            elm["position_side"] = (
+                "long" if "long" in elm["info"]["dir"].lower() else "short"
+            )
         return sorted(fetched, key=lambda x: x["timestamp"])
 
-    @hsl_revised_live.connector_write("cancel")
+    @hsl_live.connector_write("cancel")
     async def execute_cancellation(self, order: dict) -> dict:
         """Hyperliquid: Cancel order with vault support."""
         params = (
-            {"vaultAddress": self.user_info["wallet_address"]} if self.user_info["is_vault"] else {}
+            {"vaultAddress": self.user_info["wallet_address"]}
+            if self.user_info["is_vault"]
+            else {}
         )
 
         def _is_already_gone(payload) -> bool:
@@ -1752,10 +1863,14 @@ class HyperliquidBot(CCXTBot):
                 action="cancel",
                 connector_route="hyperliquid",
             )
-            res = await self.cca.cancel_order(order["id"], symbol=order["symbol"], params=params)
+            res = await self.cca.cancel_order(
+                order["id"], symbol=order["symbol"], params=params
+            )
             # Sometimes hyperliquid returns an "ok" wrapper with an embedded error; treat as non-fatal.
             if _is_already_gone(res):
-                logging.info("Order already canceled/filled on exchange; treating as success.")
+                logging.info(
+                    "Order already canceled/filled on exchange; treating as success."
+                )
                 return {
                     "status": "success",
                     "_passivbot_cancel_requires_full_authoritative_confirmation": True,
@@ -1763,7 +1878,9 @@ class HyperliquidBot(CCXTBot):
             return res
         except Exception as e:
             if _is_already_gone(e):
-                logging.info("Order already canceled/filled on exchange; treating as success.")
+                logging.info(
+                    "Order already canceled/filled on exchange; treating as success."
+                )
                 return {
                     "status": "success",
                     "_passivbot_cancel_requires_full_authoritative_confirmation": True,
@@ -1782,7 +1899,9 @@ class HyperliquidBot(CCXTBot):
         params = {
             "reduceOnly": order["reduce_only"],
             "timeInForce": (
-                "Alo" if require_live_value(self.config, "time_in_force") == "post_only" else "Gtc"
+                "Alo"
+                if require_live_value(self.config, "time_in_force") == "post_only"
+                else "Gtc"
             ),
             "clientOrderId": order["custom_id"],
         }
@@ -1827,7 +1946,8 @@ class HyperliquidBot(CCXTBot):
         did_create = super().did_create_order(executed)
         try:
             return did_create and (
-                "info" in executed and ("filled" in executed["info"] or "resting" in executed["info"])
+                "info" in executed
+                and ("filled" in executed["info"] or "resting" in executed["info"])
             )
         except (TypeError, KeyError):
             return False
@@ -1855,7 +1975,8 @@ class HyperliquidBot(CCXTBot):
                         for symbol in self.markets_dict:
                             if (
                                 "baseId" in self.markets_dict[symbol]["info"]
-                                and self.markets_dict[symbol]["info"]["baseId"] == asset_id
+                                and self.markets_dict[symbol]["info"]["baseId"]
+                                == asset_id
                             ):
                                 break
                         else:
@@ -1914,8 +2035,7 @@ class HyperliquidBot(CCXTBot):
                         isinstance(res, dict)
                         and str(res.get("status") or "").lower() == "ok"
                         and isinstance(res.get("response"), dict)
-                        and str(res["response"].get("type") or "").lower()
-                        == "default"
+                        and str(res["response"].get("type") or "").lower() == "default"
                     ):
                         raise RuntimeError(
                             "Hyperliquid margin-mode response was not an authoritative success"

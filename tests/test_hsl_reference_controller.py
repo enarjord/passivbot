@@ -1,4 +1,4 @@
-"""Controller traces settled before connecting revised scope execution."""
+"""Controller traces settled before connecting hsl scope execution."""
 
 from dataclasses import replace
 import json
@@ -17,29 +17,52 @@ def controller_backend(request, monkeypatch):
     if request.param == "reference":
         return
     import passivbot_rust as pbr
+
     assert not getattr(pbr, "__is_stub__", False)
-    assert hasattr(pbr, "hsl_revised_controller"), "rebuild the source-matched extension"
+    assert hasattr(pbr, "hsl_controller"), "rebuild the source-matched extension"
 
     def rust_replay(episodes, **kwargs):
         payload = dict(kwargs)
-        payload["budget"], payload["span"], payload["threshold"] = map(float,
-            (kwargs["budget"], kwargs["span"], kwargs["threshold"]))
+        payload["budget"], payload["span"], payload["threshold"] = map(
+            float, (kwargs["budget"], kwargs["span"], kwargs["threshold"])
+        )
         payload["cooldown_ms"] = payload.pop("cooldown")
-        payload["episodes"] = [{"entry_reference": None if e.entry_reference is None else float(e.entry_reference),
-                                "opened_at": e.opened_at,
-                                "entry_reference_delta": None if e.entry_reference_delta is None else float(e.entry_reference_delta),
-                                "points": [{"timestamp": p.observation.timestamp,
-                                            "pnl": float(p.observation.pnl), "upnl": float(p.observation.upnl),
-                                            "exposed": p.exposed, "flatten": p.flatten,
-                                            "cashflow_reference_delta": None if p.cashflow_reference_delta is None else float(p.cashflow_reference_delta)} for p in e.points]}
-                               for e in episodes]
+        payload["episodes"] = [
+            {
+                "entry_reference": (
+                    None if e.entry_reference is None else float(e.entry_reference)
+                ),
+                "opened_at": e.opened_at,
+                "entry_reference_delta": (
+                    None
+                    if e.entry_reference_delta is None
+                    else float(e.entry_reference_delta)
+                ),
+                "points": [
+                    {
+                        "timestamp": p.observation.timestamp,
+                        "pnl": float(p.observation.pnl),
+                        "upnl": float(p.observation.upnl),
+                        "exposed": p.exposed,
+                        "flatten": p.flatten,
+                        "cashflow_reference_delta": (
+                            None
+                            if p.cashflow_reference_delta is None
+                            else float(p.cashflow_reference_delta)
+                        ),
+                    }
+                    for p in e.points
+                ],
+            }
+            for e in episodes
+        ]
         try:
             expected = REFERENCE_REPLAY(episodes, **kwargs)
         except ValueError:
             with pytest.raises(ValueError):
-                pbr.hsl_revised_controller(json.dumps(payload))
+                pbr.hsl_controller(json.dumps(payload))
             raise
-        actual = json.loads(pbr.hsl_revised_controller(json.dumps(payload)))
+        actual = json.loads(pbr.hsl_controller(json.dumps(payload)))
         assert len(actual) == len(expected)
         for r, e in zip(actual, expected):
             for key in ("timestamp", "action", "red_at", "flat_at", "reason"):
@@ -48,6 +71,7 @@ def controller_backend(request, monkeypatch):
             assert r["ema"] == pytest.approx(float(e.ema))
             assert r["numeric_range_approximation"] == e.numeric_range_approximation
         return tuple(Decision(**r) for r in actual)
+
     monkeypatch.setattr(sys.modules[__name__], "replay", rust_replay)
 
 
@@ -57,26 +81,61 @@ def point(t, pnl=0, upnl=0, *, exposed=True, flatten=False):
 
 def run(*episodes, now=None, start=0, cooldown=200, restart="always", span=1):
     if now is None:
-        now = max((p.observation.timestamp for e in episodes for p in e.points), default=1000)
-    return replay(episodes, now=now, start=start, budget=1000, span=span,
-                  threshold=".05", cooldown=cooldown, restart=restart)
+        now = max(
+            (p.observation.timestamp for e in episodes for p in e.points), default=1000
+        )
+    return replay(
+        episodes,
+        now=now,
+        start=start,
+        budget=1000,
+        span=span,
+        threshold=".05",
+        cooldown=cooldown,
+        restart=restart,
+    )
 
 
 def stopped():
-    return Episode((point(0, exposed=False), point(100, upnl=-100),
-                    point(150, -50, -50), point(200, -100, exposed=False, flatten=True)))
+    return Episode(
+        (
+            point(0, exposed=False),
+            point(100, upnl=-100),
+            point(150, -50, -50),
+            point(200, -100, exposed=False, flatten=True),
+        )
+    )
 
 
 def test_actual_flat_anchors_cooldown_partial_does_not():
-    trace = run(stopped(), Episode((point(250, exposed=False), point(399, exposed=False), point(400, exposed=False))))
-    assert [d.action for d in trace] == ["normal", "panic", "panic", "halted", "halted", "halted", "normal"]
+    trace = run(
+        stopped(),
+        Episode(
+            (
+                point(250, exposed=False),
+                point(399, exposed=False),
+                point(400, exposed=False),
+            )
+        ),
+    )
+    assert [d.action for d in trace] == [
+        "normal",
+        "panic",
+        "panic",
+        "halted",
+        "halted",
+        "halted",
+        "normal",
+    ]
     assert trace[2].red_at == 100 and trace[2].flat_at is None
     assert trace[3].flat_at == 200
 
 
 @pytest.mark.parametrize("restart", ["always", "never"])
 def test_normal_intervention_clears_halt_but_fresh_loss_still_panics(restart):
-    second = Episode((point(220, -100, exposed=False), point(230, -101), point(240, -101, -100)))
+    second = Episode(
+        (point(220, -100, exposed=False), point(230, -101), point(240, -101, -100))
+    )
     trace = run(stopped(), second, restart=restart)
     assert trace[-2].action == "normal" and trace[-2].reason == "green"
     assert trace[-1].action == "panic" and trace[-1].red_at == 240
@@ -85,14 +144,29 @@ def test_normal_intervention_clears_halt_but_fresh_loss_still_panics(restart):
 @pytest.mark.parametrize("restart", ["always", "never"])
 def test_reopening_clears_cooldown_even_if_it_flattens_between_samples(restart):
     second = Episode((point(230, -101), point(240, -101, exposed=False, flatten=True)))
-    third = Episode((point(300, -101, exposed=False), point(439, -101, exposed=False), point(440, -101, exposed=False)))
+    third = Episode(
+        (
+            point(300, -101, exposed=False),
+            point(439, -101, exposed=False),
+            point(440, -101, exposed=False),
+        )
+    )
     trace = run(stopped(), second, third, restart=restart)
-    assert all(d.action == "normal" and d.red_at is None and d.flat_at is None for d in trace[4:])
+    assert all(
+        d.action == "normal" and d.red_at is None and d.flat_at is None
+        for d in trace[4:]
+    )
 
 
 def test_partial_panic_recovery_revokes_panic_without_ending_episode():
-    unfinished = Episode((point(0, exposed=False), point(100, upnl=-100), point(150, -50, -50),
-                          point(200, -50, 0)))
+    unfinished = Episode(
+        (
+            point(0, exposed=False),
+            point(100, upnl=-100),
+            point(150, -50, -50),
+            point(200, -50, 0),
+        )
+    )
     trace = run(unfinished)
     assert trace[-1].action == "normal"
     assert trace[-1].red_at is None and trace[-1].flat_at is None
@@ -107,8 +181,12 @@ def test_window_expiry_forgets_stop_and_current_risk_can_create_new_one(restart)
     damaged_now = replace(active, points=active.points[:-1] + (point(300, upnl=-100),))
     assert run(damaged_now, start=101, restart=restart)[-1].action == "panic"
     # Closed stops expire too. Remaining ordinary flat points cannot invent them.
-    assert run(stopped(), Episode((point(300, exposed=False),)), start=201,
-               restart=restart)[-1].action == "normal"
+    assert (
+        run(
+            stopped(), Episode((point(300, exposed=False),)), start=201, restart=restart
+        )[-1].action
+        == "normal"
+    )
 
 
 @pytest.mark.parametrize("cooldown,expected", [(0, "normal"), (1, "halted")])
@@ -118,7 +196,9 @@ def test_zero_cooldown_is_no_wait(cooldown, expected):
 
 
 def test_flatten_risk_before_same_timestamp_reopen():
-    first = Episode((point(0, exposed=False), point(100, -100, exposed=False, flatten=True)))
+    first = Episode(
+        (point(0, exposed=False), point(100, -100, exposed=False, flatten=True))
+    )
     second = Episode((point(100, -101), point(150, -101, 200)))
     result = run(first, second)
     assert result[1].action == "halted"
@@ -128,7 +208,15 @@ def test_flatten_risk_before_same_timestamp_reopen():
 def test_poll_and_cache_free_copy_have_identical_output():
     episodes = [stopped(), Episode((point(250, exposed=False),))]
     expected = run(*episodes)
-    fresh = [replace(e, points=tuple(replace(p, observation=replace(p.observation)) for p in e.points)) for e in episodes]
+    fresh = [
+        replace(
+            e,
+            points=tuple(
+                replace(p, observation=replace(p.observation)) for p in e.points
+            ),
+        )
+        for e in episodes
+    ]
     assert run(*fresh) == expected == run(*episodes)
 
 
@@ -139,7 +227,9 @@ def test_no_history_singleton_uses_reference_and_flat_scope_is_normal():
 
 
 def test_flat_observation_without_completion_evidence_cannot_start_cooldown():
-    episode = Episode((point(0), point(100, upnl=-100), point(200, -100, exposed=False)))
+    episode = Episode(
+        (point(0), point(100, upnl=-100), point(200, -100, exposed=False))
+    )
     last = run(episode)[-1]
     assert last.action == "normal" and last.flat_at is None and last.red_at is None
 
@@ -164,7 +254,12 @@ def test_long_ema_prevents_a_brief_excursion_and_final_recovery():
 def test_corrected_historical_loss_can_void_a_previous_stop_without_local_latch():
     original = stopped()
     assert run(original)[-1].action == "halted"
-    corrected = Episode(tuple(replace(p, observation=replace(p.observation, pnl=dec(0), upnl=dec(0))) for p in original.points))
+    corrected = Episode(
+        tuple(
+            replace(p, observation=replace(p.observation, pnl=dec(0), upnl=dec(0)))
+            for p in original.points
+        )
+    )
     assert run(corrected)[-1].action == "normal"
     assert run(original)[-1].action == "halted"
 
@@ -184,16 +279,29 @@ def test_all_expired_evidence_requires_current_sample(policy):
 
 
 def test_same_minute_partial_samples_do_not_advance_ema_clock():
-    episode = Episode((point(0), point(60_000, upnl=-100),
-                       point(60_001, -50, -150), point(120_000, -50, 50)))
+    episode = Episode(
+        (
+            point(0),
+            point(60_000, upnl=-100),
+            point(60_001, -50, -150),
+            point(120_000, -50, 50),
+        )
+    )
     trace = run(episode, now=120_000, span=3)
-    assert float(trace[1].ema) == pytest.approx(50/1050)
-    assert float(trace[2].ema) == pytest.approx(100/1050)
+    assert float(trace[1].ema) == pytest.approx(50 / 1050)
+    assert float(trace[2].ema) == pytest.approx(100 / 1050)
 
 
 def test_partial_exit_does_not_extend_original_red_time():
-    episode = Episode((point(0), point(100, upnl=-100), point(200, -25, -75),
-                       point(300, -50, -50), point(400, -75, -25)))
+    episode = Episode(
+        (
+            point(0),
+            point(100, upnl=-100),
+            point(200, -25, -75),
+            point(300, -50, -50),
+            point(400, -75, -25),
+        )
+    )
     trace = run(episode)
     assert all(d.red_at == 100 and d.flat_at is None for d in trace[1:])
 
@@ -209,13 +317,21 @@ def test_current_endpoint_is_required_to_evaluate_expiry():
 def test_expired_unreconstructible_crossing_does_not_turn_an_ordinary_flat_into_stop():
     # The remaining flatten is not proof of an expired numerical RED decision.
     # Exchange-derived stop provenance, if supported later, must be explicit.
-    trace = run(stopped(), Episode((point(300, exposed=False),)), start=151, restart="never")
+    trace = run(
+        stopped(), Episode((point(300, exposed=False),)), start=151, restart="never"
+    )
     assert trace[-1].action == "normal"
 
 
 def test_red_recovered_before_flat_does_not_start_cooldown():
-    episode = Episode((point(0), point(60_000, upnl=-100), point(120_000, upnl=0),
-                       point(180_000, exposed=False, flatten=True)))
+    episode = Episode(
+        (
+            point(0),
+            point(60_000, upnl=-100),
+            point(120_000, upnl=0),
+            point(180_000, exposed=False, flatten=True),
+        )
+    )
     trace = run(episode, cooldown=0, restart="never")
     assert trace[-1].action == "normal"
     assert trace[-1].red_at is None
@@ -225,6 +341,7 @@ def test_red_recovered_before_flat_does_not_start_cooldown():
 @pytest.mark.parametrize("seed", range(12))
 def test_generated_multi_episode_replay_matches_reference(seed):
     import random
+
     rng = random.Random(seed)
     episodes = []
     clock = 0
@@ -236,21 +353,37 @@ def test_generated_multi_episode_replay_matches_reference(seed):
             realized -= rng.randrange(0, 6)
             points.append(point(clock, realized, rng.randrange(-180, 181)))
         clock += 1
-        points.append(point(clock, realized - rng.randrange(0, 60), exposed=False, flatten=True))
+        points.append(
+            point(clock, realized - rng.randrange(0, 60), exposed=False, flatten=True)
+        )
         episodes.append(Episode(tuple(points)))
         clock += rng.randrange(1, 200_000)
     episodes.append(Episode((point(clock, exposed=False),)))
-    run(*episodes, start=seed * 60_000, cooldown=180_000,
+    run(
+        *episodes,
+        start=seed * 60_000,
+        cooldown=180_000,
         span=rng.choice([1, 2.5, 30.5]),
-        restart=rng.choice(["always", "never"]))
+        restart=rng.choice(["always", "never"]),
+    )
 
 
 def test_completed_episode_rebases_to_common_current_endpoint():
     loss = Episode((point(0), point(60_000, -100, exposed=False, flatten=True)))
-    recovered = Episode((point(120_000, -100, exposed=False), point(180_000, 0, exposed=False)))
-    trace = replay((loss, recovered), now=180_000, start=0, budget=1000, span=1,
-                   threshold=".095", cooldown=0, restart="never")
-    assert float(trace[1].raw) == pytest.approx(.1)
+    recovered = Episode(
+        (point(120_000, -100, exposed=False), point(180_000, 0, exposed=False))
+    )
+    trace = replay(
+        (loss, recovered),
+        now=180_000,
+        start=0,
+        budget=1000,
+        span=1,
+        threshold=".095",
+        cooldown=0,
+        restart="never",
+    )
+    assert float(trace[1].raw) == pytest.approx(0.1)
     assert trace[-1].action == "halted"
 
 
@@ -276,8 +409,12 @@ def test_future_tail_cannot_be_silently_clipped():
 
 @pytest.mark.parametrize("completed", [False, True])
 def test_minimal_reference_cannot_fabricate_a_stop_on_a_flat_scope(completed):
-    episode = Episode((point(0, exposed=False, flatten=completed),), entry_reference=2000)
-    trace = (episode, Episode((point(100, exposed=False),))) if completed else (episode,)
+    episode = Episode(
+        (point(0, exposed=False, flatten=completed),), entry_reference=2000
+    )
+    trace = (
+        (episode, Episode((point(100, exposed=False),))) if completed else (episode,)
+    )
     with pytest.raises(ValueError, match="current exposed singleton"):
         run(*trace, restart="never")
 
@@ -290,8 +427,13 @@ def test_expired_reference_does_not_affect_current_history():
 @pytest.mark.parametrize("opening", [200, 250, 400, 450])
 @pytest.mark.parametrize("restart", ["always", "never"])
 def test_exchange_reopen_and_flat_between_prices(opening, restart):
-    second = Episode((point(200, -100, exposed=False),
-                      point(500, -100, exposed=False, flatten=True)), opened_at=opening)
+    second = Episode(
+        (
+            point(200, -100, exposed=False),
+            point(500, -100, exposed=False, flatten=True),
+        ),
+        opened_at=opening,
+    )
     third = Episode((point(500, -100, exposed=False), point(600, -100, exposed=False)))
     result = run(stopped(), second, third, restart=restart)
     assert result[-1].action == "normal"
@@ -303,8 +445,10 @@ def test_exchange_reopen_and_flat_between_prices(opening, restart):
 
 @pytest.mark.parametrize("opening", [199, 501])
 def test_opening_event_must_belong_to_its_seeded_episode(opening):
-    second = Episode((point(200, -100, exposed=False),
-                      point(500, -100, exposed=False)), opened_at=opening)
+    second = Episode(
+        (point(200, -100, exposed=False), point(500, -100, exposed=False)),
+        opened_at=opening,
+    )
     with pytest.raises(ValueError, match="opening event"):
         run(stopped(), second)
 
@@ -316,22 +460,36 @@ def test_first_episode_cannot_claim_prior_flat_opening_metadata():
 
 
 def test_opening_before_window_cannot_retain_expired_stop():
-    second = Episode((point(200, -100, exposed=False),
-                      point(500, -100, exposed=False, flatten=True)), opened_at=250)
+    second = Episode(
+        (
+            point(200, -100, exposed=False),
+            point(500, -100, exposed=False, flatten=True),
+        ),
+        opened_at=250,
+    )
     third = Episode((point(600, -100, exposed=False),))
-    assert run(stopped(), second, third, start=251, restart="never")[-1].action == "normal"
+    assert (
+        run(stopped(), second, third, start=251, restart="never")[-1].action == "normal"
+    )
 
 
 def test_relative_entry_seed_applies_before_flat_and_expires_with_initial_sample():
-    first = Episode((point(0, upnl=-100), point(60_000, -100, exposed=False, flatten=True)),
-                    entry_reference_delta=100)
-    rest = Episode((point(60_000, -100, exposed=False), point(120_000, -100, exposed=False)))
+    first = Episode(
+        (point(0, upnl=-100), point(60_000, -100, exposed=False, flatten=True)),
+        entry_reference_delta=100,
+    )
+    rest = Episode(
+        (point(60_000, -100, exposed=False), point(120_000, -100, exposed=False))
+    )
     result = run(first, rest, now=120_000, restart="never", span=10000)
     assert result[0].action == "panic"
     assert result[-1].action == "halted"
     assert result[-1].flat_at == 60_000
     # A clipped trace must not import its expired entry reference.
-    assert run(first, rest, now=120_000, start=60_001, restart="never")[-1].action == "normal"
+    assert (
+        run(first, rest, now=120_000, start=60_001, restart="never")[-1].action
+        == "normal"
+    )
 
 
 def test_relative_entry_seed_after_flat_requires_current_singleton():
@@ -344,19 +502,25 @@ def test_relative_entry_seed_after_flat_requires_current_singleton():
 
 
 def test_cashflow_reference_is_applied_only_at_its_observation():
-    first=point(0,upnl=0)
-    later=replace(point(60_000,upnl=0),cashflow_reference_delta=100)
-    result=run(Episode((first,later)),span=3)
+    first = point(0, upnl=0)
+    later = replace(point(60_000, upnl=0), cashflow_reference_delta=100)
+    result = run(Episode((first, later)), span=3)
     assert result[0].raw == 0 and result[0].ema == 0
-    assert float(result[1].raw) == pytest.approx(100/1100)
-    assert float(result[1].ema) == pytest.approx(50/1100)
+    assert float(result[1].raw) == pytest.approx(100 / 1100)
+    assert float(result[1].ema) == pytest.approx(50 / 1100)
 
 
 @pytest.mark.parametrize("restart", ["always", "never"])
 def test_latest_green_episode_supersedes_older_red_stop(restart):
     first = stopped()
-    second = Episode((point(200, -100, exposed=False), point(250, -100),
-                      point(300, -99, exposed=False, flatten=True)), opened_at=250)
+    second = Episode(
+        (
+            point(200, -100, exposed=False),
+            point(250, -100),
+            point(300, -99, exposed=False, flatten=True),
+        ),
+        opened_at=250,
+    )
     last = Episode((point(300, -99, exposed=False), point(350, -99, exposed=False)))
     result = run(first, second, last, restart=restart)
     assert result[-1].action == "normal"
@@ -364,11 +528,23 @@ def test_latest_green_episode_supersedes_older_red_stop(restart):
 
 
 @pytest.mark.parametrize("restart", ["always", "never"])
-def test_current_balance_reclassifies_terminal_cooldown_without_renewing_anchor(restart):
+def test_current_balance_reclassifies_terminal_cooldown_without_renewing_anchor(
+    restart,
+):
     episodes = (stopped(), Episode((point(250, -100, exposed=False),)))
+
     def calculate(budget):
-        return replay(episodes, now=250, start=0, budget=budget, span=1,
-                      threshold=".05", cooldown=200, restart=restart)[-1]
+        return replay(
+            episodes,
+            now=250,
+            start=0,
+            budget=budget,
+            span=1,
+            threshold=".05",
+            cooldown=200,
+            restart=restart,
+        )[-1]
+
     assert calculate(1000).action == "halted"
     assert calculate(10000).action == "normal"
     restored = calculate(1000)
@@ -377,34 +553,62 @@ def test_current_balance_reclassifies_terminal_cooldown_without_renewing_anchor(
 
 def test_partial_close_preserves_loss_but_price_recovery_revokes_panic():
     # Balance after realizing half the loss is 90. Equity stays 80 at the close.
-    points = (point(0), point(60000, upnl=-20), point(60001, -10, -10),
-              point(120000, -10, 10))
-    result = replay((Episode(points),), now=120000, start=0, budget=90,
-                    span=1, threshold=".1", cooldown=200, restart="always")
+    points = (
+        point(0),
+        point(60000, upnl=-20),
+        point(60001, -10, -10),
+        point(120000, -10, 10),
+    )
+    result = replay(
+        (Episode(points),),
+        now=120000,
+        start=0,
+        budget=90,
+        span=1,
+        threshold=".1",
+        cooldown=200,
+        restart="always",
+    )
     assert [d.action for d in result] == ["normal", "panic", "panic", "normal"]
-    assert float(result[1].raw) == pytest.approx(.2)
-    assert float(result[2].raw) == pytest.approx(.2)
+    assert float(result[1].raw) == pytest.approx(0.2)
+    assert float(result[2].raw) == pytest.approx(0.2)
     assert result[-1].red_at is None and result[-1].flat_at is None
 
 
 def test_historical_red_cannot_panic_after_current_recovery():
     for upnls in ([0, -10], [0, -10, 10]):
-        episode = Episode(tuple(point(i*60000, upnl=u) for i,u in enumerate(upnls)))
-        result = replay((episode,), now=(len(upnls)-1)*60000, start=0,
-                        budget=100, span=1, threshold=".095", cooldown=0, restart="always")
+        episode = Episode(tuple(point(i * 60000, upnl=u) for i, u in enumerate(upnls)))
+        result = replay(
+            (episode,),
+            now=(len(upnls) - 1) * 60000,
+            start=0,
+            budget=100,
+            span=1,
+            threshold=".095",
+            cooldown=0,
+            restart="always",
+        )
         assert result[-1].action == ("panic" if upnls[-1] < 0 else "normal")
 
 
 @pytest.mark.parametrize("start", [0, 1, 60_000, 60_001, 120_000])
 @pytest.mark.parametrize("span", [1, 2.5, 1000000])
 def test_bounded_suffix_preserves_duplicate_minute_terminal_decision(start, span):
-    episode = Episode((point(0), point(60_000, upnl=100),
-                       point(60_000, upnl=-100),
-                       point(120_000, pnl=-100, exposed=False, flatten=True)),
-                      entry_reference_delta=dec(50))
+    episode = Episode(
+        (
+            point(0),
+            point(60_000, upnl=100),
+            point(60_000, upnl=-100),
+            point(120_000, pnl=-100, exposed=False, flatten=True),
+        ),
+        entry_reference_delta=dec(50),
+    )
     # The autouse backend checks every Rust decision against the independent
     # decimal reference, including clipping the initial relative peak reference.
     decisions = run(episode, start=start, span=span)
     assert [d.timestamp for d in decisions] == [
-        p.observation.timestamp for p in episode.points if p.observation.timestamp >= start]
+        p.observation.timestamp
+        for p in episode.points
+        if p.observation.timestamp >= start
+    ]
     assert decisions[-1].flat_at in (None, 120_000)

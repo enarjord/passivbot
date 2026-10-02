@@ -2,7 +2,10 @@ import logging
 from copy import deepcopy
 from typing import Optional
 
-from config.schema import CONFIG_SCHEMA_VERSION, SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
+from config.schema import (
+    CONFIG_SCHEMA_VERSION,
+    SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS,
+)
 from config.reducers import REDUCER_ALIASES, reducer_mapping_from_aliases
 from config.transform_log import ConfigTransformTracker
 from utils import normalize_coins_source
@@ -35,7 +38,9 @@ def migrate_config_version(
     current_parsed = _parse_version_tuple(current_version)
     target_parsed = _parse_version_tuple(CONFIG_SCHEMA_VERSION)
     if target_parsed is None:
-        raise ValueError(f"internal error: invalid CONFIG_SCHEMA_VERSION {CONFIG_SCHEMA_VERSION!r}")
+        raise ValueError(
+            f"internal error: invalid CONFIG_SCHEMA_VERSION {CONFIG_SCHEMA_VERSION!r}"
+        )
     supported_previous_parsed = {
         parsed
         for version in SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
@@ -62,7 +67,7 @@ def migrate_config_version(
         )
     elif (
         current_parsed != target_parsed
-        and current_parsed[0] == target_parsed[0]
+        and current_parsed[0] >= 8
         and current_parsed not in supported_previous_parsed
     ):
         supported = ", ".join(sorted(SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS))
@@ -116,7 +121,11 @@ def migrate_suite_to_scenarios(
                     backtest.pop(alias, None)
             merged_reducer = {**(existing_reducer or {}), **(suite_reducer or {})}
             backtest["reducer"] = merged_reducer
-            _log_config(verbose, logging.INFO, "migrated backtest.suite reducer -> backtest.reducer")
+            _log_config(
+                verbose,
+                logging.INFO,
+                "migrated backtest.suite reducer -> backtest.reducer",
+            )
             if tracker is not None:
                 tracker.rename(
                     ["backtest", "suite", suite_reducer_source],
@@ -127,18 +136,37 @@ def migrate_suite_to_scenarios(
             if include_base:
                 base_scenario = {"label": base_label}
                 new_scenarios = [base_scenario] + new_scenarios
-                _log_config(verbose, logging.INFO, "prepended base scenario '%s' (from include_base_scenario=True)", base_label)
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "prepended base scenario '%s' (from include_base_scenario=True)",
+                    base_label,
+                )
             if old_scenarios or include_base:
                 backtest["scenarios"] = new_scenarios
-                _log_config(verbose, logging.INFO, "migrated backtest.suite.scenarios -> backtest.scenarios (%d scenarios)", len(new_scenarios))
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "migrated backtest.suite.scenarios -> backtest.scenarios (%d scenarios)",
+                    len(new_scenarios),
+                )
                 if tracker is not None:
-                    tracker.rename(["backtest", "suite", "scenarios"], ["backtest", "scenarios"], new_scenarios)
+                    tracker.rename(
+                        ["backtest", "suite", "scenarios"],
+                        ["backtest", "scenarios"],
+                        new_scenarios,
+                    )
         elif tracker is not None:
             tracker.remove(["backtest", "suite"], suite)
 
     if "combine_ohlcvs" in backtest:
         old_value = backtest.pop("combine_ohlcvs")
-        _log_config(verbose, logging.INFO, "removed backtest.combine_ohlcvs=%s (behavior now derived from scenario exchange count)", old_value)
+        _log_config(
+            verbose,
+            logging.INFO,
+            "removed backtest.combine_ohlcvs=%s (behavior now derived from scenario exchange count)",
+            old_value,
+        )
         if tracker is not None:
             tracker.remove(["backtest", "combine_ohlcvs"], old_value)
     if not any(key in backtest for key in REDUCER_ALIASES):

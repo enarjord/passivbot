@@ -11,7 +11,6 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
-use crate::equity_hard_stop_loss as ehsl;
 use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -29,9 +28,9 @@ use crate::trailing::{
 use crate::types::{Analysis, OrderType};
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
-    EquityHardStopLossConfig, EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights,
-    HlcvsBundle, HlcvsMeta, OrderBook, Position, RuntimeOrderContext, StateParams,
-    StrategyParamsPairValue, TrailingPriceBundle, TwelEnforcerPolicy, WeExcessAllowanceMode,
+    EquityHardStopLossConfig, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
+    OrderBook, Position, RuntimeOrderContext, StateParams, StrategyParamsPairValue,
+    TrailingPriceBundle, TwelEnforcerPolicy, WeExcessAllowanceMode,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -160,21 +159,6 @@ pub struct HlcvsBundlePy {
     pub inner: HlcvsBundle,
 }
 
-#[pyclass(
-    name = "EquityHardStopRollingPeak",
-    module = "passivbot_rust",
-    unsendable
-)]
-pub struct EquityHardStopRollingPeakPy {
-    inner: ehsl::RollingPeakTracker,
-}
-
-#[pyclass(name = "EquityHardStopRuntime", module = "passivbot_rust", unsendable)]
-pub struct EquityHardStopRuntimePy {
-    state: ehsl::HardStopState,
-    last_rolling_peak: f64,
-}
-
 #[pymethods]
 impl HlcvsBundlePy {
     #[new]
@@ -226,140 +210,6 @@ impl HlcvsBundlePy {
 
     pub fn coins_len(&self) -> usize {
         self.inner.coins_len()
-    }
-}
-
-#[pymethods]
-impl EquityHardStopRollingPeakPy {
-    #[new]
-    pub fn new() -> Self {
-        Self {
-            inner: ehsl::RollingPeakTracker::default(),
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.inner.reset();
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    pub fn update(&mut self, timestamp_ms: u64, equity: f64, lookback_ms: u64) -> PyResult<f64> {
-        self.inner
-            .update(timestamp_ms, equity, lookback_ms)
-            .map_err(PyValueError::new_err)
-    }
-}
-
-#[pymethods]
-impl EquityHardStopRuntimePy {
-    #[new]
-    pub fn new() -> Self {
-        Self {
-            state: ehsl::HardStopState::default(),
-            last_rolling_peak: 0.0,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.state = ehsl::HardStopState::default();
-        self.last_rolling_peak = 0.0;
-    }
-
-    pub fn reset_state_keep_peak(&mut self) {
-        self.state = ehsl::HardStopState::default();
-    }
-
-    pub fn initialized(&self) -> bool {
-        self.state.initialized
-    }
-
-    pub fn red_latched(&self) -> bool {
-        self.state.red_latched
-    }
-
-    pub fn red_seen_in_episode(&self) -> bool {
-        self.state.red_seen_in_episode
-    }
-
-    pub fn tier(&self) -> &'static str {
-        hard_stop_tier_to_str(self.state.tier)
-    }
-
-    pub fn drawdown_ema(&self) -> f64 {
-        self.state.drawdown_ema
-    }
-
-    pub fn peak_strategy_equity(&self) -> f64 {
-        self.state.peak_strategy_equity
-    }
-
-    pub fn rolling_peak_strategy_equity(&self) -> f64 {
-        self.last_rolling_peak
-    }
-
-    #[pyo3(signature = (
-        *,
-        timestamp_ms,
-        equity,
-        peak_strategy_equity,
-        red_threshold,
-        ema_span_minutes,
-        tier_ratio_yellow,
-        tier_ratio_orange,
-        latch_red = true,
-        at_fill_boundary = false
-    ))]
-    pub fn apply_sample(
-        &mut self,
-        py: Python<'_>,
-        timestamp_ms: u64,
-        equity: f64,
-        peak_strategy_equity: f64,
-        red_threshold: f64,
-        ema_span_minutes: f64,
-        tier_ratio_yellow: f64,
-        tier_ratio_orange: f64,
-        latch_red: bool,
-        at_fill_boundary: bool,
-    ) -> PyResult<Py<PyDict>> {
-        self.last_rolling_peak = peak_strategy_equity;
-        let cfg = ehsl::HardStopConfig {
-            red_threshold,
-            ema_span_minutes,
-            tier_ratios: ehsl::HardStopTierRatios {
-                yellow: tier_ratio_yellow,
-                orange: tier_ratio_orange,
-            },
-        };
-        let step = ehsl::step_with_peak_strategy_equity_at_boundary(
-            &mut self.state,
-            cfg,
-            equity,
-            peak_strategy_equity,
-            timestamp_ms,
-            latch_red,
-            at_fill_boundary,
-        )
-        .map_err(PyValueError::new_err)?;
-
-        let out = PyDict::new_bound(py);
-        out.set_item("initialized", self.state.initialized)?;
-        out.set_item("red_latched", self.state.red_latched)?;
-        out.set_item("red_seen_in_episode", self.state.red_seen_in_episode)?;
-        out.set_item("peak_strategy_equity", self.state.peak_strategy_equity)?;
-        out.set_item("rolling_peak_strategy_equity", self.last_rolling_peak)?;
-        out.set_item("drawdown_ema", self.state.drawdown_ema)?;
-        out.set_item("tier", hard_stop_tier_to_str(self.state.tier))?;
-        out.set_item("drawdown_raw", step.drawdown_raw)?;
-        out.set_item("drawdown_score", step.drawdown_score)?;
-        out.set_item("red_active_now", step.red_active_now)?;
-        out.set_item("changed", step.changed)?;
-        out.set_item("alpha", step.alpha)?;
-        out.set_item("elapsed_minutes", step.elapsed_minutes)?;
-        Ok(out.unbind())
     }
 }
 
@@ -528,109 +378,6 @@ fn hlcvs_meta_to_dict<'py>(py: Python<'py>, meta: &HlcvsMeta) -> PyResult<Bound<
 pub fn trailing_bundle_default_py() -> (f64, f64, f64, f64) {
     let bundle = TrailingPriceBundle::default();
     trailing_bundle_to_tuple(&bundle)
-}
-
-#[pyfunction]
-pub fn hsl_no_restart_triggered(
-    restart_after_red_policy: &str,
-    drawdown_raw: f64,
-    drawdown_ema: f64,
-    no_restart_drawdown_threshold: f64,
-) -> PyResult<bool> {
-    ehsl::no_restart_triggered(
-        restart_after_red_policy,
-        drawdown_raw,
-        drawdown_ema,
-        no_restart_drawdown_threshold,
-    )
-    .map_err(pyo3::exceptions::PyValueError::new_err)
-}
-
-#[pyfunction]
-#[pyo3(signature = (enabled, balance, budget_divisor, upnl, threshold, unavailable_ms, grace_ms, missing_execution_history, realized_loss_since_peak=None))]
-pub fn hsl_emergency_signal(
-    enabled: bool, balance: f64, budget_divisor: usize, upnl: f64, threshold: f64,
-    unavailable_ms: u64, grace_ms: u64, missing_execution_history: bool,
-    realized_loss_since_peak: Option<f64>,
-) -> PyResult<(f64, f64, bool, bool)> {
-    let signal = ehsl::emergency_signal(enabled, balance, budget_divisor, upnl,
-        realized_loss_since_peak, threshold, unavailable_ms, grace_ms, missing_execution_history)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
-    Ok((signal.budget, signal.drawdown_raw, signal.grace_elapsed, signal.should_exit))
-}
-
-#[pyfunction]
-#[pyo3(signature = (*, balance, n_positions, peak_realized, last_realized, current_upnl))]
-pub fn hsl_coin_drawdown_signal(
-    py: Python<'_>,
-    balance: f64,
-    n_positions: usize,
-    peak_realized: f64,
-    last_realized: f64,
-    current_upnl: f64,
-) -> PyResult<Py<PyDict>> {
-    let result = ehsl::coin_drawdown_signal(
-        balance,
-        n_positions,
-        peak_realized,
-        last_realized,
-        current_upnl,
-    )
-    .map_err(PyValueError::new_err)?;
-    let out = PyDict::new_bound(py);
-    out.set_item("slot_budget", result.slot_budget)?;
-    out.set_item("drawdown_usd", result.drawdown_usd)?;
-    out.set_item("drawdown_raw", result.drawdown_raw)?;
-    Ok(out.unbind())
-}
-
-#[pyfunction]
-#[pyo3(signature = (
-    *,
-    restart_after_red_policy,
-    stop_timestamp_ms,
-    stop_equity,
-    stop_peak_strategy_equity,
-    previous_no_restart_peak_strategy_equity,
-    drawdown_ema,
-    red_threshold,
-    no_restart_drawdown_threshold,
-    cooldown_minutes_after_red
-))]
-pub fn hsl_red_episode_finalization(
-    py: Python<'_>,
-    restart_after_red_policy: &str,
-    stop_timestamp_ms: u64,
-    stop_equity: f64,
-    stop_peak_strategy_equity: f64,
-    previous_no_restart_peak_strategy_equity: f64,
-    drawdown_ema: f64,
-    red_threshold: f64,
-    no_restart_drawdown_threshold: f64,
-    cooldown_minutes_after_red: f64,
-) -> PyResult<Py<PyDict>> {
-    let result = ehsl::evaluate_red_episode_finalization(
-        restart_after_red_policy,
-        stop_timestamp_ms,
-        stop_equity,
-        stop_peak_strategy_equity,
-        previous_no_restart_peak_strategy_equity,
-        drawdown_ema,
-        red_threshold,
-        no_restart_drawdown_threshold,
-        cooldown_minutes_after_red,
-    )
-    .map_err(PyValueError::new_err)?;
-    let out = PyDict::new_bound(py);
-    out.set_item(
-        "no_restart_peak_strategy_equity",
-        result.no_restart_peak_strategy_equity,
-    )?;
-    out.set_item("no_restart_drawdown_raw", result.no_restart_drawdown_raw)?;
-    out.set_item("no_restart_latched", result.no_restart_latched)?;
-    out.set_item("cooldown_until_ms", result.cooldown_until_ms)?;
-    out.set_item("disposition", result.disposition.as_str())?;
-    Ok(out.unbind())
 }
 
 #[pyfunction]
@@ -972,102 +719,6 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
         bids.into_pyarray_bound(py).unbind(),
         asks.into_pyarray_bound(py).unbind(),
     ))
-}
-
-fn hard_stop_tier_from_str(raw: &str) -> Result<ehsl::HardStopTier, String> {
-    match raw {
-        "green" => Ok(ehsl::HardStopTier::Green),
-        "yellow" => Ok(ehsl::HardStopTier::Yellow),
-        "orange" => Ok(ehsl::HardStopTier::Orange),
-        "red" => Ok(ehsl::HardStopTier::Red),
-        _ => Err(format!(
-            "invalid hard-stop tier '{}'; expected one of {{green,yellow,orange,red}}",
-            raw
-        )),
-    }
-}
-
-fn hard_stop_tier_to_str(tier: ehsl::HardStopTier) -> &'static str {
-    match tier {
-        ehsl::HardStopTier::Green => "green",
-        ehsl::HardStopTier::Yellow => "yellow",
-        ehsl::HardStopTier::Orange => "orange",
-        ehsl::HardStopTier::Red => "red",
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (
-    *,
-    initialized,
-    red_latched,
-    red_seen_in_episode = None,
-    drawdown_ema,
-    tier,
-    red_threshold,
-    ema_span_minutes,
-    tier_ratio_yellow,
-    tier_ratio_orange,
-    equity,
-    peak_strategy_equity,
-    timestamp_ms
-))]
-pub fn equity_hard_stop_step_py(
-    py: Python<'_>,
-    initialized: bool,
-    red_latched: bool,
-    red_seen_in_episode: Option<bool>,
-    drawdown_ema: f64,
-    tier: &str,
-    red_threshold: f64,
-    ema_span_minutes: f64,
-    tier_ratio_yellow: f64,
-    tier_ratio_orange: f64,
-    equity: f64,
-    peak_strategy_equity: f64,
-    timestamp_ms: u64,
-) -> PyResult<Py<PyDict>> {
-    let mut state = ehsl::HardStopState {
-        peak_strategy_equity,
-        drawdown_ema,
-        tier: hard_stop_tier_from_str(tier).map_err(PyValueError::new_err)?,
-        red_latched,
-        // Conservative stateless default: a latched red was necessarily seen.
-        red_seen_in_episode: red_seen_in_episode.unwrap_or(red_latched),
-        initialized,
-        ..Default::default()
-    };
-    let cfg = ehsl::HardStopConfig {
-        red_threshold,
-        ema_span_minutes,
-        tier_ratios: ehsl::HardStopTierRatios {
-            yellow: tier_ratio_yellow,
-            orange: tier_ratio_orange,
-        },
-    };
-    let step = ehsl::step_with_peak_strategy_equity(
-        &mut state,
-        cfg,
-        equity,
-        peak_strategy_equity,
-        timestamp_ms,
-    )
-    .map_err(PyValueError::new_err)?;
-
-    let out = PyDict::new_bound(py);
-    out.set_item("initialized", state.initialized)?;
-    out.set_item("red_latched", state.red_latched)?;
-    out.set_item("red_seen_in_episode", state.red_seen_in_episode)?;
-    out.set_item("peak_strategy_equity", state.peak_strategy_equity)?;
-    out.set_item("drawdown_ema", state.drawdown_ema)?;
-    out.set_item("tier", hard_stop_tier_to_str(state.tier))?;
-    out.set_item("drawdown_raw", step.drawdown_raw)?;
-    out.set_item("drawdown_score", step.drawdown_score)?;
-    out.set_item("red_active_now", step.red_active_now)?;
-    out.set_item("changed", step.changed)?;
-    out.set_item("alpha", step.alpha)?;
-    out.set_item("elapsed_minutes", step.elapsed_minutes)?;
-    Ok(out.unbind())
 }
 
 #[pyfunction]
@@ -1504,7 +1155,10 @@ fn run_backtest_core<'py>(
         let dict = item
             .downcast::<PyDict>()
             .map_err(|_| PyValueError::new_err("each bot_params element must be a dict"))?;
-        bot_params_vec.push(bot_params_pair_from_dict(dict, backtest_params.equity_hard_stop_loss.revised.is_some())?);
+        bot_params_vec.push(bot_params_pair_from_dict(
+            dict,
+            backtest_params.equity_hard_stop_loss.hsl.is_some(),
+        )?);
     }
     if backtest_params.candle_interval_minutes != 1
         && crate::unilateralness::backtest_enabled_sides(
@@ -1662,8 +1316,6 @@ fn run_backtest_core<'py>(
         analysis_usd.hard_stop_restarts_per_year_short = hs.restarts_per_year_short;
         analysis_usd.hard_stop_restarts_long = hs.restarts_long;
         analysis_usd.hard_stop_restarts_short = hs.restarts_short;
-        analysis_usd.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
-        analysis_usd.hard_stop_time_in_orange_pct = hs.time_in_orange_pct;
         analysis_usd.hard_stop_time_in_red_pct = hs.time_in_red_pct;
         analysis_usd.hard_stop_duration_minutes_mean = hs.duration_minutes_mean;
         analysis_usd.hard_stop_duration_minutes_max = hs.duration_minutes_max;
@@ -1763,8 +1415,6 @@ fn run_backtest_core<'py>(
         analysis_btc.hard_stop_restarts_per_year_short = hs.restarts_per_year_short;
         analysis_btc.hard_stop_restarts_long = hs.restarts_long;
         analysis_btc.hard_stop_restarts_short = hs.restarts_short;
-        analysis_btc.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
-        analysis_btc.hard_stop_time_in_orange_pct = hs.time_in_orange_pct;
         analysis_btc.hard_stop_time_in_red_pct = hs.time_in_red_pct;
         analysis_btc.hard_stop_duration_minutes_mean = hs.duration_minutes_mean;
         analysis_btc.hard_stop_duration_minutes_max = hs.duration_minutes_max;
@@ -1854,10 +1504,12 @@ fn run_backtest_core<'py>(
         analysis_btc.calmar_ratio_strategy_eq_w = strategy.overall.calmar_ratio_strategy_eq_w;
         analysis_btc.sterling_ratio_strategy_eq_w = strategy.overall.sterling_ratio_strategy_eq_w;
 
-        if backtest_params.equity_hard_stop_loss.revised.is_some() {
+        if backtest_params.equity_hard_stop_loss.hsl.is_some() {
             for analysis in [&mut analysis_usd, &mut analysis_btc] {
-                analysis.drawdown_worst_ema_strategy_eq = strategy.overall.drawdown_worst_ema_strategy_eq;
-                analysis.drawdown_worst_mean_1pct_ema_strategy_eq = strategy.overall.drawdown_worst_mean_1pct_ema_strategy_eq;
+                analysis.drawdown_worst_ema_strategy_eq =
+                    strategy.overall.drawdown_worst_ema_strategy_eq;
+                analysis.drawdown_worst_mean_1pct_ema_strategy_eq =
+                    strategy.overall.drawdown_worst_mean_1pct_ema_strategy_eq;
             }
         }
         let analysis_dict_start = profile_start(profile_enabled);
@@ -1867,32 +1519,23 @@ fn run_backtest_core<'py>(
         } else {
             struct_to_py_dict(py, &analysis_btc)?
         };
-        let revised_hsl_report = revised_hsl_report_to_py(py, &backtest)?;
-        if revised_hsl_report.is_some() {
-            // Removed trading tiers are absent, never constant zero objectives.
-            for analysis in [&py_analysis_usd, &py_analysis_btc] {
-                let dict = analysis.bind(py);
-                for key in dict.keys().iter() {
-                    let name: String = key.extract()?;
-                    if matches!(name.as_str(), "hard_stop_time_in_yellow_pct" | "hard_stop_time_in_orange_pct") {
-                        dict.del_item(key)?;
-                    }
-                }
-            }
-        }
+        let hsl_report = hsl_report_to_py(py, &backtest)?;
         profile_add(
             &mut rust_profile,
             "rust_analysis_py_dict_ms",
             analysis_dict_start,
         );
         if metrics_only {
-            let py_extra = if profile_enabled || revised_hsl_report.is_some() {
+            let py_extra = if profile_enabled || hsl_report.is_some() {
                 let py_extra = PyDict::new_bound(py);
                 if profile_enabled {
-                    py_extra.set_item(RUST_PROFILE_KEY, profile_to_py_dict(py, &rust_profile, profile_total_start)?)?;
+                    py_extra.set_item(
+                        RUST_PROFILE_KEY,
+                        profile_to_py_dict(py, &rust_profile, profile_total_start)?,
+                    )?;
                 }
-                if let Some(report) = &revised_hsl_report {
-                    py_extra.set_item("revised", report)?;
+                if let Some(report) = &hsl_report {
+                    py_extra.set_item("hsl", report)?;
                 }
                 py_extra.into_py(py)
             } else {
@@ -1913,54 +1556,10 @@ fn run_backtest_core<'py>(
             ));
         }
         let artifact_conversion_start = profile_start(profile_enabled);
-        let hard_stop_plot_data = backtest.hard_stop_plot_data();
-        let py_events_long = PyList::empty_bound(py);
-        for event in hard_stop_plot_data.events_long {
-            let py_event = PyDict::new_bound(py);
-            py_event.set_item("kind", event.kind)?;
-            py_event.set_item("timestamp_ms", event.timestamp_ms)?;
-            if let Some(cooldown_until_ms) = event.cooldown_until_ms {
-                py_event.set_item("cooldown_until_ms", cooldown_until_ms)?;
-            }
-            py_event.set_item("terminal", event.terminal)?;
-            py_events_long.append(py_event)?;
-        }
-        let py_events_short = PyList::empty_bound(py);
-        for event in hard_stop_plot_data.events_short {
-            let py_event = PyDict::new_bound(py);
-            py_event.set_item("kind", event.kind)?;
-            py_event.set_item("timestamp_ms", event.timestamp_ms)?;
-            if let Some(cooldown_until_ms) = event.cooldown_until_ms {
-                py_event.set_item("cooldown_until_ms", cooldown_until_ms)?;
-            }
-            py_event.set_item("terminal", event.terminal)?;
-            py_events_short.append(py_event)?;
-        }
         let py_hard_stop_plot = PyDict::new_bound(py);
-        if let Some(report) = revised_hsl_report {
-            py_hard_stop_plot.set_item("revised", report)?;
+        if let Some(report) = hsl_report {
+            py_hard_stop_plot.set_item("hsl", report)?;
         }
-        py_hard_stop_plot.set_item("timestamps_ms", hard_stop_plot_data.timestamps_ms)?;
-        py_hard_stop_plot.set_item("drawdown_raw", hard_stop_plot_data.drawdown_raw)?;
-        py_hard_stop_plot.set_item("timestamps_ms_long", hard_stop_plot_data.timestamps_ms_long)?;
-        py_hard_stop_plot.set_item("drawdown_raw_long", hard_stop_plot_data.drawdown_raw_long)?;
-        py_hard_stop_plot.set_item("drawdown_ema_long", hard_stop_plot_data.drawdown_ema_long)?;
-        py_hard_stop_plot.set_item(
-            "drawdown_score_long",
-            hard_stop_plot_data.drawdown_score_long,
-        )?;
-        py_hard_stop_plot.set_item("events_long", py_events_long)?;
-        py_hard_stop_plot.set_item(
-            "timestamps_ms_short",
-            hard_stop_plot_data.timestamps_ms_short,
-        )?;
-        py_hard_stop_plot.set_item("drawdown_raw_short", hard_stop_plot_data.drawdown_raw_short)?;
-        py_hard_stop_plot.set_item("drawdown_ema_short", hard_stop_plot_data.drawdown_ema_short)?;
-        py_hard_stop_plot.set_item(
-            "drawdown_score_short",
-            hard_stop_plot_data.drawdown_score_short,
-        )?;
-        py_hard_stop_plot.set_item("events_short", py_events_short)?;
         let mut py_fills = Array2::from_elem((fills.len(), 19), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
@@ -1985,18 +1584,17 @@ fn run_backtest_core<'py>(
         }
 
         let strategy_equity_series = backtest.strategy_equity_series_for_artifacts();
-        let revised = backtest_params.equity_hard_stop_loss.revised.is_some();
-        if revised && strategy_equity_series.len() != equities.timestamps_ms.len() {
-            return Err(PyValueError::new_err("revised strategy-equity observations do not match equity timestamps"));
+        if strategy_equity_series.len() != equities.timestamps_ms.len() {
+            return Err(PyValueError::new_err(
+                "hsl strategy-equity observations do not match equity timestamps",
+            ));
         }
         let equities_array =
             Array2::from_shape_fn((equities.timestamps_ms.len(), 4), |(i, j)| match j {
                 0 => equities.timestamps_ms[i] as f64,
                 1 => equities.usd_total_equity[i],
                 2 => equities.btc_total_equity[i],
-                3 => if revised { strategy_equity_series[i] } else {
-                    strategy_equity_series.get(i).copied().unwrap_or(equities.usd_total_equity[i])
-                },
+                3 => strategy_equity_series[i],
                 _ => 0.0,
             })
             .into_pyarray_bound(py)
@@ -2025,8 +1623,14 @@ fn run_backtest_core<'py>(
 
 /// Preserve the public report schema while avoiding a huge intermediate JSON tree.
 /// Static field names and enum strings are shared; each row/list remains independent.
-pub(crate) fn revised_hsl_report_to_py(py: Python<'_>, backtest: &Backtest<'_>) -> PyResult<Option<PyObject>> {
-    let Some(metadata) = backtest.revised_hsl_report_metadata().map_err(PyValueError::new_err)? else {
+pub(crate) fn hsl_report_to_py(
+    py: Python<'_>,
+    backtest: &Backtest<'_>,
+) -> PyResult<Option<PyObject>> {
+    let Some(metadata) = backtest
+        .hsl_report_metadata()
+        .map_err(PyValueError::new_err)?
+    else {
         return Ok(None);
     };
     let report = json_value_to_py(py, &metadata)?;
@@ -2037,22 +1641,35 @@ pub(crate) fn revised_hsl_report_to_py(py: Python<'_>, backtest: &Backtest<'_>) 
         };
     }
     let samples = PyList::empty_bound(py);
-    for row in backtest.revised_hsl_samples() {
+    for row in backtest.hsl_samples() {
         let dict = PyDict::new_bound(py);
         fields!(dict, row, sequence, timestamp, side, coin, raw, ema, red_at, flat_at, reasons);
-        dict.set_item(pyo3::intern!(py, "phase"), pyo3::types::PyString::intern_bound(py, row.phase))?;
+        dict.set_item(
+            pyo3::intern!(py, "phase"),
+            pyo3::types::PyString::intern_bound(py, row.phase),
+        )?;
         let action = row.action.map(|action| match action {
-            crate::hsl_revised_controller::Action::Normal => pyo3::intern!(py, "normal"),
-            crate::hsl_revised_controller::Action::Panic => pyo3::intern!(py, "panic"),
-            crate::hsl_revised_controller::Action::Halted => pyo3::intern!(py, "halted"),
+            crate::hsl_controller::Action::Normal => pyo3::intern!(py, "normal"),
+            crate::hsl_controller::Action::Panic => pyo3::intern!(py, "panic"),
+            crate::hsl_controller::Action::Halted => pyo3::intern!(py, "halted"),
         });
         dict.set_item(pyo3::intern!(py, "action"), action)?;
         samples.append(dict)?;
     }
     let events = PyList::empty_bound(py);
-    for row in backtest.revised_hsl_events() {
+    for row in backtest.hsl_events() {
         let dict = PyDict::new_bound(py);
-        fields!(dict, row, sequence, observed_at, side, coin, kind, reconstructed_at, reason);
+        fields!(
+            dict,
+            row,
+            sequence,
+            observed_at,
+            side,
+            coin,
+            kind,
+            reconstructed_at,
+            reason
+        );
         events.append(dict)?;
     }
     report_dict.set_item(pyo3::intern!(py, "samples"), samples)?;
@@ -2111,20 +1728,29 @@ fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
     })
 }
 
-fn revised_hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::revised_runtime::Config> {
-    use crate::backtest::revised_runtime::{Config, Policy};
+fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config> {
+    use crate::backtest::hsl_runtime::{Config, Policy};
     fn keys(dict: &PyDict, allowed: &[&str]) -> PyResult<()> {
         for key in dict.keys().iter() {
             let key: String = key.extract()?;
             if !allowed.contains(&key.as_str()) {
-                return Err(PyValueError::new_err(format!("unknown revised HSL field: {key}")));
+                return Err(PyValueError::new_err(format!("unknown HSL field: {key}")));
             }
         }
         Ok(())
     }
     fn policy(dict: &PyDict) -> PyResult<Policy> {
-        keys(dict, &["enabled", "red_threshold", "ema_span_minutes", "cooldown_minutes_after_red",
-            "restart_after_red_policy", "panic_close_order_type"])?;
+        keys(
+            dict,
+            &[
+                "enabled",
+                "red_threshold",
+                "ema_span_minutes",
+                "cooldown_minutes_after_red",
+                "restart_after_red_policy",
+                "panic_close_order_type",
+            ],
+        )?;
         Ok(Policy {
             enabled: extract_value(dict, "enabled")?,
             red_threshold: extract_value(dict, "red_threshold")?,
@@ -2137,7 +1763,9 @@ fn revised_hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::revised_run
     fn pair(value: &PyAny) -> PyResult<[Policy; 2]> {
         let items: Vec<&PyDict> = value.extract()?;
         if items.len() != 2 {
-            return Err(PyValueError::new_err("revised HSL sides require exactly long and short"));
+            return Err(PyValueError::new_err(
+                "HSL sides require exactly long and short",
+            ));
         }
         Ok([policy(items[0])?, policy(items[1])?])
     }
@@ -2164,63 +1792,16 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         let cfg = item
             .downcast::<PyDict>()
             .map_err(|_| PyValueError::new_err(format!("{key} must be a dict")))?;
-        let engine = extract_optional_string(cfg, "engine", "legacy")?;
-        if engine == "revised" {
-            let revised = revised_hsl_from_dict(cfg)?;
-            // The legacy storage is inert when revised is Some. No removed
-            // policy is hydrated into the revised controller or producer payload.
-            return Ok(EquityHardStopLossConfig {
-                signal_mode: revised.mode.clone(),
-                revised: Some(revised),
-                ..EquityHardStopLossConfig::default()
-            });
+        let engine = extract_optional_string(cfg, "engine", "hsl")?;
+        if engine != "hsl" {
+            return Err(PyValueError::new_err(
+                "unsupported HSL engine; legacy HSL has been removed; migrate to HSL",
+            ));
         }
-        if engine != "legacy" {
-            return Err(PyValueError::new_err("HSL engine must be legacy or revised"));
-        }
-        let ratios_item = cfg.get_item("tier_ratios")?.ok_or_else(|| {
-            PyValueError::new_err(format!("missing required key: {key}.tier_ratios"))
-        })?;
-        let ratios = ratios_item
-            .downcast::<PyDict>()
-            .map_err(|_| PyValueError::new_err(format!("{key}.tier_ratios must be a dict")))?;
-        let signal_mode = cfg
-            .get_item("signal_mode")?
-            .map(|item| item.extract::<String>())
-            .transpose()?
-            .unwrap_or_else(|| "unified".to_string());
-        if signal_mode != "coin" && signal_mode != "pside" && signal_mode != "unified" {
-            return Err(PyValueError::new_err(format!(
-                "{key}.signal_mode must be one of {{coin, pside, unified}}, got {:?}",
-                signal_mode
-            )));
-        }
-        let restart_after_red_policy =
-            extract_optional_string(cfg, "restart_after_red_policy", "threshold")?;
-        match restart_after_red_policy.as_str() {
-            "always" | "threshold" | "never" => {}
-            raw => {
-                return Err(PyValueError::new_err(format!(
-                    "{key}.restart_after_red_policy must be one of {{always, threshold, never}}, got {:?}",
-                    raw
-                )));
-            }
-        }
+        let hsl = hsl_from_dict(cfg)?;
         Ok(EquityHardStopLossConfig {
-            revised: None,
-            enabled: extract_value(cfg, "enabled")?,
-            signal_mode,
-            red_threshold: extract_value(cfg, "red_threshold")?,
-            ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
-            cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,
-            no_restart_drawdown_threshold: extract_value(cfg, "no_restart_drawdown_threshold")?,
-            restart_after_red_policy,
-            tier_ratios: EquityHardStopLossTierRatios {
-                yellow: extract_value(ratios, "yellow")?,
-                orange: extract_value(ratios, "orange")?,
-            },
-            orange_tier_mode: extract_value(cfg, "orange_tier_mode")?,
-            panic_close_order_type: extract_value(cfg, "panic_close_order_type")?,
+            hsl: Some(hsl),
+            ..EquityHardStopLossConfig::default()
         })
     };
     let hard_stop_cfg = parse_hsl_cfg(dict, "equity_hard_stop_loss")?;
@@ -2319,9 +1900,13 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     };
     crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_pct)
         .map_err(PyValueError::new_err)?;
-    if let Some(revised) = &params.equity_hard_stop_loss.revised {
-        revised.validate(&params.coins, params.pnls_max_lookback_days, params.candle_interval_minutes)
-            .map_err(PyValueError::new_err)?;
+    if let Some(hsl) = &params.equity_hard_stop_loss.hsl {
+        hsl.validate(
+            &params.coins,
+            params.pnls_max_lookback_days,
+            params.candle_interval_minutes,
+        )
+        .map_err(PyValueError::new_err)?;
     }
     Ok(params)
 }
@@ -2340,10 +1925,10 @@ fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
     Ok(params)
 }
 
-fn bot_params_pair_from_dict(dict: &PyDict, revised: bool) -> PyResult<BotParamsPair> {
+fn bot_params_pair_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParamsPair> {
     Ok(BotParamsPair {
-        long: bot_params_from_dict(extract_value(dict, "long")?, revised)?,
-        short: bot_params_from_dict(extract_value(dict, "short")?, revised)?,
+        long: bot_params_from_dict(extract_value(dict, "long")?, hsl)?,
+        short: bot_params_from_dict(extract_value(dict, "short")?, hsl)?,
     })
 }
 
@@ -2583,7 +2168,7 @@ fn extract_optional_twel_enforcer_policy(dict: &PyDict) -> PyResult<TwelEnforcer
     })
 }
 
-fn bot_params_from_dict(dict: &PyDict, revised: bool) -> PyResult<BotParams> {
+fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
     let risk_wel_enforcer_threshold: f64 = extract_value(dict, "risk_wel_enforcer_threshold")?;
     let risk_twel_enforcer_threshold: f64 = extract_value(dict, "risk_twel_enforcer_threshold")?;
     let risk_we_excess_allowance_pct: f64 = extract_value(dict, "risk_we_excess_allowance_pct")?;
@@ -2591,47 +2176,19 @@ fn bot_params_from_dict(dict: &PyDict, revised: bool) -> PyResult<BotParams> {
     let wallet_exposure_limit_raw: f64 = extract_value(dict, "wallet_exposure_limit")?;
     let n_positions_float: f64 = extract_value(dict, "n_positions")?;
     let n_positions = n_positions_float.round() as usize;
-    let hsl = if revised {
+    let hsl = if hsl {
         for key in dict.keys().iter() {
             if key.extract::<String>()?.starts_with("hsl_") {
-                return Err(PyValueError::new_err("revised HSL policies belong only in equity_hard_stop_loss"));
+                return Err(PyValueError::new_err(
+                    "HSL policies belong only in equity_hard_stop_loss",
+                ));
             }
         }
-        // Only the explicit revised scope policy can enable protective orders.
-        // Legacy HSL storage is unused, including in disabled revised scopes.
+        // Only the explicit hsl scope policy can enable protective orders.
+        // HSL policies are transported separately from ordinary order parameters.
         BotParams::default()
     } else {
-        let hsl_enabled: bool = extract_value(dict, "hsl_enabled")?;
-        let hsl_red_threshold: f64 = extract_value(dict, "hsl_red_threshold")?;
-        let hsl_ema_span_minutes: f64 = extract_value(dict, "hsl_ema_span_minutes")?;
-        let hsl_cooldown_minutes_after_red: f64 =
-            extract_value(dict, "hsl_cooldown_minutes_after_red")?;
-        let hsl_no_restart_drawdown_threshold: f64 =
-            extract_value(dict, "hsl_no_restart_drawdown_threshold")?;
-        let hsl_restart_after_red_policy: String =
-            extract_optional_string(dict, "hsl_restart_after_red_policy", "threshold")?;
-        let hsl_tier_ratios = dict
-            .get_item("hsl_tier_ratios")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'hsl_tier_ratios'"))?
-            .downcast::<PyDict>()
-            .map_err(|_| PyValueError::new_err("hsl_tier_ratios must be a dict"))?;
-        let hsl_tier_ratio_yellow: f64 = extract_value(hsl_tier_ratios, "yellow")?;
-        let hsl_tier_ratio_orange: f64 = extract_value(hsl_tier_ratios, "orange")?;
-        let hsl_orange_tier_mode: String = extract_value(dict, "hsl_orange_tier_mode")?;
-        let hsl_panic_close_order_type: String = extract_value(dict, "hsl_panic_close_order_type")?;
-        BotParams {
-            hsl_enabled,
-            hsl_red_threshold,
-            hsl_ema_span_minutes,
-            hsl_cooldown_minutes_after_red,
-            hsl_no_restart_drawdown_threshold,
-            hsl_restart_after_red_policy,
-            hsl_tier_ratio_yellow,
-            hsl_tier_ratio_orange,
-            hsl_orange_tier_mode,
-            hsl_panic_close_order_type,
-            ..BotParams::default()
-        }
+        return Err(PyValueError::new_err("obsolete backtest HSL payload"));
     };
     // Callers resolve live fixed denominators before building orchestrator input.
     // Preserve zero here: per-symbol zero is the explicit side-disable sentinel.
@@ -2706,14 +2263,6 @@ fn bot_params_from_dict(dict: &PyDict, revised: bool) -> PyResult<BotParams> {
         ema_span_0: extract_optional_f64(dict, "ema_span_0")?,
         ema_span_1: extract_optional_f64(dict, "ema_span_1")?,
         hsl_enabled: hsl.hsl_enabled,
-        hsl_red_threshold: hsl.hsl_red_threshold,
-        hsl_ema_span_minutes: hsl.hsl_ema_span_minutes,
-        hsl_cooldown_minutes_after_red: hsl.hsl_cooldown_minutes_after_red,
-        hsl_no_restart_drawdown_threshold: hsl.hsl_no_restart_drawdown_threshold,
-        hsl_restart_after_red_policy: hsl.hsl_restart_after_red_policy,
-        hsl_tier_ratio_yellow: hsl.hsl_tier_ratio_yellow,
-        hsl_tier_ratio_orange: hsl.hsl_tier_ratio_orange,
-        hsl_orange_tier_mode: hsl.hsl_orange_tier_mode,
         hsl_panic_close_order_type: hsl.hsl_panic_close_order_type,
         entry_cooldown_min_duration_minutes: extract_optional_f64(
             dict,
@@ -2823,21 +2372,6 @@ fn validate_hsl_panic_close_order_type_pair(bot_params: &BotParamsPair) -> PyRes
     Ok(())
 }
 
-fn validate_hsl_restart_after_red_policy_pair(bot_params: &BotParamsPair) -> PyResult<()> {
-    for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
-        match params.hsl_restart_after_red_policy.as_str() {
-            "always" | "threshold" | "never" => {}
-            raw => {
-                return Err(PyValueError::new_err(format!(
-                    "bot.{pside}.hsl_restart_after_red_policy must be one of: always, threshold, never; got {:?}",
-                    raw
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn validate_finite_range(
     path: &str,
     value: f64,
@@ -2882,69 +2416,6 @@ fn validate_hsl_risk_unstuck_bot_params(
                 raw
             )));
         }
-    }
-    validate_finite_range(
-        &format!("{path_prefix}.hsl_ema_span_minutes"),
-        params.hsl_ema_span_minutes,
-        1.0,
-        None,
-        true,
-    )?;
-    validate_finite_range(
-        &format!("{path_prefix}.hsl_red_threshold"),
-        params.hsl_red_threshold,
-        0.0,
-        Some(1.0),
-        false,
-    )?;
-    validate_finite_range(
-        &format!("{path_prefix}.hsl_no_restart_drawdown_threshold"),
-        params.hsl_no_restart_drawdown_threshold,
-        0.0,
-        Some(1.0),
-        true,
-    )?;
-    if params.hsl_no_restart_drawdown_threshold < params.hsl_red_threshold {
-        return Err(PyValueError::new_err(format!(
-            "{path_prefix}.hsl_no_restart_drawdown_threshold must be >= {path_prefix}.hsl_red_threshold"
-        )));
-    }
-    match params.hsl_restart_after_red_policy.as_str() {
-        "always" | "threshold" | "never" => {}
-        raw => {
-            return Err(PyValueError::new_err(format!(
-                "{path_prefix}.hsl_restart_after_red_policy must be one of: always, threshold, never; got {:?}",
-                raw
-            )));
-        }
-    }
-    validate_finite_range(
-        &format!("{path_prefix}.hsl_cooldown_minutes_after_red"),
-        params.hsl_cooldown_minutes_after_red,
-        0.0,
-        None,
-        true,
-    )?;
-    validate_finite_range(
-        &format!("{path_prefix}.hsl_tier_ratio_yellow"),
-        params.hsl_tier_ratio_yellow,
-        0.0,
-        Some(1.0),
-        false,
-    )?;
-    validate_finite_range(
-        &format!("{path_prefix}.hsl_tier_ratio_orange"),
-        params.hsl_tier_ratio_orange,
-        0.0,
-        Some(1.0),
-        false,
-    )?;
-    if !(params.hsl_tier_ratio_yellow < params.hsl_tier_ratio_orange
-        && params.hsl_tier_ratio_orange < 1.0)
-    {
-        return Err(PyValueError::new_err(format!(
-            "{path_prefix}.hsl tier ratios must satisfy 0 < yellow < orange < 1"
-        )));
     }
     validate_finite_range(
         &format!("{path_prefix}.risk_entry_cooldown_minutes"),
@@ -4516,7 +3987,6 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
         }
     }
     validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
-    validate_hsl_restart_after_red_policy_pair(&input.global.global_bot_params)?;
     validate_hsl_risk_unstuck_orchestrator_input(&input)?;
 
     let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {

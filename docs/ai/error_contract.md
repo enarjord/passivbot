@@ -55,11 +55,11 @@ Account-critical surfaces are required before any exchange action:
 2. balance
 3. open orders
 
-Dedicated full-position panic closes and their cancellations are an action-specific exception:
-positions and open orders must be fresh, but balance is not an input to their sizing or decision.
-The reduced Rust close contract accepts only signed size, book, tick size, and execution policy.
-It must emit exactly one full close per exposed target; malformed or incomplete batches are fatal.
-This exception does not apply to ordinary planning, risk evaluation, or stop-event reconstruction.
+The reduced Rust full-position close API does not need balance to size a close: it
+accepts signed size, book, tick size and execution policy. This numerical API does
+not waive live admission requirements. HSL must derive its current decision from
+fresh account facts, including balance, before each protective write. Malformed
+or incomplete close batches are fatal.
 
 Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are required only for
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not
@@ -104,17 +104,13 @@ candles; it does not retain per-span contexts or consecutive-use counters.
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
 
-Numeric non-positive/non-finite current balances, unusable historical HSL denominators,
-and unavailable HSL evidence follow `features/equity_hard_stop_loss.md`. Current ordinary
-strategy inputs remain mandatory, but HSL-only reconstruction failures do not impose a blanket
-entry embargo. Continuous scoped signal unavailability starts a configurable grace period;
-after it expires, Rust evaluates current loss over budget without EMA. A committed emergency
-exit continues independently of history and balance repair until fresh flat/order confirmation.
-Proven cooldown/manual ownership is retained. HSL attempt exhaustion escalates diagnostics,
-without terminating protection; without HSL, exhaustion remains terminal.
-
-This is unavailability, not a substitute input or permission to ignore Rust validation. Shape/type
-errors, malformed configuration, and unrelated validation errors are outside this policy.
+Current HSL fact availability and best-effort historical reconstruction follow
+`features/equity_hard_stop_loss.md`. Fresh current balance, positions and required marks
+remain mandatory. Historical ambiguity is reconciled by the shared Rust evaluator with
+observable approximations; it does not start a separate grace/fallback controller or
+retain a panic commitment. Current nonpositive equity is a loss signal, not missing data.
+Ordinary strategy and unrelated risk consumers retain their own required inputs.
+Malformed configuration and producer output remain fatal at their owning boundary.
 
 ## Forager And Eligibility Inputs
 
@@ -149,10 +145,12 @@ planning may use the configured lookback only when the cache proves `history_sco
 refresh or deferral, never a neutral history.
 
 Pending or degraded realized PnL blocks only enabled consumers that require authoritative PnL, such
-as HSL, operational auto-unstuck with positive total exposure, or the realized-loss gate. When
+as operational auto-unstuck with positive total exposure, or the realized-loss gate. When
 every such consumer is disabled, proven fill history may remain ready for structural consumers
 such as fill timestamps; PnL defects remain observable and repairable but do not globally defer
-planning. Enabling a PnL consumer restores the strict requirement without a neutral PnL fallback.
+planning. Enabling a strict PnL consumer restores that requirement. HSL instead uses its
+explicit best-effort historical reconstruction contract; damaged history does not
+justify a neutral signal or indefinite protection deferral.
 
 Corrupt or unavailable fills use bounded repair/retry and explicit degraded decisions. Valid
 manual or external exchange fills without Passivbot client IDs are exchange truth unless they

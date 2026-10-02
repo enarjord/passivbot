@@ -1,7 +1,7 @@
-//! Observational revised-HSL reporting. No field here is read by trading code.
+//! Observational HSL reporting. No field here is read by trading code.
 use super::*;
-use crate::hsl_revised_controller::{Action, LifecycleEvent};
-use crate::hsl_revised_evaluator::Output;
+use crate::hsl_controller::{Action, LifecycleEvent};
+use crate::hsl_evaluator::Output;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -433,11 +433,11 @@ impl Report {
 
 impl Backtest<'_> {
     /// Reporting survives result-array draining and never supplies replay input.
-    pub fn revised_hsl_report_metadata(&self) -> Result<Option<serde_json::Value>, String> {
-        let Some(config) = &self.backtest_params.equity_hard_stop_loss.revised else {
+    pub fn hsl_report_metadata(&self) -> Result<Option<serde_json::Value>, String> {
+        let Some(config) = &self.backtest_params.equity_hard_stop_loss.hsl else {
             return Ok(None);
         };
-        let metrics = &self.revised_hsl_report.summary;
+        let metrics = &self.hsl_report.summary;
         if ![
             metrics.red_minutes,
             metrics.observed_minutes,
@@ -448,54 +448,51 @@ impl Backtest<'_> {
         .iter()
         .all(|x| x.is_finite())
         {
-            return Err("non-finite revised HSL reporting metric".into());
+            return Err("non-finite HSL reporting metric".into());
         }
-        let summary =
-            serde_json::to_value(&self.revised_hsl_report.summary).map_err(|e| e.to_string())?;
+        let summary = serde_json::to_value(&self.hsl_report.summary).map_err(|e| e.to_string())?;
         let scopes = self
-            .revised_hsl_report
+            .hsl_report
             .scopes
             .keys()
             .map(|&(side, coin)| {
                 Ok(serde_json::json!({
-                    "side": side, "coin": coin, "policy": self.revised_policy(side, coin)?,
+                    "side": side, "coin": coin, "policy": self.hsl_policy(side, coin)?,
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
         Ok(Some(serde_json::json!({
-            "schema_version": 1, "engine": "revised", "mode": config.mode,
-            "detailed": self.revised_hsl_report.detailed, "scopes": scopes,
+            "schema_version": 1, "engine": "hsl", "mode": config.mode,
+            "detailed": self.hsl_report.detailed, "scopes": scopes,
             "coins": self.backtest_params.coins, "summary": summary,
             "samples": [], "events": [],
         })))
     }
 
     /// Borrow the diagnostic trace without a second per-field JSON allocation.
-    pub fn revised_hsl_samples(&self) -> &[Sample] {
-        &self.revised_hsl_report.samples
+    pub fn hsl_samples(&self) -> &[Sample] {
+        &self.hsl_report.samples
     }
 
-    pub fn revised_hsl_events(&self) -> &[Event] {
-        &self.revised_hsl_report.events
+    pub fn hsl_events(&self) -> &[Event] {
+        &self.hsl_report.events
     }
 
     #[cfg(test)]
-    pub fn revised_hsl_report_value(&self) -> Result<Option<serde_json::Value>, String> {
-        let Some(mut value) = self.revised_hsl_report_metadata()? else {
+    pub fn hsl_report_value(&self) -> Result<Option<serde_json::Value>, String> {
+        let Some(mut value) = self.hsl_report_metadata()? else {
             return Ok(None);
         };
-        value["samples"] =
-            serde_json::to_value(self.revised_hsl_samples()).map_err(|e| e.to_string())?;
-        value["events"] =
-            serde_json::to_value(self.revised_hsl_events()).map_err(|e| e.to_string())?;
+        value["samples"] = serde_json::to_value(self.hsl_samples()).map_err(|e| e.to_string())?;
+        value["events"] = serde_json::to_value(self.hsl_events()).map_err(|e| e.to_string())?;
         Ok(Some(value))
     }
 
-    pub(super) fn revised_report_key(&self, side: usize, coin: usize) -> Key {
+    pub(super) fn hsl_report_key(&self, side: usize, coin: usize) -> Key {
         match self
             .backtest_params
             .equity_hard_stop_loss
-            .revised
+            .hsl
             .as_ref()
             .unwrap()
             .mode
@@ -504,7 +501,7 @@ impl Backtest<'_> {
             "unified" => (None, None),
             "pside" => (Some(side), None),
             "coin" => (Some(side), Some(coin)),
-            _ => unreachable!("validated revised HSL mode"),
+            _ => unreachable!("validated HSL mode"),
         }
     }
 }
@@ -512,7 +509,7 @@ impl Backtest<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hsl_revised_controller::Decision;
+    use crate::hsl_controller::Decision;
 
     fn output(now: i64, action: Action, events: Vec<LifecycleEvent>) -> Output {
         Output {

@@ -5,13 +5,13 @@ from config.shared_bot import flatten_shared_bot_side, require_grouped_bot_value
 
 def test_flatten_shared_bot_side_prefers_grouped_value_over_stale_runtime_alias():
     side_cfg = {
-        "hsl": {"no_restart_drawdown_threshold": 1.0},
-        "hsl_no_restart_drawdown_threshold": 0.3,
+        "hsl": {"red_threshold": 1.0},
+        "hsl_red_threshold": 0.3,
     }
 
     flattened = flatten_shared_bot_side(side_cfg)
 
-    assert flattened["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
+    assert flattened["hsl_red_threshold"] == pytest.approx(1.0)
 
 
 def test_require_grouped_bot_value_can_prefer_flat_raw_override():

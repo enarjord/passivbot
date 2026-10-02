@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from config import load_prepared_config
+from config.load import load_input_config, prepare_config
 from config.access import require_config_value, require_live_value
 from config.overrides import parse_overrides
 from config_utils import format_config
@@ -567,11 +567,16 @@ async def prepare_suite_contexts(
 
 
 def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[str, Any]:
-    config = load_prepared_config(str(config_path), verbose=False)
-    config = parse_overrides(config, verbose=False)
+    source, base_path, raw = load_input_config(str(config_path))
     suite_override = None
     if suite_path:
-        suite_override = load_suite_override_config(suite_path)
+        suite_override = load_suite_override_config(
+            suite_path, source_config=source, base_config_path=base_path
+        )
+    config = prepare_config(
+        source, base_config_path=base_path, raw_snapshot=raw, verbose=False
+    )
+    config = parse_overrides(config, verbose=False)
     return extract_suite_config(config, suite_override)
 
 

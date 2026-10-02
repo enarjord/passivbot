@@ -56,7 +56,7 @@ def readiness_payload(bot, now_ms):
     if not isinstance(latest_write, (int, float)) or not 0 < latest_write <= now_ms:
         latest_write = None
     completed = getattr(bot, '_console_last_cycle_completed_ms', None)
-    owner = getattr(bot, '_hsl_revised_live', None)
+    owner = getattr(bot, '_hsl_live', None)
     ordinary = getattr(owner, '_ordinary', None)
     ordinary_started = getattr(owner, '_ordinary_started_ms', None)
     ordinary_pending_age = (max(0, now_ms - ordinary_started)

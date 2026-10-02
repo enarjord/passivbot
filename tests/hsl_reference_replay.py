@@ -1,4 +1,4 @@
-"""Test-only scope-boundary and snapshot experiments for the revised HSL.
+"""Test-only scope-boundary and snapshot experiments for the HSL.
 
 These compose the independent oracle; they are not installed in the live loop.
 No cache/journal state or prior decisions are accepted as reconstruction inputs.
@@ -9,8 +9,17 @@ from decimal import Decimal
 from itertools import groupby
 
 from hsl_reference import (
-    Candle, Fill, MINUTE, Observation, Position, dec, minute_prices, ordered_fills,
-    reconstruct, signal, quantity_path,
+    Candle,
+    Fill,
+    MINUTE,
+    Observation,
+    Position,
+    dec,
+    minute_prices,
+    ordered_fills,
+    reconstruct,
+    signal,
+    quantity_path,
 )
 
 
@@ -61,9 +70,20 @@ class Pair:
         return self.symbol, self.position.pside
 
 
-def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
-                 fills_started_at=None, fills_at=None, prices_at, revisions=(0,) * 4,
-                 fills_after_position=False):
+def capture_pair(
+    symbol,
+    position,
+    position_at,
+    mark_at,
+    fills,
+    prices,
+    *,
+    fills_started_at=None,
+    fills_at=None,
+    prices_at,
+    revisions=(0,) * 4,
+    fills_after_position=False,
+):
     """Capture normalized inputs, with fetch-completion times separate from events.
 
     Fill.sequence is actual per-pair exchange/simulator ordering supplied by the
@@ -75,20 +95,48 @@ def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
     from equal millisecond timestamps, and is invalidated by position changes.
     """
     size, basis, mark, multiplier = position.validate()
-    copied_fills = tuple(replace(f, delta=_number(f.delta), price=_number(f.price),
-                                realized=_number(f.realized), fee=_number(f.fee)) for f in fills)
-    captured = Pair(symbol, replace(position, size=size, basis=basis, mark=mark,
-                                multiplier=multiplier), position_at, mark_at,
-                fills_started_at, fills_at,
-                prices_at,
-                copied_fills, tuple(sorted((t, dec(p)) for t, p in prices.items())), tuple(revisions), None)
+    copied_fills = tuple(
+        replace(
+            f,
+            delta=_number(f.delta),
+            price=_number(f.price),
+            realized=_number(f.realized),
+            fee=_number(f.fee),
+        )
+        for f in fills
+    )
+    captured = Pair(
+        symbol,
+        replace(position, size=size, basis=basis, mark=mark, multiplier=multiplier),
+        position_at,
+        mark_at,
+        fills_started_at,
+        fills_at,
+        prices_at,
+        copied_fills,
+        tuple(sorted((t, dec(p)) for t, p in prices.items())),
+        tuple(revisions),
+        None,
+    )
     # Explicit fixture/acquisition evidence, never inferred from equal clocks.
-    return replace(captured, fills_position_anchor=position_anchor(captured)) if fills_after_position else captured
+    return (
+        replace(captured, fills_position_anchor=position_anchor(captured))
+        if fills_after_position
+        else captured
+    )
 
 
 def position_anchor(pair):
     p = pair.position
-    return (pair.position_at, p.size, p.basis, p.multiplier, p.inverse, p.pside, pair.revisions[0])
+    return (
+        pair.position_at,
+        p.size,
+        p.basis,
+        p.multiplier,
+        p.inverse,
+        p.pside,
+        pair.revisions[0],
+    )
 
 
 @dataclass(frozen=True)
@@ -111,56 +159,107 @@ class Snapshot:
     revisions: tuple
 
 
-def capture(now, start, balance, balance_at, pairs, settings=Settings(), revisions=(0,) * 6,
-            max_current_age=120_000, config_at=None):
+def capture(
+    now,
+    start,
+    balance,
+    balance_at,
+    pairs,
+    settings=Settings(),
+    revisions=(0,) * 6,
+    max_current_age=120_000,
+    config_at=None,
+):
     pairs = tuple(sorted(pairs, key=lambda p: p.key))
     balance = dec(balance)
     if start > now or balance <= 0 or max_current_age < 0:
         raise ValueError("invalid minimum snapshot")
     if len({p.key for p in pairs}) != len(pairs) or len(revisions) != 6:
         raise ValueError("invalid snapshot shape")
-    observed = [balance_at, *(p.position_at for p in pairs),
-                *(p.mark_at for p in pairs if p.position.size != 0)]
-    if any(not now - max_current_age <= t <= now for t in observed) or any(p.mark_at > now for p in pairs):
+    observed = [
+        balance_at,
+        *(p.position_at for p in pairs),
+        *(p.mark_at for p in pairs if p.position.size != 0),
+    ]
+    if any(not now - max_current_age <= t <= now for t in observed) or any(
+        p.mark_at > now for p in pairs
+    ):
         raise ValueError("unusable current observation")
     config_at = now if config_at is None else config_at
-    if any(t is not None and t > now for t in [config_at, *(p.fills_at for p in pairs),
-                             *(p.fills_started_at for p in pairs),
-                             *(p.prices_at for p in pairs)]):
+    if any(
+        t is not None and t > now
+        for t in [
+            config_at,
+            *(p.fills_at for p in pairs),
+            *(p.fills_started_at for p in pairs),
+            *(p.prices_at for p in pairs),
+        ]
+    ):
         raise ValueError("future source capture")
-    if any(p.fills_started_at is not None and p.fills_at is not None
-           and p.fills_started_at > p.fills_at for p in pairs):
+    if any(
+        p.fills_started_at is not None
+        and p.fills_at is not None
+        and p.fills_started_at > p.fills_at
+        for p in pairs
+    ):
         raise ValueError("reversed fill request interval")
     if any(not isinstance(r, int) or r < 0 for r in revisions):
         raise ValueError("invalid producer revision")
     for p in pairs:
         p.position.validate()
-        if len(p.revisions) != 4 or any(not isinstance(r, int) or r < 0 for r in p.revisions):
+        if len(p.revisions) != 4 or any(
+            not isinstance(r, int) or r < 0 for r in p.revisions
+        ):
             raise ValueError("invalid pair revisions")
-    settings = replace(settings, ema_span=dec(settings.ema_span), threshold=dec(settings.threshold))
-    return Snapshot(now, start, balance, balance_at, config_at, pairs, settings, tuple(revisions))
+    settings = replace(
+        settings, ema_span=dec(settings.ema_span), threshold=dec(settings.threshold)
+    )
+    return Snapshot(
+        now, start, balance, balance_at, config_at, pairs, settings, tuple(revisions)
+    )
 
 
 def snapshot_quality(snapshot, keys=None):
-    pairs = snapshot.pairs if keys is None else tuple(p for p in snapshot.pairs if p.key in keys)
+    pairs = (
+        snapshot.pairs
+        if keys is None
+        else tuple(p for p in snapshot.pairs if p.key in keys)
+    )
     reasons = set()
     if any(p.fills_started_at is None or p.fills_at is None for p in pairs):
         reasons.add("fill_capture_unknown")
-    if any(p.fills_started_at is not None and (p.fills_started_at < p.position_at
-           or (p.fills_started_at == p.position_at and p.fills_position_anchor != position_anchor(p)))
-           for p in pairs):
+    if any(
+        p.fills_started_at is not None
+        and (
+            p.fills_started_at < p.position_at
+            or (
+                p.fills_started_at == p.position_at
+                and p.fills_position_anchor != position_anchor(p)
+            )
+        )
+        for p in pairs
+    ):
         reasons.add("fills_before_position")
     if any(p.prices_at < p.mark_at for p in pairs):
         reasons.add("prices_before_mark")
     if any(t > p.prices_at for p in pairs for t, _ in p.prices):
         reasons.add("post_capture_price")
-    if any(p.position_at < f.timestamp <= snapshot.now for p in pairs
-           for f in latest_variants(p.fills)):
+    if any(
+        p.position_at < f.timestamp <= snapshot.now
+        for p in pairs
+        for f in latest_variants(p.fills)
+    ):
         reasons.add("post_position_fill")
-    if any(f.timestamp == p.position_at for p in pairs for f in latest_variants(p.fills)):
+    if any(
+        f.timestamp == p.position_at for p in pairs for f in latest_variants(p.fills)
+    ):
         reasons.add("position_fill_timestamp_tie")
-    if any(f.timestamp > min(snapshot.now, p.fills_at if p.fills_at is not None else snapshot.now)
-           for p in pairs for f in latest_variants(p.fills)):
+    if any(
+        f.timestamp
+        > min(snapshot.now, p.fills_at if p.fills_at is not None else snapshot.now)
+        for p in pairs
+        for f in latest_variants(p.fills)
+    ):
         reasons.add("post_capture_fill")
     return reasons
 
@@ -169,8 +268,12 @@ def latest_variants(fills):
     versions = {}
     for fill in fills:
         versions.setdefault(fill.identity, []).append(fill)
-    return tuple(f for group in versions.values() for f in group
-                 if f.revision == max(x.revision for x in group))
+    return tuple(
+        f
+        for group in versions.values()
+        for f in group
+        if f.revision == max(x.revision for x in group)
+    )
 
 
 def causal_fills(pair, now):
@@ -183,8 +286,12 @@ def causal_fills(pair, now):
     versions = {}
     for f in pair.fills:
         versions.setdefault((f.identity, f.revision), []).append(f)
-    return tuple(f for group in versions.values() if all(f.timestamp <= end for f in group)
-                 for f in group)
+    return tuple(
+        f
+        for group in versions.values()
+        if all(f.timestamp <= end for f in group)
+        for f in group
+    )
 
 
 def project(snapshot, keys):
@@ -197,13 +304,18 @@ def project(snapshot, keys):
     # are per pair for scoped evaluation; aggregate tokens would reintroduce churn
     # from unrelated pairs even when all selected content stayed unchanged.
     revisions = (snapshot.revisions[0], 0, 0, 0, 0, snapshot.revisions[5])
-    return replace(snapshot, pairs=tuple(p for p in snapshot.pairs if p.key in keys),
-                   revisions=revisions)
+    return replace(
+        snapshot,
+        pairs=tuple(p for p in snapshot.pairs if p.key in keys),
+        revisions=revisions,
+    )
 
 
 def source_revisions(snapshot):
     result = {("global", i): r for i, r in enumerate(snapshot.revisions)}
-    result.update({(p.key, i): r for p in snapshot.pairs for i, r in enumerate(p.revisions)})
+    result.update(
+        {(p.key, i): r for p in snapshot.pairs for i, r in enumerate(p.revisions)}
+    )
     for p in snapshot.pairs:
         # Observed revision numbers diagnose producer rollback even when the
         # corresponding contents are quarantined from financial reconstruction.
@@ -215,7 +327,13 @@ def source_revisions(snapshot):
 def source_times(snapshot):
     result = {"balance": snapshot.balance_at, "config": snapshot.config_at}
     for p in snapshot.pairs:
-        for name in ("position_at", "mark_at", "fills_started_at", "fills_at", "prices_at"):
+        for name in (
+            "position_at",
+            "mark_at",
+            "fills_started_at",
+            "fills_at",
+            "prices_at",
+        ):
             result[(p.key, name)] = getattr(p, name)
     return result
 
@@ -233,7 +351,9 @@ def merge_fill_evidence(retained, snapshot):
             current.setdefault((p.key, f.identity), set()).add(f)
         for f in causal_fills(p, snapshot.now):
             key = p.key, f.identity
-            causal_revisions[key] = max(f.revision, causal_revisions.get(key, f.revision))
+            causal_revisions[key] = max(
+                f.revision, causal_revisions.get(key, f.revision)
+            )
     for key, records in current.items():
         combined = retained.get(key, set()) | records
         if key in causal_revisions:
@@ -251,8 +371,11 @@ def selected_pairs(snapshot, mode, *, pside=None, symbol=None):
         raise ValueError("invalid scope")
     if (mode == "coin") != (symbol is not None):
         raise ValueError("invalid symbol selector")
-    pairs = tuple(p for p in snapshot.pairs if p.position.pside == pside
-                  and (symbol is None or p.symbol == symbol))
+    pairs = tuple(
+        p
+        for p in snapshot.pairs
+        if p.position.pside == pside and (symbol is None or p.symbol == symbol)
+    )
     if mode == "coin" and not pairs:
         raise ValueError("missing current coin position; absent is not flat")
     return pairs
@@ -295,7 +418,11 @@ def _steps(pair, start, now):
         reasons.add("current_quantity_reconciliation")
         if not pair.position.size:
             reasons.add("current_flat_timestamp_estimate")
-    return [Step(pair.key, f, before, after) for f, before, after, _ in steps], reasons, []
+    return (
+        [Step(pair.key, f, before, after) for f, before, after, _ in steps],
+        reasons,
+        [],
+    )
 
 
 def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
@@ -309,29 +436,45 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
     paths, conflicts, reasons = {}, {}, set()
     reasons.update(snapshot_quality(snapshot, {p.key for p in pairs}))
     for pair in pairs:
-        paths[pair.key], quality, conflicts[pair.key] = _steps(pair, snapshot.start, snapshot.now)
+        paths[pair.key], quality, conflicts[pair.key] = _steps(
+            pair, snapshot.start, snapshot.now
+        )
         reasons.update(quality)
-    sizes = {p.key: (paths[p.key][0].before if paths[p.key] else dec(0))
-             for p in pairs}
+    sizes = {p.key: (paths[p.key][0].before if paths[p.key] else dec(0)) for p in pairs}
     consumed = {p.key: [] for p in pairs}
-    timeline = sorted((s for steps in paths.values() for s in steps), key=lambda s: s.fill.timestamp)
+    timeline = sorted(
+        (s for steps in paths.values() for s in steps), key=lambda s: s.fill.timestamp
+    )
     boundaries = []
     for timestamp, cohort in groupby(timeline, key=lambda s: s.fill.timestamp):
         cohort = list(cohort)
         one_pair = len({s.pair for s in cohort}) == 1
         seqs = [s.fill.sequence for s in cohort]
-        exact_order = one_pair and all(s is not None for s in seqs) and len(set(seqs)) == len(seqs)
+        exact_order = (
+            one_pair
+            and all(s is not None for s in seqs)
+            and len(set(seqs)) == len(seqs)
+        )
         # Unique per-pair sequence permits an exact flatten before a same-time
         # reopening. All other cohorts are applied as a whole before testing flat.
-        groups = [[s] for s in sorted(cohort, key=lambda s: s.fill.sequence)] if exact_order else [cohort]
+        groups = (
+            [[s] for s in sorted(cohort, key=lambda s: s.fill.sequence)]
+            if exact_order
+            else [cohort]
+        )
         for group in groups:
             was_exposed = any(sizes.values())
             for step in group:
-                sizes[step.pair] = (Decimal(0) if step == paths[step.pair][-1]
+                sizes[step.pair] = (
+                    Decimal(0)
+                    if step == paths[step.pair][-1]
                     and any(p.key == step.pair and p.position.size == 0 for p in pairs)
-                    else step.after)
+                    else step.after
+                )
                 consumed[step.pair].append(step.fill)
-            had_exposure = was_exposed or any(s.before > 0 or s.after > 0 for s in group)
+            had_exposure = was_exposed or any(
+                s.before > 0 or s.after > 0 for s in group
+            )
             if any(sizes.values()):
                 continue
             if not had_exposure:
@@ -340,10 +483,15 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
                 reasons.add("boundary_after_position_anchor")
             realized = Decimal(0)
             for pair in pairs:
-                history = reconstruct(pair.position, [s.fill for s in paths[pair.key]], {},
-                                      snapshot.start, snapshot.now)
+                history = reconstruct(
+                    pair.position,
+                    [s.fill for s in paths[pair.key]],
+                    {},
+                    snapshot.start,
+                    snapshot.now,
+                )
                 if consumed[pair.key]:
-                    realized += history.cashflows[len(consumed[pair.key])-1][1]
+                    realized += history.cashflows[len(consumed[pair.key]) - 1][1]
                 reasons.update(history.reasons)
             # Unknown cross-pair order is applied as one cohort; its final flat
             # is usable without claiming an unobserved internal flat/reopen.
@@ -354,7 +502,9 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
             if ambiguous:
                 reasons.add("estimated_flat")
             tape = tuple((p.key, tuple(consumed[p.key])) for p in pairs)
-            boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0))))
+            boundaries.append(
+                Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0)))
+            )
     return BoundaryTrace(tuple(boundaries), frozenset(reasons))
 
 
@@ -375,30 +525,50 @@ def estimate_pair(snapshot, key):
     """
     pair = next(p for p in snapshot.pairs if p.key == key)
     direction = 1 if pair.position.pside == "long" else -1
-    all_fills, quality = ordered_fills(causal_fills(pair, snapshot.now), snapshot.start, snapshot.now, direction)
+    all_fills, quality = ordered_fills(
+        causal_fills(pair, snapshot.now), snapshot.start, snapshot.now, direction
+    )
     quality.update(snapshot_quality(snapshot, {key}))
-    end = min(pair.position_at, pair.fills_at if pair.fills_at is not None else snapshot.now)
+    end = min(
+        pair.position_at, pair.fills_at if pair.fills_at is not None else snapshot.now
+    )
     fills = [f for f in all_fills if f.timestamp <= end]
     if any(f.timestamp > pair.position_at for f in all_fills):
         quality.add("post_position_fill")
     if len({snapshot.balance_at, pair.position_at, pair.mark_at}) > 1:
         quality.add("snapshot_skew")
-    prices = {t: p for t, p in pair.prices if snapshot.start <= t <= min(snapshot.now, pair.prices_at)}
+    prices = {
+        t: p
+        for t, p in pair.prices
+        if snapshot.start <= t <= min(snapshot.now, pair.prices_at)
+    }
     if not prices:
-        raise ValueError("snapshot experiment requires a historical price grid; use the minimal-history oracle separately")
-    expected = set(range(((snapshot.start + MINUTE - 1) // MINUTE) * MINUTE,
-                         snapshot.now + 1, MINUTE))
+        raise ValueError(
+            "snapshot experiment requires a historical price grid; use the minimal-history oracle separately"
+        )
+    expected = set(
+        range(
+            ((snapshot.start + MINUTE - 1) // MINUTE) * MINUTE, snapshot.now + 1, MINUTE
+        )
+    )
     if not expected.issubset(prices):
         quality.add("filled_price_grid")
     # Apply the agreed ffill/bfill convention instead of compressing EMA time or
     # turning a historical gap into a readiness veto. Inputs are minute closes.
-    prices = minute_prices([Candle(t - MINUTE, 1, p, p, p, p) for t, p in prices.items()],
-                           snapshot.start, snapshot.now)
+    prices = minute_prices(
+        [Candle(t - MINUTE, 1, p, p, p, p) for t, p in prices.items()],
+        snapshot.start,
+        snapshot.now,
+    )
     history = reconstruct(pair.position, fills, prices, snapshot.start, snapshot.now)
     if snapshot.settings.slots <= 0:
         raise ValueError("pair experiment requires an active coin slot")
-    result = signal(history.rows, snapshot.balance / snapshot.settings.slots,
-                    snapshot.settings.ema_span, snapshot.settings.threshold)
+    result = signal(
+        history.rows,
+        snapshot.balance / snapshot.settings.slots,
+        snapshot.settings.ema_span,
+        snapshot.settings.threshold,
+    )
     return PairEstimate(history, result, frozenset(quality | set(history.reasons)))
 
 
@@ -445,8 +615,12 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
             raise ValueError("missing current scope positions; absent is not flat")
         observed_keys.update(current_keys)
         revisions = source_revisions(current)
-        regression = current.now < last_time or any(r < high_water.get(k, r) for k, r in revisions.items())
-        high_water.update({k: max(r, high_water.get(k, r)) for k, r in revisions.items()})
+        regression = current.now < last_time or any(
+            r < high_water.get(k, r) for k, r in revisions.items()
+        )
+        high_water.update(
+            {k: max(r, high_water.get(k, r)) for k, r in revisions.items()}
+        )
         capture_regression = False
         for k, t in source_times(current).items():
             prior = time_water.get(k)
@@ -457,8 +631,10 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
         current_fills = merge_fill_evidence(fill_water, current)
         # Future timestamps are quarantined anomalies, not expired history. Their
         # unexplained omission cannot validate an older tape before time catches up.
-        missing_identity = any(k not in current_fills and any(current.start <= f.timestamp for f in rows)
-                               for k, rows in fill_water.items())
+        missing_identity = any(
+            k not in current_fills and any(current.start <= f.timestamp for f in rows)
+            for k, rows in fill_water.items()
+        )
         last_time = max(last_time, current.now)
         quality = snapshot_quality(current, scope_keys)
         if regression:
@@ -472,12 +648,19 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
             for f in records:
                 revisions.setdefault(f.revision, set()).add(f)
             for variants in revisions.values():
-                if len(variants) > 1 and any(current.start <= f.timestamp <= current.now for f in variants):
+                if len(variants) > 1 and any(
+                    current.start <= f.timestamp <= current.now for f in variants
+                ):
                     quality.add("conflicting_fill_contents")
                     if len({f.timestamp for f in variants}) > 1:
                         quality.add("conflicting_fill_timestamps")
         if current == snapshot:
             return Evaluation(snapshot, value, attempt, not quality, frozenset(quality))
         snapshot = current
-    return Evaluation(snapshot, compute(snapshot), max_attempts + 1, False,
-                      frozenset(quality | {"revision_churn"}))
+    return Evaluation(
+        snapshot,
+        compute(snapshot),
+        max_attempts + 1,
+        False,
+        frozenset(quality | {"revision_churn"}),
+    )

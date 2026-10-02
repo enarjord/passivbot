@@ -37,9 +37,10 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     assert "_raw_effective" not in cleaned
     assert cleaned["bot"]["long"]["risk"]["n_positions"] == 5
     assert cleaned["bot"]["short"]["risk"]["n_positions"] == 3
-    assert cleaned["bot"]["long"]["forager"]["volume_ema_span_1m"] == template["bot"]["long"]["forager"][
-        "volume_ema_span_1m"
-    ]
+    assert (
+        cleaned["bot"]["long"]["forager"]["volume_ema_span_1m"]
+        == template["bot"]["long"]["forager"]["volume_ema_span_1m"]
+    )
     assert (
         cleaned["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"]
         == template["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
@@ -59,15 +60,25 @@ def test_clean_config_fills_missing_values_from_template():
     cleaned = clean_config(config)
     template = get_template_config()
     assert cleaned["live"]["strategy_kind"] == template["live"]["strategy_kind"]
-    assert cleaned["bot"]["long"]["strategy"] == {"trailing_martingale": template["bot"]["long"]["strategy"]["trailing_martingale"]}
+    assert cleaned["bot"]["long"]["strategy"] == {
+        "trailing_martingale": template["bot"]["long"]["strategy"][
+            "trailing_martingale"
+        ]
+    }
     assert cleaned["bot"]["short"]["strategy"] == {
-        "trailing_martingale": template["bot"]["short"]["strategy"]["trailing_martingale"]
+        "trailing_martingale": template["bot"]["short"]["strategy"][
+            "trailing_martingale"
+        ]
     }
     assert cleaned["optimize"]["bounds"]["long"]["strategy"] == {
-        "trailing_martingale": template["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        "trailing_martingale": template["optimize"]["bounds"]["long"]["strategy"][
+            "trailing_martingale"
+        ]
     }
     assert cleaned["optimize"]["bounds"]["short"]["strategy"] == {
-        "trailing_martingale": template["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"]
+        "trailing_martingale": template["optimize"]["bounds"]["short"]["strategy"][
+            "trailing_martingale"
+        ]
     }
 
 
@@ -78,7 +89,9 @@ def test_clean_config_prunes_inactive_strategy_subtrees_for_selected_kind():
 
     cleaned = clean_config(config)
 
-    assert cleaned["bot"]["long"]["strategy"] == {"ema_anchor": template["bot"]["long"]["strategy"]["ema_anchor"]}
+    assert cleaned["bot"]["long"]["strategy"] == {
+        "ema_anchor": template["bot"]["long"]["strategy"]["ema_anchor"]
+    }
     assert cleaned["bot"]["short"]["strategy"] == {
         "ema_anchor": template["bot"]["short"]["strategy"]["ema_anchor"]
     }
@@ -202,8 +215,8 @@ def test_clean_config_preserves_sparse_backtest_reducer():
 
 
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-def test_clean_revised_config_preserves_engine_policy_and_bounds(mode):
-    from config.hsl_revised import generated_template, REMOVED_FIELDS
+def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
+    from config.hsl import generated_template, REMOVED_FIELDS
 
     cfg = generated_template(get_template_config(), mode)
     cfg["bot"]["long"]["hsl"]["enabled"] = True
@@ -212,7 +225,7 @@ def test_clean_revised_config_preserves_engine_policy_and_bounds(mode):
     original = deepcopy(cfg)
     cleaned = clean_config(cfg)
     assert cfg == original
-    assert cleaned["live"]["hsl_engine"] == "revised"
+    assert "hsl_engine" not in cleaned["live"]
     for side in ["long", "short"]:
         assert not REMOVED_FIELDS.intersection(cleaned["bot"][side]["hsl"])
         assert cleaned["bot"][side]["hsl"] == cfg["bot"][side]["hsl"]
@@ -225,8 +238,9 @@ def test_clean_revised_config_preserves_engine_policy_and_bounds(mode):
     assert sanitize_prepared_config_for_dump(cfg) == cleaned
 
 
-def test_clean_revised_does_not_author_missing_portfolio_or_restart():
-    from config.hsl_revised import generated_template
+def test_clean_hsl_does_not_author_missing_portfolio_or_restart():
+    from config.hsl import generated_template
+
     cfg = generated_template(get_template_config(), "unified")
     del cfg["bot"]["hsl"]["restart_after_red_policy"]
     assert "restart_after_red_policy" not in clean_config(cfg)["bot"]["hsl"]
@@ -235,36 +249,52 @@ def test_clean_revised_does_not_author_missing_portfolio_or_restart():
 
 
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-def test_revised_saved_fitness_contract_keeps_fixed_scope_policy(mode):
-    from config.hsl_revised import generated_template
+def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
+    from config.hsl import generated_template
     from optimization.evaluation_contract import build_evaluation_contract
     from optimize import _resume_config_mismatches
     from optimization.evaluation_contract import CONTRACT_KEY
+
     cfg = generated_template(get_template_config(), mode)
     contract = build_evaluation_contract(cfg)
-    assert contract["live"]["hsl_engine"] == "revised"
-    block = contract["bot"]["hsl"] if mode == "unified" else contract["bot"]["long"]["hsl"]
+    assert "hsl_engine" not in contract["live"]
+    block = (
+        contract["bot"]["hsl"] if mode == "unified" else contract["bot"]["long"]["hsl"]
+    )
     assert block["restart_after_red_policy"] == "always"
     assert "red_threshold" not in block  # candidate value, not fixed policy
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}
     assert _resume_config_mismatches(record, cfg) == []
-    candidate_block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
-    candidate_block["red_threshold"] = .031
+    candidate_block = (
+        cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    )
+    candidate_block["red_threshold"] = 0.031
     assert _resume_config_mismatches(record, cfg) == []
-    path = "bot.hsl.restart_after_red_policy" if mode == "unified" else "bot.long.hsl.restart_after_red_policy"
+    path = (
+        "bot.hsl.restart_after_red_policy"
+        if mode == "unified"
+        else "bot.long.hsl.restart_after_red_policy"
+    )
     cfg["optimize"]["fixed_runtime_overrides"][path] = "never"
-    assert any("evaluation.bot" in diff for diff in _resume_config_mismatches(record, cfg))
+    assert any(
+        "evaluation.bot" in diff for diff in _resume_config_mismatches(record, cfg)
+    )
 
 
-def test_revised_exported_config_can_be_prepared_without_legacy_hydration():
-    from config.hsl_revised import generated_template, REMOVED_FIELDS
+def test_hsl_exported_config_can_be_prepared_without_legacy_hydration():
+    from config.hsl import generated_template, REMOVED_FIELDS
     from config_utils import format_config
+
     cfg = generated_template(get_template_config(), "unified")
-    cfg["bot"]["hsl"].update(enabled=True, ema_span_minutes=12.5,
-                            red_threshold=.07, restart_after_red_policy="never")
-    cfg["optimize"]["bounds"]["hsl"] = {"red_threshold": [.02, .2]}
+    cfg["bot"]["hsl"].update(
+        enabled=True,
+        ema_span_minutes=12.5,
+        red_threshold=0.07,
+        restart_after_red_policy="never",
+    )
+    cfg["optimize"]["bounds"]["hsl"] = {"red_threshold": [0.02, 0.2]}
     exported = sanitize_prepared_config_for_dump(cfg)
     loaded = format_config(json.loads(json.dumps(exported)), verbose=False)
     assert loaded["bot"]["hsl"] == cfg["bot"]["hsl"]
-    assert loaded["optimize"]["bounds"]["hsl"]["red_threshold"] == [.02, .2]
+    assert loaded["optimize"]["bounds"]["hsl"]["red_threshold"] == [0.02, 0.2]
     assert not REMOVED_FIELDS.intersection(loaded["bot"]["long"]["hsl"])

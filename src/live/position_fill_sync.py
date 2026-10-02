@@ -194,14 +194,11 @@ def permits(bot, order):
     # Aggregate HSL decisions consume every contributing position on that scope.
     keys = {key}
     config = getattr(bot, "config", {})
-    if config.get("live", {}).get("hsl_engine") == "revised":
-        mode = config.get("live", {}).get("hsl_signal_mode", "coin")
-        if mode == "unified" and config.get("bot", {}).get("hsl", {}).get(
-            "enabled", False
-        ):
-            keys.update(gate.pending)
-        elif mode == "pside" and config.get("bot", {}).get(key[1], {}).get(
-            "hsl", {}
-        ).get("enabled", False):
-            keys.update(k for k in gate.pending if k[1] == key[1])
+    mode = config.get("live", {}).get("hsl_signal_mode", "coin")
+    if mode == "unified" and config.get("bot", {}).get("hsl", {}).get("enabled", False):
+        keys.update(gate.pending)
+    elif mode == "pside" and config.get("bot", {}).get(key[1], {}).get("hsl", {}).get(
+        "enabled", False
+    ):
+        keys.update(k for k in gate.pending if k[1] == key[1])
     return not any(gate.blocked(k) for k in keys)

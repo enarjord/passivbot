@@ -50,7 +50,6 @@ from live.smoke_report import (
     summarize_live_smoke_report_brief,
 )
 
-
 BUNDLE_VERSION = 1
 MONITOR_SNAPSHOT_FILE_NAMES = frozenset({"state.latest.json", "manifest.json"})
 SNAPSHOT_SENSITIVE_KEY_FRAGMENTS = (
@@ -135,7 +134,9 @@ def _compact_event(
         "symbol": live_event.get("symbol") or row.get("symbol"),
         "pside": live_event.get("pside") or row.get("pside"),
         "side": live_event.get("side"),
-        "ids": {key: ids.get(key) for key in LIVE_EVENT_ID_KEYS if ids.get(key) is not None},
+        "ids": {
+            key: ids.get(key) for key in LIVE_EVENT_ID_KEYS if ids.get(key) is not None
+        },
     }
     if include_data:
         data = live_event.get("data")
@@ -725,7 +726,9 @@ def _problem_report_result_summary(problem_report: dict[str, Any]) -> dict[str, 
 
 
 def _smoke_log_result_summary(smoke_report: dict[str, Any]) -> dict[str, Any]:
-    logs = smoke_report.get("logs") if isinstance(smoke_report.get("logs"), dict) else {}
+    logs = (
+        smoke_report.get("logs") if isinstance(smoke_report.get("logs"), dict) else {}
+    )
     window = logs.get("window") if isinstance(logs.get("window"), dict) else {}
     return {
         "max_files": logs.get("max_files"),
@@ -880,7 +883,6 @@ def _smoke_data_plane_result_summaries(
             "account_critical_remote_calls",
             "fill_refresh",
             "startup_timings",
-            "hsl_replay",
         )
     }
 
@@ -1313,9 +1315,7 @@ def build_live_incident_bundle(
     smoke_operational_summaries = _smoke_operational_result_summaries(
         smoke_brief_summary
     )
-    smoke_data_plane_summaries = _smoke_data_plane_result_summaries(
-        smoke_brief_summary
-    )
+    smoke_data_plane_summaries = _smoke_data_plane_result_summaries(smoke_brief_summary)
     performance_report: dict[str, Any] | None = None
     performance_report_summary: dict[str, Any] | None = None
     if include_performance_report:
@@ -1426,30 +1426,36 @@ def build_live_incident_bundle(
                     "since_ms": since_ms,
                     "until_ms": until_ms,
                     "event_tail_lines": event_tail_lines if event_tail_lines else None,
-                    "max_event_files_per_bot": max_event_files_per_bot
-                    if max_event_files_per_bot
-                    else None,
+                    "max_event_files_per_bot": (
+                        max_event_files_per_bot if max_event_files_per_bot else None
+                    ),
                     "max_log_files": max_log_files if max_log_files else None,
                     "log_tail_lines": log_tail_lines if log_tail_lines else None,
                     "max_log_matches": max_log_matches if max_log_matches else None,
                     "log_window_unparsed_policy": log_window_unparsed_policy,
                     "smoke_sections": list(smoke_sections),
-                    "performance_sections": list(performance_sections)
-                    if include_performance_report and performance_sections
-                    else None,
+                    "performance_sections": (
+                        list(performance_sections)
+                        if include_performance_report and performance_sections
+                        else None
+                    ),
                     "include_restart_smoke_plan": include_restart_smoke_plan,
-                    "restart_smoke_window_minutes": restart_smoke_window_minutes
-                    if include_restart_smoke_plan
-                    else None,
+                    "restart_smoke_window_minutes": (
+                        restart_smoke_window_minutes
+                        if include_restart_smoke_plan
+                        else None
+                    ),
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
                     "include_problem_report": include_problem_report,
                     "include_performance_report": include_performance_report,
                     "include_processes": include_processes,
-                    "supervisor_config": str(supervisor_config)
-                    if supervisor_config is not None
-                    else None,
+                    "supervisor_config": (
+                        str(supervisor_config)
+                        if supervisor_config is not None
+                        else None
+                    ),
                 }.items()
                 if value not in (None, [], "")
             },
@@ -1552,7 +1558,9 @@ def build_live_incident_bundle(
         "monitor_snapshots": len(metadata["monitor_snapshots"]),
         "event_segments": {
             "files": len(segment_manifest["files"]),
-            "included": sum(1 for item in segment_manifest["files"] if item.get("included")),
+            "included": sum(
+                1 for item in segment_manifest["files"] if item.get("included")
+            ),
             "file_discovery": segment_manifest.get("file_discovery") or {},
             "selection": segment_manifest.get("selection"),
             "total_included_bytes": segment_manifest["total_included_bytes"],
@@ -1562,7 +1570,9 @@ def build_live_incident_bundle(
                 "event_file_limit_applies_to"
             ),
             "event_file_limit_groups": segment_manifest.get("event_file_limit_groups"),
-            "event_files_before_limit": segment_manifest.get("event_files_before_limit"),
+            "event_files_before_limit": segment_manifest.get(
+                "event_files_before_limit"
+            ),
             "event_files_skipped_by_limit": segment_manifest.get(
                 "event_files_skipped_by_limit"
             ),

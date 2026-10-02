@@ -71,19 +71,6 @@ Related detailed plans:
 
 ## High-Value Follow-Ups
 
-0a. [ ] Critical: HSL false-panic recovery and preflight.
-   Status: open. VPS3 `ebybitsub03` evidence from 2026-06-28/29 showed a wrong
-   `close_panic_long` on XMR under `hsl_signal_mode=unified` with
-   `balance_override=1000`. HSL reconstructed a synthetic account-level peak
-   near `1213` from overridden balance plus historical realized PnL, while the
-   account was not near a legitimate drawdown that should have triggered RED.
-   PR #839 added the immediate fail-loud runtime guard for
-   `balance_override` plus account-level HSL replay. `live-config-preflight`
-   flags the same unsafe startup contract before launch, and
-   `live-smoke-report --processes` now adds a read-only local config check for
-   running/expected live commands. An operational gap remains for recovery and
-   prevention.
-
    Target contract: operators need a preflight-visible warning/error before
    starting a config that combines `balance_override` with `unified` or `pside`
    HSL, and a carefully designed recovery path for historical panic fills that
@@ -98,21 +85,6 @@ Related detailed plans:
    if needed; and add tests proving that the default remains fail-loud and
    exchange-derived cooldown evidence is ignored only when the explicit recovery
    contract is satisfied.
-
-0. [ ] Critical: HSL startup replay latency before protective panic.
-   Status: open. Binance VPS5 incident evidence from 2026-06-26 shows
-   `hsl_signal_mode=coin` startup history reconstruction loaded
-   `symbols=24 pairs=24 rows=43201 fills=2704 panic_events=0` at
-   `16:19:33Z`, then completed at `16:46:37Z` after replaying `985965` rows
-   in `1623.4s`. The XLM protective close was not posted until `16:48:06Z`.
-   This is too slow for a live safety path: correctness from exhaustive replay
-   is valuable, but not at the cost of delaying panic/protective action by
-   tens of minutes while a held coin may already be beyond red threshold.
-   A 2026-06-29 VPS5 restart on `v8` head `7ce1aec9` re-confirmed the issue:
-   after roughly 20 minutes, Binance, Kucoin, GateIO, and OKX were still live
-   but not `READY`; their current logs had HSL coin reconstruction start lines
-   and no completion lines. Process smoke stayed hard-green, so this remains a
-   startup readiness latency issue rather than a process crash.
 
    Target contract: startup must prioritize fast protective HSL classification
    for currently held positions. Full historical replay can continue for
@@ -129,78 +101,6 @@ Related detailed plans:
    coin state proves red; and separate cooldown discovery from immediate panic
    eligibility. Any implementation must include targeted tests and structured
    startup timing evidence.
-
-   Work log:
-   - 2026-06-29: After PR #858 deployed to VPS5 at `8c908e72`, new structured
-     `hsl.replay.progress` events showed all four forager bots reached
-     `hsl_history_inputs_loaded` and `hsl_price_history_fetch_started`, but no
-     bot had emitted `hsl_price_history_fetch_completed` or timeline replay
-     stages in the early smoke window. This localizes the current bottleneck to
-     HSL price/candle history fetching before dense timeline replay begins.
-   - 2026-06-30: After PR #897 deployed at `aebc3667` and bots were restarted,
-     a 20-minute smoke showed three forager bots still in active coin-HSL
-     replay: Binance at pair `10/27` after `645s`, OKX at pair `22/28` after
-     `1522s`, and Kucoin still in `price_history_symbol_fetch_started` after
-     `1541s`. GateIO reached ZEC cooldown handling, but its startup timing
-     reported `full-warmup` around `1843s`. This confirms the latency is still
-     present with the current HSL config and should remain a top-priority
-     trading-path optimization.
-   - 2026-06-30: A later VPS5 smoke on the same deployment showed OKX finished
-     coin-HSL replay after `1904.391s`, logged `hsl-ready=2462.54s`, then
-     finalized `HSL[long:ZEC/USDT:USDT]` RED without an exchange order and
-     entered cooldown. This is a second post-restart exchange/account example
-     of the same latency pattern and strengthens the case for a position-first
-     protective classification path before full cooldown replay completes.
-   - 2026-06-30: PR #899 added read-only `live-smoke-report --brief`
-     projection of the worst active HSL replay elapsed time, latest-event age,
-     and stage counts from existing sanitized HSL replay groups. This does not
-     reduce startup latency or change trading behavior, but it makes repeated
-     smoke loops surface active replay latency without opening the full report.
-   - 2026-06-30: PR #901 added read-only `live-smoke-report --brief`
-     projection of the worst completed HSL replay elapsed time from existing
-     sanitized completed replay groups. This keeps settled post-replay smoke
-     useful after `active_bots` falls back to zero, while still leaving the
-     actual HSL startup latency optimization open.
-   - 2026-06-30: PR #903 added read-only `live-smoke-report`
-     `risk_events.hsl_status` projections from existing `hsl.status` monitor
-     events, with value-safe shareable summary/brief output. This makes current
-     HSL tier/symbol/bot status visible in smoke loops, but does not reduce
-     startup replay latency or change panic/cooldown behavior.
-   - 2026-07-02: PR #988 added active HSL replay stale/long-running
-     classification to `live-smoke-report`, making a missing completion event
-     visible while a bot is still startup-blocked. A subsequent VPS5 deploy
-     exposed Kucoin as stopped after a terminal coin-HSL startup validation
-     failure, not merely slow replay.
-   - 2026-07-02: PR #989 narrowed coin-mode HSL price replay strictness to
-     current-position and historical panic/cooldown symbols. Kucoin no longer
-     failed on a flat, non-panic historical AVAX fill and no candle cache was
-     used for HSL price replay (`cm_cache=0.00 MiB`). However, the remaining
-     dense row replay still took `1237.7s` and the bot reached READY only after
-     about `1445s`, confirming the next fix must target the
-     `timeline_minutes * pairs` replay loop rather than only candle fetching or
-     missing-UPnL validation.
-   - 2026-07-02: The same Kucoin restart emitted a recovered first-cycle
-     `InvalidNonce` after the long startup and finalized a NEAR coin-HSL RED
-     cooldown from replayed history. These should be handled as separate
-     follow-ups: refresh exchange time before the first cycle after very long
-     startup, and review whether smoke should distinguish expected HSL
-     red/cooldown risk events from software hard failures. Branch
-     `codex/v8-smoke-recovered-time-sync` addresses the smoke side for
-     timestamp/nonce recovery by classifying same-cycle successful
-     `exchange.time_sync` as recovered problem evidence instead of a persistent
-     hard failure.
-   - 2026-07-10: The held-readiness prerequisite audit found that live coin HSL
-     normalizes drawdown by `balance / n_positions`, while the Rust backtest
-     uses `balance * total_wallet_exposure_limit / n_positions`. The live
-     contract and metric regression explicitly make sensitivity independent of
-     exposure limits, so reconcile the backtest denominator in a focused
-     parity PR before using full-replay equivalence as the held-readiness gate.
-     The current prerequisite branch separately centralizes post-episode
-     no-restart/cooldown finalization in Rust without changing trigger math.
-   - 2026-07-10: PR #1174 merged and deployed the shared post-episode
-     transition. The dependent denominator-parity branch now moves coin slot
-     budget/raw drawdown into Rust, removes TWEL scaling from backtest, and
-     preserves TWEL activation plus intentional dynamic backtest slot counts.
 
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
@@ -296,160 +196,6 @@ Related detailed plans:
    event counts, startup timings, and resource usage. This should be safe,
    explicit, and produce a reviewable smoke report.
 
-   Work log:
-   - 2026-06-26: Added first-slice plan-only
-     `passivbot tool live-restart-smoke-plan`, which parses a tmuxp-style
-     supervisor config and emits a structured dry-run restart/smoke plan with
-     bot commands, stop/start/check phases, timeouts, escalation ladder, repo
-     checks, and smoke-report command wiring. It explicitly rejects execution
-     and does not signal processes, invoke tmux, SSH, pull code, start bots,
-     contact exchanges, or load credentials.
-   - 2026-06-27: Added process-signal safety guidance to the plan-only restart
-     smoke planner after a VPS5 restart shell matched its own broad
-     `passivbot live` process pattern. The planner now records that future
-     execution must use exact tmux panes or exact canonical process rows, and
-     rejects broad process-pattern kill/signal commands.
-   - 2026-06-29: VPS5 deploy of PR #858 at `8c908e72` re-confirmed that
-     shutdown responsiveness is uneven during HSL replay. Hyperliquid stopped
-     promptly on the first signal, but Binance, GateIO, Kucoin, and OKX were
-     still alive after roughly 20 seconds and required a second signal. Future
-     restart orchestration should record per-bot shutdown timings, identify the
-     current blocking phase, and apply an explicit escalation ladder while
-     leaving bots running after smoke.
-   - 2026-06-30: After PR #880 deployed at `74a07640`, VPS5 5-minute brief
-     smoke hit a 30-second timeout wrapper and a narrower 1-minute smoke took
-     roughly 15-19 seconds while reporting `ok=true`. With text logs disabled,
-     the report still skipped roughly 14.7k old monitor events to summarize
-     roughly 600 in-window events. First-pass fix: make `live-smoke-report`
-     reuse one monitor-event parse for both monitor validation/summary and
-     windowed smoke aggregates instead of parsing every event segment twice.
-   - 2026-06-30: Added an opt-in `live-smoke-report --event-tail-lines`
-     parser bound for repeated recent-window smoke checks over large current
-     monitor segments. The default remains full monitor-event validation; the
-     opt-in path reports tail-limit metadata in `event_window` so bounded smoke
-     evidence is explicit.
-   - 2026-06-30: PR #897 deploy required a bot restart so running processes
-     would load the new `exchange.config_refresh` event producer. Kucoin did
-     not exit within a 180-second Ctrl+C observation window and required SIGTERM
-     before reload. The subsequent 2-minute brief smoke was green with all five
-     configured bots running. This adds another concrete data point for
-     per-bot shutdown timing, current-phase attribution, and a bounded
-     escalation ladder in future restart automation.
-   - 2026-06-30: PR #899 added worst-active-HSL replay elapsed/event-age/stage
-     counters to `live-smoke-report --brief`, so short operator smoke loops can
-     see whether startup HSL replay is still active and how old the active
-     stage evidence is. VPS5 deploy smoke at `e1fcb038` was green, but its
-     sampled window had `hsl_replay.active_bots=0`, so the active fields were
-     not populated by live data in that run.
-   - 2026-07-16: PR #1271 added bounded existing
-     `forager.feature_unavailable` evidence to smoke reports. Its no-restart
-     VPS5 deploy stayed hard-green with all five bots matched. A naturally
-     empty event window exposed that the registered `forager_features` section
-     selector was rejected when the optional section was omitted.
-   - 2026-07-16: PR #1272 repaired registered absent-section selection and
-     added existing `planning.defer_summary` evidence to staged readiness. Its
-     no-restart VPS5 deploy stayed hard-green, and focused zero-event selectors
-     succeeded. The settled window naturally contained one existing
-     `forager.eligibility_changed` event that smoke reports still omitted; the
-     active follow-up adds that bounded membership-transition projection.
-   - 2026-07-16: PR #1282 added bounded cycle terminal-outcome and recovery
-     health. Its no-restart VPS5 deploy retained a real KuCoin nonce
-     degradation, then proved the next successful cycle. A final exact PID
-     check found that same unchanged process in `D` for about 20 seconds before
-     three consecutive `R` samples. The active read-only follow-up makes this
-     bounded process-state observation/recovery sequence reproducible in the
-     smoke tool without adding restart execution.
-   - 2026-07-16: PR #1286 deployed aggregate-only process checks that retained
-     the complete process/config verdict and naturally proved transient `D`
-     recovery. The active exact-target preflight now joins supervisor window
-     names to read-only tmux pane metadata while keeping all restart execution
-     and process signals unavailable.
-   - 2026-07-16: PR #1287 deployed exact canonical pane-ID and PID/PPID
-     ownership proof for all five configured bots. Immediate and settled target
-     reports were hard-green without process action; the active follow-up adds
-     bounded identity stability across a pre-action sample window.
-   - 2026-07-16: PR #1288 deployed bounded target identity stability. Immediate
-     and settled three-sample reports retained all five exact targets with zero
-     changed identities or failed samples. The active follow-up binds this
-     local-only hard gate into the non-executing restart smoke plan.
-   - 2026-07-16: PR #1289 deployed the exact stable-target command and required
-     verdict in the non-executing restart plan. The active follow-up classifies
-     whether each bot has a pane-parent candidate relaunch path with a mandatory
-     post-stop recheck, without exposing its command or adding process control.
-   - 2026-07-16: PR #1290 deployed pane-parent relaunch classification for all
-     five exact VPS5 targets, with a mandatory post-stop pane recheck and no
-     command exposure or process control. The active follow-up binds sampled
-     target stability to an opaque parsed supervisor command-contract
-     fingerprint so configuration drift fails closed before future execution.
-   - 2026-07-17: PR #1291 merged and deployed the sampled supervisor-contract
-     fingerprint. Post-merge inspection found its source rows were already
-     redacted and truncated for public process output. The active follow-up
-     computes the digest from full private canonical commands before
-     sanitization and validates the value-safe contract shape before target
-     sampling can pass.
-   - 2026-07-17: PR #1294 merged and deployed full private-command fingerprint
-     derivation. Three stable VPS5 samples resolved all five configured targets
-     with the same opaque fingerprint and no command exposure. The active
-     follow-up adds the first explicit local executor: one exact-pane Ctrl-C
-     round, bounded exact-PID exit observation, process/pane TOCTOU rechecks,
-     private exact-pane relaunch, and stable final verification. It deliberately
-     omits SSH, git pull, Rust rebuild, direct exchange access, and automatic
-     force escalation.
-   - 2026-07-17: PR #1300 merged and deployed operator-confirmed Rust
-     build-input fingerprints plus an in-check final rehash at every executor
-     runtime boundary. A deliberately wrong VPS5 fingerprint failed before
-     target sampling or action, and all five bot PIDs remained unchanged. The
-     active follow-up adds a pure evaluator for already-generated full target
-     and smoke JSON reports; automatic report collection remains later work.
-   - 2026-07-17: PR #1301 merged and deployed the pure target/smoke evidence
-     evaluator without restarting bots. A real shutdown-through-startup window
-     passed all gates and a wider window correctly failed on existing hard
-     events. Deployment also exposed lossy epoch-ms projection and comparison;
-     the active follow-up preserves exact bounded timestamps and rejects
-     dropped hard-looking log evidence. Automatic collection remains later.
-   - 2026-07-17: PR #1302 merged and deployed exact epoch-ms fidelity plus the
-     dropped-hard fail-closed gate without restarting bots. The retained real
-     restart window passed with exact bounds; one-millisecond mismatch and
-     dropped-hard in-memory variants failed as expected. The active follow-up
-     composes target, smoke, and evaluation in memory without intermediate full
-     report files or process control.
-   - 2026-07-17: PR #1303 merged and deployed the in-memory collector without a
-     bot restart or signal. Its first exact retained-window run discovered 1,012
-     event segments totaling about 801 MB and remained CPU-active beyond ten
-     minutes, so the exact collector PID was interrupted while all five bot panes
-     and `misc:0.0` stayed unchanged. A read-only prototype selected the 10
-     rotation intervals overlapping that window and returned the complete green
-     five-bot lifecycle verdict in 37.3 seconds. The active follow-up makes that
-     interval selection fail-closed and caps per-bot, global-file, and byte scope.
-   - 2026-07-17: PR #1305 merged and deployed fail-closed interval selection
-     without a bot restart or signal. The exact retained window selected
-     10/1,008 segments and `131834602` projected bytes under the 128 MiB cap,
-     recovered all five shutdown/startup cohorts, and returned zero hard
-     failures. The active follow-up binds canonical `origin/master`
-     fast-forward and Rust runtime preparation to caller-confirmed commits and
-     source inputs before the restart executor can act.
-   - 2026-07-17: PR #1306 merged and deployed exact canonical repository
-     preparation. A same-head VPS5 smoke proved the no-move/no-build path, and a
-     wrong target failed before build while all five panes and `misc:0.0`
-     remained unchanged. The active follow-up composes the existing exact-pane
-     executor and bounded collector over one exact restart-through-observation
-     window without force escalation or report files.
-   - 2026-07-17: PR #1307 merged and deployed the exact restart-through-smoke
-     orchestrator. Graceful execution stopped, exited, relaunched, and verified
-     all five configured targets without force; the bounded collector recovered
-     all five shutdown/startup cohorts. Smoke honestly remained red on a real
-     KuCoin positions-fetch timeout while every bot stayed running and
-     `misc:0.0` remained unchanged. The retained event exposed raw connector
-     exception text and a request URL; the active follow-up removes those fields
-     while preserving bounded classification and correlation.
-   - 2026-07-17: PR #1308 merged and deployed strict `cycle.degraded` payload
-     projection. The exact five-pane graceful restart completed without force;
-     its settled 600-second window recovered all five shutdown/startup cohorts
-     with zero hard, monitor, text-log, or target failures while `misc:0.0`
-     retained its pre-restart identity. Canonical sink-failure handling still
-     retained raw exception text in `sink.degraded`; the active follow-up removes
-     that field while preserving stable classification, counters, and timings.
-
    Remaining refinements: activate the bounded `sink.degraded` redaction
    follow-up and observe a fresh settled post-restart window. Remote-host control
    and any force-escalation policy remain separate review boundaries.
@@ -473,12 +219,6 @@ Related detailed plans:
    values smoke-report precedence. PR #1270 carries those same assessments
    into `live-performance-report`; enforcement and broader
    readiness-stage coverage remain out of scope.
-
-   Startup currently has timing events, but the next step is durable budget
-   accounting by phase: account-critical fetches, fill/PnL refresh, active
-   candle readiness, forager warmup, HSL replay, Rust planning, and READY.
-   Store both current timings and rolling baselines so regressions stand out
-   after short-downtime restarts.
 
    Work log:
    - 2026-06-27: Added report-only startup budget projections to
@@ -627,7 +367,7 @@ Related detailed plans:
    of fabricating them.
 
    Add a non-trading preview that reconstructs current HSL state and reports
-   which symbols are green/yellow/red, cooldown status, current drawdown to red,
+   which scopes are GREEN/RED, cooldown status, current drawdown to red,
    and whether startup would emit panic orders. This would make risky restarts
    with changed HSL configs easier to reason about before live execution.
 
@@ -669,66 +409,6 @@ Related detailed plans:
     meaningful risk/HSL/unstuck transitions, and compact "waiting because"
     summaries. EMA/candle/cache internals should stay structured DEBUG unless
     they directly explain a blocked trading action.
-
-    PR #1207 deployed an aligned `position.changed` human transition with
-    base/effective WEL utilization while preserving the complete structured
-    event; a natural live Hyperliquid change verified the projection. Zero
-    values in fill, balance, and entry-gate summaries are already retained
-    because their numeric helper returns formatted strings; the prior
-    truthiness-gap note was incorrect. PR #1210 renders frequent balance changes
-    as exact raw/snapped transitions. PR #1215 removed the fill legacy/event
-    duplicate after the structured projection gained timestamp, pending-PnL,
-    bounded traceability, and bulk-summary semantics. PR #1216 merged and
-    deployed at `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`: four natural
-    periodic health lines proved compact single ownership and sane RSS, with
-    `ok=true` settled smoke (`414/414` remote, `70/70` account-critical,
-    five process/config checks, `12/12` fill refreshes, and zero tracked
-    repository changes).
-    PR #1217 then removed the natural KuCoin execution-loop error-burst
-    structured/legacy duplicate while preserving the legacy fallback when no
-    structured console sink exists. It merged and deployed at
-    `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`; after a real transient KuCoin
-    timeout aged out, the final two-minute smoke was green with `284/284`
-    remote and `62/62` account-critical calls, all five bots running, zero
-    pipeline failures, and a clean tracked repository. Retained OKX logs then
-    exposed the next adjacent duplicate: structured
-    `execution.cancel_ambiguous_terminal` followed by the legacy full-account
-    confirmation summary for the same symbol.
-    PR #1218 removed that ambiguous-cancel duplicate and added the compact
-    full-account-confirmation cue without changing cancellation or confirmation
-    behavior. It merged and deployed at
-    `4bf7706d79f2e2404f785195973d13ea49c31efb`; the settled two-minute smoke was
-    green with five matching bots, `472/472` remote calls, `25/25`
-    account-critical calls, `7/7` fill refreshes, four complete active HSL
-    replays, zero hard/log/monitor/pipeline failures, and a clean repository.
-    Fresh Binance, GateIO, and OKX logs then exposed the next adjacent duplicate:
-    legacy `[entry] initial entry staged but not placed` immediately followed by
-    structured `entry.initial_distance_gate_blocked`. The blocked and cleared
-    structured events already carry the bounded operator context and should own
-    normal console/text output while retaining legacy fallback when structured
-    console infrastructure is absent.
-    PR #1219 removed that entry-distance duplicate and deployed at
-    `23d9e72af180e8636de7f80cdff8178a60e61937`. Its final bounded smoke was
-    green with five config-valid bots, `299/299` remote and `32/32`
-    account-critical calls, six fill refreshes, complete required HSL replay
-    work, zero hard/log/monitor/pipeline failures, and a clean repository.
-    Natural post-deploy blocked events on Binance, KuCoin, GateIO, and OKX
-    proved structured single ownership. The same GateIO log exposed a separate
-    duplicate: legacy `initial entry blocked by min effective cost` immediately
-    followed by structured `entry.min_effective_cost_blocked`. The per-block
-    structured event should own normal detail output when its console sink is
-    available, while the distinct throttled aggregate summary for larger block
-    sets remains operator-visible.
-    PR #1220 removed that min-effective-cost duplicate and deployed at
-    `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`. Its final bounded smoke was
-    green with five config-valid bots, `279/279` remote and `44/44`
-    account-critical calls, seven fill refreshes, complete required HSL replay
-    work, zero hard/log/pipeline failures, and a clean repository. Natural
-    GateIO output proved structured single ownership. Static follow-up found
-    direct duplicate ownership in `_log_realized_loss_gate_blocks`: the legacy
-    warning immediately precedes an already console/text-routed structured
-    warning. Migrate that detail with the same emitter/pipeline/sink fallback
-    contract while preserving every gate decision and throttle.
 
     PR #1246 merged and deployed the risk-status materiality slice. It keeps every
     five-minute trailing and unstuck observation in structured/monitor sinks
@@ -885,12 +565,6 @@ Related detailed plans:
     report-only warm-cache readiness evidence are merged. Deeper report-only
     metadata compatibility evidence for candle known gaps, fill coverage proof,
     and HSL artifact/timestamp compatibility is also merged.
-
-    Keep the read-only doctor focused on canonical candle/fill caches and diagnostic HSL latch/state
-    artifacts: report coverage, metadata compatibility, corrupted shards, suspicious gaps,
-    synthetic/no-trade assumptions, and whether a short restart has usable authoritative inputs.
-    Persisted HSL replay matrices are intentionally no longer a supported warm-cache path.
-    This supports the separate warm-cache restart work.
 
     Work log:
     - 2026-06-25: Added `passivbot tool cache-integrity-doctor`, which reports
@@ -1255,105 +929,6 @@ Related detailed plans:
     any destructive remediation proposal.
 
 ## Merged Work Log
-
-| Date | Item | PR / Commit | Result | Remaining |
-|------|------|-------------|--------|-----------|
-| 2026-06-30 | #1/#2/#3 Incident bundle generator, event query, and live restart/smoke automation | pending PR / `codex/v8-incident-window-discovery-summary` | Projects `time_window.files_scanned` and `time_window.file_discovery` into compact incident-bundle output so focused bundle scoping can be verified without opening the archive | Review, merge, and VPS5 no-restart smoke pending |
-| 2026-06-30 | #1/#2/#3 Incident bundle generator, event query, and live restart/smoke automation | PR #919 / `989b81c9` | Applied incident-bundle query scope filters to `time_window_report.json`, `timeline.txt`, and matched event-segment selection; VPS5 no-restart deploy stayed hard-green and a focused OKX bundle verified only OKX time-window paths, exchange/user values, and segment selection | Surface time-window discovery metadata in compact output |
-| 2026-06-30 | #1/#2/#3 Incident bundle generator, event query, and live restart/smoke automation | PR #918 / `946d0757` | Added incident-bundle CLI/library filters for level, exchange, user, bot id, remote-call group, side, source, component, tag, and data_eq; VPS5 no-restart deploy stayed hard-green and a focused OKX bundle verified scoped event/problem reports from the live monitor tree | Completed by PR #919 time-window/timeline/segment scoping |
-| 2026-06-30 | #1/#2/#3 Incident bundle generator, event query, and live restart/smoke automation | PR #917 / `29d026a` | Embedded a bounded `problem_event_report.json` in incident bundles by default, using the same shared problem-event predicate as `live-smoke-report` and `live-event-query --problem-events`; VPS5 no-restart deploy stayed hard-green and a bounded bundle smoke verified `problem_event_report.json` in the archive | Continue cross-bot incident workflow improvements only where concrete operator diagnostics require them |
-| 2026-06-30 | #2/#3 Event query and live restart/smoke automation | PR #916 / `0f32aeff` | Added `live-event-query --problem-events` and `--hard-problem-events` using the same shared predicate as `live-smoke-report`; VPS5 no-restart deploy stayed hard-green and a focused query matched the same EMA/HSL attention groups shown by brief smoke | Completed by PR #917 incident-bundle problem-event embedding |
-| 2026-06-30 | #2/#3 Event query and live restart/smoke automation | PR #915 / `aef82af9` | Projected bounded, value-safe `problem_events.groups` and `event_types` into `live-smoke-report --brief`; VPS5 no-restart deploy stayed hard-green with all five bots matched and remaining attention attributable to EMA readiness plus HSL cooldown groups | Completed by PR #916 query filters and the pending incident-bundle embedding slice |
-| 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #914 / `9ff335e4` | Moved incident-bundle event-segment SHA hashing behind actual segment inclusion; VPS5 no-restart deploy stayed green, bounded bundle smoke completed in 9.77s with zero event-segment bytes copied, and brief smoke stayed hard-green with all five bots matched | Brief smoke still reports `attention=true` from structured problem events without bounded top-cause groups; continue safe restart orchestration |
-| 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #913 / `d3f3264c` | Added opt-in `--event-tail-lines` to incident bundles and shared seek-tail event-row iteration for plain NDJSON across event-query, smoke-report, and incident time-window scans; VPS5 no-restart deploy stayed green and bounded bundle smoke completed in 15.51s with seek-tail metadata | Avoid remaining disabled-segment manifest hashing; continue safe restart orchestration |
-| 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #912 / `0eb29545` | Added `--recent-minutes` to incident bundles and deployed it read-only to VPS5; bundle smoke showed the recent window active with clean hard-failure status but still many matched current-segment events | Add opt-in event-tail bounding for recent incident bundles; continue safe restart orchestration |
-| 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #911 / `7c5c96f4` | Projected bounded event-file discovery metadata into incident-bundle event-report summaries and event-segment manifests; VPS5 no-restart deploy stayed green and bundle smoke showed matching discovery counts without copying event segments | Continue safe restart orchestration; add small incident-bundle CLI ergonomics where they reduce operator mistakes |
-| 2026-06-30 | #3/#4 Live restart/smoke automation and performance readiness | PR #910 / `ac949f03` | Projected bounded event-file discovery metadata into `live-performance-report` full and summary output; VPS5 no-restart deploy stayed green and concise performance smoke showed discovery counts without file paths | Continue safe restart orchestration; carry discovery visibility into incident bundles where it explains copied segment scope |
-| 2026-06-30 | #3 Live restart/smoke automation | PR #909 / `c8c51d73` | Projected bounded event-file discovery metadata into `live-smoke-report` full, summary, and brief output; VPS5 no-restart deploy stayed green and brief smoke showed discovery counts without file paths | Continue safe restart orchestration; carry discovery visibility into other read-only report surfaces where it explains scan cost |
-| 2026-06-30 | #2 Event query and timeline CLI extensions | PR #908 / `0c0024a3` | Added bounded `file_discovery` metadata to `live-event-query` reports while preserving the existing list-returning discovery API; VPS5 no-restart deploy stayed green and focused query smoke showed path-pruning counts for Binance | Carry discovery visibility into smoke reports where useful; continue query-pruning/index work only where concrete smoke cost appears |
-| 2026-06-30 | #2 Event query and timeline CLI extensions | PR #907 / `f792f889` | Added conservative monitor path pruning for path-shaped `live-event-query --bot-id` filters; VPS5 no-restart deploy stayed green, path-shaped bot-id query scanned one file, and opaque bot-id query preserved full-scan behavior | Continue query-pruning/index work only where concrete smoke cost appears; expose pruning/discovery metadata so operators can see when scope pruning occurred |
-| 2026-06-30 | #2 Event query and timeline CLI extensions | PR #906 / `b7b34758` | Added `live-event-query --source`, `--component`, and `--side` filters plus compact `source` output; folded #903/#904 deploy evidence into the same real observability PR; VPS5 no-restart deploy stayed green and focused single-bot query smokes validated the new filter echoes | Broad parallel root-level monitor scans were too slow for routine VPS smoke; prefer focused paths and continue query-pruning/index work where concrete smoke cost appears |
-| 2026-06-30 | #0/#3/#10 HSL status smoke evidence | PR #903 / `1dd115cc` | Added `risk_events.hsl_status` to `live-smoke-report` full, summary, and brief output from existing `hsl.status` events; fixed #904 by filtering shareable summary risk `latest_data` through a value-safe whitelist; VPS5 no-restart smoke stayed green and showed red HSL status counts for ZEC without magnitude fields in brief output | Actual HSL startup latency optimization remains open; broader event-driven console redesign remains open |
-| 2026-06-30 | #0/#3 HSL completed replay smoke evidence | PR #901 / `9b3c29ad` | Added `hsl_replay.max_completed_elapsed_ms` to `live-smoke-report --brief`; VPS5 no-restart smoke stayed green after deploy, with no HSL replay events in the sampled window | HSL startup latency remains a trading-path optimization; this slice only surfaces completed replay latency when completed replay events are in-window |
-| 2026-06-30 | #0/#3 HSL replay/startup smoke evidence | PR #899 / `e1fcb038` | Added `live-smoke-report --brief` projection for worst active HSL replay elapsed time, latest-event age, and active stage counts from existing sanitized groups; VPS5 no-restart smoke stayed green after deploy | HSL startup latency remains a trading-path optimization; this slice only surfaces active replay latency in brief smoke |
-| 2026-06-30 | Logging loop scope/progress tracking | PR #898 / `05c48b5` | Recorded the retuned logging-loop boundary: backlog work is in-loop only when it helps diagnostics, smoke evidence, incident reconstruction, or logging-overhaul validation | Continue keeping scope decisions and deploy evidence current as the loop proceeds |
-| 2026-06-30 | #0/#3/#18 Progress and evidence tracking | PR #897 / `aebc3667` | Recorded exchange-config-refresh smoke projection evidence; VPS5 was then restarted so live processes loaded the producer/projection, with a green settled smoke and a wider real HSL ZEC cooldown window | Prove `exchange.config_refresh` during an hourly refresh; implement HSL startup latency and safe restart orchestration separately |
-| 2026-06-25 | #1 Incident bundle generator | PR #641 / `e1f99002` | Added `passivbot tool live-incident-bundle`; bundle smoke on VPS5 created an archive with redacted monitor/config evidence | Supervisor/process status and tighter remote smoke integration |
-| 2026-06-25 | #2 Event query and timeline CLI extensions | PR #638 / `1b15b2d5` | Added broader live event query filters | More ID scopes still needed at that point |
-| 2026-06-25 | #2 Event query and timeline CLI extensions | PR #642 / `ad36d8ea` | Added bot/snapshot/plan/action/remote-call-group filters and shared ID-key timeline rendering; VPS5 query smoke passed | Richer reconstruction views |
-| 2026-06-25 | #2/#11 Event query and order trace summaries | PR #648 / `774bcf74` | Added `live-event-query --trace-summary` aggregate counts across matched events, ID scopes, symbols, sides, and order waves | Full create/cancel/missing-order reconstruction view |
-| 2026-06-25 | #2/#11 Event query and order trace completeness | PR #651 / `b9f42ebd` | Added `live-event-query --order-trace` reconstruction grouped by order wave and action, with confirmation events and bounded samples | Richer cycle reconstruction and incident-bundle integration |
-| 2026-06-25 | #2/#11 Event query and cycle trace completeness | PR #654 / `ff493541` | Added `live-event-query --cycle-trace` reconstruction grouped by cycle id, with bounded timelines, aggregate summaries, and nested order traces | Incident-bundle integration and cross-bot workflow |
-| 2026-06-25 | #1/#2/#11 Incident bundle trace integration | PR #659 / `27931c81` | Embedded trace-summary and order-trace reports into incident bundles by default, plus cycle-trace when scoped to `--cycle-id`; VPS5 bundle smoke verified trace sections | Cross-bot incident workflow and supervisor/process context |
-| 2026-06-25 | #1/#3/#14 Smoke process status | PR #661 / `72b3d931` | Added optional read-only process liveness to `live-smoke-report` and incident bundles; VPS5 smoke matched all five `/root/bots_vps5.yaml` bots | Safe restart orchestration and richer supervisor model remain open |
-| 2026-06-25 | #6 Exchange health and contract probes | PR #663 / `45b0cf9e` | Added passive `remote_call.failed` summaries to `live-smoke-report`; VPS5 smoke grouped Kucoin timeouts by balance/positions/open_orders | Active read-only exchange endpoint probes remain open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #665 / `37c29359` | Added structured-event time windows to `live-smoke-report` and threaded them into incident-bundle smoke reports; VPS5 smoke used the window to separate pre-deploy failures from settled post-restart behavior | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #11 Order lifecycle trace completeness | PR #666 / `fa90623d` | Added structured create-filter/defer events for pre-exchange create-order gates, best-effort and off default console | Continue producer coverage as nearby execution surfaces are touched |
-| 2026-06-26 | #2 Event query and timeline CLI extensions | PR #667 / `e5771cfa` | Added event time-window filters to `live-event-query`; query, timeline, trace-summary, order-trace, and cycle-trace views use the same scoped event set | Cross-bot incident workflow |
-| 2026-06-26 | #13 Cache integrity doctor | PR #668 / `734c2de0` | Added cache-family summaries and issue family tags to the read-only cache doctor | Coverage windows, suspicious gaps, metadata compatibility, and warm-cache readiness |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #670 / `b74d12be` | Extended `live-smoke-report` time windows to parseable timestamped text log lines; VPS5 smoke proved stale log lines were skipped via `logs.window.lines_skipped_before` | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #671 / `34f63799` | Narrowed traceback log matching to real Python traceback headers; VPS5 smoke with logs enabled returned `ok=true`, `logs.hard_matches=0`, and all five bots matched | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #3/#8 Live restart/smoke automation and HSL preview | PR #673 / `2697ff48` | Added bounded `risk_events` summaries to `live-smoke-report`; VPS5 smoke exposed GateIO ZEC long HSL RED cooldown without changing smoke health policy | Safe pull/stop/start orchestration and true HSL dry-run preview still open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #675 / `3aa1e7a7` | Added explicit `keep|drop` policy for unparseable text-log lines in smoke windows; opt-in `drop` suppresses only non-signal unparseable noise and preserves traceback/hard signals; VPS5 smoke with `drop` passed | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #10 Operator console redesign from events | PR #677 / `409f5d8e` | Mirrored existing execution-loop error burst warnings into structured `health.summary` events with `execution_loop_error_burst`, best-effort and redacted | Continue migrating high-value text logs to structured events without increasing console noise |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #679 / `60c9a41` | Added bounded `problem_events.latest_data` for selected smoke problem groups and timestamp-context filtering for stale unparseable log continuations; VPS5 smoke after deploy returned `ok=true`, no hard problem events, no log hard/attention matches, and all five bots matched | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #682 / `048e8595c` | Added top-level `problem_event_count` and bounded `problem_event_groups` aggregates to `live-smoke-report`; settled VPS5 smoke after deploy returned `ok=true`, no hard problem events, no log matches, no remote-call failures, and all five bots matched | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #684 / `04ca7174` | Dropped contextless unparseable log lines under explicit `--log-window-unparsed-policy drop`, preventing stale mid-traceback tails from causing false hard smoke failures; VPS5 smoke after deploy returned `ok=true`, no hard problem events, no log hard/attention matches, no remote-call failures, and all five bots matched | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #686 / `b03f4139` | Added branch/head/tracked-dirty repository metadata to `live-smoke-report`; VPS5 smoke verified `/root/passivbot` on `v8` head `9e898019`, dirty=false, all five bots matched | Kucoin authoritative endpoint timeout probes and safe pull/stop/start orchestration remain open |
-| 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #688 / `9945a3d3` | Added `remote_call_timings` elapsed-time groups to `live-smoke-report`; VPS5 smoke on `11f7d142` returned `ok=true`, no hard failures, all five bots matched, and surfaced slow-but-successful candle fetch groups | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
-| 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #690 / `dc99378a` | Added `remote_call_health` groups to `live-smoke-report`, rolling up terminal remote-call successes/failures/throttles, latency, reason/error counts, and affected symbols by bot/component/kind/surface; VPS5 smoke on `b150176f` returned `ok=true`, no hard failures, all five bots matched, and summarized 445 terminal remote calls | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
-| 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #692 / `ac4afe3f` | Added top-level `remote_call_health` success/failure/throttle totals and percentages to `live-smoke-report`; VPS5 smoke on `c8ce4880` returned `ok=true`, no hard failures, all five bots matched, and reported total=390, succeeded=389, failed=1, throttled=0 | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
-| 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #694 / `bebbb3f6` | Added `account_critical_remote_call_health` to `live-smoke-report`, isolating authoritative balance/positions/open-orders style endpoint health from candle/fill traffic; VPS5 smoke on `3299c1ca` returned `ok=true`, no hard failures, all five bots matched, and reported account-critical total=126, succeeded=126, failed=0, throttled=0 | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #696 / `f1efbe45` | Added `live-smoke-report --summary`, a concise high-signal projection of smoke health, process/repository state, problem groups, remote-call/account-critical health, and risk events; VPS5 compact summary smoke on `d850daf5` returned `ok=true`, no hard failures, all five bots matched, and account-critical total=58, succeeded=58 | Safe pull/stop/start orchestration remains open; optional row-limit/brief summary mode could reduce chat-facing output further |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #698 / `7c7368f3` | Redacted common user/home prefixes from smoke-report `repository.root` while preserving real git cwd use; incident-bundle `smoke_report.json` inherits the safer display field | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #699 / `4e2fcee7` | Surfaced dropped contextless unparsed attention/hard counters under `--log-window-unparsed-policy drop`; dropped attention now makes smoke `attention=true` without making stale tail fragments hard failures; VPS5 settled smoke on `d5639813` returned `ok=true`, no hard failures, all five bots matched | Safe pull/stop/start orchestration still open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #709 / `71479c61` deploy evidence | VPS5 restart smoke after the fill-cache event slice returned `ok=true`, no hard failures, all five bots matched; the restart exposed four orphaned live processes after two Ctrl+C rounds, cleared by SIGTERM before reload | Safe pull/stop/start orchestration should include shutdown timing, orphan detection, and escalation policy |
-| 2026-06-26 | #3/#14 Supervisor/process diagnostics | PR #712 / `51ba92a3` | Extended `live-smoke-report --supervisor-config` to classify expected matches, missing expected commands, duplicate configured-command process matches, and extra/orphan-like `passivbot live` processes with bounded per-process metadata; VPS5 smoke showed all five configured bots matched with zero duplicate or extra live process matches; documented the read-only command-match limitation and shutdown escalation ladder as policy only | Safe pull/stop/start orchestration remains open |
-| 2026-06-26 | #12 Debug profile toggles | pending PR | Added opt-in live-event debug profiles via config/env and initial Rust orchestrator structured-event enrichment with bounded input-symbol and output-order samples | Add remote-call, candle/EMA, HSL, fills, and execution profiles as needed |
-| 2026-06-27 | #12 Debug profile toggles | PR #728 / `5714d36d` | Added opt-in `fills` debug-profile enrichment to existing fill refresh and ingestion events with bounded count, coverage, and key-shape metadata | HSL and execution followed in #730/#732 |
-| 2026-06-27 | #12 Debug profile toggles | PR #730 / `1334982c` | Added opt-in `hsl` debug-profile enrichment to existing HSL event surfaces with bounded event key, metric key, and latch/cooldown state-shape metadata | Execution followed in #732 |
-| 2026-06-27 | #12 Debug profile toggles | PR #732 / `9bc2c37f` | Added opt-in `execution` debug-profile enrichment to existing order-wave, order-write, create-filter, and confirmation events with bounded key-shape/counter metadata | Initial targeted profile set complete; add future profiles only as diagnostics require |
-| 2026-06-26 | #7 Live config preflight/linter | PR #714 / `564dc0a8` | Added `passivbot tool live-config-preflight`, a local-only JSON report for one config's risk-relevant live facts with bounded coin samples and malformed-structure errors; VPS5 preflight smoke returned `ok=true` with one expected missing short-side warning | Config diffing, deeper cache compatibility checks, and live startup enforcement remain open |
-| 2026-06-26 | #3 Live restart/smoke automation | PR #715 / `7b12d4b2` | Added passive `shutdown_events` summaries to full, summary, and brief `live-smoke-report` output for existing bot stopping/stage/stopped events; VPS5 no-restart smoke showed `shutdown_events.total=0`, all five bots matched, and no hard failures | Safe pull/stop/start orchestration remains open |
-| 2026-06-27 | #13 Cache integrity doctor | PR #722 / `3b7e6306` | Added read-only v2 candle coverage windows and suspicious interior gap samples from local `.valid.npy` artifacts | Fill/HSL coverage/readiness and deeper metadata compatibility |
-| 2026-06-27 | #13 Cache integrity doctor | PR #725 / `1ed9c466` | Added read-only fill/HSL metadata summaries from local JSON/NDJSON artifacts | Deeper metadata compatibility, synthetic/no-trade assumptions, and warm-cache readiness |
-| 2026-06-27 | #13 Cache integrity doctor | PR #727 / `d8dd7246` | Added report-only warm-cache readiness evidence from already-scanned candle/fill/HSL cache metadata | Deeper metadata compatibility and synthetic/no-trade assumptions |
-| 2026-06-27 | #7 Live config preflight/linter | PR #731 / `3cc2d229` | Added optional read-only `--compare` diff reporting for local two-config preflights, including HSL signal/enabled changes, universe deltas, forager slots/staleness, identity hints, and cache live settings | Deeper cache compatibility checks and live startup enforcement remain open |
-| 2026-06-27 | #4 Startup phase budget tracking | PR #735 / `6f415777` | Added report-only startup budget projections to `live-smoke-report` phase summaries using prior local p95 baselines from existing monitor events; VPS5 deploy kept all five bots running and the settled smoke returned `ok=true` after unrelated transient HSL/EMA events aged out | Explicit durable budget config/events |
-| 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
-| 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
-| 2026-06-27 | #6 Exchange health and contract probes | PR #741 / `d4c28058` | Added `ticker-endpoint-probe` read-only `fetch_time` clock-skew evidence and collection-level `time_sync_health`, with unsupported exchanges separated from failures and `--skip-time-sync` as an operator escape hatch | Rate-limit/fill-pagination/candle-freshness probes |
-| 2026-06-27 | #6 Exchange health and contract probes | PR #743 / `1fe1292b` | Added `ticker-endpoint-probe` `candle_freshness_health` summaries from existing 1m OHLCV tail results, including worst-symbol age and current-incomplete counts without extra exchange calls | Rate-limit/fill-pagination probes |
-| 2026-06-27 | #6 Exchange health and contract probes | PR #745 / `4130155e` | Added `ticker-endpoint-probe` `fill_history_health` summaries from the existing first-symbol `fetch_my_trades` sample, including success/failure, latency, trade count, newest timestamp, and shape without raw trade/order ids or extra pagination calls; VPS5 authenticated Binance probe validated total=1, succeeded=1, failed=0 | Rate-limit/full fill-pagination coverage probes |
-| 2026-06-27 | #6 Exchange health and contract probes | PR #747 / `74270454` | Added `ticker-endpoint-probe` `rate_limit_health` request-pressure estimates from existing probe outcomes and CCXT rate-limit metadata, without adding exchange calls or enforcing throttles; VPS5 authenticated Binance probe validated observed_call_count=12, private=5, public=6, concurrent=1 | Full fill-pagination coverage probes |
-| 2026-06-27 | #6 Exchange health and contract probes | PR #749 / `16c25149` | Added opt-in bounded first-symbol `fetch_my_trades` pagination sampling to `ticker-endpoint-probe`, keeping default one-call behavior; VPS5 authenticated Binance probe validated pages=2/limit=2 request shape, short-page stop, call_count=1, and rate-limit accounting | Basic endpoint latency and deeper exchange-specific coverage checks |
-| 2026-06-27 | #6 Exchange health and contract probes | PR #751 / `4eef3572` | Added `ticker-endpoint-probe` `endpoint_latency_health` summaries from existing probe outcomes, including open-orders fallback attempts and fill-history pages; VPS5 Binance probe validated endpoint_count=11, total=12, slowest=load_markets, and expected Binance open-orders all-symbol warning classification | Deeper exchange-specific coverage checks |
-| 2026-06-27 | #6 Exchange health and contract probes | PR #753 / `0f1afc49` | Added `ticker-endpoint-probe` `exchange_surface_health` notes from existing open-orders, time-sync, fill-history, and OHLCV-tail outcomes; VPS5 Binance probe validated open-orders symbol fallback and fill-history short-page notes | Further probe expansion should be driven by concrete exchange gaps |
-| 2026-06-27 | #3 Live restart/smoke automation | PR #755 / `5d9f3a5f` | Added `live-smoke-report` EMA readiness health summaries from existing `ema.unavailable` events; settled VPS5 smoke reported all five bots matched, no hard failures, no failed remote/account-critical calls, and `ema_readiness.total=11`, `bots=4`, `latest_candidate_unavailable_total=31`, `latest_unavailable_total=112` | Safe pull/stop/start orchestration still open; staged readiness diagnostics remain a useful next slice |
-| 2026-06-27 | Adjacent strategy/runtime | PR #756 / `19b34138` | Added fixed trailing-martingale `ema_gate_mode` values and an unstuck EMA-gating toggle; VPS5 required an explicit Rust extension rebuild before restart, then immediate and settled smokes reported all five bots matched, no hard failures, no failed remote/account-critical calls, and only non-hard EMA readiness attention | Deployment tooling should make Rust rebuild/stamp verification explicit before live restarts |
-| 2026-06-27 | #3 Live restart/smoke automation | PR #759 / `74a52ede` | Added `live-smoke-report` staged-readiness health summaries from existing staged `cycle.degraded` events; VPS5 smoke reported all five bots matched, no hard failures, no failed remote/account-critical calls, and `staged_readiness.total=4`, `bots=1`, `latest_missing_surface_total=1`, `latest_invalid_surface_total=1` | Use the new staged readiness signal to decide whether a narrow completed-candle readiness fix is warranted |
-| 2026-06-27 | #3 Live restart/smoke automation | PR #760 / `31d42ea3` | Recorded staged-readiness deploy evidence; VPS5 pull required no restart, an initial smoke surfaced real HSL ZEC RED finalizations through logs and `risk_events`, and settled follow-up smokes returned `ok=true`, no hard/log failures, all five bots matched, no failed remote/account-critical calls, and persistent `staged_readiness` across up to four bots | Continue using `staged_readiness` summaries to decide whether completed-candle target-change fixes or diagnostics are warranted |
-| 2026-06-27 | Adjacent staged readiness/runtime | PR #762 / `d9188b64` | Tolerated completed-candle fallback-to-normal signature shape recovery when symbol and target timestamp are unchanged; VPS5 restart smoke returned `ok=true`, all five bots matched, no hard/log failures, no failed remote/account-critical calls, and `staged_readiness.total=0` in both immediate and settled windows | Continue monitoring staged readiness; if it recurs, classify account-surface delays separately from completed-candle readiness shapes |
-| 2026-06-27 | #13 Cache integrity doctor | PR #764 / `7797d038` | Added report-only metadata compatibility evidence for candle known-gap no-trade reasons, fill current-contract coverage proof, and HSL artifact/timestamp compatibility; final review follow-up made mixed no-trade/unclassified gaps explicitly partial and still unproven | Further cache-doctor refinements should stay read-only and prove rather than assume coverage |
-| 2026-06-27 | #5 Resource pressure telemetry | PR #765 / `5275ab75` | Added `live-smoke-report` event-pipeline health summaries from existing `health.summary` queue/drop/sink-error counters; VPS5 30-minute smoke showed `event_pipeline.total=1`, no drops, no sink errors, and worker alive | Consider thresholded console/report warnings only after more live evidence |
-| 2026-06-27 | #10 Operator console redesign from events | PR #767 / `b07d5166` | Added `live-smoke-report` risk/HSL log-match counters and bounded `category=risk|general` match labels; VPS5 smoke after deploy was green with zero hard/risk/non-risk log matches and all five bots running | Use the split counters to collect evidence before changing smoke verdict policy for real HSL RED/cooldown episodes |
-| 2026-06-27 | #10 Operator console redesign from events | PR #769 / `b789e146` | Added `live-smoke-report` `hard_failure_sources` and `attention_sources` to full, summary, and brief output; VPS5 smoke after deploy was green with `hard_failure_sources.total=0`, all five bots running, no failed remote/account-critical calls, and all attention attributed to non-hard structured problem events | Use source breakdown plus risk/general log split before considering any smoke verdict policy change |
-| 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
-| 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
-| 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
-| 2026-06-25 | #9 Reason-code registry | PR #645 / `31263bb9` | Added shared `EventTags` and `ReasonCodes` registries and migrated representative live event emitters without changing emitted strings | Continue migrating stable literals as nearby event surfaces are touched |
-| 2026-06-25 | #9 Reason-code registry | PR #653 / `f0a0f744` | Added focused AI docs for live event tags/reason codes and a doc drift test against the code registry | Continue migrating stable literals as nearby event surfaces are touched |
-| 2026-06-25 | #10 Operator console redesign from events | PR #646 / `521832cc` | Improved event-projected console/text summaries for already-routed execution events without changing routes or console event volume | Migrate high-value stdlib text logs to structured-event projections |
-| 2026-06-25 | #13 Cache integrity doctor | PR #656 / `e65597c3` | Added read-only `cache-integrity-doctor` for local cache root presence, file counts/sizes, and corrupt JSON/NDJSON/NPY artifacts | Cache-family metadata, coverage windows, suspicious gaps, and warm-cache readiness |
-| 2026-06-24 | Operational restart goals | PR #619 / `e71c4f6c` | Improved shutdown progress and bounded shutdown cancel grace coverage | Broader interruptible shutdown contract remains separate work |
-| 2026-06-24 | Operational restart goals | PR #622 / `29eba387` | Improved live startup warm-cache reuse | Deeper cache doctor and budget tracking remain open |
-| 2026-06-30 | #3/#4 Live restart/smoke automation and startup budget tracking | PR #886 / `60c79c3a` | Exposed existing startup timing evidence in `live-smoke-report --summary` and `--brief`; VPS5 5-minute smoke stayed hard-green and showed the new `startup_timings` brief key | Safe pull/stop/start orchestration and durable startup budget config/events remain open |
-| 2026-06-30 | #3 Live restart/smoke automation | PR #888 / `4b435d33` | Exposed bounded text-log window counters in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `logs.window.lines_skipped_before=1730` | Safe pull/stop/start orchestration remains open |
-| 2026-06-30 | #3 Live restart/smoke automation | PR #890 / `1498abc9` | Exposed `event_window.enabled` in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `event_window.enabled=true` | Safe pull/stop/start orchestration remains open |
-| 2026-07-16 | #3 Live restart/smoke automation | PR #1291 / `codex/restart-target-contract-fingerprint`, after PR #1290 / `b490bd75be` | PR #1290 deployed pane-parent relaunch classification for all five exact targets; active work binds the sampled target set to the parsed supervisor command contract without exposing command content | Review and validate contract-drift failure; safe pull/stop/start execution remains open |
-| 2026-06-30 | #2 Event query and timeline CLI extensions | PR #892 / `7e7ce16f` | Added `live-event-query --level` filtering for structured event severity; VPS5 query smoke matched 33 warning-level events with `ok=true` and all five bots still running | Cross-bot incident workflow remains open; Binance config-refresh traceback classification added as item #18 |
-| 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #894 / `796ceb38` | Added off-console/text `exchange.config_refresh` events for hourly maintenance refresh success/failure with sanitized bounded error fields and fail-loud behavior preserved | Live emission evidence after next bot restart; smoke/report classification remains open |
-| 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #896 / `53b8accb` | Added `live-smoke-report` full/summary/brief health projections for `exchange.config_refresh`, excluding raw error text; VPS5 no-restart smoke stayed hard-green and showed the new brief section | Live emission evidence after next bot restart; smoke/report classification remains open |
 
 ## Suggested Priority
 

@@ -255,9 +255,7 @@ def test_zero_coin_wallet_override_preserves_side_total_exposure():
         "BTC/USDT:USDT": {"bot": {"long": {"wallet_exposure_limit": 0.0}}}
     }
 
-    bot_params_list, _, _, _ = prep_backtest_args(
-        config, _base_mss(), "binance"
-    )
+    bot_params_list, _, _, _ = prep_backtest_args(config, _base_mss(), "binance")
 
     assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.0
     assert bot_params_list[0]["long"]["total_wallet_exposure_limit"] == 1.5
@@ -276,34 +274,30 @@ def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
                     "hsl": {
                         "enabled": True,
                         "red_threshold": 0.01,
-                        "tier_ratios": {"yellow": 0.4},
                     }
                 }
             }
         }
     }
 
-    bot_params_list, _, _, _ = prep_backtest_args(
+    bot_params_list, _, _, backtest_params = prep_backtest_args(
         config, _multi_coin_mss(), "binance"
     )
 
-    btc_long = bot_params_list[0]["long"]
-    eth_long = bot_params_list[1]["long"]
-    assert btc_long["hsl_enabled"] is True
-    assert btc_long["hsl_red_threshold"] == pytest.approx(0.01)
-    assert btc_long["hsl_tier_ratios"] == {
-        "yellow": pytest.approx(0.4),
-        "orange": pytest.approx(0.75),
-    }
-    assert eth_long["hsl_enabled"] is False
-    assert eth_long["hsl_red_threshold"] == pytest.approx(0.2)
-    assert eth_long["hsl_tier_ratios"] == {
-        "yellow": pytest.approx(0.5),
-        "orange": pytest.approx(0.75),
-    }
+    policies = backtest_params["equity_hard_stop_loss"]
+    btc_long = policies["coins"]["BTC/USDT:USDT"][0]
+    assert btc_long["enabled"] is True
+    assert btc_long["red_threshold"] == pytest.approx(0.01)
+    assert policies["sides"][0]["enabled"] is False
+    assert policies["sides"][0]["red_threshold"] == pytest.approx(0.2)
+    assert all(
+        not any(k.startswith("hsl_") for k in pair["long"]) for pair in bot_params_list
+    )
 
 
-def test_prep_backtest_args_matches_exact_override_to_active_alias(tmp_path, monkeypatch):
+def test_prep_backtest_args_matches_exact_override_to_active_alias(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     markets = {
         "BTC/USDT:USDT": {
@@ -339,10 +333,14 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
     config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "ema_span_0"
     ] = 321.0
-    config["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"] = 0.0123
+    config["bot"]["short"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] = 0.0123
     mss = _base_mss()
 
-    bot_params_list, strategy_params_list, _, _ = prep_backtest_args(config, mss, "binance")
+    bot_params_list, strategy_params_list, _, _ = prep_backtest_args(
+        config, mss, "binance"
+    )
 
     assert len(bot_params_list) == 1
     assert "ema_span_0" not in bot_params_list[0]["long"]
@@ -356,28 +354,28 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     config["live"]["strategy_kind"] = "ema_anchor"
     config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 3.0
     config["bot"]["long"]["strategy"]["ema_anchor"] = {
-            "base_qty_pct": 0.02,
-            "ema_span_0": 55.0,
-            "ema_span_1": 144.0,
-            "entry_double_down_factor": 0.8,
-            "offset": 0.003,
-            "offset_volatility_ema_span_1m": 30.0,
-            "offset_volatility_1m_weight": 2.5,
-            "offset_volatility_ema_span_1h": 12.0,
-            "offset_volatility_1h_weight": 1.75,
-            "offset_psize_weight": 0.2,
+        "base_qty_pct": 0.02,
+        "ema_span_0": 55.0,
+        "ema_span_1": 144.0,
+        "entry_double_down_factor": 0.8,
+        "offset": 0.003,
+        "offset_volatility_ema_span_1m": 30.0,
+        "offset_volatility_1m_weight": 2.5,
+        "offset_volatility_ema_span_1h": 12.0,
+        "offset_volatility_1h_weight": 1.75,
+        "offset_psize_weight": 0.2,
     }
     config["bot"]["short"]["strategy"]["ema_anchor"] = {
-            "base_qty_pct": 0.03,
-            "ema_span_0": 34.0,
-            "ema_span_1": 89.0,
-            "entry_double_down_factor": 0.5,
-            "offset": 0.004,
-            "offset_volatility_ema_span_1m": 45.0,
-            "offset_volatility_1m_weight": 3.5,
-            "offset_volatility_ema_span_1h": 18.0,
-            "offset_volatility_1h_weight": 0.5,
-            "offset_psize_weight": 0.1,
+        "base_qty_pct": 0.03,
+        "ema_span_0": 34.0,
+        "ema_span_1": 89.0,
+        "entry_double_down_factor": 0.5,
+        "offset": 0.004,
+        "offset_volatility_ema_span_1m": 45.0,
+        "offset_volatility_1m_weight": 3.5,
+        "offset_volatility_ema_span_1h": 18.0,
+        "offset_volatility_1h_weight": 0.5,
+        "offset_psize_weight": 0.1,
     }
     mss = _base_mss()
 
@@ -399,6 +397,7 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     assert strategy_params_list[0]["short"]["offset_volatility_1h_weight"] == 0.5
     assert strategy_params_list[0]["short"]["offset"] == 0.004
     assert strategy_params_list[0]["short"]["entry_double_down_factor"] == 0.5
+
 
 def test_prep_backtest_args_does_not_log_execution_settings_by_default(caplog):
     config = _base_config()
@@ -436,7 +435,9 @@ def test_build_backtest_payload_compiles_runtime_config_once(monkeypatch):
         call_count["count"] += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(backtest_module, "compile_runtime_config", counting_compile_runtime_config)
+    monkeypatch.setattr(
+        backtest_module, "compile_runtime_config", counting_compile_runtime_config
+    )
 
     build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
 

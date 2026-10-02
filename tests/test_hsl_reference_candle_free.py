@@ -10,7 +10,6 @@ from hsl_reference import Fill, Position, dec, minimal_signal
 from hsl_reference_candle_free import estimate_candle_free
 from hsl_reference_replay import Settings, capture, capture_pair, estimate_pair
 
-
 REFERENCE_ESTIMATE = estimate_candle_free
 
 
@@ -21,20 +20,27 @@ def estimator_backend(request, monkeypatch):
     import json
     import sys
     import passivbot_rust as pbr
-    from test_hsl_revised_snapshot import payload
-    assert hasattr(pbr, "hsl_revised_candle_free"), "rebuild the source-matched extension"
+    from test_hsl_snapshot import payload
+
+    assert hasattr(pbr, "hsl_candle_free"), "rebuild the source-matched extension"
 
     def compare(snapshot, mode, **kwargs):
-        encoded = json.dumps(dict(snapshot=payload(snapshot, mode, **kwargs),
-                                  slots=snapshot.settings.slots, span=float(snapshot.settings.ema_span),
-                                  threshold=float(snapshot.settings.threshold)), allow_nan=False)
+        encoded = json.dumps(
+            dict(
+                snapshot=payload(snapshot, mode, **kwargs),
+                slots=snapshot.settings.slots,
+                span=float(snapshot.settings.ema_span),
+                threshold=float(snapshot.settings.threshold),
+            ),
+            allow_nan=False,
+        )
         try:
             expected = REFERENCE_ESTIMATE(snapshot, mode, **kwargs)
         except ValueError:
             with pytest.raises(ValueError):
-                pbr.hsl_revised_candle_free(encoded)
+                pbr.hsl_candle_free(encoded)
             raise
-        actual = json.loads(pbr.hsl_revised_candle_free(encoded))
+        actual = json.loads(pbr.hsl_candle_free(encoded))
         for field in ("realized", "realized_peak", "upnl"):
             assert actual[field] == pytest.approx(float(getattr(expected, field)))
         assert expected.reasons <= set(actual["reasons"])
@@ -42,23 +48,40 @@ def estimator_backend(request, monkeypatch):
             assert actual["signal"] is None
         else:
             for field in ("equity", "peaks", "raw", "ema"):
-                assert actual["signal"][field] == pytest.approx([float(x) for x in getattr(expected.signal, field)])
+                assert actual["signal"][field] == pytest.approx(
+                    [float(x) for x in getattr(expected.signal, field)]
+                )
             assert actual["signal"]["panic"] == list(expected.signal.panic)
             assert len(actual["signal"]["ema"]) == 1
         return expected
+
     monkeypatch.setattr(sys.modules[__name__], "estimate_candle_free", compare)
 
 
 def pair(symbol="TEST", side="long", fills=(), size=1, basis=100, mark=80, **kwargs):
-    return capture_pair(symbol, Position(size if side == "long" else -size, basis, mark,
-                                         pside=side, **kwargs),
-                        300_000, 300_000, fills, {}, fills_started_at=300_000,
-                        fills_at=300_000, prices_at=300_000, fills_after_position=True)
+    return capture_pair(
+        symbol,
+        Position(size if side == "long" else -size, basis, mark, pside=side, **kwargs),
+        300_000,
+        300_000,
+        fills,
+        {},
+        fills_started_at=300_000,
+        fills_at=300_000,
+        prices_at=300_000,
+        fills_after_position=True,
+    )
 
 
 def snap(*pairs, span=1, slots=1, start=0):
-    return capture(300_000, start, 1000, 300_000, pairs,
-                   Settings(ema_span=span, threshold=".05", slots=slots))
+    return capture(
+        300_000,
+        start,
+        1000,
+        300_000,
+        pairs,
+        Settings(ema_span=span, threshold=".05", slots=slots),
+    )
 
 
 def coin(snapshot):
@@ -75,8 +98,10 @@ def test_empty_fills_match_minimal_formula_exactly(span, mark):
 
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
 def test_known_loss_and_fee_survive_with_no_candles(mode):
-    fills = [Fill("open", 60_000, 2, 100, 0, -1),
-             Fill("partial", 120_000, -1, 80, -20, -1)]
+    fills = [
+        Fill("open", 60_000, 2, 100, 0, -1),
+        Fill("partial", 120_000, -1, 80, -20, -1),
+    ]
     snapshot = snap(pair(fills=fills), span=1_000_000)
     args = {} if mode == "unified" else {"pside": "long"}
     if mode == "coin":
@@ -88,9 +113,11 @@ def test_known_loss_and_fee_survive_with_no_candles(mode):
 
 
 def test_realized_profit_peak_is_not_discarded_or_added_twice():
-    fills = [Fill("open", 60_000, 3, 100, 0),
-             Fill("profit", 120_000, -1, 200, 100),
-             Fill("loss", 180_000, -1, 20, -80)]
+    fills = [
+        Fill("open", 60_000, 3, 100, 0),
+        Fill("profit", 120_000, -1, 200, 100),
+        Fill("loss", 180_000, -1, 20, -80),
+    ]
     result = coin(snap(pair(fills=fills)))
     assert (result.realized, result.realized_peak, result.upnl) == (20, 100, -20)
     assert float(result.signal.raw[-1]) == pytest.approx(100 / 1080)
@@ -104,21 +131,32 @@ def test_current_profit_offsets_known_losses_in_currency():
     assert result.signal.raw == (0,)
 
 
-@pytest.mark.parametrize("delta,price,realized,fee,reason", [
-    ("bad", "bad", -75, -2, "invalid_quantity"),
-    ("NaN", 100, -75, -2, "invalid_quantity"),
-    (-1, "bad", -75, -2, "estimated_fill_price"),
-    (-1, 80, None, -2, "estimated_realized_pnl"),
-    (-1, 80, -75, "bad", "unknown_fee"),
-])
+@pytest.mark.parametrize(
+    "delta,price,realized,fee,reason",
+    [
+        ("bad", "bad", -75, -2, "invalid_quantity"),
+        ("NaN", 100, -75, -2, "invalid_quantity"),
+        (-1, "bad", -75, -2, "estimated_fill_price"),
+        (-1, 80, None, -2, "estimated_realized_pnl"),
+        (-1, 80, -75, "bad", "unknown_fee"),
+    ],
+)
 def test_historical_damage_still_evaluates(delta, price, realized, fee, reason):
-    p = pair(fills=[Fill("open", 60_000, 2, 100, 0),
-                   Fill("close", 120_000, delta, price, realized, fee)])
+    p = pair(
+        fills=[
+            Fill("open", 60_000, 2, 100, 0),
+            Fill("close", 120_000, delta, price, realized, fee),
+        ]
+    )
     result = coin(snap(p))
     assert reason in result.reasons
-    expected_realized = (-20 if realized is None else realized) + (fee if isinstance(fee, int) else 0)
+    expected_realized = (-20 if realized is None else realized) + (
+        fee if isinstance(fee, int) else 0
+    )
     assert result.realized == expected_realized
-    assert float(result.signal.raw[-1]) == pytest.approx((20 - expected_realized) / (1000 - expected_realized))
+    assert float(result.signal.raw[-1]) == pytest.approx(
+        (20 - expected_realized) / (1000 - expected_realized)
+    )
 
 
 def test_same_symbol_hedged_upnl_and_cross_pair_cashflow_cancel_before_peak():
@@ -138,10 +176,14 @@ def test_per_pair_sequences_do_not_manufacture_cross_pair_peak():
     assert estimate_candle_free(snap(a, b), "unified").realized_peak == 0
 
 
-@pytest.mark.parametrize("sequences,peak", [((1, 2), 100), ((None, None), 0), ((1, 1), 0)])
+@pytest.mark.parametrize(
+    "sequences,peak", [((1, 2), 100), ((None, None), 0), ((1, 1), 0)]
+)
 def test_actual_within_pair_sequence_preserves_peak(sequences, peak):
-    fills = [Fill("gain", 60_000, -1, 100, 100, sequence=sequences[0]),
-             Fill("loss", 60_000, -1, 100, -100, sequence=sequences[1])]
+    fills = [
+        Fill("gain", 60_000, -1, 100, 100, sequence=sequences[0]),
+        Fill("loss", 60_000, -1, 100, -100, sequence=sequences[1]),
+    ]
     result = coin(snap(pair(fills=fills, mark=100)))
     assert result.realized_peak == peak
     assert bool(result.signal.raw[-1]) == bool(peak)
@@ -180,14 +222,24 @@ def test_coin_slots_and_inactive_scope_and_empty_portfolio():
     assert estimate_candle_free(snap(), "unified").signal.raw == (0,)
 
 
-@pytest.mark.parametrize("side,size,basis,mark,multiplier,inverse,upnl", [
-    ("long", 2, 100, 90, 3, False, -60),
-    ("short", 2, 100, 110, 3, False, -60),
-    ("long", 10, 100, 50, 100, True, -10),
-    ("short", 10, 50, 100, 100, True, -10),
-])
+@pytest.mark.parametrize(
+    "side,size,basis,mark,multiplier,inverse,upnl",
+    [
+        ("long", 2, 100, 90, 3, False, -60),
+        ("short", 2, 100, 110, 3, False, -60),
+        ("long", 10, 100, 50, 100, True, -10),
+        ("short", 10, 50, 100, 100, True, -10),
+    ],
+)
 def test_current_contract_units(side, size, basis, mark, multiplier, inverse, upnl):
-    p = pair(side=side, size=size, basis=basis, mark=mark, multiplier=multiplier, inverse=inverse)
+    p = pair(
+        side=side,
+        size=size,
+        basis=basis,
+        mark=mark,
+        multiplier=multiplier,
+        inverse=inverse,
+    )
     result = estimate_candle_free(snap(p), "coin", pside=side, symbol="TEST")
     assert result.upnl == upnl
     assert float(result.signal.raw[-1]) == pytest.approx(-upnl / 1000)
@@ -213,8 +265,11 @@ def test_unrelated_pair_history_does_not_affect_coin_domain():
 @pytest.mark.parametrize("field", ["balance_at", "position_at", "mark_at"])
 def test_fresh_selected_observation_skew_is_visible(field):
     p = pair()
-    snapshot = (replace(snap(p), balance_at=299_000) if field == "balance_at" else
-                snap(replace(p, **{field: 299_000})))
+    snapshot = (
+        replace(snap(p), balance_at=299_000)
+        if field == "balance_at"
+        else snap(replace(p, **{field: 299_000}))
+    )
     result = coin(snapshot)
     assert "snapshot_skew" in result.reasons
     assert result.signal == coin(snap(p)).signal
@@ -224,8 +279,14 @@ def test_skew_is_scope_local_and_includes_all_selected_pairs():
     p, other = pair(), replace(pair("OTHER", "short"), mark_at=299_000)
     snapshot = snap(p, other)
     assert "snapshot_skew" not in coin(snapshot).reasons
-    assert "snapshot_skew" not in estimate_candle_free(snapshot, "pside", pside="long").reasons
-    assert "snapshot_skew" in estimate_candle_free(snapshot, "pside", pside="short").reasons
+    assert (
+        "snapshot_skew"
+        not in estimate_candle_free(snapshot, "pside", pside="long").reasons
+    )
+    assert (
+        "snapshot_skew"
+        in estimate_candle_free(snapshot, "pside", pside="short").reasons
+    )
     assert "snapshot_skew" in estimate_candle_free(snapshot, "unified").reasons
 
 
@@ -236,32 +297,79 @@ def test_fake_exchange_cashflows_without_candles(pside):
 
     symbol = "TEST/USDT:USDT"
     direction = 1 if pside == "long" else -1
-    actions = lambda side, qty: [{"type": "manual_fill", "symbol": symbol,
-                                  "position_side": pside, "side": side, "qty": qty}]
+    actions = lambda side, qty: [
+        {
+            "type": "manual_fill",
+            "symbol": symbol,
+            "position_side": pside,
+            "side": side,
+            "qty": qty,
+        }
+    ]
     entry, close = ("buy", "sell") if direction == 1 else ("sell", "buy")
-    client = FakeCCXTClient({
-        "name": "hsl_candle_free", "start_time": "2026-01-01T00:00:00Z",
-        "tick_interval_seconds": 60, "account": {"balance": 1000},
-        "symbols": {symbol: {"qty_step": .1, "price_step": .1, "min_qty": .1,
-                             "min_cost": 1, "taker": .001}},
-        "timeline": [{"t": 0, "prices": {symbol: 100}},
-                     {"t": 1, "prices": {symbol: 100}, "actions": actions(entry, 2)},
-                     {"t": 2, "prices": {symbol: 80 if direction == 1 else 120},
-                      "actions": actions(close, 1)}],
-    })
+    client = FakeCCXTClient(
+        {
+            "name": "hsl_candle_free",
+            "start_time": "2026-01-01T00:00:00Z",
+            "tick_interval_seconds": 60,
+            "account": {"balance": 1000},
+            "symbols": {
+                symbol: {
+                    "qty_step": 0.1,
+                    "price_step": 0.1,
+                    "min_qty": 0.1,
+                    "min_cost": 1,
+                    "taker": 0.001,
+                }
+            },
+            "timeline": [
+                {"t": 0, "prices": {symbol: 100}},
+                {"t": 1, "prices": {symbol: 100}, "actions": actions(entry, 2)},
+                {
+                    "t": 2,
+                    "prices": {symbol: 80 if direction == 1 else 120},
+                    "actions": actions(close, 1),
+                },
+            ],
+        }
+    )
     start = client.now_ms
     assert client.advance_time() and client.advance_time()
-    fills = [Fill(e["id"], e["timestamp"], e["qty"] * (1 if e["side"] == "buy" else -1),
-                  e["price"], e["pnl"], -e["fees"]["cost"])
-             for e in client.get_fill_events(start, client.now_ms)]
+    fills = [
+        Fill(
+            e["id"],
+            e["timestamp"],
+            e["qty"] * (1 if e["side"] == "buy" else -1),
+            e["price"],
+            e["pnl"],
+            -e["fees"]["cost"],
+        )
+        for e in client.get_fill_events(start, client.now_ms)
+    ]
     state = client.positions[(symbol, pside)]
-    p = capture_pair(symbol, Position(direction * state["size"], state["entry_price"],
-                                      80 if direction == 1 else 120, pside=pside),
-                     client.now_ms, client.now_ms, fills, {}, prices_at=client.now_ms)
+    p = capture_pair(
+        symbol,
+        Position(
+            direction * state["size"],
+            state["entry_price"],
+            80 if direction == 1 else 120,
+            pside=pside,
+        ),
+        client.now_ms,
+        client.now_ms,
+        fills,
+        {},
+        prices_at=client.now_ms,
+    )
     snapshot = capture(client.now_ms, start, client.balance_total, client.now_ms, [p])
     result = estimate_candle_free(snapshot, "unified")
     net = client.realized_pnl - client.realized_fees
     assert float(result.realized) == pytest.approx(net)
     assert result.upnl == -20
-    assert float(result.signal.raw[-1]) == pytest.approx((20 - net) / (client.balance_total - net))
-    assert estimate_candle_free(replace(snapshot, pairs=(replace(p),)), "unified") == result
+    assert float(result.signal.raw[-1]) == pytest.approx(
+        (20 - net) / (client.balance_total - net)
+    )
+    assert (
+        estimate_candle_free(replace(snapshot, pairs=(replace(p),)), "unified")
+        == result
+    )

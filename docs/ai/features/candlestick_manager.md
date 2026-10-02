@@ -378,7 +378,7 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 - `src/tools/verify_hlcvs_data.py`
 - `exchange_integrations.md`
 
-## Source-resolution reads for revised HSL
+## Source-resolution reads for HSL
 
 `get_candles(standardize=False)` retains normal source acquisition and caching but
 returns sparse source rows without the 1m gap-standardization or outside-range
@@ -386,7 +386,7 @@ price seed. The 1m returned array is detached from the mutable cache. Native coa
 cache reads remain native even with no exchange object; they must not relabel 1m
 rows as 5m/15m/1h. Existing callers retain standardization by default.
 
-The staged `live.hsl_revised_candles.CandleSourceReader.acquire` reader requests supported
+The staged `live.hsl_candles.CandleSourceReader.acquire` reader requests supported
 1m/5m/15m/1h sources over the full estimator window. A real 1m close at the inclusive
 left edge belongs to the window although its source bucket opened one minute earlier.
 Rust rejects earlier closes and coarse buckets straddling the boundary, selects the
@@ -414,9 +414,9 @@ tracked within the fixed capacity until completion. Late exceptions are consumed
 unexpected late programming failures are raised on the next acquisition instead of
 silently hidden. No source projection is written into factual caches. The caller owns
 background scheduling and coherent current-state capture; this staged reader alone
-does not activate revised trading.
+does not activate hsl trading.
 
-Revised-HSL source batches may retain a native copy of their immutable scalar candle
+HSL source batches may retain a native copy of their immutable scalar candle
 rows for repeated evaluations. Replacing a source batch replaces that native copy.
 The copy contains no projected window or trading permission: every projection
 reapplies its exact lookback bounds and current exchange/UTC observation offset,

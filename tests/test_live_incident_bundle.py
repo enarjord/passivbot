@@ -102,9 +102,7 @@ def _assert_nonnegative_elapsed_scan_cost(scan_cost, expected):
     }
     assert isinstance(scan_cost["elapsed_ms"], float)
     assert scan_cost["elapsed_ms"] >= 0.0
-    actual = {
-        key: value for key, value in scan_cost.items() if key != "elapsed_ms"
-    }
+    actual = {key: value for key, value in scan_cost.items() if key != "elapsed_ms"}
     assert actual == expected
 
 
@@ -225,9 +223,10 @@ def test_incident_bundle_time_window_scan_cost_gzip_tracks_physical_and_decoded_
             "read_methods": {"full_scan": 1},
         },
     )
-    assert report["scan_cost"]["physical_bytes_read"] < report["scan_cost"][
-        "decoded_bytes_read"
-    ]
+    assert (
+        report["scan_cost"]["physical_bytes_read"]
+        < report["scan_cost"]["decoded_bytes_read"]
+    )
 
 
 def test_incident_bundle_time_window_scan_cost_marks_failed_or_unmeasurable_reads_unknown(
@@ -295,7 +294,9 @@ def test_incident_bundle_time_window_scan_cost_marks_failed_or_unmeasurable_read
     ]
 
 
-def test_incident_bundle_time_window_scan_cost_is_zero_and_known_when_disabled(tmp_path):
+def test_incident_bundle_time_window_scan_cost_is_zero_and_known_when_disabled(
+    tmp_path,
+):
     report = incident_bundle_module._build_time_window_report(
         tmp_path / "monitor",
         since_ms=None,
@@ -565,14 +566,14 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                 },
             ),
             _monitor_row(
-                event_type="hsl.replay.completed",
+                event_type="health.summary",
                 seq=14,
                 ts=2494,
                 status="succeeded",
                 level="debug",
-                reason_code="hsl_timeline_replay_completed",
+                reason_code="risk_mode_changed",
                 component="risk.hsl",
-                ids={"cycle_id": "cy_hsl_replay_1"},
+                ids={"cycle_id": "cy_risk_1"},
                 data={
                     "signal_mode": "coin",
                     "stage": "full_replay",
@@ -582,7 +583,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                     "full_elapsed_s": 1623.4,
                     "startup_blocking_elapsed_s": 1623.4,
                     "balance": 123456.78,
-                    "secret": "HSL_REPLAY_SECRET",
+                    "secret": "RISK_SECRET",
                 },
             ),
         ],
@@ -606,7 +607,9 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     unexpected_snapshot = (
         tmp_path / "monitor" / "binance" / "binance_01" / "debug_dump.json"
     )
-    unexpected_snapshot.write_text('{"secret": "do-not-copy-snapshot"}\n', encoding="utf-8")
+    unexpected_snapshot.write_text(
+        '{"secret": "do-not-copy-snapshot"}\n', encoding="utf-8"
+    )
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     (logs_dir / "bot.log").write_text(
@@ -627,7 +630,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         until_ms=2500,
         include_data=False,
         include_performance_report=True,
-        performance_sections=["hsl_replay_profile"],
+        performance_sections=["risk_activity"],
         max_event_segment_bytes=100_000,
         cwd=tmp_path,
     )
@@ -668,7 +671,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
     }
-    assert "hsl_replay_profile" in report["performance_report"]
+    assert "risk_activity" in report["performance_report"]
     assert "performance" not in report["performance_report"]
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
@@ -962,9 +965,10 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             }
         ],
     }
-    assert report["smoke_report"]["account_critical_remote_calls"] == report[
-        "smoke_report"
-    ]["remote_calls"]
+    assert (
+        report["smoke_report"]["account_critical_remote_calls"]
+        == report["smoke_report"]["remote_calls"]
+    )
     assert report["smoke_report"]["fill_refresh"] == {
         "total": 1,
         "bots": 1,
@@ -987,18 +991,6 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "max_latest_elapsed_ms": 10000,
         "max_latest_phase_ms": 7000,
         "max_startup_elapsed_ms": 10000,
-    }
-    assert report["smoke_report"]["hsl_replay"] == {
-        "total": 1,
-        "bots": 1,
-        "active_bots": 0,
-        "stale_active_bots": 0,
-        "long_running_active_bots": 0,
-        "completed_bots": 1,
-        "failed_bots": 0,
-        "failed_attention_bots": 0,
-        "event_types": {"hsl.replay.completed": 1},
-        "max_completed_elapsed_ms": 1623400,
     }
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
@@ -1052,21 +1044,23 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert report["time_window"]["scan_cost"] == window_report["scan_cost"]
     assert manifest["time_window"]["scan_cost"] == window_report["scan_cost"]
     assert manifest["performance_report"] == report["performance_report"]
-    assert performance_report["event_window"] == report["performance_report"][
-        "event_window"
-    ]
-    assert "hsl_replay_profile" in performance_report
+    assert (
+        performance_report["event_window"]
+        == report["performance_report"]["event_window"]
+    )
+    assert "risk_activity" in performance_report
     assert "performance" not in performance_report
-    assert manifest["filters"]["performance_sections"] == ["hsl_replay_profile"]
+    assert manifest["filters"]["performance_sections"] == ["risk_activity"]
     for section in ("ok", "attention", "hard_failures", "attention_count"):
         assert manifest["smoke_report"][section] == report["smoke_report"][section]
-    assert manifest["smoke_report"]["event_window"] == report["smoke_report"][
-        "event_window"
-    ]
+    assert (
+        manifest["smoke_report"]["event_window"]
+        == report["smoke_report"]["event_window"]
+    )
     assert manifest["smoke_report"]["logs"] == report["smoke_report"]["logs"]
-    assert manifest["smoke_report"]["repository"] == report["smoke_report"][
-        "repository"
-    ]
+    assert (
+        manifest["smoke_report"]["repository"] == report["smoke_report"]["repository"]
+    )
     assert manifest["smoke_report"]["monitor"] == report["smoke_report"]["monitor"]
     for section in (
         "hard_failure_sources",
@@ -1074,16 +1068,18 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "recovered_problem_events",
     ):
         assert manifest["smoke_report"][section] == report["smoke_report"][section]
-    assert manifest["smoke_report"]["problem_events"] == report["smoke_report"][
-        "problem_events"
-    ]
+    assert (
+        manifest["smoke_report"]["problem_events"]
+        == report["smoke_report"]["problem_events"]
+    )
     assert manifest["smoke_report"]["execution"] == report["smoke_report"]["execution"]
-    assert manifest["smoke_report"]["risk_events"] == report["smoke_report"][
-        "risk_events"
-    ]
-    assert manifest["smoke_report"]["ema_readiness"] == report["smoke_report"][
-        "ema_readiness"
-    ]
+    assert (
+        manifest["smoke_report"]["risk_events"] == report["smoke_report"]["risk_events"]
+    )
+    assert (
+        manifest["smoke_report"]["ema_readiness"]
+        == report["smoke_report"]["ema_readiness"]
+    )
     for section in (
         "exchange_config_refresh",
         "staged_readiness",
@@ -1093,7 +1089,6 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "account_critical_remote_calls",
         "fill_refresh",
         "startup_timings",
-        "hsl_replay",
     ):
         assert manifest["smoke_report"][section] == report["smoke_report"][section]
     manifest_dump = json.dumps(manifest, sort_keys=True)
@@ -1109,7 +1104,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert "REMOTE_SECRET" not in manifest_dump
     assert "FILL_REFRESH_SECRET" not in manifest_dump
     assert "STARTUP_SECRET" not in manifest_dump
-    assert "HSL_REPLAY_SECRET" not in manifest_dump
+    assert "RISK_SECRET" not in manifest_dump
     assert "12345.67" not in manifest_dump
     assert "123456.78" not in manifest_dump
     assert "0.42" not in json.dumps(
@@ -1122,12 +1117,14 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert manifest["filters"]["max_log_matches"] == 100
     assert manifest["filters"]["log_window_unparsed_policy"] == "keep"
     assert manifest["filters"]["include_performance_report"] is True
-    assert manifest["event_segments"]["file_discovery"] == report["event_segments"][
-        "file_discovery"
-    ]
-    assert event_segments_manifest["file_discovery"] == report["event_segments"][
-        "file_discovery"
-    ]
+    assert (
+        manifest["event_segments"]["file_discovery"]
+        == report["event_segments"]["file_discovery"]
+    )
+    assert (
+        event_segments_manifest["file_discovery"]
+        == report["event_segments"]["file_discovery"]
+    )
     assert manifest["monitor_snapshots"][0]["redacted"] is True
     assert "do-not-copy" not in json.dumps(manifest)
     assert "do-not-copy" not in json.dumps(config_hashes)
@@ -1161,15 +1158,17 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert window_report["events"][0]["seq"] == 2
     assert "remote_call.failed" in window_report["timeline"][0]
     assert smoke_report["event_window"] == report["smoke_report"]["event_window"]
-    assert smoke_report["logs"]["max_files"] == report["smoke_report"]["logs"][
-        "max_files"
-    ]
-    assert smoke_report["logs"]["tail_lines"] == report["smoke_report"]["logs"][
-        "tail_lines"
-    ]
-    assert smoke_report["logs"]["max_matches"] == report["smoke_report"]["logs"][
-        "max_matches"
-    ]
+    assert (
+        smoke_report["logs"]["max_files"] == report["smoke_report"]["logs"]["max_files"]
+    )
+    assert (
+        smoke_report["logs"]["tail_lines"]
+        == report["smoke_report"]["logs"]["tail_lines"]
+    )
+    assert (
+        smoke_report["logs"]["max_matches"]
+        == report["smoke_report"]["logs"]["max_matches"]
+    )
     scan_cost = smoke_report["logs"]["scan_cost"]
     assert report["smoke_report"]["logs"]["scan_cost"] == scan_cost
     assert manifest["smoke_report"]["logs"]["scan_cost"] == scan_cost
@@ -1257,8 +1256,7 @@ def test_live_incident_bundle_embeds_problem_event_report(tmp_path):
     }
     assert problem_event_report["query"]["matched_events"] == 1
     assert (
-        problem_event_report["query"]["events"][0]["event_type"]
-        == "remote_call.failed"
+        problem_event_report["query"]["events"][0]["event_type"] == "remote_call.failed"
     )
     assert problem_event_report["query"]["events"][0]["data"] == {
         "detail": "kept only when include_data is enabled",
@@ -1464,7 +1462,9 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     assert manifest["filters"]["until_ms"] == 2000
 
 
-def test_live_incident_bundle_cli_requires_performance_report_for_performance_section(capsys):
+def test_live_incident_bundle_cli_requires_performance_report_for_performance_section(
+    capsys,
+):
     with pytest.raises(SystemExit) as exc:
         live_incident_bundle.main(
             [
@@ -1475,7 +1475,9 @@ def test_live_incident_bundle_cli_requires_performance_report_for_performance_se
         )
 
     assert exc.value.code == 2
-    assert "--performance-section requires --performance-report" in capsys.readouterr().err
+    assert (
+        "--performance-section requires --performance-report" in capsys.readouterr().err
+    )
 
 
 def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, capsys):
@@ -1556,9 +1558,9 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     assert "trace_summary" not in event_report["query"]
     assert "order_trace" not in event_report["query"]
     assert smoke_report["logs"]["root"] is None
-    assert smoke_report["logs"]["max_files"] == report["smoke_report"]["logs"][
-        "max_files"
-    ]
+    assert (
+        smoke_report["logs"]["max_files"] == report["smoke_report"]["logs"]["max_files"]
+    )
     assert smoke_report["logs"]["hard_matches"] == 0
 
 
@@ -1948,14 +1950,15 @@ def test_live_incident_bundle_cli_max_event_files_per_bot_is_fair(tmp_path, caps
         "okx_new",
     }
     assert {
-        event["data"]["label"]
-        for event in problem_event_report["query"]["events"]
+        event["data"]["label"] for event in problem_event_report["query"]["events"]
     } == kept_labels
     assert {event["data"]["label"] for event in window_report["events"]} == kept_labels
     assert window_report["event_file_limit_order"] == "current_then_recent_mtime"
 
 
-def test_live_incident_bundle_cli_caps_fallback_event_segments_per_bot(tmp_path, capsys):
+def test_live_incident_bundle_cli_caps_fallback_event_segments_per_bot(
+    tmp_path, capsys
+):
     binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
     files = [
@@ -2111,9 +2114,7 @@ def test_live_incident_bundle_preserves_matched_event_segments_under_cap(tmp_pat
     )
 
     included_paths = {
-        item["path"]
-        for item in manifest["files"]
-        if item.get("included")
+        item["path"] for item in manifest["files"] if item.get("included")
     }
     assert included_paths == {str(path) for path in files}
     assert manifest["selection"] == "matched_report_paths"
@@ -2167,7 +2168,9 @@ def test_live_incident_bundle_cli_rejects_negative_max_event_files_per_bot(capsy
     assert "--max-event-files-per-bot must be >= 0" in capsys.readouterr().err
 
 
-def test_live_incident_bundle_cli_rejects_recent_window_after_until(capsys, monkeypatch):
+def test_live_incident_bundle_cli_rejects_recent_window_after_until(
+    capsys, monkeypatch
+):
     monkeypatch.setattr(live_incident_bundle.time, "time", lambda: 5.0)
 
     with pytest.raises(SystemExit) as exc_info:
@@ -2176,7 +2179,9 @@ def test_live_incident_bundle_cli_rejects_recent_window_after_until(capsys, monk
         )
 
     assert exc_info.value.code == 2
-    assert "--since-ms/--recent-minutes must be <= --until-ms" in capsys.readouterr().err
+    assert (
+        "--since-ms/--recent-minutes must be <= --until-ms" in capsys.readouterr().err
+    )
 
 
 def test_live_incident_bundle_includes_process_status_when_requested(
@@ -2271,9 +2276,7 @@ def test_live_incident_bundle_includes_process_status_when_requested(
     with tarfile.open(output, "r:gz") as tar:
         smoke_report = _read_tar_json(tar, "smoke_report.json")
         manifest = _read_tar_json(tar, "manifest.json")
-    assert manifest["smoke_report"]["processes"] == report["smoke_report"][
-        "processes"
-    ]
+    assert manifest["smoke_report"]["processes"] == report["smoke_report"]["processes"]
     assert smoke_report["processes"]["expected_total"] == 1
     assert smoke_report["processes"]["matched_expected"] == 1
     assert smoke_report["processes"]["missing_expected"] == []
@@ -2347,28 +2350,39 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
         "performance_sections": ["startup_readiness"],
     }
     assert report["restart_smoke_plan"]["smoke_report"]["execute"] is False
-    assert "passivbot tool live-smoke-report" in report["restart_smoke_plan"][
-        "smoke_report"
-    ]["command"]
+    assert (
+        "passivbot tool live-smoke-report"
+        in report["restart_smoke_plan"]["smoke_report"]["command"]
+    )
     assert report["restart_smoke_plan"]["incident_bundle"]["execute"] is False
-    assert "passivbot tool live-incident-bundle" in report["restart_smoke_plan"][
-        "incident_bundle"
-    ]["command"]
-    assert report["restart_smoke_plan"]["process_signal_safety"][
-        "forbid_broad_process_pattern_signals"
-    ] is True
+    assert (
+        "passivbot tool live-incident-bundle"
+        in report["restart_smoke_plan"]["incident_bundle"]["command"]
+    )
+    assert (
+        report["restart_smoke_plan"]["process_signal_safety"][
+            "forbid_broad_process_pattern_signals"
+        ]
+        is True
+    )
     assert report["restart_smoke_plan"]["execution_policy"]["execute_flag"] == (
         "not_implemented"
     )
-    assert report["restart_smoke_plan"]["execution_policy"][
-        "future_execution_requires_review"
-    ] is True
+    assert (
+        report["restart_smoke_plan"]["execution_policy"][
+            "future_execution_requires_review"
+        ]
+        is True
+    )
     assert report["restart_smoke_plan"]["warnings"]["count"] > 0
     assert report["restart_smoke_plan"]["issues"]["count"] == 0
     assert report["restart_smoke_plan"]["timeout_escalation_ladder"]
-    assert report["restart_smoke_plan"]["timeout_escalation_ladder"][0][
-        "planned_command_count"
-    ] >= 0
+    assert (
+        report["restart_smoke_plan"]["timeout_escalation_ladder"][0][
+            "planned_command_count"
+        ]
+        >= 0
+    )
     assert report["restart_smoke_plan"]["config_preflight"]["command_count"] == 1
     assert "commands" not in report["restart_smoke_plan"]["config_preflight"]
 
@@ -2388,28 +2402,39 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
         "performance_sections": ["startup_readiness"],
     }
     assert manifest["restart_smoke_plan"]["smoke_report"]["execute"] is False
-    assert "passivbot tool live-smoke-report" in manifest["restart_smoke_plan"][
-        "smoke_report"
-    ]["command"]
+    assert (
+        "passivbot tool live-smoke-report"
+        in manifest["restart_smoke_plan"]["smoke_report"]["command"]
+    )
     assert manifest["restart_smoke_plan"]["incident_bundle"]["execute"] is False
-    assert "passivbot tool live-incident-bundle" in manifest["restart_smoke_plan"][
-        "incident_bundle"
-    ]["command"]
-    assert manifest["restart_smoke_plan"]["process_signal_safety"][
-        "forbid_broad_process_pattern_signals"
-    ] is True
+    assert (
+        "passivbot tool live-incident-bundle"
+        in manifest["restart_smoke_plan"]["incident_bundle"]["command"]
+    )
+    assert (
+        manifest["restart_smoke_plan"]["process_signal_safety"][
+            "forbid_broad_process_pattern_signals"
+        ]
+        is True
+    )
     assert manifest["restart_smoke_plan"]["execution_policy"]["execute_flag"] == (
         "not_implemented"
     )
-    assert manifest["restart_smoke_plan"]["execution_policy"][
-        "future_execution_requires_review"
-    ] is True
+    assert (
+        manifest["restart_smoke_plan"]["execution_policy"][
+            "future_execution_requires_review"
+        ]
+        is True
+    )
     assert manifest["restart_smoke_plan"]["warnings"]["count"] > 0
     assert manifest["restart_smoke_plan"]["issues"]["count"] == 0
     assert manifest["restart_smoke_plan"]["timeout_escalation_ladder"]
-    assert manifest["restart_smoke_plan"]["timeout_escalation_ladder"][0][
-        "planned_command_count"
-    ] >= 0
+    assert (
+        manifest["restart_smoke_plan"]["timeout_escalation_ladder"][0][
+            "planned_command_count"
+        ]
+        >= 0
+    )
     assert "commands" not in manifest["restart_smoke_plan"]["config_preflight"]
     assert restart_plan["metadata"] == {
         "dry_run": True,
@@ -2426,12 +2451,14 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     assert "--event-tail-lines 2000" in restart_plan["smoke_report"]["command"]
     assert "--max-event-files-per-bot 2" in restart_plan["smoke_report"]["command"]
     assert "--section fill_refresh_health" in restart_plan["smoke_report"]["command"]
-    assert "--smoke-section fill_refresh_health" in restart_plan["incident_bundle"][
-        "command"
-    ]
-    assert "--performance-section startup_readiness" in restart_plan[
-        "incident_bundle"
-    ]["command"]
+    assert (
+        "--smoke-section fill_refresh_health"
+        in restart_plan["incident_bundle"]["command"]
+    )
+    assert (
+        "--performance-section startup_readiness"
+        in restart_plan["incident_bundle"]["command"]
+    )
 
 
 def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
@@ -2510,42 +2537,56 @@ def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
         "performance_sections": ["startup_readiness"],
     }
     assert report["restart_smoke_plan"]["smoke_report"]["execute"] is False
-    assert "passivbot tool live-smoke-report" in report["restart_smoke_plan"][
-        "smoke_report"
-    ]["command"]
+    assert (
+        "passivbot tool live-smoke-report"
+        in report["restart_smoke_plan"]["smoke_report"]["command"]
+    )
     assert report["restart_smoke_plan"]["incident_bundle"]["execute"] is False
-    assert "passivbot tool live-incident-bundle" in report["restart_smoke_plan"][
-        "incident_bundle"
-    ]["command"]
-    assert report["restart_smoke_plan"]["process_signal_safety"][
-        "forbid_broad_process_pattern_signals"
-    ] is True
+    assert (
+        "passivbot tool live-incident-bundle"
+        in report["restart_smoke_plan"]["incident_bundle"]["command"]
+    )
+    assert (
+        report["restart_smoke_plan"]["process_signal_safety"][
+            "forbid_broad_process_pattern_signals"
+        ]
+        is True
+    )
     assert report["restart_smoke_plan"]["execution_policy"]["execute_flag"] == (
         "not_implemented"
     )
-    assert report["restart_smoke_plan"]["execution_policy"][
-        "future_execution_requires_review"
-    ] is True
+    assert (
+        report["restart_smoke_plan"]["execution_policy"][
+            "future_execution_requires_review"
+        ]
+        is True
+    )
     assert report["restart_smoke_plan"]["warnings"]["count"] > 0
     assert report["restart_smoke_plan"]["issues"]["count"] == 0
     assert report["restart_smoke_plan"]["timeout_escalation_ladder"]
-    assert report["restart_smoke_plan"]["timeout_escalation_ladder"][0][
-        "planned_command_count"
-    ] >= 0
+    assert (
+        report["restart_smoke_plan"]["timeout_escalation_ladder"][0][
+            "planned_command_count"
+        ]
+        >= 0
+    )
     with tarfile.open(output, "r:gz") as tar:
         restart_plan = _read_tar_json(tar, "restart_smoke_plan.json")
     assert restart_plan["inputs"]["smoke_window_minutes"] == 9
     assert restart_plan["inputs"]["performance_sections"] == ["startup_readiness"]
-    assert "--performance-section startup_readiness" in restart_plan[
-        "incident_bundle"
-    ]["command"]
+    assert (
+        "--performance-section startup_readiness"
+        in restart_plan["incident_bundle"]["command"]
+    )
 
 
 def test_live_incident_bundle_cli_requires_supervisor_for_restart_plan(capsys):
     with pytest.raises(SystemExit):
         live_incident_bundle.main(["monitor", "--restart-smoke-plan"])
 
-    assert "--restart-smoke-plan requires --supervisor-config" in capsys.readouterr().err
+    assert (
+        "--restart-smoke-plan requires --supervisor-config" in capsys.readouterr().err
+    )
 
 
 def test_live_incident_bundle_infers_git_metadata_from_monitor_root(tmp_path):
@@ -2595,8 +2636,7 @@ def test_live_incident_bundle_infers_git_metadata_from_monitor_root(tmp_path):
 
     assert manifest["git"]["cwd"] == str(repo)
     assert (
-        manifest["git"]["remote_url"]
-        == "https://[redacted]@example.com/org/repo.git"
+        manifest["git"]["remote_url"] == "https://[redacted]@example.com/org/repo.git"
     )
     assert manifest["git"]["status_short"] is not None
     assert "secret_local_config.json" not in manifest["git"]["status_short"]

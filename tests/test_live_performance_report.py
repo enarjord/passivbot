@@ -98,16 +98,12 @@ def _write_ndjson(path, rows):
 
 
 def _groups_by_operation(report):
-    return {
-        group["operation"]: group
-        for group in report["performance"]["groups"]
-    }
+    return {group["operation"]: group for group in report["performance"]["groups"]}
 
 
 def _operation_duration_groups_by_operation(report):
     return {
-        group["operation"]: group
-        for group in report["operation_durations"]["groups"]
+        group["operation"]: group for group in report["operation_durations"]["groups"]
     }
 
 
@@ -142,7 +138,9 @@ def test_live_performance_report_ignores_canonical_budget_metadata(tmp_path):
     assert LIVE_EVENT_BUDGET_METADATA_KEY not in json.dumps(report, sort_keys=True)
 
 
-def test_live_performance_report_aggregates_cycle_state_remote_and_hsl_timings(tmp_path):
+def test_live_performance_report_aggregates_cycle_state_remote_and_fill_timings(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -210,13 +208,13 @@ def test_live_performance_report_aggregates_cycle_state_remote_and_hsl_timings(t
                 data={"kind": "ccxt_fetch_ohlcv", "elapsed_ms": 120},
             ),
             _monitor_row(
-                event_type="hsl.replay.progress",
+                event_type="fills.refresh_summary",
                 seq=6,
                 ts=6000,
                 component="risk.hsl",
                 symbol="BTC/USDT:USDT",
                 pside="long",
-                data={"stage": "pair_replay", "elapsed_s": 12.5},
+                data={"elapsed_ms": 12500},
             ),
         ],
     )
@@ -250,22 +248,24 @@ def test_live_performance_report_aggregates_cycle_state_remote_and_hsl_timings(t
     assert groups["remote_call.candle.ccxt_fetch_ohlcv"]["trading_impact"] == (
         "blocks_indicator_readiness"
     )
-    assert groups["hsl_replay.pair_replay.elapsed"]["max_ms"] == 12500
-    assert groups["hsl_replay.pair_replay.elapsed"]["timing_kind"] == "cumulative"
+    assert groups["fills_refresh.elapsed"]["max_ms"] == 12500
+    assert groups["fills_refresh.elapsed"]["timing_kind"] == "duration"
 
     operation_durations = report["operation_durations"]
     duration_groups = _operation_duration_groups_by_operation(report)
     assert operation_durations["total_groups"] >= len(groups)
     assert operation_durations["operation_category_counts"]["cycle"] >= 2
-    assert operation_durations["operation_category_counts"]["hsl_replay"] == 1
-    assert operation_durations["blocking_scope_counts"]["delays_protective_readiness"] == 1
-    assert duration_groups["hsl_replay.pair_replay.elapsed"]["source_section"] == "performance"
-    assert duration_groups["hsl_replay.pair_replay.elapsed"]["operation_category"] == (
-        "hsl_replay"
+    assert operation_durations["operation_category_counts"]["fill_refresh"] == 1
+    assert (
+        operation_durations["blocking_scope_counts"]["delays_protective_readiness"] == 1
     )
-    assert duration_groups["remote_call.authoritative.open_orders"]["blocking_scope"] == (
-        "delays_exchange_actions"
+    assert duration_groups["fills_refresh.elapsed"]["source_section"] == "performance"
+    assert duration_groups["fills_refresh.elapsed"]["operation_category"] == (
+        "fill_refresh"
     )
+    assert duration_groups["remote_call.authoritative.open_orders"][
+        "blocking_scope"
+    ] == ("delays_exchange_actions")
 
 
 def test_live_performance_report_time_window_and_group_limit(tmp_path):
@@ -419,11 +419,11 @@ def test_live_performance_report_slowest_blockers(tmp_path):
                 },
             ),
             _monitor_row(
-                event_type="hsl.replay.progress",
+                event_type="fills.refresh_summary",
                 seq=3,
                 ts=64_000,
                 component="risk.hsl",
-                data={"stage": "pair_replay", "elapsed_s": 12.0},
+                data={"elapsed_ms": 12000},
             ),
             _monitor_row(
                 event_type="data_packet.updated",
@@ -439,7 +439,10 @@ def test_live_performance_report_slowest_blockers(tmp_path):
                 event_type="snapshot.built",
                 seq=5,
                 ts=66_000,
-                data={"cycle_id": 2, "data_packets": [{"kind": "balance", "revision": 1}]},
+                data={
+                    "cycle_id": 2,
+                    "data_packets": [{"kind": "balance", "revision": 1}],
+                },
             ),
         ],
     )
@@ -449,7 +452,7 @@ def test_live_performance_report_slowest_blockers(tmp_path):
     operations = [group["operation"] for group in blockers["groups"]]
 
     assert blockers["total_groups"] >= 4
-    assert operations[0] == "hsl_replay.pair_replay.elapsed"
+    assert operations[0] == "fills_refresh.elapsed"
     assert "cycle.phase.monitor_flush" not in operations
     hsl_group = blockers["groups"][0]
     assert hsl_group["source_section"] == "performance"
@@ -741,8 +744,7 @@ def test_live_performance_report_decision_boundary_lag(tmp_path):
 
     report = build_live_performance_report(tmp_path / "monitor")
     lag_groups = {
-        group["operation"]: group
-        for group in report["decision_boundary_lag"]["groups"]
+        group["operation"]: group for group in report["decision_boundary_lag"]["groups"]
     }
 
     assert report["decision_boundary_lag"]["cycles"] == 1
@@ -797,8 +799,7 @@ def test_live_performance_report_decision_boundary_handles_cycle_id_reuse(tmp_pa
 
     assert report["decision_boundary_lag"]["cycles"] == 2
     lag_groups = {
-        group["operation"]: group
-        for group in report["decision_boundary_lag"]["groups"]
+        group["operation"]: group for group in report["decision_boundary_lag"]["groups"]
     }
     assert lag_groups["decision_boundary.cycle_started"]["count"] == 2
     assert lag_groups["decision_boundary.cycle_started"]["max_ms"] == 1000
@@ -921,8 +922,7 @@ def test_live_performance_report_input_staleness(tmp_path):
 
     report = build_live_performance_report(tmp_path / "monitor")
     staleness_groups = {
-        group["operation"]: group
-        for group in report["input_staleness"]["groups"]
+        group["operation"]: group for group in report["input_staleness"]["groups"]
     }
 
     assert report["input_staleness"]["snapshots_seen"] == 1
@@ -989,18 +989,25 @@ def test_live_performance_report_input_staleness(tmp_path):
     assert report["input_staleness"]["snapshot_to_rust_exact_matches"] == 0
     assert report["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 1
     assert staleness_groups["input_staleness.surface.balance"]["max_ms"] == 900
-    assert staleness_groups["input_staleness.surface.completed_candles"]["max_ms"] == 1500
-    assert staleness_groups["input_staleness.surface.completed_candles"][
-        "trading_impact"
-    ] == "blocks_indicator_readiness"
+    assert (
+        staleness_groups["input_staleness.surface.completed_candles"]["max_ms"] == 1500
+    )
+    assert (
+        staleness_groups["input_staleness.surface.completed_candles"]["trading_impact"]
+        == "blocks_indicator_readiness"
+    )
     assert staleness_groups["input_staleness.market_snapshot.max"]["max_ms"] == 700
     assert staleness_groups["input_staleness.market_snapshot.mean"]["max_ms"] == 450
-    assert staleness_groups["input_staleness.market_snapshot.configured_excess"][
-        "max_ms"
-    ] == 100
-    assert staleness_groups["input_staleness.market_snapshot.configured_excess"][
-        "timing_kind"
-    ] == "configured_age_excess"
+    assert (
+        staleness_groups["input_staleness.market_snapshot.configured_excess"]["max_ms"]
+        == 100
+    )
+    assert (
+        staleness_groups["input_staleness.market_snapshot.configured_excess"][
+            "timing_kind"
+        ]
+        == "configured_age_excess"
+    )
     assert staleness_groups["input_staleness.data_packet.balance"]["max_ms"] == 1000
     assert staleness_groups["input_staleness.data_packet.open_orders"]["max_ms"] == 800
     assert staleness_groups["input_staleness.data_packet.positions"]["max_ms"] == 600
@@ -1011,7 +1018,9 @@ def test_live_performance_report_input_staleness(tmp_path):
     )
 
 
-def test_live_performance_report_market_snapshot_summary_counts_missing_sources(tmp_path):
+def test_live_performance_report_market_snapshot_summary_counts_missing_sources(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -1178,10 +1187,13 @@ def test_live_performance_report_completed_candle_freshness_summary(tmp_path):
     assert completed["last_real_close_age_ms"]["max"]["max"] == 70
     assert completed["max_tail_gap_age_ms"]["max"] == 60
     assert completed["configured_max_tail_gap_ms"]["max"] == 120
-    assert groups["input_staleness.completed_candles.expected_close.max"][
-        "trading_impact"
-    ] == "blocks_indicator_readiness"
-    assert groups["input_staleness.completed_candles.last_real_close.max"]["max_ms"] == 70
+    assert (
+        groups["input_staleness.completed_candles.expected_close.max"]["trading_impact"]
+        == "blocks_indicator_readiness"
+    )
+    assert (
+        groups["input_staleness.completed_candles.last_real_close.max"]["max_ms"] == 70
+    )
     assert groups["input_staleness.completed_candles.tail_gap.max"]["max_ms"] == 60
     assert summary["input_staleness"]["completed_candles"] == completed
 
@@ -1226,8 +1238,7 @@ def test_live_performance_report_input_staleness_handles_cycle_id_reuse(tmp_path
 
     report = build_live_performance_report(tmp_path / "monitor")
     staleness_groups = {
-        group["operation"]: group
-        for group in report["input_staleness"]["groups"]
+        group["operation"]: group for group in report["input_staleness"]["groups"]
     }
 
     assert report["input_staleness"]["rust_calls_missing_snapshot"] == 1
@@ -1264,8 +1275,7 @@ def test_live_performance_report_input_staleness_prefers_envelope_cycle_id(tmp_p
 
     report = build_live_performance_report(tmp_path / "monitor")
     staleness_groups = {
-        group["operation"]: group
-        for group in report["input_staleness"]["groups"]
+        group["operation"]: group for group in report["input_staleness"]["groups"]
     }
 
     assert report["input_staleness"]["snapshot_to_rust_exact_matches"] == 1
@@ -1312,8 +1322,7 @@ def test_live_performance_report_input_staleness_uses_latest_legacy_snapshot(tmp
 
     report = build_live_performance_report(tmp_path / "monitor")
     staleness_groups = {
-        group["operation"]: group
-        for group in report["input_staleness"]["groups"]
+        group["operation"]: group for group in report["input_staleness"]["groups"]
     }
 
     assert report["input_staleness"]["snapshot_to_rust_exact_matches"] == 0
@@ -1359,9 +1368,10 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
     assert summary["input_staleness"]["snapshot_market_summaries_seen"] == 1
     assert summary["input_staleness"]["snapshot_market_stale_count"] == 1
     assert summary["input_staleness"]["market_snapshot"]["observations"] == 1
-    assert summary["input_staleness"]["market_snapshot"]["configured_excess_ms"][
-        "max"
-    ] == 50
+    assert (
+        summary["input_staleness"]["market_snapshot"]["configured_excess_ms"]["max"]
+        == 50
+    )
     assert summary["input_staleness"]["rust_calls_seen"] == 1
     assert summary["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 1
     assert summary["input_staleness"]["rust_calls_missing_ema"] == 1
@@ -1413,26 +1423,6 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
                     "trading_impact": "protective_blocker",
                 },
             ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=4,
-                ts=4000,
-                component="risk.hsl",
-                status="started",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "pair_replay",
-                    "pairs": 26,
-                    "held_pairs": 1,
-                    "cooldown_pairs": 1,
-                    "required_pairs": 20,
-                    "timeline_rows": 43201,
-                    "applied_rows": 3000,
-                    "total_applied_rows": 4425,
-                    "rows_per_second": 289.4,
-                    "elapsed_s": 15.2,
-                },
-            ),
             _monitor_row(event_type="bot.ready", seq=5, ts=5000),
         ],
     )
@@ -1442,7 +1432,6 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
 
     assert startup["bot_count"] == 1
     assert startup["ready_count"] == 1
-    assert startup["hsl_replay_active_count"] == 1
     bot = startup["bots"][0]
     assert bot["bot"] == "binance/binance_01"
     assert bot["lifecycle_status"] == "ready"
@@ -1470,8 +1459,7 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
     }
     assert startup["readiness_scope_elapsed_ms"]["account_critical"]["max"] == 900
     assert (
-        startup["readiness_scope_elapsed_ms"]["held_position_protective"]["max"]
-        == 2500
+        startup["readiness_scope_elapsed_ms"]["held_position_protective"]["max"] == 2500
     )
     assert startup["readiness_trading_impact_counts"] == {
         "protective_blocker": 2,
@@ -1488,11 +1476,6 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
     assert startup["startup_phase_elapsed_ms"]["hsl"]["max"] == 2500
     assert startup["startup_phase_since_previous_ms"]["account"]["max"] == 900
     assert startup["startup_phase_since_previous_ms"]["hsl"]["max"] == 1600
-    assert bot["hsl_replay"]["stage"] == "pair_replay"
-    assert bot["hsl_replay"]["pairs"] == 26
-    assert bot["hsl_replay"]["held_pairs"] == 1
-    assert bot["hsl_replay"]["rows_per_second"] == 289.4
-    assert bot["hsl_replay"]["latest_event_age_ms"] == 60000
 
 
 def test_live_performance_report_startup_readiness_assesses_configured_budgets(
@@ -1551,9 +1534,10 @@ def test_live_performance_report_startup_readiness_assesses_configured_budgets(
         "over_budget": 1,
         "within_budget": 1,
     }
-    assert summary["startup_readiness"]["bots"][0][
-        "startup_phase_budgets"
-    ] == startup["bots"][0]["startup_phase_budgets"]
+    assert (
+        summary["startup_readiness"]["bots"][0]["startup_phase_budgets"]
+        == startup["bots"][0]["startup_phase_budgets"]
+    )
 
 
 def test_live_performance_report_startup_readiness_rejects_malformed_config_budget(
@@ -1590,9 +1574,7 @@ def test_live_performance_report_startup_readiness_rejects_malformed_config_budg
         ],
     )
 
-    startup = build_live_performance_report(tmp_path / "monitor")[
-        "startup_readiness"
-    ]
+    startup = build_live_performance_report(tmp_path / "monitor")["startup_readiness"]
 
     assert startup["startup_budget_status_counts"] == {"invalid_budget": 1}
     budgets = startup["bots"][0]["startup_phase_budgets"]
@@ -1630,9 +1612,7 @@ def test_live_performance_report_startup_readiness_legacy_shape_has_no_budgets(
         ],
     )
 
-    startup = build_live_performance_report(tmp_path / "monitor")[
-        "startup_readiness"
-    ]
+    startup = build_live_performance_report(tmp_path / "monitor")["startup_readiness"]
 
     assert "startup_budget_status_counts" not in startup
     assert "startup_phase_budgets" not in startup["bots"][0]
@@ -1714,94 +1694,6 @@ def test_live_performance_report_startup_phase_uses_stage_only_as_legacy_fallbac
     assert startup_groups["startup.hsl"]["count"] == 1
 
 
-def test_live_performance_report_startup_readiness_completed_hsl_not_active(tmp_path):
-    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
-    _write_ndjson(
-        events_dir / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="bot.started",
-                seq=1,
-                ts=1000,
-                data={"live_event_debug_profiles": ["rust"]},
-            ),
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=2,
-                ts=2000,
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="coin_history_replay_completed",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "full_replay",
-                    "pairs": 2,
-                    "skipped_pairs": 1,
-                    "full_elapsed_s": 12.3,
-                    "startup_blocking_elapsed_s": 12.3,
-                },
-            ),
-        ],
-    )
-
-    report = build_live_performance_report(tmp_path / "monitor")
-    startup = report["startup_readiness"]
-
-    assert startup["ready_count"] == 0
-    assert startup["hsl_replay_active_count"] == 0
-    assert startup["bots"][0]["hsl_replay"]["status"] == "succeeded"
-    assert "latest_event_age_ms" not in startup["bots"][0]["hsl_replay"]
-    assert startup["bots"][0]["hsl_replay"]["skipped_pairs"] == 1
-
-
-def test_live_performance_report_startup_readiness_keeps_sparse_hsl_context(tmp_path):
-    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
-    _write_ndjson(
-        events_dir / "current.ndjson",
-        [
-            _monitor_row(event_type="bot.started", seq=1, ts=1000),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=2,
-                ts=2000,
-                status="progress",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "pair_replay",
-                    "pairs": 26,
-                    "held_pairs": 1,
-                    "rows_per_second": 300,
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.failed",
-                seq=3,
-                ts=3000,
-                status="failed",
-                reason_code="replay_failed",
-                data={"signal_mode": "coin", "elapsed_s": 5},
-            ),
-        ],
-    )
-
-    hsl_replay = build_live_performance_report(tmp_path / "monitor")[
-        "startup_readiness"
-    ]["bots"][0]["hsl_replay"]
-
-    assert hsl_replay == {
-        "latest_ts": 3000,
-        "event_type": "hsl.replay.failed",
-        "status": "failed",
-        "reason_code": "replay_failed",
-        "signal_mode": "coin",
-        "stage": "pair_replay",
-        "pairs": 26,
-        "held_pairs": 1,
-        "rows_per_second": 300,
-        "elapsed_s": 5,
-    }
-
-
 def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -1819,13 +1711,6 @@ def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
                     "elapsed_budget_ms": 500,
                 },
             ),
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=3,
-                ts=1200,
-                status="succeeded",
-                data={"stage": "full_replay", "pairs": 2, "full_elapsed_s": 1.5},
-            ),
             _monitor_row(event_type="bot.ready", seq=4, ts=1300),
             _monitor_row(
                 event_type="bot.started",
@@ -1840,7 +1725,6 @@ def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
     startup = report["startup_readiness"]
 
     assert startup["ready_count"] == 0
-    assert startup["hsl_replay_active_count"] == 0
     bot = startup["bots"][0]
     assert bot["lifecycle_status"] == "started"
     assert bot["bot_started_ts"] == 2000
@@ -1850,7 +1734,6 @@ def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
     assert "startup_phases_ms" not in bot
     assert "startup_phase_budgets" not in bot
     assert "startup_budget_status_counts" not in startup
-    assert "hsl_replay" not in bot
 
 
 @pytest.mark.parametrize("current_started_ts", [None, 1000])
@@ -1872,13 +1755,6 @@ def test_live_performance_report_startup_readiness_uses_event_order_with_file_ca
                     "readiness_scope": "held_position_protective",
                     "trading_impact": "protective_blocker",
                 },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=3,
-                ts=1200,
-                status="succeeded",
-                data={"stage": "full_replay", "pairs": 2},
             ),
             _monitor_row(event_type="bot.ready", seq=4, ts=1300),
         ],
@@ -1930,7 +1806,6 @@ def test_live_performance_report_startup_readiness_uses_event_order_with_file_ca
             "trading_impact": "protective_blocker",
         }
     }
-    assert "hsl_replay" not in bot
     assert startup["startup_phase_counts"] == {"account": 1, "hsl": 1}
     assert startup["startup_phase_elapsed_ms"]["hsl"]["max"] == 9000
     assert startup["readiness_scope_counts"] == {
@@ -2244,9 +2119,7 @@ def test_live_performance_report_startup_milestone_requires_eligible_initial_ent
         ],
     )
 
-    startup = build_live_performance_report(tmp_path / "monitor")[
-        "startup_milestones"
-    ]
+    startup = build_live_performance_report(tmp_path / "monitor")["startup_milestones"]
 
     assert startup["observed_counts"]["first_fresh_entry_eligible"] == 1
     assert startup["elapsed_ms"]["first_fresh_entry_eligible"]["max"] == 600
@@ -2285,9 +2158,12 @@ def test_startup_milestone_accumulator_retains_one_candidate_per_milestone():
     state = accumulator.bots["binance/binance_01"]
     assert state["milestone_events_seen"] == 3000
     assert len(state["milestones"]) == 3
-    assert accumulator.to_dict()["bots"][0]["milestones"]["first_cycle_started"][
-        "event_id"
-    ] == "evt_2"
+    assert (
+        accumulator.to_dict()["bots"][0]["milestones"]["first_cycle_started"][
+            "event_id"
+        ]
+        == "evt_2"
+    )
 
 
 def test_live_performance_report_startup_milestones_cancel_only_and_unknown(tmp_path):
@@ -2307,9 +2183,7 @@ def test_live_performance_report_startup_milestones_cancel_only_and_unknown(tmp_
         ],
     )
 
-    startup = build_live_performance_report(tmp_path / "monitor")[
-        "startup_milestones"
-    ]
+    startup = build_live_performance_report(tmp_path / "monitor")["startup_milestones"]
     milestones = startup["bots"][0]["milestones"]
 
     assert milestones["first_cycle_started"] == {
@@ -2361,9 +2235,7 @@ def test_live_performance_report_startup_milestones_use_latest_ordered_lifecycle
         assert bot["milestones"]["first_cycle_started"]["elapsed_ms"] == 1100
     assert bot["milestones"]["first_cycle_started"]["ts_ms"] == 2100
     assert bot["milestones"]["first_rust_called"]["status"] == "unknown"
-    assert bot["milestones"]["first_exchange_write_submitted"]["status"] == (
-        "unknown"
-    )
+    assert bot["milestones"]["first_exchange_write_submitted"]["status"] == ("unknown")
     assert startup["observed_counts"]["first_rust_called"] == 0
     assert startup["observed_counts"]["first_exchange_write_submitted"] == 0
 
@@ -2462,9 +2334,7 @@ def test_live_performance_report_startup_milestones_are_bounded_and_projectable(
     report = build_live_performance_report(tmp_path / "monitor", group_limit=2)
     startup = report["startup_milestones"]
     summary = summarize_live_performance_report(report, group_limit=1)
-    projected = project_live_performance_report_sections(
-        report, ["startup_milestones"]
-    )
+    projected = project_live_performance_report_sections(report, ["startup_milestones"])
 
     assert startup["bot_count"] == 4
     assert startup["bots_truncated"] is True
@@ -2886,7 +2756,9 @@ def test_live_performance_report_startup_fill_cache_proof_resets_and_rejects_inc
     }
 
 
-@pytest.mark.parametrize("started_ts, proof_ts", [(None, 1200), (1000, None), (1000, -1)])
+@pytest.mark.parametrize(
+    "started_ts, proof_ts", [(None, 1200), (1000, None), (1000, -1)]
+)
 def test_live_performance_report_startup_fill_cache_proof_rejects_invalid_timestamps(
     tmp_path, started_ts, proof_ts
 ):
@@ -2995,7 +2867,9 @@ def test_live_performance_report_startup_fill_cache_proof_is_bounded_whitelisted
                                 if index == 0
                                 else "known_gap_overlaps_lookback"
                             ),
-                            "history_scope": "private/secret" if index == 0 else "window",
+                            "history_scope": (
+                                "private/secret" if index == 0 else "window"
+                            ),
                             "gap_reason": (
                                 "/private/secret/api_key_abc"
                                 if index == 0
@@ -3055,45 +2929,6 @@ def test_live_performance_report_startup_fill_cache_proof_is_bounded_whitelisted
     assert "startup_milestones" not in projected
 
 
-def test_live_performance_report_startup_readiness_hsl_whitelist(tmp_path, monkeypatch):
-    monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 122000)
-    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
-    _write_ndjson(
-        events_dir / "current.ndjson",
-        [
-            _monitor_row(event_type="bot.started", seq=1, ts=1000),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=2,
-                ts=2000,
-                status="started",
-                data={
-                    "stage": "pair_replay",
-                    "pairs": 1,
-                    "equity": 12345.0,
-                    "balance": 6789.0,
-                    "raw_payload": {"secret": "nope"},
-                    "price": 42.0,
-                    "drawdown": 0.12,
-                },
-            ),
-        ],
-    )
-
-    report = build_live_performance_report(tmp_path / "monitor")
-    hsl_replay = report["startup_readiness"]["bots"][0]["hsl_replay"]
-
-    assert hsl_replay == {
-        "latest_ts": 2000,
-        "event_type": "hsl.replay.progress",
-        "status": "started",
-        "reason_code": "test",
-        "stage": "pair_replay",
-        "pairs": 1,
-        "latest_event_age_ms": 120000,
-    }
-
-
 def test_live_performance_report_summary_includes_startup_readiness(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -3140,724 +2975,6 @@ def test_live_performance_report_startup_phase_labels_are_whitelisted(tmp_path):
     assert startup["startup_phase_since_previous_ms"]["other"]["max"] == 50
     assert startup["bots"][0]["startup_phases_ms"] == {"other": 100}
     assert report["operation_durations"]["groups"][0]["operation"] == "startup.other"
-
-
-def test_live_performance_report_hsl_replay_profile(tmp_path):
-    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
-    _write_ndjson(
-        events_dir / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.started",
-                seq=1,
-                ts=1000,
-                component="risk.hsl",
-                status="started",
-                reason_code="coin_history_replay",
-                data={"signal_mode": "coin", "lookback_days": 30},
-            ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=2,
-                ts=2000,
-                component="risk.hsl",
-                status="started",
-                reason_code="history_loaded",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "loaded",
-                    "symbols": 5,
-                    "pairs": 4,
-                    "held_pairs": 1,
-                    "cooldown_pairs": 1,
-                    "required_pairs": 3,
-                    "timeline_rows": 10,
-                    "fill_events": 7,
-                    "panic_events": 2,
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=3,
-                ts=3000,
-                component="risk.hsl",
-                status="started",
-                reason_code="pair_replay_progress",
-                symbol="XLM/USDT:USDT",
-                pside="long",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "pair_replay",
-                    "pair_idx": 2,
-                    "pairs": 4,
-                    "held_pairs": 1,
-                    "cooldown_pairs": 1,
-                    "required_pairs": 3,
-                    "timeline_rows": 10,
-                    "applied_rows": 8,
-                    "total_applied_rows": 12,
-                    "rows_per_second": 123.4567,
-                    "is_held_pair": True,
-                    "is_cooldown_pair": False,
-                    "elapsed_s": 2.5,
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=4,
-                ts=4000,
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="coin_history_replay_completed",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "full_replay",
-                    "pairs": 4,
-                    "held_pairs": 1,
-                    "cooldown_pairs": 1,
-                    "required_pairs": 3,
-                    "timeline_rows": 10,
-                    "candidate_rows": 30,
-                    "rows": 30,
-                    "applied_rows": 30,
-                    "skipped_pairs": 1,
-                    "rows_per_second": 40,
-                    "full_elapsed_s": 7.5,
-                    "startup_blocking_elapsed_s": 7.5,
-                    "elapsed_s": 7.5,
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.failed",
-                seq=5,
-                ts=5000,
-                component="risk.hsl",
-                status="failed",
-                reason_code="coin_history_replay_failed",
-                data={
-                    "signal_mode": "coin",
-                    "elapsed_s": 8.0,
-                    "error_type": "RuntimeError",
-                    "secret": "must-not-render",
-                },
-            ),
-        ],
-    )
-
-    report = build_live_performance_report(tmp_path / "monitor")
-    profile = report["hsl_replay_profile"]
-    group = profile["groups"][0]
-
-    assert profile["total_events"] == 5
-    assert profile["bot_count"] == 1
-    assert profile["event_types"] == {
-        "hsl.replay.started": 1,
-        "hsl.replay.progress": 2,
-        "hsl.replay.completed": 1,
-        "hsl.replay.failed": 1,
-    }
-    assert profile["stage_counts"] == {
-        "loaded": 1,
-        "pair_replay": 1,
-        "full_replay": 1,
-    }
-    assert profile["latest_status_counts"] == {"failed": 1}
-    assert profile["latest_stage_counts"] == {}
-    assert profile["active_stage_counts"] == {}
-    assert profile["active_bot_count"] == 0
-    assert profile["completed_bot_count"] == 0
-    assert profile["failed_bot_count"] == 1
-    assert group["bot"] == "binance/binance_01"
-    assert group["event_types"]["hsl.replay.progress"] == 2
-    assert group["loaded"]["data"]["symbols"] == 5
-    assert group["progress"]["data"]["is_held_pair"] is True
-    assert group["progress"]["derived"]["observed_work_pct"] == 30
-    assert group["progress"]["derived"]["observed_required_work_pct"] == 40
-    assert group["progress"]["derived"]["estimated_dense_pair_row_work"] == 40
-    assert group["progress"]["derived"]["estimated_held_pair_row_work"] == 10
-    assert group["progress"]["derived"]["estimated_required_pair_row_work"] == 30
-    assert group["progress"]["derived"]["estimated_dense_remaining_rows"] == 28
-    assert group["progress"]["derived"]["estimated_required_remaining_rows"] == 18
-    assert group["progress"]["derived"]["estimated_remaining_rows"] == 28
-    assert group["progress"]["derived"]["estimated_dense_remaining_ms"] == 227
-    assert group["progress"]["derived"]["estimated_required_remaining_ms"] == 146
-    assert group["progress"]["derived"]["estimated_remaining_ms"] == 227
-    assert group["progress"]["derived"]["latest_elapsed_ms"] == 2500
-    assert group["completed"]["derived"]["startup_blocking_elapsed_ms"] == 7500
-    assert group["completed"]["derived"]["startup_blocking"] is True
-    assert group["failed"]["event_type"] == "hsl.replay.failed"
-    assert group["failed"]["status"] == "failed"
-    assert group["failed"]["derived"]["latest_elapsed_ms"] == 8000
-    assert "must-not-render" not in json.dumps(group, sort_keys=True)
-    assert group["completed"]["derived"]["observed_work_pct"] == 75
-    assert group["completed"]["derived"]["estimated_dense_remaining_rows"] == 10
-    assert group["completed"]["derived"]["estimated_dense_remaining_ms"] == 250
-    assert group["completed"]["derived"]["work_estimate_source"] == (
-        "candidate_rows_terminal"
-    )
-    assert group["completed"]["derived"]["estimated_remaining_rows"] == 0
-    assert group["completed"]["derived"]["estimated_remaining_ms"] == 0
-
-
-@pytest.mark.parametrize("required_pairs", (0, 1))
-def test_hsl_replay_profile_prefers_scanned_work_for_eta(required_pairs):
-    data = {
-        "stage": "pair_replay",
-        "timeline_rows": 100,
-        "pairs": 3,
-        "required_pairs": required_pairs,
-        "total_applied_rows": 10,
-        "rows_per_second": 2.0,
-        "scanned_rows": 75,
-        "candidate_rows": 150,
-        "total_scanned_rows": 150,
-        "scanned_rows_per_second": 50.0,
-        "pair_elapsed_s": 1.5,
-        "secret": "must-not-render",
-    }
-    bounded = performance_report_module._bounded_hsl_replay_data(data)
-    derived = performance_report_module._derive_hsl_replay_profile(bounded)
-
-    assert bounded["scanned_rows"] == 75
-    assert bounded["candidate_rows"] == 150
-    assert bounded["pair_elapsed_s"] == 1.5
-    assert "secret" not in bounded
-    assert derived["throughput_source"] == "scanned_rows"
-    assert derived["observed_applied_rows"] == 10
-    assert derived["observed_scanned_rows"] == 150
-    assert derived["observed_work_pct"] == 50.0
-    assert derived["estimated_dense_remaining_rows"] == 150
-    assert derived["estimated_dense_remaining_ms"] == 3000
-    assert derived["estimated_required_remaining_rows"] == 0
-    assert derived["estimated_required_remaining_ms"] == 0
-    assert derived["work_estimate_source"] == "dense_rows_upper_bound"
-    assert derived["estimated_remaining_rows"] == 150
-    assert derived["estimated_remaining_ms"] == 3000
-
-    terminal = performance_report_module._derive_hsl_replay_profile(
-        {**bounded, "stage": "full_replay"}
-    )
-    assert terminal["work_estimate_source"] == "candidate_rows_terminal"
-    assert terminal["estimated_candidate_pair_row_work"] == 150
-    assert terminal["estimated_candidate_remaining_rows"] == 0
-    assert terminal["estimated_remaining_rows"] == 0
-
-
-def test_hsl_replay_profile_keeps_legacy_applied_work_fallback():
-    data = {
-        "timeline_rows": 100,
-        "pairs": 3,
-        "total_applied_rows": 10,
-        "rows_per_second": 2.0,
-    }
-    derived = performance_report_module._derive_hsl_replay_profile(data)
-
-    assert derived["throughput_source"] == "applied_rows_legacy"
-    assert derived["observed_applied_rows"] == 10
-    assert "observed_scanned_rows" not in derived
-    assert derived["estimated_dense_remaining_rows"] == 290
-    assert derived["estimated_dense_remaining_ms"] == 145000
-    assert derived["work_estimate_source"] == "dense_rows_upper_bound"
-
-    terminal = performance_report_module._derive_hsl_replay_profile(
-        {**data, "stage": "full_replay"}
-    )
-    assert terminal["estimated_dense_remaining_rows"] == 290
-    assert terminal["work_estimate_source"] == "legacy_terminal_no_candidate_rows"
-    assert terminal["estimated_remaining_rows"] == 0
-    assert terminal["estimated_remaining_ms"] == 0
-
-
-def test_live_performance_report_hsl_replay_profile_stage_summary(tmp_path):
-    rows = [
-        _monitor_row(
-            event_type="hsl.replay.progress",
-            seq=1,
-            ts=1000,
-            exchange="binance",
-            user="binance_01",
-            component="risk.hsl",
-            status="started",
-            data={
-                "stage": "price_history_fetch_started",
-                "history_build_elapsed_s": 45.0,
-            },
-        ),
-        _monitor_row(
-            event_type="hsl.replay.progress",
-            seq=2,
-            ts=2000,
-            exchange="gateio",
-            user="gateio_01",
-            component="risk.hsl",
-            status="started",
-            data={"stage": "pair_replay", "elapsed_s": 12.0},
-        ),
-        _monitor_row(
-            event_type="hsl.replay.completed",
-            seq=3,
-            ts=3000,
-            exchange="okx",
-            user="okx_01",
-            component="risk.hsl",
-            status="succeeded",
-            data={"stage": "full_replay", "full_elapsed_s": 18.0},
-        ),
-        _monitor_row(
-            event_type="hsl.replay.failed",
-            seq=4,
-            ts=4000,
-            exchange="kucoin",
-            user="kucoin_01",
-            component="risk.hsl",
-            status="failed",
-            data={"stage": "price_history_fetch_started", "elapsed_s": 3.0},
-        ),
-    ]
-    for row in rows:
-        exchange = row["exchange"]
-        user = row["user"]
-        _write_ndjson(
-            tmp_path / "monitor" / exchange / user / "events" / "current.ndjson",
-            [row],
-        )
-
-    report = build_live_performance_report(tmp_path / "monitor")
-    profile = report["hsl_replay_profile"]
-
-    assert profile["bot_count"] == 4
-    assert profile["stage_counts"] == {
-        "price_history_fetch_started": 2,
-        "pair_replay": 1,
-        "full_replay": 1,
-    }
-    assert profile["latest_status_counts"] == {
-        "active": 2,
-        "completed": 1,
-        "failed": 1,
-    }
-    assert profile["latest_stage_counts"] == {
-        "price_history_fetch_started": 2,
-        "full_replay": 1,
-        "pair_replay": 1,
-    }
-    assert profile["active_stage_counts"] == {
-        "price_history_fetch_started": 1,
-        "pair_replay": 1,
-    }
-    assert profile["active_bot_count"] == 2
-    assert profile["completed_bot_count"] == 1
-    assert profile["failed_bot_count"] == 1
-
-
-def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard(
-    tmp_path,
-):
-    fixtures = {
-        ("binance", "binance_01"): [
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=1,
-                ts=1000,
-                exchange="binance",
-                user="binance_01",
-                component="risk.hsl",
-                status="started",
-                reason_code="history_loaded",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "loaded",
-                    "history_format": "compact",
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=2,
-                ts=2000,
-                exchange="binance",
-                user="binance_01",
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="hsl_held_protective_ready",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "held_protective_ready",
-                    "protective_elapsed_s": 12.3,
-                    "startup_blocking_elapsed_s": 12.3,
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=3,
-                ts=3000,
-                exchange="binance",
-                user="binance_01",
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="coin_history_replay_completed",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "full_replay",
-                    "history_format": "compact",
-                    "replay_strategy": "sparse_change_points",
-                    "candidate_rows": 120,
-                    "dense_equivalent_rows": 1200,
-                    "candidate_reduction_pct": 90.0,
-                    "dense_replay_pairs": 1,
-                    "dense_fallback_pairs": 0,
-                    "sparse_replay_pairs": 9,
-                    "full_elapsed_s": 30.0,
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=4,
-                ts=1500,
-                exchange="binance",
-                user="binance_01",
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="hsl_held_protective_ready",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "held_protective_ready",
-                    "protective_elapsed_s": 99.0,
-                    "startup_blocking_elapsed_s": 99.0,
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=5,
-                ts=2500,
-                exchange="binance",
-                user="binance_01",
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="coin_history_replay_completed",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "full_replay",
-                    "history_format": "timeline",
-                    "full_elapsed_s": 99.0,
-                },
-            ),
-        ],
-        ("gateio", "gateio_01"): [
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=1,
-                ts=1500,
-                exchange="gateio",
-                user="gateio_01",
-                component="risk.hsl",
-                status="started",
-                reason_code="history_loaded",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "loaded",
-                    "history_format": "timeline",
-                    "replay_strategy": "dense_timeline",
-                },
-            ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=2,
-                ts=2500,
-                exchange="gateio",
-                user="gateio_01",
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="hsl_held_protective_ready",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "held_protective_ready",
-                    "startup_blocking_elapsed_s": 20.0,
-                },
-            ),
-        ],
-        ("okx", "okx_01"): [
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=1,
-                ts=3500,
-                exchange="okx",
-                user="okx_01",
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="coin_history_replay_completed",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "full_replay",
-                    "history_format": "compact",
-                    "replay_strategy": "sparse_change_points",
-                    "candidate_rows": 100,
-                    "dense_equivalent_rows": 1000,
-                    "candidate_reduction_pct": 90.0,
-                    "protective_elapsed_s": 5.0,
-                    "startup_blocking_elapsed_s": 5.0,
-                    "full_elapsed_s": 25.0,
-                },
-            ),
-        ],
-    }
-    for (exchange, user), rows in fixtures.items():
-        _write_ndjson(
-            tmp_path / "monitor" / exchange / user / "events" / "current.ndjson",
-            rows,
-        )
-
-    report = build_live_performance_report(tmp_path / "monitor")
-    profile = report["hsl_replay_profile"]
-    summary_profile = summarize_live_performance_report(report)["hsl_replay_profile"]
-    groups = {group["bot"]: group for group in profile["groups"]}
-
-    assert profile["history_format_counts"] == {"compact": 2, "timeline": 1}
-    assert profile["replay_strategy_counts"] == {
-        "sparse_change_points": 2,
-        "dense_timeline": 1,
-    }
-    assert profile["protective_ready_bot_count"] == 3
-    assert profile["protective_ready_elapsed_ms"]["count"] == 3
-    assert profile["protective_ready_elapsed_ms"]["min"] == 5000
-    assert profile["protective_ready_elapsed_ms"]["max"] == 20000
-    assert profile["full_replay_elapsed_ms"]["count"] == 2
-    assert profile["full_replay_elapsed_ms"]["max"] == 30000
-    assert summary_profile["history_format_counts"] == {"compact": 2, "timeline": 1}
-    assert summary_profile["replay_strategy_counts"] == {
-        "sparse_change_points": 2,
-        "dense_timeline": 1,
-    }
-    assert summary_profile["protective_ready_elapsed_ms"]["max"] == 20000
-    assert summary_profile["full_replay_elapsed_ms"]["max"] == 30000
-    assert groups["binance/binance_01"]["history_format"] == "compact"
-    assert groups["binance/binance_01"]["replay_strategy"] == "sparse_change_points"
-    assert groups["binance/binance_01"]["completed"]["data"]["candidate_rows"] == 120
-    assert (
-        groups["binance/binance_01"]["completed"]["data"]["dense_equivalent_rows"]
-        == 1200
-    )
-    assert (
-        groups["binance/binance_01"]["completed"]["data"]["candidate_reduction_pct"]
-        == 90.0
-    )
-    assert groups["binance/binance_01"]["completed"]["data"][
-        "dense_replay_pairs"
-    ] == 1
-    assert groups["binance/binance_01"]["completed"]["data"][
-        "dense_fallback_pairs"
-    ] == 0
-    assert groups["binance/binance_01"]["completed"]["data"][
-        "sparse_replay_pairs"
-    ] == 9
-    assert groups["binance/binance_01"]["protective_ready"]["derived"] == {
-        "latest_elapsed_ms": 12300,
-        "protective_elapsed_ms": 12300,
-        "startup_blocking": True,
-        "startup_blocking_elapsed_ms": 12300,
-    }
-    assert groups["gateio/gateio_01"]["history_format"] == "timeline"
-    assert groups["gateio/gateio_01"]["replay_strategy"] == "dense_timeline"
-    assert groups["gateio/gateio_01"]["protective_ready"]["derived"] == {
-        "latest_elapsed_ms": 20000,
-        "startup_blocking": True,
-        "startup_blocking_elapsed_ms": 20000,
-    }
-    assert groups["okx/okx_01"]["history_format"] == "compact"
-    assert "protective_ready" not in groups["okx/okx_01"]
-    assert groups["okx/okx_01"]["completed"]["derived"][
-        "protective_elapsed_ms"
-    ] == 5000
-
-
-def test_live_performance_report_completion_requires_explicit_protective_elapsed(
-    tmp_path,
-):
-    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
-    _write_ndjson(
-        events_dir / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.completed",
-                seq=1,
-                ts=1000,
-                component="risk.hsl",
-                status="succeeded",
-                reason_code="coin_history_replay_completed",
-                data={
-                    "signal_mode": "coin",
-                    "stage": "full_replay",
-                    "startup_blocking_elapsed_s": 9.0,
-                    "full_elapsed_s": 10.0,
-                },
-            )
-        ],
-    )
-
-    profile = build_live_performance_report(tmp_path / "monitor")[
-        "hsl_replay_profile"
-    ]
-
-    assert profile["protective_ready_bot_count"] == 0
-    assert profile["protective_ready_elapsed_ms"] == {}
-    assert profile["full_replay_elapsed_ms"]["max"] == 10000
-
-
-def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
-    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
-    _write_ndjson(
-        events_dir / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=1,
-                ts=1000,
-                component="risk.hsl",
-                data={
-                    "stage": "price_history_symbol_fetch_completed",
-                    "timeframe": "1m",
-                    "error_type": "TimeoutError",
-                    "events": 2,
-                    "current_position_pairs": 1,
-                    "price_replay_symbols": 3,
-                    "skipped_price_symbols": 1,
-                    "missing_price_symbols": 2,
-                    "history_minutes": 10,
-                    "start_ts": 1782492000000,
-                    "end_ts": 1782492600000,
-                    "record_start_ts": 1782492000000,
-                    "rows": 9,
-                    "elapsed_s": 4.5,
-                    "history_build_elapsed_s": 17.25,
-                    "price_history_fetch_elapsed_s": 16.5,
-                    "timeline_replay_elapsed_s": 3.2,
-                    "balance": 1000.0,
-                    "equity": 999.0,
-                    "raw_payload": {"leak_marker": "raw"},
-                    "api_key": "secret",
-                    "drawdown_raw": 0.1,
-                },
-            )
-        ],
-    )
-
-    report = build_live_performance_report(tmp_path / "monitor")
-    rendered = json.dumps(report["hsl_replay_profile"], sort_keys=True)
-
-    assert report["hsl_replay_profile"]["groups"][0]["progress"]["data"] == {
-        "current_position_pairs": 1,
-        "end_ts": 1782492600000,
-        "elapsed_s": 4.5,
-        "error_type": "TimeoutError",
-        "events": 2,
-        "history_build_elapsed_s": 17.25,
-        "history_minutes": 10,
-        "missing_price_symbols": 2,
-        "price_history_fetch_elapsed_s": 16.5,
-        "price_replay_symbols": 3,
-        "record_start_ts": 1782492000000,
-        "rows": 9,
-        "skipped_price_symbols": 1,
-        "stage": "price_history_symbol_fetch_completed",
-        "start_ts": 1782492000000,
-        "timeframe": "1m",
-        "timeline_replay_elapsed_s": 3.2,
-    }
-    assert report["hsl_replay_profile"]["groups"][0]["progress"]["derived"] == {
-        "history_build_elapsed_ms": 17250,
-        "latest_elapsed_ms": 4500,
-        "observed_applied_rows": 9,
-        "price_history_fetch_elapsed_ms": 16500,
-        "throughput_source": "applied_rows_legacy",
-        "timeline_replay_elapsed_ms": 3200,
-    }
-    assert "balance" not in rendered
-    assert "equity" not in rendered
-    assert "raw_payload" not in rendered
-    assert "leak_marker" not in rendered
-    assert "api_key" not in rendered
-    assert "secret" not in rendered
-    assert "drawdown_raw" not in rendered
-
-
-def test_bounded_hsl_replay_data_bounds_string_values():
-    bounded = performance_report_module._bounded_hsl_replay_data(
-        {
-            "stage": "x" * 100_000,
-            "signal_mode": "coin",
-        }
-    )
-
-    assert bounded == {
-        "signal_mode": "coin",
-        "stage": "x" * 120,
-    }
-
-
-def test_live_performance_report_hsl_history_elapsed_is_latest_when_replay_not_started(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 121000)
-    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
-    _write_ndjson(
-        events_dir / "current.ndjson",
-        [
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=1,
-                ts=1000,
-                exchange="gateio",
-                user="gateio_01",
-                component="risk.hsl",
-                status="started",
-                reason_code="hsl_price_history_fetch_started",
-                data={
-                    "stage": "price_history_fetch_started",
-                    "history_build_elapsed_s": 91.25,
-                    "history_minutes": 43201,
-                    "price_replay_symbols": 24,
-                    "replay_concurrency": 4,
-                },
-            )
-        ],
-    )
-
-    report = build_live_performance_report(tmp_path / "monitor")
-    group = report["hsl_replay_profile"]["groups"][0]
-
-    assert group["bot"] == "gateio/gateio_01"
-    assert group["latest"]["data"]["stage"] == "price_history_fetch_started"
-    assert group["latest"]["derived"] == {
-        "history_build_elapsed_ms": 91250,
-        "latest_event_age_ms": 120000,
-        "latest_elapsed_ms": 91250,
-    }
-    assert group["active_latest_event_age_ms"] == 120000
-
-
-def test_live_performance_report_hsl_replay_profile_summary_is_bounded(tmp_path):
-    for index in range(2):
-        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
-        _write_ndjson(
-            events_dir / "current.ndjson",
-            [
-                _monitor_row(
-                    event_type="hsl.replay.progress",
-                    seq=index + 1,
-                    ts=1000 + index,
-                    user=f"user_{index}",
-                    component="risk.hsl",
-                    data={"stage": "loaded", "pairs": 1, "timeline_rows": 10},
-                ),
-            ],
-        )
-
-    report = build_live_performance_report(tmp_path / "monitor")
-    summary = summarize_live_performance_report(report, group_limit=1)
-
-    assert report["hsl_replay_profile"]["bot_count"] == 2
-    assert len(summary["hsl_replay_profile"]["groups"]) == 1
-    assert summary["hsl_replay_profile"]["groups_truncated"] is True
 
 
 def test_live_performance_report_cache_warmup_from_existing_events(tmp_path):
@@ -4070,7 +3187,10 @@ def test_live_performance_report_forager_ema_readiness_from_existing_events(tmp_
                     ],
                     "unavailable": ["ATOM/USDT:USDT"],
                     "unavailable_reasons": [
-                        {"reason": "missing required m1_close EMA", "symbols": ["ATOM/USDT:USDT"]}
+                        {
+                            "reason": "missing required m1_close EMA",
+                            "symbols": ["ATOM/USDT:USDT"],
+                        }
                     ],
                 },
             ),
@@ -4537,10 +3657,7 @@ def test_live_performance_report_execution_timing_pairs_order_events(tmp_path):
 
     report = build_live_performance_report(tmp_path / "monitor")
     execution = report["execution_timing"]
-    groups = {
-        group["operation"]: group
-        for group in execution["groups"]
-    }
+    groups = {group["operation"]: group for group in execution["groups"]}
     rendered = json.dumps(execution, sort_keys=True)
 
     assert execution["total_events"] == 8
@@ -4568,7 +3685,9 @@ def test_live_performance_report_execution_timing_pairs_order_events(tmp_path):
     assert "cid-short" not in rendered
 
 
-def test_live_performance_report_execution_timing_counts_missing_and_unpaired_ids(tmp_path):
+def test_live_performance_report_execution_timing_counts_missing_and_unpaired_ids(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -4639,7 +3758,9 @@ def test_live_performance_report_execution_timing_summary_is_bounded(tmp_path):
     assert summary["execution_timing"]["groups_truncated"] is True
     assert len(summary["execution_timing"]["groups"]) == 1
     assert summary["operation_durations"]["total_groups"] == 2
-    assert summary["operation_durations"]["operation_category_counts"] == {"execution": 2}
+    assert summary["operation_durations"]["operation_category_counts"] == {
+        "execution": 2
+    }
     assert summary["operation_durations"]["blocking_scope_counts"] == {"exchange_io": 2}
     assert summary["slowest_blockers"]["total_groups"] >= 2
 
@@ -4702,10 +3823,7 @@ def test_live_performance_report_account_state_changes_are_value_safe(tmp_path):
 
     report = build_live_performance_report(tmp_path / "monitor")
     changes = report["account_state_changes"]
-    groups = {
-        group["event_type"]: group
-        for group in changes["groups"]
-    }
+    groups = {group["event_type"]: group for group in changes["groups"]}
     rendered = json.dumps(changes, sort_keys=True)
 
     assert changes["total_events"] == 3
@@ -4873,25 +3991,12 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
                     "secret_marker": "loss-gate-secret",
                 },
             ),
-            _monitor_row(
-                event_type="hsl.replay.progress",
-                seq=8,
-                ts=5000,
-                component="risk.hsl.replay",
-                reason_code="replay_progress",
-                symbol="XRP/USDT:USDT",
-                pside="long",
-                data={"rows": 100, "secret_marker": "replay-secret"},
-            ),
         ],
     )
 
     report = build_live_performance_report(tmp_path / "monitor")
     risk = report["risk_activity"]
-    groups = {
-        group["event_type"]: group
-        for group in risk["groups"]
-    }
+    groups = {group["event_type"]: group for group in risk["groups"]}
     rendered = json.dumps(risk, sort_keys=True)
 
     assert risk["total_events"] == 7
@@ -4904,14 +4009,11 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
         "trailing.status": 1,
         "unstuck.selection": 1,
     }
-    assert "hsl.replay.progress" not in risk["event_types"]
     assert groups["hsl.status"]["statuses"] == {"degraded": 1}
     assert groups["hsl.status"]["reason_codes"] == {"cooldown_active": 1}
     assert groups["hsl.status"]["symbols_sample"] == ["BTC/USDT:USDT"]
     assert groups["hsl.status"]["psides"] == {"long": 1}
-    assert groups["hsl.red_finalized_without_order"]["statuses"] == {
-        "succeeded": 1
-    }
+    assert groups["hsl.red_finalized_without_order"]["statuses"] == {"succeeded": 1}
     assert groups["hsl.red_finalized_without_order"]["reason_codes"] == {
         "hsl_red_finalized_without_exchange_order": 1
     }
@@ -4923,7 +4025,9 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     assert groups["trailing.status"]["statuses"] == {"pending": 1}
     assert groups["trailing.status"]["reason_codes"] == {"trailing_status": 1}
     assert groups["trailing.status"]["psides"] == {"long": 1}
-    assert groups["risk.realized_loss_gate_blocked"]["symbols_sample"] == ["SOL/USDT:USDT"]
+    assert groups["risk.realized_loss_gate_blocked"]["symbols_sample"] == [
+        "SOL/USDT:USDT"
+    ]
     assert groups["risk.realized_loss_gate_blocked"]["statuses"] == {"deferred": 1}
     assert "98765.43" not in rendered
     assert "45678.9" not in rendered
@@ -4972,7 +4076,9 @@ def test_live_performance_report_risk_activity_summary_is_bounded(tmp_path):
     assert summary["risk_activity"]["bots_truncated"] is True
 
 
-def test_live_performance_report_resource_pressure_from_health_summary(tmp_path, monkeypatch):
+def test_live_performance_report_resource_pressure_from_health_summary(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 5000)
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -5318,18 +4424,22 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "median": 2,
         "p95": 2,
     }
-    assert binance_fields["event_monitor_publisher_retention_age_filter_ms_total"][
-        "count"
-    ] == 1
-    assert binance_fields["event_monitor_publisher_retention_age_filter_ms_max"][
-        "count"
-    ] == 1
-    assert binance_fields["event_monitor_publisher_retention_cap_prune_ms_total"][
-        "count"
-    ] == 1
-    assert binance_fields["event_monitor_publisher_retention_cap_prune_ms_max"][
-        "count"
-    ] == 1
+    assert (
+        binance_fields["event_monitor_publisher_retention_age_filter_ms_total"]["count"]
+        == 1
+    )
+    assert (
+        binance_fields["event_monitor_publisher_retention_age_filter_ms_max"]["count"]
+        == 1
+    )
+    assert (
+        binance_fields["event_monitor_publisher_retention_cap_prune_ms_total"]["count"]
+        == 1
+    )
+    assert (
+        binance_fields["event_monitor_publisher_retention_cap_prune_ms_max"]["count"]
+        == 1
+    )
     retention_fields = (
         "event_monitor_publisher_retention_thread_cpu_ms_total",
         "event_monitor_publisher_retention_thread_cpu_ms_max",
@@ -5350,9 +4460,7 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "event_monitor_publisher_retention_age_deleted",
         "event_monitor_publisher_retention_cap_deleted",
     )
-    assert {
-        key: binance_fields[key]["latest"] for key in retention_fields
-    } == {
+    assert {key: binance_fields[key]["latest"] for key in retention_fields} == {
         "event_monitor_publisher_retention_thread_cpu_ms_total": 0.05,
         "event_monitor_publisher_retention_thread_cpu_ms_max": 0.03,
         "event_monitor_publisher_retention_non_cpu_ms_total": 0.15,
@@ -5372,9 +4480,7 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "event_monitor_publisher_retention_age_deleted": 2,
         "event_monitor_publisher_retention_cap_deleted": 1,
     }
-    assert {
-        key: okx_fields[key]["latest"] for key in retention_fields
-    } == {
+    assert {key: okx_fields[key]["latest"] for key in retention_fields} == {
         "event_monitor_publisher_retention_thread_cpu_ms_total": 0.04,
         "event_monitor_publisher_retention_thread_cpu_ms_max": 0.03,
         "event_monitor_publisher_retention_non_cpu_ms_total": 0.06,
@@ -5536,7 +4642,7 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
                     "raw_payload": {"leak_marker": "raw-payload"},
                     "event_drop_counts": {"queue_full": 1},
                 },
-            )
+            ),
         ],
     )
 
@@ -5544,7 +4650,10 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
     rendered = json.dumps(report["resource_pressure"], sort_keys=True)
 
     assert report["ok"] is True
-    assert report["resource_pressure"]["groups"][0]["fields"]["rss_bytes"]["latest"] == 1200
+    assert (
+        report["resource_pressure"]["groups"][0]["fields"]["rss_bytes"]["latest"]
+        == 1200
+    )
     assert (
         report["resource_pressure"]["groups"][0]["fields"]["system_memory_percent"][
             "latest"
@@ -5565,7 +4674,9 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
     assert "raw-payload" not in rendered
 
 
-def test_live_performance_report_resource_pressure_omits_missing_latest_rotated_field(tmp_path):
+def test_live_performance_report_resource_pressure_omits_missing_latest_rotated_field(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     stale_rotated = events_dir / "2026-06-24T00-00-00.ndjson"
     rotated = events_dir / "2026-06-25T00-00-00.ndjson"
@@ -5622,7 +4733,9 @@ def test_live_performance_report_resource_pressure_omits_missing_latest_rotated_
     assert group["fields"]["event_queue_depth"]["latest"] == 0
 
 
-def test_live_performance_report_resource_pressure_latest_snapshot_clears_invalid_fields(tmp_path):
+def test_live_performance_report_resource_pressure_latest_snapshot_clears_invalid_fields(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -5670,7 +4783,9 @@ def test_live_performance_report_resource_pressure_latest_snapshot_clears_invali
     assert "latest_event_pipeline_worker_alive" not in group
 
 
-def test_live_performance_report_resource_pressure_unordered_row_keeps_ordered_latest(tmp_path):
+def test_live_performance_report_resource_pressure_unordered_row_keeps_ordered_latest(
+    tmp_path,
+):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -5701,7 +4816,9 @@ def test_live_performance_report_resource_pressure_unordered_row_keeps_ordered_l
     assert group["fields"]["rss_bytes"]["count"] == 1
 
 
-def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path, monkeypatch):
+def test_live_performance_report_resource_pressure_summary_is_bounded(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 5000)
     events_dir = tmp_path / "monitor" / "mixed" / "events"
     _write_ndjson(
@@ -5832,16 +4949,22 @@ def test_live_performance_report_exchange_config_refresh_health(tmp_path):
         for group in report["operation_durations"]["groups"]
         if group["operation"].startswith("exchange_config_refresh.")
     }
-    assert groups["exchange_config_refresh.init_markets"]["trading_impact"] == "exchange_io"
+    assert (
+        groups["exchange_config_refresh.init_markets"]["trading_impact"]
+        == "exchange_io"
+    )
     assert groups["exchange_config_refresh.init_markets"]["max_ms"] == 200
     assert summary["exchange_config_refresh"]["total"] == 2
     assert summary["exchange_config_refresh"]["statuses"] == {
         "succeeded": 1,
         "failed": 1,
     }
-    assert summary["operation_durations"]["operation_category_counts"][
-        "exchange_config_refresh"
-    ] == 1
+    assert (
+        summary["operation_durations"]["operation_category_counts"][
+            "exchange_config_refresh"
+        ]
+        == 1
+    )
 
 
 def test_live_performance_report_marks_recovered_exchange_config_refresh_bot(tmp_path):
@@ -5922,9 +5045,12 @@ def test_live_performance_report_exchange_config_refresh_summary_is_bounded(tmp_
     assert summary["exchange_config_refresh"]["groups_truncated"] is True
     assert summary["exchange_config_refresh"]["groups"][0]["bot"] == "okx/okx_faisal"
     assert summary["operation_durations"]["total_groups"] >= 2
-    assert summary["operation_durations"]["operation_category_counts"][
-        "exchange_config_refresh"
-    ] == 2
+    assert (
+        summary["operation_durations"]["operation_category_counts"][
+            "exchange_config_refresh"
+        ]
+        == 2
+    )
 
 
 def test_live_performance_report_shutdown_latency_from_lifecycle_events(tmp_path):
@@ -5948,7 +5074,11 @@ def test_live_performance_report_shutdown_latency_from_lifecycle_events(tmp_path
                 status="succeeded",
                 component="shutdown",
                 reason_code="maintainers_stopped",
-                data={"stage": "maintainers_stopped", "elapsed_s": 2.5, "task_count": 4},
+                data={
+                    "stage": "maintainers_stopped",
+                    "elapsed_s": 2.5,
+                    "task_count": 4,
+                },
             ),
             _monitor_row(
                 event_type="bot.shutdown.stage",
@@ -5995,8 +5125,12 @@ def test_live_performance_report_shutdown_latency_from_lifecycle_events(tmp_path
         "execution_loop_timeout": 1,
     }
     assert groups["shutdown.stage.execution_loop_timeout"]["max_ms"] == 6250
-    assert groups["shutdown.stage.execution_loop_timeout"]["statuses"] == {"degraded": 1}
-    assert groups["shutdown.stage.execution_loop_timeout"]["timing_kind"] == "cumulative"
+    assert groups["shutdown.stage.execution_loop_timeout"]["statuses"] == {
+        "degraded": 1
+    }
+    assert (
+        groups["shutdown.stage.execution_loop_timeout"]["timing_kind"] == "cumulative"
+    )
     assert groups["shutdown.total"]["max_ms"] == 7500
     assert groups["shutdown.total"]["timing_kind"] == "duration"
     assert "AKIA123" not in rendered
@@ -6035,8 +5169,12 @@ def test_live_performance_report_shutdown_latency_summary_is_bounded(tmp_path):
     assert summary["shutdown_latency"]["groups_truncated"] is True
     assert summary["shutdown_latency"]["groups"][0]["operation"] == "shutdown.total"
     assert summary["operation_durations"]["total_groups"] == 2
-    assert summary["operation_durations"]["operation_category_counts"] == {"shutdown": 2}
-    assert summary["operation_durations"]["blocking_scope_counts"] == {"observability": 2}
+    assert summary["operation_durations"]["operation_category_counts"] == {
+        "shutdown": 2
+    }
+    assert summary["operation_durations"]["blocking_scope_counts"] == {
+        "observability": 2
+    }
     assert summary["operation_durations"]["groups"][0]["operation"] == "shutdown.total"
 
 
@@ -6332,14 +5470,19 @@ def test_live_performance_report_scan_cost_aggregates_plain_and_gzip_reads(tmp_p
         plain_path.stat().st_size + gzip_path.stat().st_size
     )
     assert scan_cost["physical_bytes_known"] is True
-    assert scan_cost["decoded_bytes_read"] == plain_path.stat().st_size + gzip_decoded_bytes
+    assert (
+        scan_cost["decoded_bytes_read"]
+        == plain_path.stat().st_size + gzip_decoded_bytes
+    )
     assert scan_cost["decoded_bytes_known"] is True
     assert scan_cost["files_read"] == 2
     assert scan_cost["records_read"] == 2
     assert scan_cost["read_methods"] == {"full_scan": 2}
 
 
-def test_live_performance_report_scan_cost_survives_summary_and_section_projection(tmp_path):
+def test_live_performance_report_scan_cost_survives_summary_and_section_projection(
+    tmp_path,
+):
     events_path = (
         tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
     )
@@ -6651,7 +5794,9 @@ def test_live_performance_report_redacts_missing_root_paths():
 
 
 def test_live_performance_report_redacts_file_paths_and_oserror_messages(monkeypatch):
-    event_path = Path("/root/passivbot/monitor/binance/binance_01/events/current.ndjson")
+    event_path = Path(
+        "/root/passivbot/monitor/binance/binance_01/events/current.ndjson"
+    )
 
     monkeypatch.setattr(
         performance_report_module,
@@ -6668,7 +5813,9 @@ def test_live_performance_report_redacts_file_paths_and_oserror_messages(monkeyp
 
     rendered = json.dumps(report, sort_keys=True)
     assert report["root"] == "~/passivbot/monitor"
-    assert report["files"] == ["~/passivbot/monitor/binance/binance_01/events/current.ndjson"]
+    assert report["files"] == [
+        "~/passivbot/monitor/binance/binance_01/events/current.ndjson"
+    ]
     assert report["issues"][0]["path"] == (
         "~/passivbot/monitor/binance/binance_01/events/current.ndjson"
     )
@@ -6684,7 +5831,9 @@ def test_live_performance_report_redacts_file_paths_and_oserror_messages(monkeyp
 
 
 def test_live_performance_report_redacts_file_paths_for_valid_events(monkeypatch):
-    event_path = Path("/Users/operator/passivbot/monitor/binance/binance_01/events/current.ndjson")
+    event_path = Path(
+        "/Users/operator/passivbot/monitor/binance/binance_01/events/current.ndjson"
+    )
     row = _monitor_row(
         event_type="cycle.completed",
         seq=1,

@@ -27,7 +27,6 @@ from live.event_query import (
 )
 from live.smoke_report import _sort_event_position_key, _user_safe_display_path
 
-
 GROUP_LIMIT = 80
 SUMMARY_GROUP_LIMIT = 12
 _PERFORMANCE_REPORT_ID_KEY_ALLOWLIST = frozenset(
@@ -176,66 +175,6 @@ _EXECUTION_CONFIRMATION_TERMINALS = {
     "execution.confirmation_satisfied",
     "execution.confirmation_timeout",
 }
-_HSL_REPLAY_STRING_FIELDS = (
-    "error_type",
-    "history_format",
-    "replay_strategy",
-    "signal_mode",
-    "stage",
-    "timeframe",
-)
-_HSL_REPLAY_BOOL_FIELDS = (
-    "is_held_pair",
-    "is_cooldown_pair",
-)
-_HSL_REPLAY_NUMERIC_FIELDS = (
-    "lookback_days",
-    "symbols",
-    "pairs",
-    "held_pairs",
-    "cooldown_pairs",
-    "required_pairs",
-    "timeline_rows",
-    "fill_events",
-    "panic_events",
-    "skipped_unsupported_symbols",
-    "events",
-    "current_position_pairs",
-    "price_replay_symbols",
-    "priced_symbols",
-    "empty_price_symbols",
-    "approximate_price_symbols",
-    "skipped_price_symbols",
-    "missing_price_symbols",
-    "history_minutes",
-    "replay_concurrency",
-    "start_ts",
-    "end_ts",
-    "record_start_ts",
-    "pair_idx",
-    "applied_rows",
-    "scanned_rows",
-    "candidate_rows",
-    "dense_equivalent_rows",
-    "candidate_reduction_pct",
-    "dense_replay_pairs",
-    "dense_fallback_pairs",
-    "sparse_replay_pairs",
-    "total_applied_rows",
-    "total_scanned_rows",
-    "rows",
-    "skipped_pairs",
-    "rows_per_second",
-    "scanned_rows_per_second",
-    "pair_elapsed_s",
-    "elapsed_s",
-    "history_build_elapsed_s",
-    "price_history_fetch_elapsed_s",
-    "timeline_replay_elapsed_s",
-    "full_elapsed_s",
-    "protective_elapsed_s",
-    "startup_blocking_elapsed_s",
-)
 _CACHE_EVENT_TYPES = {
     "cache.load.completed",
     "cache.flush.completed",
@@ -274,9 +213,7 @@ _CACHE_STRING_FIELDS = (
     "timeframe",
     "stage",
 )
-_CACHE_BOOL_FIELDS = (
-    "cold_path_required",
-)
+_CACHE_BOOL_FIELDS = ("cold_path_required",)
 _CACHE_NUMERIC_FIELDS = (
     "start_ts",
     "end_ts",
@@ -325,9 +262,7 @@ _FORAGER_FEATURE_UNAVAILABLE_NUMERIC_FIELDS = (
     "max_age_ms",
     "fetch_budget",
 )
-_EMA_UNAVAILABLE_NUMERIC_FIELDS = (
-    "optional_drop_count",
-)
+_EMA_UNAVAILABLE_NUMERIC_FIELDS = ("optional_drop_count",)
 _EMA_FALLBACK_NUMERIC_FIELDS = (
     "close_recovered_count",
     "close_fallback_count",
@@ -368,10 +303,7 @@ _EXCHANGE_CONFIG_REFRESH_EVENT_TYPES = {
     "exchange.config_refresh",
 }
 _SAFE_LABEL_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyz"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "0123456789"
-    "._:-/"
+    "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "0123456789" "._:-/"
 )
 
 
@@ -381,7 +313,9 @@ def _open_text(path: Path):
     return open(path, "r", encoding="utf-8")
 
 
-def _limit_recent_event_files(files: list[Path], max_event_files: int) -> tuple[list[Path], int]:
+def _limit_recent_event_files(
+    files: list[Path], max_event_files: int
+) -> tuple[list[Path], int]:
     if max_event_files <= 0 or len(files) <= max_event_files:
         return files, 0
     ordered = sorted(files, key=_recent_event_file_sort_key)
@@ -564,7 +498,9 @@ def _percentile(sorted_values: list[int], pct: float) -> int | None:
     if lower == upper:
         return int(sorted_values[lower])
     weight = rank - lower
-    return int(round(sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight))
+    return int(
+        round(sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight)
+    )
 
 
 class _MetricGroup:
@@ -787,7 +723,11 @@ def _decision_milestone(event_type: str) -> str | None:
 
 
 def _decision_trading_impact(milestone: str) -> str:
-    if milestone in {"first_write_sent", "confirmation_requested", "confirmation_satisfied"}:
+    if milestone in {
+        "first_write_sent",
+        "confirmation_requested",
+        "confirmation_satisfied",
+    }:
         return "blocks_exchange_actions"
     if milestone == "cycle_completed":
         return "blocks_next_cycle"
@@ -934,7 +874,9 @@ class _InputStalenessAccumulator:
                 bot=bot,
                 operation=operation,
                 component="input_staleness",
-                event_type=str(live_event.get("event_type") or row.get("kind") or "unknown"),
+                event_type=str(
+                    live_event.get("event_type") or row.get("kind") or "unknown"
+                ),
                 trading_impact=trading_impact,
                 timing_kind=timing_kind,
             )
@@ -992,7 +934,10 @@ class _InputStalenessAccumulator:
             or len(set(samples)) != len(samples)
             or samples != sorted(samples)
             or not isinstance(symbols_truncated, bool)
-            or (symbols_truncated and (len(samples) != 8 or fallback_symbol_count <= len(samples)))
+            or (
+                symbols_truncated
+                and (len(samples) != 8 or fallback_symbol_count <= len(samples))
+            )
             or (not symbols_truncated and len(samples) != fallback_symbol_count)
         ):
             self.completed_candle_summary_malformed_proof_count += 1
@@ -1038,7 +983,9 @@ class _InputStalenessAccumulator:
         if any(real_ages[label] < expected_ages[label] for label in expected_ages):
             self.completed_candle_summary_malformed_proof_count += 1
             return
-        max_tail_gap_age_ms = _strict_non_negative_int(summary.get("max_tail_gap_age_ms"))
+        max_tail_gap_age_ms = _strict_non_negative_int(
+            summary.get("max_tail_gap_age_ms")
+        )
         if fallback_count == 0 and max_tail_gap_age_ms is not None:
             self.completed_candle_summary_malformed_proof_count += 1
             return
@@ -1091,7 +1038,9 @@ class _InputStalenessAccumulator:
         cycle_scope: int,
     ) -> None:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
-        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        data = (
+            live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        )
         timestamp_ms = _record_ts(row)
         if timestamp_ms is None:
             return
@@ -1102,9 +1051,9 @@ class _InputStalenessAccumulator:
             received_ts = _non_negative_ms(data.get("response_received_ts_ms"))
             if kind is None or revision is None or received_ts is None:
                 return
-            self.packet_received_ts[(bot, int(cycle_scope), str(kind), str(revision))] = int(
-                received_ts
-            )
+            self.packet_received_ts[
+                (bot, int(cycle_scope), str(kind), str(revision))
+            ] = int(received_ts)
             return
         if event_type == "snapshot.built":
             self.snapshots_seen += 1
@@ -1112,7 +1061,9 @@ class _InputStalenessAccumulator:
             self.latest_snapshot_ts_by_scope[scope_key] = int(timestamp_ms)
             cycle_id = _event_cycle_id(live_event)
             if cycle_id:
-                self.snapshot_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(timestamp_ms)
+                self.snapshot_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(
+                    timestamp_ms
+                )
             self._consume_completed_candle_summary(
                 row=row, live_event=live_event, data=data
             )
@@ -1156,7 +1107,9 @@ class _InputStalenessAccumulator:
                     value = _non_negative_number(market_summary.get(key))
                     if value is not None:
                         values.append(int(value))
-                missing_count = _non_negative_number(market_summary.get("missing_count"))
+                missing_count = _non_negative_number(
+                    market_summary.get("missing_count")
+                )
                 if missing_count is not None:
                     missing_symbols = int(missing_count)
                     self.market_snapshot_missing_symbols_total += missing_symbols
@@ -1237,19 +1190,27 @@ class _InputStalenessAccumulator:
         if event_type == "ema.bundle.completed":
             cycle_id = _event_cycle_id(live_event)
             if cycle_id:
-                self.ema_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(timestamp_ms)
+                self.ema_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(
+                    timestamp_ms
+                )
             return
         if event_type == "rust_orchestrator.called":
             self.rust_calls_seen += 1
             cycle_id = _event_cycle_id(live_event)
             if not cycle_id:
                 return
-            snapshot_ts = self.snapshot_ts_by_cycle.get((bot, int(cycle_scope), cycle_id))
+            snapshot_ts = self.snapshot_ts_by_cycle.get(
+                (bot, int(cycle_scope), cycle_id)
+            )
             if snapshot_ts is not None:
                 self.snapshot_to_rust_exact_matches += 1
             else:
-                latest_snapshot_ts = self.latest_snapshot_ts_by_scope.get((bot, int(cycle_scope)))
-                if latest_snapshot_ts is not None and latest_snapshot_ts <= int(timestamp_ms):
+                latest_snapshot_ts = self.latest_snapshot_ts_by_scope.get(
+                    (bot, int(cycle_scope))
+                )
+                if latest_snapshot_ts is not None and latest_snapshot_ts <= int(
+                    timestamp_ms
+                ):
                     snapshot_ts = int(latest_snapshot_ts)
                     self.snapshot_to_rust_latest_snapshot_matches += 1
             if snapshot_ts is None:
@@ -1298,9 +1259,15 @@ class _InputStalenessAccumulator:
             "market_snapshot": {
                 "observations": int(self.market_snapshot_observations),
                 "count": _number_summary(self.market_snapshot_count_values),
-                "symbol_count": _number_summary(self.market_snapshot_symbol_count_values),
-                "missing_count": _number_summary(self.market_snapshot_missing_count_values),
-                "missing_symbols_total": int(self.market_snapshot_missing_symbols_total),
+                "symbol_count": _number_summary(
+                    self.market_snapshot_symbol_count_values
+                ),
+                "missing_count": _number_summary(
+                    self.market_snapshot_missing_count_values
+                ),
+                "missing_symbols_total": int(
+                    self.market_snapshot_missing_symbols_total
+                ),
                 "missing_observation_count": int(
                     self.market_snapshot_missing_observation_count
                 ),
@@ -1320,7 +1287,9 @@ class _InputStalenessAccumulator:
                     self.completed_candle_required_surface_unknown_snapshots
                 ),
                 "summary_observations": int(self.completed_candle_summary_observations),
-                "missing_proof_count": int(self.completed_candle_summary_missing_proof_count),
+                "missing_proof_count": int(
+                    self.completed_candle_summary_missing_proof_count
+                ),
                 "malformed_proof_count": int(
                     self.completed_candle_summary_malformed_proof_count
                 ),
@@ -1328,9 +1297,7 @@ class _InputStalenessAccumulator:
                     self.completed_candle_summary_no_valid_rows_count
                 ),
                 "metric_observations": int(self.completed_candle_metric_observations),
-                "source_rows": _number_summary(
-                    self.completed_candle_source_row_values
-                ),
+                "source_rows": _number_summary(self.completed_candle_source_row_values),
                 "valid_rows": _number_summary(self.completed_candle_valid_row_values),
                 "invalid_rows": _number_summary(
                     self.completed_candle_invalid_row_values
@@ -1409,7 +1376,9 @@ _STARTUP_PHASE_LABELS = {
 def _known_debug_profiles(value: Any) -> list[str]:
     if isinstance(value, str):
         raw_values: list[Any] = [
-            part for part in value.replace(";", ",").replace(" ", ",").split(",") if part
+            part
+            for part in value.replace(";", ",").replace(" ", ",").split(",")
+            if part
         ]
     elif isinstance(value, (list, tuple, set, frozenset)):
         raw_values = list(value)
@@ -1473,9 +1442,7 @@ def _startup_config_budget_projection(
         "status": (
             "unavailable"
             if latest_ms is None
-            else "over_budget"
-            if over_budget_by_ms
-            else "within_budget"
+            else "over_budget" if over_budget_by_ms else "within_budget"
         ),
         "latest_ms": latest_ms,
         "budget_ms": budget_ms,
@@ -1510,9 +1477,9 @@ class _StartupSourceCompletenessTracker:
     """Track newer incomplete event sources without retaining their rows."""
 
     def __init__(self) -> None:
-        self.latest_incomplete_order: dict[
-            str, tuple[str, int, str, int, int, int]
-        ] = {}
+        self.latest_incomplete_order: dict[str, tuple[str, int, str, int, int, int]] = (
+            {}
+        )
 
     def observe(
         self,
@@ -1575,7 +1542,9 @@ class _StartupReadinessAccumulator:
             state["debug_profiles"] = existing
         existing.update(profiles)
 
-    def _bot_state(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> dict[str, Any]:
+    def _bot_state(
+        self, *, row: dict[str, Any], live_event: dict[str, Any]
+    ) -> dict[str, Any]:
         bot = _bot_key(row, live_event)
         state = self.bots.get(bot)
         if state is None:
@@ -1674,8 +1643,6 @@ class _StartupReadinessAccumulator:
                     "trading_impact": contract["trading_impact"],
                 }
             return
-        if event_type.startswith("hsl.replay."):
-            state["hsl_replay"] = candidate["hsl_replay"]
 
     def add(
         self,
@@ -1685,7 +1652,9 @@ class _StartupReadinessAccumulator:
         source_complete: bool = True,
     ) -> None:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
-        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        data = (
+            live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        )
         ts = _record_ts(row)
         bot = _bot_key(row, live_event)
         event_order = _startup_event_order_key(row)
@@ -1737,12 +1706,9 @@ class _StartupReadinessAccumulator:
                 and event_order <= previous_started_order
             ):
                 return
-            if (
-                previous_started_order is None
-                and self.source_completeness.supersedes(
-                    bot=bot,
-                    event_order=event_order,
-                )
+            if previous_started_order is None and self.source_completeness.supersedes(
+                bot=bot,
+                event_order=event_order,
             ):
                 return
             state = self._bot_state(row=row, live_event=live_event)
@@ -1776,20 +1742,15 @@ class _StartupReadinessAccumulator:
         if event_type not in {
             "bot.ready",
             "bot.startup_timing",
-        } and not event_type.startswith("hsl.replay."):
+        }:
             return
         existing_state = self.bots.get(bot)
         started_order = (
-            existing_state.get("_started_order")
-            if existing_state is not None
-            else None
+            existing_state.get("_started_order") if existing_state is not None else None
         )
-        if (
-            started_order is None
-            and self.source_completeness.supersedes(
-                bot=bot,
-                event_order=event_order,
-            )
+        if started_order is None and self.source_completeness.supersedes(
+            bot=bot,
+            event_order=event_order,
         ):
             return
         state = self._bot_state(row=row, live_event=live_event)
@@ -1823,49 +1784,6 @@ class _StartupReadinessAccumulator:
                     "contract": contract,
                 }
             )
-        if event_type.startswith("hsl.replay."):
-            candidate_key = "hsl.replay"
-            existing = state["_candidates"].get(candidate_key)
-            hsl_state: dict[str, Any] = {}
-            if existing is not None:
-                previous_hsl_state = existing[1].get("hsl_replay")
-                if isinstance(previous_hsl_state, dict):
-                    hsl_state.update(previous_hsl_state)
-            if ts is not None:
-                hsl_state["latest_ts"] = int(ts)
-            hsl_state["event_type"] = _safe_label(event_type, max_len=120)
-            hsl_state["status"] = _safe_label(
-                live_event.get("status"),
-                max_len=120,
-            )
-            hsl_state["reason_code"] = _safe_label(
-                live_event.get("reason_code"),
-                max_len=120,
-            )
-            bounded_hsl_data = _bounded_hsl_replay_data(data)
-            for key in (
-                "signal_mode",
-                "stage",
-                "pairs",
-                "held_pairs",
-                "cooldown_pairs",
-                "required_pairs",
-                "timeline_rows",
-                "applied_rows",
-                "scanned_rows",
-                "total_applied_rows",
-                "total_scanned_rows",
-                "skipped_pairs",
-                "rows_per_second",
-                "scanned_rows_per_second",
-                "pair_elapsed_s",
-                "elapsed_s",
-                "full_elapsed_s",
-                "startup_blocking_elapsed_s",
-            ):
-                if key in bounded_hsl_data:
-                    hsl_state[key] = bounded_hsl_data[key]
-            candidate["hsl_replay"] = hsl_state
 
         existing = state["_candidates"].get(candidate_key)
         if existing is not None and event_order <= existing[0]:
@@ -1888,7 +1806,6 @@ class _StartupReadinessAccumulator:
             report_ts_ms = utc_ms()
         bot_items = []
         ready_count = 0
-        hsl_active_count = 0
         debug_profile_counts: Counter[str] = Counter()
         startup_budget_status_counts: Counter[str] = Counter()
         limit = max(0, int(group_limit))
@@ -1938,30 +1855,16 @@ class _StartupReadinessAccumulator:
             if state.get("bot_ready_ts") is not None:
                 item["bot_ready_ts"] = int(state["bot_ready_ts"])
                 ready_count += 1
-            if isinstance(state.get("hsl_replay"), dict):
-                hsl_state = {
-                    key: value
-                    for key, value in state["hsl_replay"].items()
-                    if value is not None
-                }
-                if hsl_state.get("status") not in ("succeeded", "failed"):
-                    hsl_active_count += 1
-                    age_ms = _hsl_replay_latest_event_age_ms(
-                        {"ts": hsl_state.get("latest_ts")},
-                        report_ts_ms=int(report_ts_ms),
-                    )
-                    if age_ms is not None:
-                        hsl_state["latest_event_age_ms"] = int(age_ms)
-                item["hsl_replay"] = hsl_state
             debug_profiles = sorted(state.get("debug_profiles") or [])
             if debug_profiles:
                 item["debug_profiles"] = debug_profiles
                 debug_profile_counts.update(debug_profiles)
-            bot_items.append({key: value for key, value in item.items() if value not in (None, {})})
+            bot_items.append(
+                {key: value for key, value in item.items() if value not in (None, {})}
+            )
         result = {
             "bot_count": len(bot_items),
             "ready_count": int(ready_count),
-            "hsl_replay_active_count": int(hsl_active_count),
             "debug_profile_counts": dict(sorted(debug_profile_counts.items())),
             "startup_phase_counts": {
                 phase: int(self.startup_phase_counts[phase]) for phase in phase_labels
@@ -2007,7 +1910,9 @@ _STARTUP_MILESTONE_EVENT_TYPES = {
     "execution.create_sent": "first_exchange_write_submitted",
     "execution.cancel_sent": "first_exchange_write_submitted",
 }
-_STARTUP_MILESTONE_LABELS = tuple(dict.fromkeys(_STARTUP_MILESTONE_EVENT_TYPES.values()))
+_STARTUP_MILESTONE_LABELS = tuple(
+    dict.fromkeys(_STARTUP_MILESTONE_EVENT_TYPES.values())
+)
 _STARTUP_MILESTONE_TRADING_IMPACTS = {
     "first_cycle_started": "cycle_delay",
     "first_rust_called": "cycle_delay",
@@ -2016,9 +1921,7 @@ _STARTUP_MILESTONE_TRADING_IMPACTS = {
 }
 
 
-def _startup_milestone_label(
-    event_type: str, live_event: dict[str, Any]
-) -> str | None:
+def _startup_milestone_label(event_type: str, live_event: dict[str, Any]) -> str | None:
     label = _STARTUP_MILESTONE_EVENT_TYPES.get(event_type)
     if label is None:
         return None
@@ -2112,16 +2015,11 @@ class _StartupMilestoneAccumulator:
             return
         existing_state = self.bots.get(bot)
         previous_started_order = (
-            existing_state.get("started_order")
-            if existing_state is not None
-            else None
+            existing_state.get("started_order") if existing_state is not None else None
         )
-        if (
-            previous_started_order is None
-            and self.source_completeness.supersedes(
-                bot=bot,
-                event_order=event_order,
-            )
+        if previous_started_order is None and self.source_completeness.supersedes(
+            bot=bot,
+            event_order=event_order,
         ):
             return
         state = self.bots.setdefault(
@@ -2133,7 +2031,10 @@ class _StartupMilestoneAccumulator:
             },
         )
         if event_type == "bot.started":
-            if previous_started_order is not None and event_order <= previous_started_order:
+            if (
+                previous_started_order is not None
+                and event_order <= previous_started_order
+            ):
                 return
             state["started_order"] = event_order
             state["started_ts"] = _record_ts(row)
@@ -2167,7 +2068,11 @@ class _StartupMilestoneAccumulator:
     def _set_elapsed(item: dict[str, Any], *, started_ts: int | None) -> None:
         item.pop("elapsed_ms", None)
         event_ts = _non_negative_ms(item.get("ts_ms"))
-        if event_ts is not None and started_ts is not None and event_ts >= int(started_ts):
+        if (
+            event_ts is not None
+            and started_ts is not None
+            and event_ts >= int(started_ts)
+        ):
             item["elapsed_ms"] = int(event_ts) - int(started_ts)
 
     @staticmethod
@@ -2239,7 +2144,9 @@ class _StartupMilestoneAccumulator:
                 }
                 for label in _STARTUP_MILESTONE_LABELS
             }
-            for label, (_order, observed, _source_complete) in state["milestones"].items():
+            for label, (_order, observed, _source_complete) in state[
+                "milestones"
+            ].items():
                 milestones[label] = observed
                 observed_counts[label] += 1
                 if observed.get("elapsed_ms") is not None:
@@ -2253,7 +2160,8 @@ class _StartupMilestoneAccumulator:
         return {
             "bot_count": len(bot_items),
             "observed_counts": {
-                label: int(observed_counts[label]) for label in _STARTUP_MILESTONE_LABELS
+                label: int(observed_counts[label])
+                for label in _STARTUP_MILESTONE_LABELS
             },
             "elapsed_ms": {
                 label: _number_summary(elapsed_values[label])
@@ -2372,7 +2280,12 @@ class _StartupFillCacheProofAccumulator:
             )
             if value is not None:
                 summary[key] = value
-        for key in ("covered_start_ms", "oldest_event_ts", "gap_start_ts", "gap_end_ts"):
+        for key in (
+            "covered_start_ms",
+            "oldest_event_ts",
+            "gap_start_ts",
+            "gap_end_ts",
+        ):
             value = coverage_after.get(key)
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 summary[key] = int(value)
@@ -2443,12 +2356,9 @@ class _StartupFillCacheProofAccumulator:
             )
             if previous_started is not None and event_order <= previous_started[0]:
                 return
-            if (
-                previous_started is None
-                and self.source_completeness.supersedes(
-                    bot=bot,
-                    event_order=event_order,
-                )
+            if previous_started is None and self.source_completeness.supersedes(
+                bot=bot,
+                event_order=event_order,
             ):
                 return
             retained: dict[str, Any] = {}
@@ -2492,12 +2402,9 @@ class _StartupFillCacheProofAccumulator:
             return
 
         existing_state = self.bots.get(bot)
-        if (
-            existing_state is None
-            and self.source_completeness.supersedes(
-                bot=bot,
-                event_order=event_order,
-            )
+        if existing_state is None and self.source_completeness.supersedes(
+            bot=bot,
+            event_order=event_order,
         ):
             return
         state = self.bots.setdefault(bot, {"bot": bot})
@@ -2521,7 +2428,11 @@ class _StartupFillCacheProofAccumulator:
             )
             self._replace_earliest(
                 state,
-                "cache_load" if cache_candidate[2] is not None else "invalid_cache_load",
+                (
+                    "cache_load"
+                    if cache_candidate[2] is not None
+                    else "invalid_cache_load"
+                ),
                 cache_candidate,
             )
         if proof is not None:
@@ -2591,9 +2502,7 @@ class _StartupFillCacheProofAccumulator:
                 or state.get("invalid_proof")
             )
             lifecycle_source_complete = bool(
-                started is not None
-                and started[2]
-                and (proof is None or proof[3])
+                started is not None and started[2] and (proof is None or proof[3])
             )
             item: dict[str, Any] = {
                 "bot": bot,
@@ -2649,7 +2558,9 @@ class _StartupFillCacheProofAccumulator:
             bot_items.append(item)
 
         limit = max(0, int(group_limit))
-        status_counts = Counter(str(item.get("status") or "unknown") for item in bot_items)
+        status_counts = Counter(
+            str(item.get("status") or "unknown") for item in bot_items
+        )
         proof_elapsed_values = [
             int(item["proof_elapsed_ms_from_start"])
             for item in bot_items
@@ -2663,24 +2574,6 @@ class _StartupFillCacheProofAccumulator:
             "bots_truncated": len(bot_items) > limit,
             "bots": bot_items[:limit],
         }
-
-
-def _bounded_hsl_replay_data(data: Any) -> dict[str, Any]:
-    if not isinstance(data, dict):
-        return {}
-    out: dict[str, Any] = {}
-    for key in _HSL_REPLAY_STRING_FIELDS:
-        value = _safe_label(data.get(key), max_len=120)
-        if value is not None:
-            out[key] = value
-    for key in _HSL_REPLAY_BOOL_FIELDS:
-        if key in data:
-            out[key] = bool(data.get(key))
-    for key in _HSL_REPLAY_NUMERIC_FIELDS:
-        value = _non_negative_number(data.get(key))
-        if value is not None:
-            out[key] = value
-    return out
 
 
 def _bounded_cache_event_data(data: Any) -> dict[str, Any]:
@@ -2760,12 +2653,18 @@ def _bounded_ema_unavailable_data(data: Any) -> dict[str, Any]:
             if not isinstance(item, dict):
                 continue
             group = {
-                "reason": str(item.get("reason")) if item.get("reason") is not None else None,
+                "reason": (
+                    str(item.get("reason")) if item.get("reason") is not None else None
+                ),
                 "symbols": _safe_string_list(item.get("symbols"), limit=12),
                 "error_types": _safe_string_list(item.get("error_types"), limit=4),
             }
             candidate_groups.append(
-                {key: value for key, value in group.items() if value not in (None, [], {})}
+                {
+                    key: value
+                    for key, value in group.items()
+                    if value not in (None, [], {})
+                }
             )
     if candidate_groups:
         out["candidate_unavailable_groups"] = candidate_groups
@@ -2776,11 +2675,17 @@ def _bounded_ema_unavailable_data(data: Any) -> dict[str, Any]:
             if not isinstance(item, dict):
                 continue
             group = {
-                "reason": str(item.get("reason")) if item.get("reason") is not None else None,
+                "reason": (
+                    str(item.get("reason")) if item.get("reason") is not None else None
+                ),
                 "symbols": _safe_string_list(item.get("symbols"), limit=12),
             }
             unavailable_reasons.append(
-                {key: value for key, value in group.items() if value not in (None, [], {})}
+                {
+                    key: value
+                    for key, value in group.items()
+                    if value not in (None, [], {})
+                }
             )
     if unavailable_reasons:
         out["unavailable_reasons"] = unavailable_reasons
@@ -2792,13 +2697,21 @@ def _bounded_ema_unavailable_data(data: Any) -> dict[str, Any]:
                 continue
             group = {
                 "ema_type": (
-                    str(item.get("ema_type")) if item.get("ema_type") is not None else None
+                    str(item.get("ema_type"))
+                    if item.get("ema_type") is not None
+                    else None
                 ),
-                "reason": str(item.get("reason")) if item.get("reason") is not None else None,
+                "reason": (
+                    str(item.get("reason")) if item.get("reason") is not None else None
+                ),
                 "symbols": _safe_string_list(item.get("symbols"), limit=12),
             }
             optional_groups.append(
-                {key: value for key, value in group.items() if value not in (None, [], {})}
+                {
+                    key: value
+                    for key, value in group.items()
+                    if value not in (None, [], {})
+                }
             )
     if optional_groups:
         out["optional_drop_groups"] = optional_groups
@@ -2873,454 +2786,6 @@ def _usage_pct(value: int | None, budget: int | None) -> int | None:
     if value is None or budget is None or budget <= 0:
         return None
     return int(round(float(value) * 100.0 / float(budget)))
-
-
-def _hsl_replay_observed_applied_rows(data: dict[str, Any]) -> int | None:
-    for key in ("total_applied_rows", "applied_rows", "rows"):
-        value = _non_negative_number(data.get(key))
-        if value is not None:
-            return int(value)
-    return None
-
-
-def _hsl_replay_work_observation(
-    data: dict[str, Any],
-) -> tuple[int | None, Any, str | None]:
-    scanned_rows = _non_negative_number(data.get("total_scanned_rows"))
-    if scanned_rows is not None:
-        return int(scanned_rows), data.get("scanned_rows_per_second"), "scanned_rows"
-    applied_rows = _hsl_replay_observed_applied_rows(data)
-    return (
-        applied_rows,
-        data.get("rows_per_second"),
-        "applied_rows_legacy" if applied_rows is not None else None,
-    )
-
-
-def _hsl_replay_remaining_rows(
-    *,
-    estimated_work: int | None,
-    observed_rows: int | None,
-) -> int | None:
-    if estimated_work is None or observed_rows is None:
-        return None
-    return max(0, int(estimated_work) - int(observed_rows))
-
-
-def _hsl_replay_eta_ms(
-    *,
-    remaining_rows: int | None,
-    rows_per_second: Any,
-) -> int | None:
-    if remaining_rows is None:
-        return None
-    rate = _non_negative_number(rows_per_second)
-    if rate is None or float(rate) <= 0.0:
-        return None
-    return int(round(1000.0 * float(remaining_rows) / float(rate)))
-
-
-def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
-    timeline_rows = _non_negative_number(data.get("timeline_rows"))
-    pairs = _non_negative_number(data.get("pairs"))
-    required_pairs = _non_negative_number(data.get("required_pairs"))
-    held_pairs = _non_negative_number(data.get("held_pairs"))
-    cooldown_pairs = _non_negative_number(data.get("cooldown_pairs"))
-    observed_applied_rows = _hsl_replay_observed_applied_rows(data)
-    observed_rows, throughput_rate, throughput_source = _hsl_replay_work_observation(
-        data
-    )
-    out: dict[str, Any] = {}
-    dense_work: int | None = None
-    required_work: int | None = None
-    candidate_work: int | None = None
-    if timeline_rows is not None and pairs is not None:
-        dense_work = int(timeline_rows) * int(pairs)
-        out["estimated_dense_pair_row_work"] = dense_work
-        if observed_rows is not None and dense_work > 0:
-            out["observed_work_pct"] = _rounded_float(
-                min(100.0, max(0.0, 100.0 * float(observed_rows) / float(dense_work)))
-            )
-    if timeline_rows is not None and required_pairs is not None:
-        required_work = int(timeline_rows) * int(required_pairs)
-        out["estimated_required_pair_row_work"] = required_work
-        if observed_rows is not None and required_work > 0:
-            out["observed_required_work_pct"] = _rounded_float(
-                min(100.0, max(0.0, 100.0 * float(observed_rows) / float(required_work)))
-            )
-    if timeline_rows is not None and held_pairs is not None:
-        out["estimated_held_pair_row_work"] = int(timeline_rows) * int(held_pairs)
-    if timeline_rows is not None and cooldown_pairs is not None:
-        out["estimated_cooldown_pair_row_work"] = int(timeline_rows) * int(cooldown_pairs)
-    if data.get("stage") == "full_replay":
-        candidate_value = _non_negative_number(data.get("candidate_rows"))
-        if candidate_value is not None:
-            candidate_work = int(candidate_value)
-            out["estimated_candidate_pair_row_work"] = candidate_work
-            if observed_rows is not None and candidate_work > 0:
-                out["observed_candidate_work_pct"] = _rounded_float(
-                    min(
-                        100.0,
-                        max(0.0, 100.0 * float(observed_rows) / float(candidate_work)),
-                    )
-                )
-    if observed_applied_rows is not None:
-        out["observed_applied_rows"] = int(observed_applied_rows)
-    observed_scanned_rows = _non_negative_number(data.get("total_scanned_rows"))
-    if observed_scanned_rows is not None:
-        out["observed_scanned_rows"] = int(observed_scanned_rows)
-    if throughput_source is not None:
-        out["throughput_source"] = throughput_source
-    dense_remaining_rows = _hsl_replay_remaining_rows(
-        estimated_work=dense_work,
-        observed_rows=observed_rows,
-    )
-    if dense_remaining_rows is not None:
-        out["estimated_dense_remaining_rows"] = dense_remaining_rows
-        dense_remaining_ms = _hsl_replay_eta_ms(
-            remaining_rows=dense_remaining_rows,
-            rows_per_second=throughput_rate,
-        )
-        if dense_remaining_ms is not None:
-            out["estimated_dense_remaining_ms"] = dense_remaining_ms
-    required_remaining_rows = _hsl_replay_remaining_rows(
-        estimated_work=required_work,
-        observed_rows=observed_rows,
-    )
-    if required_remaining_rows is not None:
-        out["estimated_required_remaining_rows"] = required_remaining_rows
-        required_remaining_ms = _hsl_replay_eta_ms(
-            remaining_rows=required_remaining_rows,
-            rows_per_second=throughput_rate,
-        )
-        if required_remaining_ms is not None:
-            out["estimated_required_remaining_ms"] = required_remaining_ms
-    candidate_remaining_rows = _hsl_replay_remaining_rows(
-        estimated_work=candidate_work,
-        observed_rows=observed_rows,
-    )
-    if candidate_remaining_rows is not None:
-        out["estimated_candidate_remaining_rows"] = candidate_remaining_rows
-        candidate_remaining_ms = _hsl_replay_eta_ms(
-            remaining_rows=candidate_remaining_rows,
-            rows_per_second=throughput_rate,
-        )
-        if candidate_remaining_ms is not None:
-            out["estimated_candidate_remaining_ms"] = candidate_remaining_ms
-    is_terminal = data.get("stage") == "full_replay"
-    primary_remaining_rows = (
-        candidate_remaining_rows
-        if candidate_remaining_rows is not None
-        else (0 if is_terminal else dense_remaining_rows)
-    )
-    if candidate_remaining_rows is not None:
-        out["work_estimate_source"] = "candidate_rows_terminal"
-    elif is_terminal:
-        out["work_estimate_source"] = "legacy_terminal_no_candidate_rows"
-    elif dense_remaining_rows is not None:
-        out["work_estimate_source"] = "dense_rows_upper_bound"
-    if primary_remaining_rows is not None:
-        out["estimated_remaining_rows"] = primary_remaining_rows
-        primary_remaining_ms = _hsl_replay_eta_ms(
-            remaining_rows=primary_remaining_rows,
-            rows_per_second=throughput_rate,
-        )
-        if primary_remaining_ms is not None:
-            out["estimated_remaining_ms"] = primary_remaining_ms
-    for source_key, target_key in (
-        ("elapsed_s", "latest_elapsed_ms"),
-        ("history_build_elapsed_s", "history_build_elapsed_ms"),
-        ("price_history_fetch_elapsed_s", "price_history_fetch_elapsed_ms"),
-        ("timeline_replay_elapsed_s", "timeline_replay_elapsed_ms"),
-        ("full_elapsed_s", "full_elapsed_ms"),
-        ("protective_elapsed_s", "protective_elapsed_ms"),
-        ("startup_blocking_elapsed_s", "startup_blocking_elapsed_ms"),
-    ):
-        value_ms = _elapsed_s_to_ms(data.get(source_key))
-        if value_ms is not None:
-            out[target_key] = value_ms
-            if source_key == "history_build_elapsed_s" and "latest_elapsed_ms" not in out:
-                out["latest_elapsed_ms"] = value_ms
-    if "latest_elapsed_ms" not in out:
-        for key in (
-            "full_elapsed_ms",
-            "protective_elapsed_ms",
-            "startup_blocking_elapsed_ms",
-        ):
-            if key in out:
-                out["latest_elapsed_ms"] = int(out[key])
-                break
-    if data.get("startup_blocking_elapsed_s") is not None:
-        out["startup_blocking"] = True
-    return out
-
-
-def _hsl_replay_latest_event_age_ms(
-    record: dict[str, Any],
-    *,
-    report_ts_ms: int,
-) -> int | None:
-    ts = _non_negative_number(record.get("ts"))
-    if ts is None:
-        return None
-    return int(max(0, int(report_ts_ms) - int(ts)))
-
-
-def _hsl_replay_active(latest: dict[str, Any] | None) -> bool:
-    if not isinstance(latest, dict):
-        return False
-    return latest.get("event_type") not in {
-        "hsl.replay.completed",
-        "hsl.replay.failed",
-    }
-
-
-def _hsl_replay_latest_status(latest: dict[str, Any] | None) -> str | None:
-    if not isinstance(latest, dict):
-        return None
-    event_type = latest.get("event_type")
-    if event_type == "hsl.replay.failed":
-        return "failed"
-    if event_type == "hsl.replay.completed":
-        return "completed"
-    return "active"
-
-
-def _with_hsl_replay_active_age(
-    group: dict[str, Any],
-    *,
-    report_ts_ms: int,
-) -> dict[str, Any]:
-    latest = group.get("latest")
-    if not _hsl_replay_active(latest):
-        return group
-    age_ms = _hsl_replay_latest_event_age_ms(latest, report_ts_ms=report_ts_ms)
-    if age_ms is None:
-        return group
-    out = dict(group)
-    latest_out = dict(latest)
-    derived = latest_out.get("derived")
-    derived_out = dict(derived) if isinstance(derived, dict) else {}
-    derived_out["latest_event_age_ms"] = int(age_ms)
-    latest_out["derived"] = derived_out
-    out["latest"] = latest_out
-    out["active_latest_event_age_ms"] = int(age_ms)
-    return out
-
-
-class _HslReplayProfileAccumulator:
-    def __init__(self) -> None:
-        self.bots: dict[str, dict[str, Any]] = {}
-        self.event_types: Counter[str] = Counter()
-        self.stage_counts: Counter[str] = Counter()
-        self.total_events = 0
-
-    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
-        event_type = str(live_event.get("event_type") or row.get("kind") or "")
-        if not event_type.startswith("hsl.replay."):
-            return
-        data = _bounded_hsl_replay_data(live_event.get("data"))
-        if not data:
-            return
-        bot = _bot_key(row, live_event)
-        state = self.bots.get(bot)
-        if state is None:
-            state = {
-                "bot": bot,
-                "event_types": Counter(),
-                "total_events": 0,
-                "latest_ts": None,
-            }
-            self.bots[bot] = state
-        self.total_events += 1
-        self.event_types[event_type] += 1
-        stage = str(data.get("stage") or "")
-        if stage:
-            self.stage_counts[stage] += 1
-        state["total_events"] = int(state["total_events"]) + 1
-        state["event_types"][event_type] += 1
-        ts = _record_ts(row)
-        position = _metric_event_position(row)
-
-        def is_newer(field: str) -> bool:
-            existing = state.get(f"_{field}_position")
-            if position is None:
-                return existing is None and state.get(field) is None
-            return existing is None or position >= existing
-
-        def retain(field: str, value: Any) -> None:
-            state[field] = value
-            if position is not None:
-                state[f"_{field}_position"] = position
-
-        record = {
-            key: value
-            for key, value in {
-                "event_type": event_type,
-                "status": live_event.get("status"),
-                "reason_code": live_event.get("reason_code"),
-                "ts": int(ts) if ts is not None else None,
-                "symbol": live_event.get("symbol") or row.get("symbol"),
-                "pside": live_event.get("pside") or row.get("pside"),
-                "data": data,
-                "derived": _derive_hsl_replay_profile(data),
-            }.items()
-            if value not in (None, {}, [])
-        }
-        if event_type == "hsl.replay.progress" and stage == "loaded":
-            if is_newer("loaded"):
-                retain("loaded", record)
-        elif event_type == "hsl.replay.progress" and stage == "held_protective_ready":
-            if is_newer("protective_ready"):
-                retain("protective_ready", record)
-            if is_newer("progress"):
-                retain("progress", record)
-        elif event_type == "hsl.replay.completed" and is_newer("completed"):
-            retain("completed", record)
-        elif event_type == "hsl.replay.failed" and is_newer("failed"):
-            retain("failed", record)
-        elif event_type == "hsl.replay.progress" and is_newer("progress"):
-            retain("progress", record)
-        elif event_type == "hsl.replay.started" and is_newer("started"):
-            retain("started", record)
-        if is_newer("latest"):
-            if ts is not None:
-                state["latest_ts"] = int(ts)
-            retain("latest", record)
-        history_format = data.get("history_format")
-        if history_format is not None and is_newer("history_format"):
-            retain("history_format", str(history_format))
-        replay_strategy = data.get("replay_strategy")
-        if replay_strategy is not None and is_newer("replay_strategy"):
-            retain("replay_strategy", str(replay_strategy))
-
-    def to_dict(
-        self,
-        *,
-        group_limit: int = GROUP_LIMIT,
-        report_ts_ms: int | None = None,
-    ) -> dict[str, Any]:
-        if report_ts_ms is None:
-            report_ts_ms = utc_ms()
-        groups = []
-        latest_status_counts: Counter[str] = Counter()
-        latest_stage_counts: Counter[str] = Counter()
-        active_stage_counts: Counter[str] = Counter()
-        history_format_counts: Counter[str] = Counter()
-        replay_strategy_counts: Counter[str] = Counter()
-        protective_ready_elapsed_ms: list[int] = []
-        full_replay_elapsed_ms: list[int] = []
-        for bot, state in self.bots.items():
-            group = {
-                "bot": bot,
-                "total_events": int(state.get("total_events") or 0),
-                "latest_ts": state.get("latest_ts"),
-                "event_types": dict(state["event_types"].most_common())
-                if isinstance(state.get("event_types"), Counter)
-                else {},
-                "latest": state.get("latest"),
-                "started": state.get("started"),
-                "loaded": state.get("loaded"),
-                "protective_ready": state.get("protective_ready"),
-                "progress": state.get("progress"),
-                "completed": state.get("completed"),
-                "failed": state.get("failed"),
-                "history_format": state.get("history_format"),
-                "replay_strategy": state.get("replay_strategy"),
-            }
-            group = {
-                key: value for key, value in group.items() if value not in (None, {}, [])
-            }
-            latest = group.get("latest")
-            latest_status = _hsl_replay_latest_status(latest)
-            if latest_status is not None:
-                latest_status_counts[latest_status] += 1
-                latest_data = latest.get("data") if isinstance(latest, dict) else {}
-                latest_stage = (
-                    str(latest_data.get("stage") or "")
-                    if isinstance(latest_data, dict)
-                    else ""
-                )
-                if latest_stage:
-                    latest_stage_counts[latest_stage] += 1
-                    if latest_status == "active":
-                        active_stage_counts[latest_stage] += 1
-            history_format = state.get("history_format")
-            if history_format:
-                history_format_counts[str(history_format)] += 1
-            replay_strategy = state.get("replay_strategy")
-            if replay_strategy:
-                replay_strategy_counts[str(replay_strategy)] += 1
-            protective_elapsed_ms = None
-            protective_ready = state.get("protective_ready")
-            if isinstance(protective_ready, dict):
-                derived = protective_ready.get("derived")
-                if isinstance(derived, dict):
-                    protective_elapsed_ms = derived.get("protective_elapsed_ms")
-                    if protective_elapsed_ms is None:
-                        protective_elapsed_ms = derived.get(
-                            "startup_blocking_elapsed_ms"
-                        )
-            completed = state.get("completed")
-            if isinstance(completed, dict):
-                derived = completed.get("derived")
-                if isinstance(derived, dict):
-                    if protective_elapsed_ms is None:
-                        # Pre-split completions may have startup blocking time
-                        # without an equivalent protective-ready milestone.
-                        protective_elapsed_ms = derived.get("protective_elapsed_ms")
-                    if derived.get("full_elapsed_ms") is not None:
-                        full_replay_elapsed_ms.append(int(derived["full_elapsed_ms"]))
-            if protective_elapsed_ms is not None:
-                protective_ready_elapsed_ms.append(int(protective_elapsed_ms))
-            groups.append(
-                _with_hsl_replay_active_age(group, report_ts_ms=int(report_ts_ms))
-            )
-        groups = sorted(
-            groups,
-            key=lambda item: (
-                -int(
-                    (
-                        item.get("latest", {})
-                        .get("derived", {})
-                        .get("startup_blocking_elapsed_ms", 0)
-                    )
-                    or 0
-                ),
-                -int(
-                    (
-                        item.get("latest", {})
-                        .get("derived", {})
-                        .get("latest_elapsed_ms", 0)
-                    )
-                    or 0
-                ),
-                -int(item.get("latest_ts", 0) or 0),
-                str(item.get("bot") or ""),
-            ),
-        )
-        limit = max(0, int(group_limit))
-        return {
-            "total_events": int(self.total_events),
-            "bot_count": len(groups),
-            "event_types": dict(self.event_types.most_common()),
-            "stage_counts": dict(self.stage_counts.most_common()),
-            "latest_status_counts": dict(latest_status_counts.most_common()),
-            "latest_stage_counts": dict(latest_stage_counts.most_common()),
-            "active_stage_counts": dict(active_stage_counts.most_common()),
-            "history_format_counts": dict(history_format_counts.most_common()),
-            "replay_strategy_counts": dict(replay_strategy_counts.most_common()),
-            "active_bot_count": int(latest_status_counts.get("active", 0)),
-            "completed_bot_count": int(latest_status_counts.get("completed", 0)),
-            "failed_bot_count": int(latest_status_counts.get("failed", 0)),
-            "protective_ready_bot_count": len(protective_ready_elapsed_ms),
-            "protective_ready_elapsed_ms": _number_summary(
-                protective_ready_elapsed_ms
-            ),
-            "full_replay_elapsed_ms": _number_summary(full_replay_elapsed_ms),
-            "groups_truncated": len(groups) > limit,
-            "groups": groups[:limit],
-        }
 
 
 class _CacheWarmupAccumulator:
@@ -3401,7 +2866,9 @@ class _CacheWarmupAccumulator:
             elapsed_ms = _non_negative_ms(data.get("elapsed_ms"))
             if elapsed_ms is not None:
                 state["warmup_elapsed_ms"].append(elapsed_ms)
-            for reason, count in _safe_counter_mapping(data.get("reason_counts")).items():
+            for reason, count in _safe_counter_mapping(
+                data.get("reason_counts")
+            ).items():
                 state["warmup_reason_counts"][reason] += int(count)
             state["latest_warmup_decision"] = record
         elif event_type == "cache.load.completed":
@@ -3410,9 +2877,9 @@ class _CacheWarmupAccumulator:
                 state["loaded_rows"] = int(state["loaded_rows"]) + int(loaded_rows)
             suppressed = _non_negative_number(data.get("suppressed_count"))
             if suppressed is not None:
-                state["suppressed_load_events"] = int(state["suppressed_load_events"]) + int(
-                    suppressed
-                )
+                state["suppressed_load_events"] = int(
+                    state["suppressed_load_events"]
+                ) + int(suppressed)
             elapsed_ms = _non_negative_ms(data.get("elapsed_ms"))
             if elapsed_ms is not None:
                 state["load_elapsed_ms"].append(elapsed_ms)
@@ -3422,17 +2889,19 @@ class _CacheWarmupAccumulator:
         elif event_type == "cache.flush.completed":
             persisted_rows = _non_negative_number(data.get("persisted_rows"))
             if persisted_rows is not None:
-                state["persisted_rows"] = int(state["persisted_rows"]) + int(persisted_rows)
+                state["persisted_rows"] = int(state["persisted_rows"]) + int(
+                    persisted_rows
+                )
             suppressed = _non_negative_number(data.get("suppressed_count"))
             if suppressed is not None:
-                state["suppressed_flush_events"] = int(state["suppressed_flush_events"]) + int(
-                    suppressed
-                )
+                state["suppressed_flush_events"] = int(
+                    state["suppressed_flush_events"]
+                ) + int(suppressed)
             suppressed_rows = _non_negative_number(data.get("suppressed_rows"))
             if suppressed_rows is not None:
-                state["suppressed_flush_rows"] = int(state["suppressed_flush_rows"]) + int(
-                    suppressed_rows
-                )
+                state["suppressed_flush_rows"] = int(
+                    state["suppressed_flush_rows"]
+                ) + int(suppressed_rows)
             state["latest_flush_completed"] = record
 
         latest_changed = ts is None or state.get("latest_ts") is None
@@ -3486,15 +2955,17 @@ class _CacheWarmupAccumulator:
                 "latest_ts": state.get("latest_ts"),
                 "event_types": dict(event_counts.most_common()),
                 "timeframes": dict(state["timeframes"].most_common()),
-                "symbols": {
-                    "count": len(state["symbols"]),
-                    "sample": [
-                        symbol
-                        for symbol, _count in state["symbols"].most_common(10)
-                    ],
-                }
-                if state.get("symbols")
-                else {},
+                "symbols": (
+                    {
+                        "count": len(state["symbols"]),
+                        "sample": [
+                            symbol
+                            for symbol, _count in state["symbols"].most_common(10)
+                        ],
+                    }
+                    if state.get("symbols")
+                    else {}
+                ),
                 "latest": state.get("latest"),
                 "warmup": {
                     key: value
@@ -3628,13 +3099,13 @@ class _FillRefreshAccumulator:
             data.get("coverage_reason_after"),
         )
         if data.get("coverage_ready_after") is True:
-            state["coverage_ready_after_true"] = int(
-                state["coverage_ready_after_true"]
-            ) + 1
+            state["coverage_ready_after_true"] = (
+                int(state["coverage_ready_after_true"]) + 1
+            )
         elif data.get("coverage_ready_after") is False:
-            state["coverage_ready_after_false"] = int(
-                state["coverage_ready_after_false"]
-            ) + 1
+            state["coverage_ready_after_false"] = (
+                int(state["coverage_ready_after_false"]) + 1
+            )
 
         for field in (
             "elapsed_ms",
@@ -3681,7 +3152,9 @@ class _FillRefreshAccumulator:
                 else Counter()
             )
             failed_count = int(statuses.get("failed") or 0)
-            latest = state.get("latest") if isinstance(state.get("latest"), dict) else {}
+            latest = (
+                state.get("latest") if isinstance(state.get("latest"), dict) else {}
+            )
             latest_status = latest.get("status") if isinstance(latest, dict) else None
             if failed_count:
                 failed_groups += 1
@@ -3895,7 +3368,9 @@ class _ForagerEmaReadinessAccumulator:
             self._add_counter(state["incumbent_symbols"], data.get("incumbent_symbols"))
             state["latest_selection"] = record
         elif event_type == "forager.feature_unavailable":
-            state["feature_unavailable_events"] = int(state["feature_unavailable_events"]) + 1
+            state["feature_unavailable_events"] = (
+                int(state["feature_unavailable_events"]) + 1
+            )
             for field, bucket in (
                 ("candidate_count", "feature_unavailable_candidate_counts"),
                 ("volume_count", "feature_unavailable_volume_counts"),
@@ -3904,13 +3379,15 @@ class _ForagerEmaReadinessAccumulator:
                 ("fetch_budget", "feature_unavailable_fetch_budget"),
             ):
                 self._add_number(state[bucket], data.get(field))
-            self._add_counter(state["feature_unavailable_symbols"], data.get("unavailable"))
+            self._add_counter(
+                state["feature_unavailable_symbols"], data.get("unavailable")
+            )
             state["latest_feature_unavailable"] = record
         elif event_type == "ema.unavailable":
             state["ema_unavailable_events"] = int(state["ema_unavailable_events"]) + 1
-            state["ema_optional_drop_count"] = int(state["ema_optional_drop_count"]) + int(
-                _non_negative_number(data.get("optional_drop_count")) or 0
-            )
+            state["ema_optional_drop_count"] = int(
+                state["ema_optional_drop_count"]
+            ) + int(_non_negative_number(data.get("optional_drop_count")) or 0)
             candidate_symbols = data.get("candidate_unavailable")
             unavailable_symbols = data.get("unavailable")
             state["ema_candidate_unavailable_count"] = int(
@@ -3939,7 +3416,9 @@ class _ForagerEmaReadinessAccumulator:
         elif event_type == "ema.fallback_used":
             state["ema_fallback_events"] = int(state["ema_fallback_events"]) + 1
             for field in _EMA_FALLBACK_NUMERIC_FIELDS:
-                state[field] = int(state[field]) + int(_non_negative_number(data.get(field)) or 0)
+                state[field] = int(state[field]) + int(
+                    _non_negative_number(data.get(field)) or 0
+                )
             for key in (
                 "close_recovered_symbols",
                 "close_fallback_symbols",
@@ -3960,9 +3439,15 @@ class _ForagerEmaReadinessAccumulator:
             if int(state.get("selection_events") or 0):
                 selection = {
                     "events": int(state.get("selection_events") or 0),
-                    "candidate_count": _number_summary(state["selection_candidate_counts"]),
-                    "eligible_count": _number_summary(state["selection_eligible_counts"]),
-                    "selected_count": _number_summary(state["selection_selected_counts"]),
+                    "candidate_count": _number_summary(
+                        state["selection_candidate_counts"]
+                    ),
+                    "eligible_count": _number_summary(
+                        state["selection_eligible_counts"]
+                    ),
+                    "selected_count": _number_summary(
+                        state["selection_selected_counts"]
+                    ),
                     "feature_unavailable_count": _number_summary(
                         state["selection_feature_unavailable_counts"]
                     ),
@@ -3971,8 +3456,12 @@ class _ForagerEmaReadinessAccumulator:
                     ),
                     "max_age_ms": _number_summary(state["selection_max_age_ms"]),
                     "fetch_budget": _number_summary(state["selection_fetch_budget"]),
-                    "selected_symbols": self._symbols_summary(state["selected_symbols"]),
-                    "incumbent_symbols": self._symbols_summary(state["incumbent_symbols"]),
+                    "selected_symbols": self._symbols_summary(
+                        state["selected_symbols"]
+                    ),
+                    "incumbent_symbols": self._symbols_summary(
+                        state["incumbent_symbols"]
+                    ),
                     "latest": state.get("latest_selection"),
                 }
             feature_unavailable = {}
@@ -3982,12 +3471,18 @@ class _ForagerEmaReadinessAccumulator:
                     "candidate_count": _number_summary(
                         state["feature_unavailable_candidate_counts"]
                     ),
-                    "volume_count": _number_summary(state["feature_unavailable_volume_counts"]),
+                    "volume_count": _number_summary(
+                        state["feature_unavailable_volume_counts"]
+                    ),
                     "log_range_count": _number_summary(
                         state["feature_unavailable_log_range_counts"]
                     ),
-                    "max_age_ms": _number_summary(state["feature_unavailable_max_age_ms"]),
-                    "fetch_budget": _number_summary(state["feature_unavailable_fetch_budget"]),
+                    "max_age_ms": _number_summary(
+                        state["feature_unavailable_max_age_ms"]
+                    ),
+                    "fetch_budget": _number_summary(
+                        state["feature_unavailable_fetch_budget"]
+                    ),
                     "unavailable_symbols": self._symbols_summary(
                         state["feature_unavailable_symbols"]
                     ),
@@ -3997,20 +3492,28 @@ class _ForagerEmaReadinessAccumulator:
             if int(state.get("ema_unavailable_events") or 0):
                 ema_unavailable = {
                     "events": int(state.get("ema_unavailable_events") or 0),
-                    "optional_drop_count": int(state.get("ema_optional_drop_count") or 0),
+                    "optional_drop_count": int(
+                        state.get("ema_optional_drop_count") or 0
+                    ),
                     "candidate_symbol_sample_count": int(
                         state.get("ema_candidate_unavailable_count") or 0
                     ),
                     "unavailable_symbol_sample_count": int(
                         state.get("ema_unavailable_count") or 0
                     ),
-                    "candidate_reasons": dict(state["ema_candidate_reasons"].most_common()),
-                    "unavailable_reasons": dict(state["ema_unavailable_reasons"].most_common()),
+                    "candidate_reasons": dict(
+                        state["ema_candidate_reasons"].most_common()
+                    ),
+                    "unavailable_reasons": dict(
+                        state["ema_unavailable_reasons"].most_common()
+                    ),
                     "optional_drop_reasons": dict(
                         state["ema_optional_drop_reasons"].most_common()
                     ),
                     "error_types": dict(state["ema_error_types"].most_common()),
-                    "candidate_symbols": self._symbols_summary(state["ema_candidate_symbols"]),
+                    "candidate_symbols": self._symbols_summary(
+                        state["ema_candidate_symbols"]
+                    ),
                     "unavailable_symbols": self._symbols_summary(
                         state["ema_unavailable_symbols"]
                     ),
@@ -4020,7 +3523,9 @@ class _ForagerEmaReadinessAccumulator:
             if int(state.get("ema_fallback_events") or 0):
                 ema_fallback = {
                     "events": int(state.get("ema_fallback_events") or 0),
-                    "close_recovered_count": int(state.get("close_recovered_count") or 0),
+                    "close_recovered_count": int(
+                        state.get("close_recovered_count") or 0
+                    ),
                     "close_fallback_count": int(state.get("close_fallback_count") or 0),
                     "forager_cached_fallback_count": int(
                         state.get("forager_cached_fallback_count") or 0
@@ -4069,15 +3574,14 @@ class _ForagerEmaReadinessAccumulator:
             groups,
             key=lambda item: (
                 -int(
-                    (
-                        item.get("ema_unavailable", {}) or {}
-                    ).get("candidate_symbol_sample_count", 0)
+                    (item.get("ema_unavailable", {}) or {}).get(
+                        "candidate_symbol_sample_count", 0
+                    )
                     or 0
                 ),
                 -int(
-                    (
-                        item.get("forager_selection", {}) or {}
-                    ).get("feature_unavailable_count", {})
+                    (item.get("forager_selection", {}) or {})
+                    .get("feature_unavailable_count", {})
                     .get("max", 0)
                     or 0
                 ),
@@ -4104,7 +3608,9 @@ class _ResourcePressureAccumulator:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
         if event_type != "health.summary":
             return
-        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        data = (
+            live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        )
         observed_values = {}
         for key in _RESOURCE_PRESSURE_FIELDS:
             value = _non_negative_number(data.get(key))
@@ -4168,7 +3674,10 @@ class _ResourcePressureAccumulator:
             p95 = numeric[p95_lower]
         else:
             p95_weight = p95_index - p95_lower
-            p95 = numeric[p95_lower] * (1.0 - p95_weight) + numeric[p95_upper] * p95_weight
+            p95 = (
+                numeric[p95_lower] * (1.0 - p95_weight)
+                + numeric[p95_upper] * p95_weight
+            )
 
         integral_series = all(value.is_integer() for value in numeric)
 
@@ -4200,14 +3709,20 @@ class _ResourcePressureAccumulator:
     ) -> dict[str, Any]:
         groups = []
         for bot, state in self.bots.items():
-            latest = state.get("latest") if isinstance(state.get("latest"), dict) else {}
+            latest = (
+                state.get("latest") if isinstance(state.get("latest"), dict) else {}
+            )
             latest_ts = state.get("latest_ts")
             latest_event_age_ms = None
             if report_ts_ms is not None and latest_ts is not None:
                 latest_event_age_ms = max(0, int(report_ts_ms) - int(latest_ts))
             fields = {}
             for key in _RESOURCE_PRESSURE_FIELDS:
-                values = state["values"].get(key) if isinstance(state.get("values"), dict) else []
+                values = (
+                    state["values"].get(key)
+                    if isinstance(state.get("values"), dict)
+                    else []
+                )
                 stats = self._field_stats(values or [], latest.get(key))
                 if stats:
                     fields[key] = stats
@@ -4232,18 +3747,37 @@ class _ResourcePressureAccumulator:
                 ),
             }
             groups.append(
-                {key: value for key, value in group.items() if value not in (None, {}, [])}
+                {
+                    key: value
+                    for key, value in group.items()
+                    if value not in (None, {}, [])
+                }
             )
         groups = sorted(
             groups,
             key=lambda item: (
-                -int(item.get("fields", {}).get("event_dropped_total", {}).get("latest", 0) or 0),
                 -int(
-                    item.get("fields", {}).get("event_sink_error_total", {}).get("latest", 0)
+                    item.get("fields", {})
+                    .get("event_dropped_total", {})
+                    .get("latest", 0)
                     or 0
                 ),
-                -int(item.get("fields", {}).get("event_degraded_count", {}).get("latest", 0) or 0),
-                -int(item.get("fields", {}).get("event_queue_depth", {}).get("latest", 0) or 0),
+                -int(
+                    item.get("fields", {})
+                    .get("event_sink_error_total", {})
+                    .get("latest", 0)
+                    or 0
+                ),
+                -int(
+                    item.get("fields", {})
+                    .get("event_degraded_count", {})
+                    .get("latest", 0)
+                    or 0
+                ),
+                -int(
+                    item.get("fields", {}).get("event_queue_depth", {}).get("latest", 0)
+                    or 0
+                ),
                 -int(item.get("fields", {}).get("rss_bytes", {}).get("max", 0) or 0),
                 str(item.get("bot") or ""),
             ),
@@ -4254,6 +3788,7 @@ class _ResourcePressureAccumulator:
             for group in groups
             if group.get("latest_event_age_ms") is not None
         ]
+
         def latest_field_number(
             group: dict[str, Any], field: str
         ) -> float | int | None:
@@ -4328,9 +3863,9 @@ class _ResourcePressureAccumulator:
             "total": sum(int(group.get("count") or 0) for group in groups),
             "bots": len(groups),
             "event_types": dict(self.event_types.most_common()),
-            "latest_event_queue_depth_max": max(latest_queue_depths)
-            if latest_queue_depths
-            else None,
+            "latest_event_queue_depth_max": (
+                max(latest_queue_depths) if latest_queue_depths else None
+            ),
             "latest_event_dropped_total_sum": dropped_total_latest_sum,
             "latest_event_sink_error_total_sum": sink_error_total_latest_sum,
             "latest_event_degraded_count_sum": degraded_count_latest_sum,
@@ -4495,7 +4030,9 @@ class _ShutdownLatencyAccumulator:
         if event_type not in _SHUTDOWN_EVENT_TYPES:
             return
         self.event_types[event_type] += 1
-        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        data = (
+            live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        )
         if event_type == "bot.stopping":
             self.shutdowns_started += 1
             return
@@ -4548,7 +4085,9 @@ class _ExchangeConfigRefreshAccumulator:
         if event_type not in _EXCHANGE_CONFIG_REFRESH_EVENT_TYPES:
             return
         self.event_index += 1
-        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        data = (
+            live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        )
         bot = _bot_key(row, live_event)
         status = str(live_event.get("status") or "unknown")
         reason_code = str(live_event.get("reason_code") or "unknown")
@@ -4745,14 +4284,15 @@ class _ExecutionTimingAccumulator:
     ) -> None:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
         if not (
-            event_type.startswith("execution.")
-            or event_type.startswith("order_wave.")
+            event_type.startswith("execution.") or event_type.startswith("order_wave.")
         ):
             return
         self.event_types[event_type] += 1
         bot = _bot_key(row, live_event)
         timestamp_ms = _record_ts(row)
-        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        data = (
+            live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        )
 
         if event_type == "order_wave.started":
             order_wave_id = _event_id_value(live_event, "order_wave_id")
@@ -4830,7 +4370,9 @@ class _ExecutionTimingAccumulator:
             if order_wave_id is None or timestamp_ms is None:
                 self.missing_id_counts["execution.confirmation"] += 1
                 return
-            self.confirmation_starts[(bot, int(cycle_scope), order_wave_id)] = int(timestamp_ms)
+            self.confirmation_starts[(bot, int(cycle_scope), order_wave_id)] = int(
+                timestamp_ms
+            )
             return
 
         if event_type in _EXECUTION_CONFIRMATION_TERMINALS:
@@ -4880,9 +4422,13 @@ class _ExecutionTimingAccumulator:
             "starts_seen": dict(sorted(self.starts_seen.items())),
             "terminals_seen": dict(sorted(self.terminals_seen.items())),
             "timing_observations": dict(sorted(self.timing_observations.items())),
-            "terminal_outcome_counts": dict(sorted(self.terminal_outcome_counts.items())),
+            "terminal_outcome_counts": dict(
+                sorted(self.terminal_outcome_counts.items())
+            ),
             "missing_id_counts": dict(sorted(self.missing_id_counts.items())),
-            "unpaired_terminal_counts": dict(sorted(self.unpaired_terminal_counts.items())),
+            "unpaired_terminal_counts": dict(
+                sorted(self.unpaired_terminal_counts.items())
+            ),
             "pending_start_counts": dict(sorted(pending_starts.items())),
             "total_groups": int(timing.get("total_groups") or 0),
             "groups_truncated": bool(timing.get("groups_truncated")),
@@ -5199,7 +4745,6 @@ def _operation_category(operation: Any) -> str:
         ("startup.", "startup"),
         ("state_refresh.", "state_refresh"),
         ("remote_call.", "remote_call"),
-        ("hsl_replay.", "hsl_replay"),
         ("cache_", "cache"),
         ("fills_refresh.", "fill_refresh"),
         ("forager_", "forager"),
@@ -5359,8 +4904,6 @@ def _trading_impact_for_event(event_type: str, operation: str) -> str:
         if "ccxt_fetch_ohlcv" in operation or "candle" in operation:
             return "blocks_indicator_readiness"
         return "exchange_io"
-    if event_type.startswith("hsl.replay."):
-        return "blocks_or_delays_hsl_readiness"
     if event_type == "cache.warmup_decision":
         return "blocks_indicator_readiness"
     if event_type == "cache.load.completed":
@@ -5445,21 +4988,6 @@ def _add_event_timings(
             operation=operation,
             value_ms=_non_negative_ms(data.get("elapsed_ms")),
             trading_impact=_trading_impact_for_event(event_type, operation),
-        )
-        return
-
-    if event_type.startswith("hsl.replay."):
-        stage = data.get("stage")
-        operation = "hsl_replay.elapsed"
-        if stage is not None:
-            operation = f"hsl_replay.{stage}.elapsed"
-        accumulator.add(
-            row=row,
-            live_event=live_event,
-            operation=operation,
-            value_ms=_elapsed_s_to_ms(data.get("elapsed_s")),
-            trading_impact=_trading_impact_for_event(event_type, operation),
-            timing_kind="cumulative",
         )
         return
 
@@ -5550,7 +5078,9 @@ def build_live_performance_report(
     max_event_file_count = max(0, int(max_event_files))
     max_event_file_count_per_bot = max(0, int(max_event_files_per_bot))
     if max_event_file_count and max_event_file_count_per_bot:
-        raise ValueError("max_event_files and max_event_files_per_bot are mutually exclusive")
+        raise ValueError(
+            "max_event_files and max_event_files_per_bot are mutually exclusive"
+        )
     event_window = {
         "enabled": bool(window_enabled),
         "since_ms": since_filter,
@@ -5634,9 +5164,11 @@ def build_live_performance_report(
             event_window["event_files_skipped_by_limit"] = int(skipped_by_file_limit)
         elif max_event_file_count_per_bot:
             event_window["event_files_before_limit"] = len(files)
-            files, skipped_by_file_limit, limit_groups = _limit_recent_event_files_per_bot(
-                files,
-                max_event_file_count_per_bot,
+            files, skipped_by_file_limit, limit_groups = (
+                _limit_recent_event_files_per_bot(
+                    files,
+                    max_event_file_count_per_bot,
+                )
             )
             event_window["event_files_skipped_by_limit"] = int(skipped_by_file_limit)
             event_window["event_file_limit_groups"] = int(limit_groups)
@@ -5676,7 +5208,6 @@ def build_live_performance_report(
         source_completeness=startup_source_completeness
     )
     report_ts_ms = utc_ms()
-    hsl_replay_profile = _HslReplayProfileAccumulator()
     cache_warmup = _CacheWarmupAccumulator()
     fill_refresh = _FillRefreshAccumulator()
     forager_ema_readiness = _ForagerEmaReadinessAccumulator()
@@ -5799,7 +5330,6 @@ def build_live_performance_report(
             live_event=live_event,
             source_complete=source_complete,
         )
-        hsl_replay_profile.add(row=row, live_event=live_event)
         cache_warmup.add(row=row, live_event=live_event)
         fill_refresh.add(row=row, live_event=live_event)
         forager_ema_readiness.add(row=row, live_event=live_event)
@@ -5924,10 +5454,6 @@ def build_live_performance_report(
         "startup_fill_cache_proof": startup_fill_cache_proof.to_dict(
             group_limit=group_limit
         ),
-        "hsl_replay_profile": hsl_replay_profile.to_dict(
-            group_limit=group_limit,
-            report_ts_ms=report_ts_ms,
-        ),
         "cache_warmup": cache_warmup.to_dict(group_limit=group_limit),
         "fill_refresh": fill_refresh.to_dict(group_limit=group_limit),
         "forager_ema_readiness": forager_ema_readiness.to_dict(group_limit=group_limit),
@@ -5975,8 +5501,12 @@ def summarize_live_performance_report(
     *,
     group_limit: int = SUMMARY_GROUP_LIMIT,
 ) -> dict[str, Any]:
-    performance = report.get("performance") if isinstance(report.get("performance"), dict) else {}
-    groups = performance.get("groups") if isinstance(performance.get("groups"), list) else []
+    performance = (
+        report.get("performance") if isinstance(report.get("performance"), dict) else {}
+    )
+    groups = (
+        performance.get("groups") if isinstance(performance.get("groups"), list) else []
+    )
     summary = {
         "ok": bool(report.get("ok")),
         "root": report.get("root"),
@@ -6000,13 +5530,17 @@ def summarize_live_performance_report(
     if isinstance(report.get("decision_boundary_lag"), dict):
         decision_lag = report["decision_boundary_lag"]
         decision_groups = (
-            decision_lag.get("groups") if isinstance(decision_lag.get("groups"), list) else []
+            decision_lag.get("groups")
+            if isinstance(decision_lag.get("groups"), list)
+            else []
         )
         summary["decision_boundary_lag"] = {
             "minute_ms": int(decision_lag.get("minute_ms") or 60_000),
             "cycles": int(decision_lag.get("cycles") or 0),
             "cycles_with_write": int(decision_lag.get("cycles_with_write") or 0),
-            "events_without_cycle_id": int(decision_lag.get("events_without_cycle_id") or 0),
+            "events_without_cycle_id": int(
+                decision_lag.get("events_without_cycle_id") or 0
+            ),
             "total_groups": int(decision_lag.get("total_groups") or 0),
             "groups_truncated": bool(decision_lag.get("groups_truncated")),
             "groups": decision_groups[: max(0, int(group_limit))],
@@ -6042,7 +5576,9 @@ def summarize_live_performance_report(
             "rust_calls_missing_snapshot": int(
                 input_staleness.get("rust_calls_missing_snapshot") or 0
             ),
-            "rust_calls_missing_ema": int(input_staleness.get("rust_calls_missing_ema") or 0),
+            "rust_calls_missing_ema": int(
+                input_staleness.get("rust_calls_missing_ema") or 0
+            ),
             "total_groups": int(input_staleness.get("total_groups") or 0),
             "groups_truncated": bool(input_staleness.get("groups_truncated")),
             "groups": staleness_groups[: max(0, int(group_limit))],
@@ -6080,17 +5616,6 @@ def summarize_live_performance_report(
         if len(proof_bots) > max(0, int(group_limit)):
             startup_fill_cache_proof["bots_truncated"] = True
         summary["startup_fill_cache_proof"] = startup_fill_cache_proof
-    if isinstance(report.get("hsl_replay_profile"), dict):
-        hsl_replay_profile = dict(report["hsl_replay_profile"])
-        hsl_groups = (
-            hsl_replay_profile.get("groups")
-            if isinstance(hsl_replay_profile.get("groups"), list)
-            else []
-        )
-        hsl_replay_profile["groups"] = hsl_groups[: max(0, int(group_limit))]
-        if len(hsl_groups) > max(0, int(group_limit)):
-            hsl_replay_profile["groups_truncated"] = True
-        summary["hsl_replay_profile"] = hsl_replay_profile
     if isinstance(report.get("cache_warmup"), dict):
         cache_warmup = dict(report["cache_warmup"])
         cache_groups = (
@@ -6228,8 +5753,10 @@ def summarize_live_performance_report(
         summary["operation_durations"] = {
             "total_groups": int(operation_durations.get("total_groups") or 0),
             "groups_truncated": bool(operation_durations.get("groups_truncated")),
-            "trading_impact_counts": operation_durations.get("trading_impact_counts") or {},
-            "blocking_scope_counts": operation_durations.get("blocking_scope_counts") or {},
+            "trading_impact_counts": operation_durations.get("trading_impact_counts")
+            or {},
+            "blocking_scope_counts": operation_durations.get("blocking_scope_counts")
+            or {},
             "operation_category_counts": operation_durations.get(
                 "operation_category_counts"
             )
@@ -6280,7 +5807,9 @@ def project_live_performance_report_sections(
         )
 
     projected = {
-        key: report[key] for key in _PERFORMANCE_REPORT_SECTION_BASE_KEYS if key in report
+        key: report[key]
+        for key in _PERFORMANCE_REPORT_SECTION_BASE_KEYS
+        if key in report
     }
     for section in requested:
         projected[section] = report[section]
