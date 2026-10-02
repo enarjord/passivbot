@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Bound CUDA multicoin suite memory by keeping only the active market dataset resident on the
+  GPU and spilling inactive immutable packing to temporary files. Release inactive proxies'
+  replay buffers even when they share that dataset. Preserve scenario grouping,
+  screening, and exact validation. Apply the 45% invariant-memory cap to initial free VRAM and
+  check current availability on every activation, avoiding failures from accumulating datasets
+  or repeatedly shrinking the budget after CUDA workspace allocation. Keep the original error
+  or interrupt when secondary cleanup fails.
+
 - Make HSL balance reporting passive and retryable: show one initial snapshot even when equity
   inputs are unavailable, retain failed publications for retry, and keep unchanged/raw-only
   updates off the console without adding fetches or affecting trading decisions.

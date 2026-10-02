@@ -811,6 +811,17 @@ GPU-specific settings live under `optimize.gpu`:
 The CPU-side NSGA-II proposal stage uses the same `optimize.pymoo.shared` crossover, mutation, and
 duplicate-elimination controls as the ordinary pymoo optimizer.
 
+CUDA multicoin suites keep one distinct market dataset resident in VRAM at a time. Immutable
+packed inputs for inactive datasets live in run-local files in the system temporary directory;
+compatible scenarios still share a dataset and can batch together. Inactive proxies sharing that
+dataset release their replay and output buffers when its representative proxy changes. Allow
+temporary disk space for all distinct packed datasets and upload time when switching between them.
+Normal completion,
+errors, and handled interruption remove these files. The existing 45% invariant-memory safety
+limit uses free VRAM before the first upload as its fixed run budget, reserving the remainder for
+replay and CUDA workspace. Each activation also checks currently free VRAM after releasing the
+previous dataset and its replay buffers. MPS suites retain their existing shared tensor allocation.
+
 - `population_size` is the NSGA-II proxy population. The general default is 1024 so long-history
   runs reach their first exact Rust validation batch four times sooner than the former 4096
   default. `null` or an omitted key requests this automatic default. On a detected Apple M3 family

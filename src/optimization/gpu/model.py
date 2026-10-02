@@ -928,8 +928,9 @@ def build_mps_multicoin_data(
     *,
     include_hourly_ranges: bool = True,
     limit_order_fill_buffer_pct: float = 0.0,
+    spill_dir=None,
 ):
-    """Pack compact multicoin inputs for the persistent Apple MPS kernel.
+    """Pack compact multicoin inputs for the shared MPS/CUDA kernel.
 
     Raw OHLCV stays float32 for unified-memory efficiency. Strict fill and
     order-book touch comparisons are encoded from the original float64 data as
@@ -1065,9 +1066,10 @@ def build_mps_multicoin_data(
         + (hour_log_ranges.nbytes if hour_log_ranges is not None else 0)
     )
     recommended = None
-    if gpu_device(torch) == "cuda":
-        recommended = int(torch.cuda.mem_get_info()[0])
-    else:
+    if gpu_device(torch) == "cuda" and spill_dir is None:
+        from optimization.gpu.residency import check_cuda_invariant_memory
+        check_cuda_invariant_memory(torch, invariant_bytes)
+    elif gpu_device(torch) != "cuda":
         recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
         if callable(recommended_fn):
             recommended = int(recommended_fn())
@@ -1078,22 +1080,27 @@ def build_mps_multicoin_data(
             f"the device's {recommended / 2**30:.2f} GiB recommended working set"
         )
 
-    def tensor(array, *, dtype=None):
+    def tensor(array, *, dtype=None, name):
+        if spill_dir is not None:
+            path = spill_dir / (name + ".npy")
+            np.save(path, array, allow_pickle=False)
+            return path
         return torch.as_tensor(array, dtype=dtype, device=gpu_device()).contiguous()
 
     first_day = int(timestamps[0] // 86_400_000)
     last_day = int(timestamps[-1] // 86_400_000)
     packed = {
-        "bars": tensor(bars, dtype=torch.float32),
-        "fill_ticks": tensor(fill_ticks, dtype=torch.int32),
-        "touch_ticks": tensor(touch_ticks, dtype=torch.int32),
-        "touch_nearest_ticks": tensor(touch_nearest_ticks, dtype=torch.int32),
-        "touch_min_qty_bits": tensor(touch_min_qty_bits, dtype=torch.int32),
+        "bars": tensor(bars, dtype=torch.float32, name="bars"),
+        "fill_ticks": tensor(fill_ticks, dtype=torch.int32, name="fill_ticks"),
+        "touch_ticks": tensor(touch_ticks, dtype=torch.int32, name="touch_ticks"),
+        "touch_nearest_ticks": tensor(touch_nearest_ticks, dtype=torch.int32, name="touch_nearest_ticks"),
+        "touch_min_qty_bits": tensor(touch_min_qty_bits, dtype=torch.int32, name="touch_min_qty_bits"),
         "touch_min_qty_relation": tensor(
             touch_min_qty_relation,
             dtype=torch.int8 if relation_dtype == np.int8 else torch.int32,
+            name="touch_min_qty_relation",
         ),
-        "coin_settings": tensor(coin_settings, dtype=torch.float32),
+        "coin_settings": tensor(coin_settings, dtype=torch.float32, name="coin_settings"),
         "n": candle_count,
         "n_coins": coin_count,
         "n_days": last_day - first_day + 1,
@@ -1103,5 +1110,7 @@ def build_mps_multicoin_data(
         "invariant_bytes": invariant_bytes,
     }
     if hour_log_ranges is not None:
-        packed["hour_log_ranges"] = tensor(hour_log_ranges, dtype=torch.float32)
+        packed["hour_log_ranges"] = tensor(
+            hour_log_ranges, dtype=torch.float32, name="hour_log_ranges"
+        )
     return packed
