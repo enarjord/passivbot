@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Avoid rebuilding minute-by-minute HSL valuation history for an observed flat coin/side
+  with no retained fills. This speeds up exact validation in single-side optimization suites
+  while preserving held-position protection, retained episode replay, and detailed HSL exports.
+
 - Improve default GPU auto tuning for long single-coin HSL optimizations: gather temporal
   evidence on both directional and one-sided replays, release inactive suite scratch, and size
   active history buffers from available memory. Trial CPU worker counts from completed exact

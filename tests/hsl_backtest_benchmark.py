@@ -41,6 +41,11 @@ def fixture_parser():
         help="Include per-minute HSL samples (requires --detailed)",
     )
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument(
+        "--include-inactive-hsl",
+        action="store_true",
+        help="Enable HSL on the unused short side to benchmark single-side suites",
+    )
     return parser
 
 
@@ -66,6 +71,12 @@ def build_fixture(options):
         policies.append(hsl["portfolio"])
     for policy in policies:
         policy["red_threshold"] = options.red_threshold
+    if options.include_inactive_hsl:
+        if options.mode != "coin":
+            raise ValueError("--include-inactive-hsl requires coin mode")
+        inactive = [hsl["sides"][1], *(pair[1] for pair in hsl["coins"].values())]
+        for policy in inactive:
+            policy.update(enabled=True, restart_after_red_policy="always")
     return args
 
 

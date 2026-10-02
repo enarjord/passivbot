@@ -155,7 +155,17 @@ impl Backtest<'_> {
                         revision: 0,
                     });
                 }
-                if position.size == 0.0 && fills.is_empty() && !self.coin_is_valid_at(idx, k) {
+                // An observed flat coin with no retained executions has no
+                // historical exposure to value. Feed the shared evaluator its
+                // explicit flat proof instead of building a minute price tape.
+                // Detailed exports keep that tape's historical diagnostics.
+                let compact_flat = matches!(mode, snapshot::Mode::Coin)
+                    && (self.backtest_params.metrics_only
+                        || !self.backtest_params.hsl_detailed_report);
+                if position.size == 0.0
+                    && fills.is_empty()
+                    && (compact_flat || !self.coin_is_valid_at(idx, k))
+                {
                     // Preserve explicit flat proof for a requested coin without
                     // manufacturing a mark for a market that has no quote.
                     if matches!(mode, snapshot::Mode::Coin) {
@@ -403,6 +413,144 @@ mod tests {
                 bt.process_close_fill_short(k, coin, &order, exec).unwrap()
             }
         }
+    }
+
+    #[test]
+    fn compact_flat_coin_omits_only_irrelevant_valuation_history() {
+        let data = candles(1500, 2);
+        let btc = Array1::from_elem(1500, 20_000.0);
+        for side in [PositionSide::Long, PositionSide::Short] {
+            let mut bt = make(&data, &btc);
+            bt.backtest_params.hsl_detailed_report = false;
+            // An execution on another coin/side is not this scope's history.
+            fill(&mut bt, 0, 1, PositionSide::Long, 1.0, 200.0);
+            let compact = bt
+                .hsl_inputs(1499, snapshot::Mode::Coin, Some(side), Some("C0"))
+                .unwrap();
+            assert!(compact.snapshot.pairs.is_empty());
+            let flat = compact.snapshot.flat_coin.as_ref().unwrap();
+            assert_eq!(flat.pside, side);
+            assert_eq!(flat.position_at, compact.snapshot.now);
+            assert_eq!(flat.fills_at, Some(compact.snapshot.now));
+            assert_eq!(flat.history_start, compact.snapshot.start);
+            bt.backtest_params.hsl_detailed_report = true;
+            let detailed = bt
+                .hsl_inputs(1499, snapshot::Mode::Coin, Some(side), Some("C0"))
+                .unwrap();
+            assert!(detailed.snapshot.flat_coin.is_none());
+            assert!(detailed.snapshot.pairs[0].prices.len() > 1000);
+            bt.backtest_params.metrics_only = true;
+            assert!(bt
+                .hsl_inputs(1499, snapshot::Mode::Coin, Some(side), Some("C0"))
+                .unwrap()
+                .snapshot
+                .pairs
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn compact_flat_coin_preserves_retained_fills_and_expires_old_episodes() {
+        let data = candles(1500, 1);
+        let btc = Array1::from_elem(1500, 20_000.0);
+        for side in [PositionSide::Long, PositionSide::Short] {
+            let mut bt = make(&data, &btc);
+            bt.backtest_params.hsl_detailed_report = false;
+            let direction = if side == PositionSide::Long {
+                1.0
+            } else {
+                -1.0
+            };
+            fill(&mut bt, 0, 0, side, direction, 100.0);
+            fill(&mut bt, 1, 0, side, -direction, 100.0 - 20.0 * direction);
+            let retained = bt
+                .hsl_inputs(100, snapshot::Mode::Coin, Some(side), Some("C0"))
+                .unwrap();
+            assert!(retained.snapshot.flat_coin.is_none());
+            assert_eq!(retained.snapshot.pairs[0].fills.len(), 2);
+            assert!(!retained.snapshot.pairs[0].prices.is_empty());
+            let expired = bt
+                .hsl_inputs(1499, snapshot::Mode::Coin, Some(side), Some("C0"))
+                .unwrap();
+            assert!(expired.snapshot.flat_coin.is_some());
+            let evaluate = |input: Inputs| {
+                crate::hsl_evaluator::evaluate_for_simulator(crate::hsl_evaluator::Input {
+                    snapshot: input.snapshot,
+                    slots: 1,
+                    span: 1.5,
+                    threshold: 0.01,
+                    cooldown_ms: 60_000,
+                    restart: crate::hsl_controller::Restart::Never,
+                })
+                .unwrap()
+            };
+            let compact = evaluate(expired);
+            bt.backtest_params.hsl_detailed_report = true;
+            let detailed = evaluate(
+                bt.hsl_inputs(1499, snapshot::Mode::Coin, Some(side), Some("C0"))
+                    .unwrap(),
+            );
+            assert_eq!(
+                serde_json::to_value(&compact.decision).unwrap(),
+                serde_json::to_value(&detailed.decision).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(&compact.events).unwrap(),
+                serde_json::to_value(&detailed.events).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn compact_flat_proof_never_hides_current_exposure_or_invalid_balance() {
+        let data = candles(10, 1);
+        let btc = Array1::from_elem(10, 20_000.0);
+        let mut bt = make(&data, &btc);
+        bt.backtest_params.hsl_detailed_report = false;
+        // Missing retained executions cannot turn observed exposure into flatness.
+        bt.positions.short[0].size = -1.0;
+        bt.positions.short[0].price = 110.0;
+        let held = bt
+            .hsl_inputs(
+                8,
+                snapshot::Mode::Coin,
+                Some(PositionSide::Short),
+                Some("C0"),
+            )
+            .unwrap();
+        assert!(held.snapshot.flat_coin.is_none());
+        assert_eq!(held.snapshot.pairs[0].position.size, -1.0);
+        assert!(!held.snapshot.pairs[0].prices.is_empty());
+        bt.coin_last_valid_idx[0] = 1;
+        assert!(bt
+            .hsl_inputs(
+                8,
+                snapshot::Mode::Coin,
+                Some(PositionSide::Short),
+                Some("C0")
+            )
+            .is_err());
+        bt.positions.short[0].size = 0.0;
+        bt.balance.usd_total_balance = f64::NAN;
+        let flat = bt
+            .hsl_inputs(
+                8,
+                snapshot::Mode::Coin,
+                Some(PositionSide::Short),
+                Some("C0"),
+            )
+            .unwrap();
+        assert!(
+            crate::hsl_evaluator::evaluate_for_simulator(crate::hsl_evaluator::Input {
+                snapshot: flat.snapshot,
+                slots: 0,
+                span: 1.5,
+                threshold: 0.01,
+                cooldown_ms: 0,
+                restart: crate::hsl_controller::Restart::Always,
+            })
+            .is_err()
+        );
     }
 
     #[test]

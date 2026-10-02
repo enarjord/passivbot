@@ -331,6 +331,34 @@ def test_default_report_preserves_trading_metrics_and_events_without_samples(mod
 
 
 @pytest.mark.parametrize("detailed", [False, True])
+@pytest.mark.parametrize("inactive", ["long", "short"])
+def test_single_side_hsl_suite_preserves_full_results_and_optimizer_metrics(inactive, detailed):
+    args = base_payload("coin")
+    # Single-side suite overrides leave the unused side's HSL policy enabled.
+    side_index = 0 if inactive == "long" else 1
+    for pair in args[2]:
+        pair[inactive]["total_wallet_exposure_limit"] = 0.0
+        pair[inactive]["n_positions"] = 0
+    hsl = args[-1]["equity_hard_stop_loss"]
+    for policy in [hsl["sides"][side_index], *(pair[side_index] for pair in hsl["coins"].values())]:
+        policy.update(enabled=True, restart_after_red_policy="always")
+    # The reference path retains all price diagnostics and per-minute samples.
+    args[-1]["hsl_detailed_report"] = True
+    reference = run(args)
+    args[-1]["hsl_detailed_report"] = detailed
+    actual = run(args)
+    for got, expected in zip(actual[:4], reference[:4]):
+        np.testing.assert_equal(got, expected)
+    def without_samples(report):
+        return {k: v for k, v in report.items() if k not in {"detailed", "samples"}}
+    assert without_samples(actual[4]["hsl"]) == without_samples(reference[4]["hsl"])
+    args[-1]["metrics_only"] = True
+    metrics = run(args)
+    assert metrics[2:4] == reference[2:4]
+    assert metrics[4]["hsl"]["summary"] == reference[4]["hsl"]["summary"]
+
+
+@pytest.mark.parametrize("detailed", [False, True])
 def test_report_option_roundtrips_and_is_strictly_boolean(detailed):
     from config import prepare_config
     from config_utils import strip_config_metadata
