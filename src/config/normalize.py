@@ -26,7 +26,7 @@ from .migrations import (
 from .optimize_bounds import prune_inactive_optimize_strategy_bounds
 from .scoring import normalize_scoring_config
 from .schema import get_template_config
-from .hsl_revised import normalization_template, normalize_revised
+from .hsl import normalization_template, normalize_hsl, require_current_hsl_schema
 from .strategy import (
     prune_inactive_strategy_subtrees,
     reject_legacy_flat_strategy_fields,
@@ -57,24 +57,39 @@ def normalize_config(
     flavor = detect_flavor(config, {})
     source_payload = config["config"] if flavor == "nested_current" else config
     optimize_suite_defined = (
-        isinstance(source_payload.get("optimize"), dict) and "suite" in source_payload["optimize"]
+        isinstance(source_payload.get("optimize"), dict)
+        and "suite" in source_payload["optimize"]
     )
     raw_optimize_limits_present = (
-        isinstance(source_payload.get("optimize"), dict) and "limits" in source_payload["optimize"]
+        isinstance(source_payload.get("optimize"), dict)
+        and "limits" in source_payload["optimize"]
     )
     raw_optimize_limits = deepcopy(source_payload.get("optimize", {}).get("limits"))
     raw_optimize_snapshot = (
-        deepcopy(source_payload.get("optimize")) if isinstance(source_payload.get("optimize"), dict) else {}
+        deepcopy(source_payload.get("optimize"))
+        if isinstance(source_payload.get("optimize"), dict)
+        else {}
     )
-    coin_sources_input = deepcopy(source_payload.get("backtest", {}).get("coin_sources"))
+    coin_sources_input = deepcopy(
+        source_payload.get("backtest", {}).get("coin_sources")
+    )
     live_coin_sources_input = {}
+    require_current_hsl_schema(source_payload, base_config_path=base_config_path)
     template = normalization_template(get_template_config(), source_payload)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     if flavor == "nested_current" and isinstance(config.get("config"), dict):
         source_sections = set(config["config"])
     else:
         source_sections = set(config) if isinstance(config, dict) else set()
-    for section in ("backtest", "bot", "coin_overrides", "live", "logging", "monitor", "optimize"):
+    for section in (
+        "backtest",
+        "bot",
+        "coin_overrides",
+        "live",
+        "logging",
+        "monitor",
+        "optimize",
+    ):
         if section in result and section not in source_sections:
             tracker.add([section], result[section])
     for path in ("backtest", "bot", "live", "optimize"):
@@ -99,7 +114,9 @@ def normalize_config(
             "logging": {},
             "optimize": deepcopy(raw_optimize_snapshot),
         }
-        apply_backward_compatibility_renames(raw_optimize_compat, verbose=False, tracker=None)
+        apply_backward_compatibility_renames(
+            raw_optimize_compat, verbose=False, tracker=None
+        )
         from .migrations.entry_ema import migrate_entry_ema_tree
         from .migrations.entry_cooldown import migrate_entry_cooldown_tree
 
@@ -121,7 +138,7 @@ def normalize_config(
         tracker=tracker,
         explicit_bounds=raw_optimize_snapshot.get("bounds", {}),
     )
-    normalize_revised(result, template, verbose=verbose)
+    normalize_hsl(result, template, verbose=verbose)
     result["bot"] = format_bot_config(
         result["bot"],
         live_cfg=result["live"],
@@ -180,7 +197,7 @@ def normalize_config(
             raw_optimize_limits_present=raw_optimize_limits_present,
         )
 
-    normalize_revised(result, template, verbose=verbose)
+    normalize_hsl(result, template, verbose=verbose)
     result["_transform_log"] = existing_log
     if raw_snapshot is not None and "_raw" not in result:
         result["_raw"] = deepcopy(raw_snapshot)

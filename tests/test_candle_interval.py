@@ -72,14 +72,17 @@ def test_aggregate_candles_error_on_insufficient():
         aggregate_candles(candles, 5)
 
 
-@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
+@pytest.mark.skipif(
+    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
+)
 def test_backtest_with_candle_interval():
     from backtest import build_backtest_payload, execute_backtest
     from config_utils import load_config
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"),
+        verbose=False,
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
@@ -93,7 +96,9 @@ def test_backtest_with_candle_interval():
 
     n_minutes = 60
     start_ts = 1609459200000  # 2021-01-01 00:00:00 UTC
-    timestamps = np.arange(start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64)
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
     hlcvs = np.zeros((n_minutes, 1, 4), dtype=np.float64)
     for i in range(n_minutes):
         base = 100 + i * 0.1
@@ -175,7 +180,8 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"),
+        verbose=False,
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
@@ -193,7 +199,9 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
 
     n_minutes = 60
     start_ts = 1609459200000
-    timestamps = np.arange(start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64)
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
     hlcvs = np.zeros((n_minutes, 1, 4), dtype=np.float64)
     btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
     mss = {
@@ -223,8 +231,12 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
         btc_usd_prices,
         timestamps,
     )
-    assert payload.bot_params_list[0]["long"]["hsl_ema_span_minutes"] == pytest.approx(1.0)
-    assert payload.bot_params_list[0]["short"]["hsl_ema_span_minutes"] == pytest.approx(1.0)
+    assert payload.backtest_params["equity_hard_stop_loss"]["sides"][0][
+        "ema_span_minutes"
+    ] == pytest.approx(1.0)
+    assert payload.backtest_params["equity_hard_stop_loss"]["sides"][1][
+        "ema_span_minutes"
+    ] == pytest.approx(1.0)
 
 
 def test_build_backtest_payload_normalizes_integral_float_candle_interval():
@@ -244,7 +256,9 @@ def test_build_backtest_payload_normalizes_integral_float_candle_interval():
 
     n_minutes = 60
     start_ts = 1609459200000
-    timestamps = np.arange(start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64)
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
     hlcvs = np.zeros((n_minutes, 1, 4), dtype=np.float64)
     btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
     mss = {
@@ -295,7 +309,9 @@ def test_build_backtest_payload_rejects_fractional_candle_interval():
 
     n_minutes = 60
     start_ts = 1609459200000
-    timestamps = np.arange(start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64)
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
     hlcvs = np.zeros((n_minutes, 1, 4), dtype=np.float64)
     btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
     mss = {
@@ -334,7 +350,8 @@ def test_backtest_rejects_invalid_liquidation_threshold():
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"),
+        verbose=False,
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
@@ -348,7 +365,9 @@ def test_backtest_rejects_invalid_liquidation_threshold():
 
     n_minutes = 60
     start_ts = 1609459200000
-    timestamps = np.arange(start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64)
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
     hlcvs = np.zeros((n_minutes, 1, 4), dtype=np.float64)
     btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
     mss = {
@@ -371,7 +390,8 @@ def test_backtest_rejects_invalid_liquidation_threshold():
     }
 
     with pytest.raises(
-        ValueError, match=r"backtest\.liquidation_threshold must satisfy 0\.0 <= x < 1\.0"
+        ValueError,
+        match=r"backtest\.liquidation_threshold must satisfy 0\.0 <= x < 1\.0",
     ):
         build_backtest_payload(
             hlcvs,

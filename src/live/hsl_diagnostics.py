@@ -1,0 +1,318 @@
+"""Passive, bounded views of HSL observations; never execution authority."""
+
+from collections import Counter
+from copy import deepcopy
+import hashlib
+import json
+import logging
+
+from live.diagnostic_safety import bounded_exception_type
+from live.event_bus import EventTags, EventTypes
+from live.event_emitters import _safe_emit, _console_sink_error_count
+
+SCOPE_LIMIT = 128
+SAMPLE_LIMIT = 3
+
+
+def _account_unavailable(bot, now):
+    ledger = getattr(bot, "freshness_ledger", None)
+    pending = getattr(bot, "_authoritative_pending_confirmations", {})
+    max_age = bot._live_market_snapshot_max_age_ms()
+    missing = []
+    for name in ("balance", "positions", "open_orders"):
+        state = getattr(ledger, "surfaces", {}).get(name)
+        if (
+            state is None
+            or state.updated_ms <= 0
+            or not 0 <= now - state.updated_ms <= max_age
+            or int(pending.get(name, 0)) > state.epoch
+        ):
+            missing.append(name)
+    return missing
+
+
+def _row(scope, *, action=None, reason=None, decision=None):
+    native = json.loads(decision.payload)["decision"] if decision is not None else None
+    estimates = list(decision.reasons) if decision is not None else []
+    return dict(
+        signal_mode=scope.mode,
+        symbol=scope.symbol,
+        pside=scope.pside,
+        action=action,
+        tier=(
+            None
+            if reason
+            else (
+                "inactive"
+                if action is None
+                else "green" if action == "normal" else "red"
+            )
+        ),
+        availability="unavailable" if reason else "available",
+        unavailable_reason=reason,
+        estimated=bool(estimates),
+        estimates=estimates[:32],
+        omitted_estimates=max(0, len(estimates) - 32),
+        raw=None if native is None else native["raw"],
+        ema=None if native is None else native["ema"],
+        score=None if native is None else min(native["raw"], native["ema"]),
+        threshold=None if decision is None else decision.threshold,
+        red_at=None if native is None else native["red_at"],
+        flat_at=None if native is None else native["flat_at"],
+    )
+
+
+def _raw_pending(row):
+    return (
+        row["action"] == "normal"
+        and row["raw"] is not None
+        and row["raw"] > row["threshold"]
+        and row["score"] <= row["threshold"]
+    )
+
+
+def _priority(row):
+    rank = (
+        0
+        if row["tier"] == "red"
+        else (
+            1
+            if row["availability"] == "unavailable"
+            else 2 if _raw_pending(row) else 3 if row["estimated"] else 4
+        )
+    )
+    return rank, row["signal_mode"], row["pside"] or "", row["symbol"] or ""
+
+
+def record(bot, wave):
+    """Report a completed protective wave and emit bounded status changes."""
+    try:
+        from utils import utc_ms
+
+        rows = [_row(d.scope, action=d.action, decision=d) for d in wave.decisions]
+        rows += [_row(item.scope, reason=item.reason) for item in wave.unavailable]
+        rows.sort(key=_priority)
+        counts = Counter(row["tier"] or "unavailable" for row in rows)
+        counts["estimated"] = sum(row["estimated"] for row in rows)
+        counts = {
+            key: counts[key]
+            for key in ("green", "red", "inactive", "unavailable", "estimated")
+        }
+        stamps = [wave.captured_ms, wave.position_observed_ms, *wave.mark_observed_ms]
+        ledger = getattr(bot, "freshness_ledger", None)
+        stamps += [
+            state.updated_ms
+            for name, state in getattr(ledger, "surfaces", {}).items()
+            if name in ("balance", "open_orders")
+        ]
+        observation = dict(
+            engine="hsl",
+            schema_version=1,
+            signal_mode=bot.config["live"]["hsl_signal_mode"],
+            captured_at_ms=wave.captured_ms,
+            input_expires_at_ms=min(stamps)
+            + int(bot._live_market_snapshot_max_age_ms()),
+            account_generation=wave.generation,
+            counts=counts,
+            scope_count=len(rows),
+            action_counts=dict(
+                Counter(row["action"] for row in rows if row["action"] is not None)
+            ),
+            raw_pending_scope_count=sum(_raw_pending(row) for row in rows),
+            # Existing risk reports consume one aggregate tier. Keep RED visible
+            # without fabricating a portfolio score from distinct coin signals.
+            tier=(
+                "red"
+                if counts["red"]
+                else (
+                    "unavailable"
+                    if counts["unavailable"]
+                    else "green" if counts["green"] else "inactive"
+                )
+            ),
+            scopes=rows[:SCOPE_LIMIT],
+            omitted_scopes=max(0, len(rows) - SCOPE_LIMIT),
+        )
+        # Human materiality ignores estimator-reason churn, numeric movement and
+        # cycle timestamps. Include every scope before either payload sample cap:
+        # equal aggregate counts must not hide a different affected position.
+        observation["console_state"] = hashlib.sha256(
+            json.dumps(
+                sorted(
+                    [
+                        (
+                            r["signal_mode"],
+                            r["symbol"] or "",
+                            r["pside"] or "",
+                            r["action"] or "",
+                            r["tier"] or "",
+                            r["availability"],
+                            r["unavailable_reason"] or "",
+                            r["estimated"],
+                        )
+                        for r in rows
+                    ]
+                ),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        scope_signature = hashlib.sha256(
+            json.dumps(
+                [
+                    (
+                        r["signal_mode"],
+                        r["symbol"],
+                        r["pside"],
+                        r["action"],
+                        r["availability"],
+                        r["unavailable_reason"],
+                        r["estimates"],
+                        _raw_pending(r),
+                    )
+                    for r in rows
+                ],
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        # A skipped account-refresh wave may let the previous observation expire.
+        # Preserve the transition in durable history, retaining its compact
+        # all-scope signature; this diagnostic state is never execution authority.
+        previous = getattr(bot, "_hsl_diagnostic_event", None)
+        prior = snapshot(bot, now_ms=int(utc_ms())) if previous is not None else None
+        bot._hsl_diagnostic_observation = observation
+        bot._hsl_diagnostic_failed = False
+        replacement = snapshot(bot, now_ms=int(utc_ms()))
+        if prior is not None and "captured_at_ms" in prior:
+            # Only classify expiry of an already replaced, unchanged GREEN/inactive
+            # observation. Actual current-input outages, RED and scope changes stay
+            # immediate. Both events remain durable with their original severity.
+            if (
+                prior["observation_status"] == "stale"
+                and replacement["observation_status"] == "current"
+                and prior.get("console_state") == replacement.get("console_state")
+                and not prior["counts"]["red"]
+                and not prior["counts"]["unavailable"]
+            ):
+                prior["console_replaced_observation"] = True
+            _emit_status(bot, prior, previous[0][0])
+        # Recheck after the prior sink write: a slow sink must not fabricate freshness.
+        _emit_status(bot, snapshot(bot, now_ms=int(utc_ms())), scope_signature)
+    except Exception as exc:
+        # Optional diagnostics must never inhibit or fabricate a trading decision.
+        bot._hsl_diagnostic_failed = True
+        logging.debug(
+            "[risk] HSL diagnostic projection failed | error_type=%s",
+            bounded_exception_type(exc),
+        )
+
+
+def _emit_status(bot, data, scope_signature):
+    signature = (
+        scope_signature,
+        data["observation_status"],
+        tuple(data["account_unavailable"]),
+    )
+    previous = getattr(bot, "_hsl_diagnostic_event", None)
+    if previous is not None and previous[0] == signature:
+        return
+    bot._hsl_diagnostic_event = (signature, data["captured_at_ms"] + data["age_ms"])
+    counts = data["counts"]
+    unavailable = bool(counts["unavailable"] or data["observation_status"] != "current")
+    data["scopes"] = data["scopes"][:SAMPLE_LIMIT]
+    data["omitted_scopes"] = max(0, data["scope_count"] - SAMPLE_LIMIT)
+    console_errors_before = _console_sink_error_count(bot)
+    emitted = _safe_emit(
+        bot,
+        EventTypes.HSL_STATUS,
+        component="risk.hsl",
+        tags=(EventTags.RISK, EventTags.SUMMARY),
+        level="warning" if unavailable else "info",
+        status="degraded" if unavailable or counts["estimated"] else "succeeded",
+        cycle_id=getattr(bot, "_live_event_current_cycle_id", None),
+        data=data,
+    )
+    console_errors_after = _console_sink_error_count(bot)
+    console_failed = (
+        console_errors_before is not None
+        and console_errors_after is not None
+        and console_errors_after > console_errors_before
+    )
+    if emitted is None or console_failed:
+        logging.log(
+            (
+                logging.DEBUG
+                if data.get("console_replaced_observation")
+                else logging.WARNING if unavailable else logging.INFO
+            ),
+            "[risk] HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d",
+            data["signal_mode"],
+            data["observation_status"],
+            counts["green"],
+            counts["red"],
+            counts["inactive"],
+            counts["unavailable"],
+            counts["estimated"],
+        )
+
+
+def snapshot(bot, *, now_ms):
+    """Read prior observations without creating owners, refreshing inputs or evaluating risk."""
+    try:
+        observed = getattr(bot, "_hsl_diagnostic_observation", None)
+        if observed is None:
+            return dict(
+                engine="hsl",
+                schema_version=1,
+                signal_mode=bot.config["live"]["hsl_signal_mode"],
+                observation_status=(
+                    "diagnostic_unavailable"
+                    if getattr(bot, "_hsl_diagnostic_failed", False)
+                    else "not_evaluated"
+                ),
+                scopes=[],
+                counts={},
+                scope_count=0,
+                omitted_scopes=0,
+            )
+        result = deepcopy(observed)
+        missing = _account_unavailable(bot, now_ms)
+        result["account_unavailable"] = missing
+        age = now_ms - observed["captured_at_ms"]
+        stale_reasons = []
+        if age < 0:
+            stale_reasons.append("clock_before_capture")
+        if now_ms > observed["input_expires_at_ms"]:
+            stale_reasons.append("input_expired")
+        if missing:
+            stale_reasons.append("account_unavailable")
+        if observed["account_generation"] != int(
+            getattr(bot, "_account_invalidation_generation", 0)
+        ):
+            stale_reasons.append("account_generation_changed")
+        stale = bool(stale_reasons)
+        result["stale_reasons"] = stale_reasons
+        result["age_ms"] = max(0, age)
+        result["observation_status"] = (
+            "diagnostic_unavailable"
+            if getattr(bot, "_hsl_diagnostic_failed", False)
+            else "stale" if stale else "current"
+        )
+        # Older bounded report/preview consumers retain only the aggregate tier.
+        # Keep last RED attention, but never present stale GREEN as current GREEN.
+        if result["observation_status"] != "current" and result["tier"] != "red":
+            result["tier"] = result["observation_status"]
+        return result
+    except Exception as exc:
+        logging.debug(
+            "[risk] HSL diagnostic read failed | error_type=%s",
+            bounded_exception_type(exc),
+        )
+        return dict(
+            engine="hsl",
+            schema_version=1,
+            observation_status="diagnostic_unavailable",
+            scopes=[],
+            counts={},
+            scope_count=0,
+            omitted_scopes=0,
+        )

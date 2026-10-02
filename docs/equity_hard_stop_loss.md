@@ -1,407 +1,172 @@
 # Equity Hard Stop Loss
 
-This guide describes `live.hsl_engine=legacy`, the default. For the opt-in engine, see
-[Revised Equity Hard Stop Loss](hsl_revised.md), including its different signal,
-portfolio controller, finite-window restart and best-effort history policies.
+HSL has one implementation across live execution, the offline fake runner, backtests,
+CPU optimization and GPU optimization. Use `passivbot tool migrate-hsl` to prepare
+older configurations and re-backtest their thresholds before use.
 
-Passivbot includes a side-specific Equity Hard Stop Loss (HSL) that acts as a circuit breaker when strategy drawdown becomes too severe.
+## Signals and scopes
 
-HSL is configured separately for each `pside`:
+All three modes use the same reconstructed equity-peak drawdown and EMA calculation.
+They differ in which positions contribute and which positions a RED signal closes.
 
-1. `bot.long.hsl.*`
-2. `bot.short.hsl.*`
+| `live.hsl_signal_mode` | Controller and RED scope | Current budget | Policy configuration |
+|---|---|---|---|
+| `coin` | One symbol and position side | Raw balance / that side's applicable position-slot count | `bot.long.hsl`, `bot.short.hsl`; coin overrides allowed |
+| `pside` | All positions on one side | Raw balance | `bot.long.hsl`, `bot.short.hsl` |
+| `unified` | One controller for the whole portfolio | Raw balance | Explicit `bot.hsl` |
 
-Signal construction is selected globally with `live.hsl_signal_mode`:
+Unified protection includes exposure on either side even if ordinary entries on that
+side are disabled. It does not inherit policy from the long or short blocks. Coin mode
+never substitutes a divisor for an inactive zero-slot side. Live coin budgets use configured
+slots; a backtest's explicitly enabled tradability-aware slot policy remains applicable.
+TWEL does not multiply the HSL budget.
 
-1. `unified`
-   - long and short keep separate HSL controllers
-   - both controllers are fed from the same combined account-level strategy signal
-2. `pside`
-   - long HSL uses long realized/unrealized strategy PnL
-   - short HSL uses short realized/unrealized strategy PnL
-3. `coin` (default)
-   - each `coin+pside` has its own HSL controller
-   - RED panic-closes only the affected `coin+pside`
-   - drawdown is measured from realized PnL cumsum peak inside `live.pnls_max_lookback_days` plus current UPnL, divided by the configured slot budget
-
-### Choosing a Signal Mode
-
-`coin` is the default symbol-local stop mode. `unified` remains available when account-level HSL behavior is preferred. In `unified` mode:
-
-1. HSL reacts to whole-account strategy drawdown
-2. long and short still keep separate thresholds, cooldowns, and halts
-3. account-level stress on either side can influence both HSL controllers
-4. it avoids side-local churn where one side repeatedly halts while the other keeps adding account risk
-
-Use `unified` when:
-
-1. the strategy is intended to behave as one combined book
-2. long and short share one capital pool
-3. you want portfolio/account-level drawdown control
-
-`pside` is a specialized side-local signal mode:
-
-1. long HSL reacts only to long deterioration
-2. short HSL reacts only to short deterioration
-3. one profitable `pside` cannot hide a weak one
-4. side-specific `*_strategy_eq_long` and `*_strategy_eq_short` metrics are easier to interpret
-
-Use `pside` when:
-
-1. long and short are intentionally independent strategies
-2. one `pside` should be allowed to halt while the other continues
-3. you optimize and deploy with `live.hsl_signal_mode = "pside"` consistently
-
-`coin` is a symbol-local stop mode:
-
-1. realized net PnL is tracked per `coin+pside` inside `live.pnls_max_lookback_days`
-2. the peak realized cumsum in that window is compared to `last_realized_cumsum + current_upnl`
-3. the resulting drawdown is divided by `balance / config.n_positions`; TWEL
-   controls whether the side is active but does not scale HSL sensitivity
-4. live uses `config.n_positions` directly, not runtime effective position count, so adding/removing active symbols does not silently change HSL sensitivity
-5. RED affects only the stopped `coin+pside`; other coins on the same `pside` continue normally
-
-Use `coin` when one symbol should be stopped because it has high adverse UPnL or has recently realized heavy losses through unstuck/WEL enforcement, while unrelated symbols should keep trading.
-
-### Per-coin HSL configuration
-
-When the main config uses `live.hsl_signal_mode = "coin"`, any field in
-`bot.<side>.hsl.*` may be overridden for an individual coin through `coin_overrides`. This includes
-enablement, red and tier thresholds, EMA span, cooldown and restart policy, orange-tier behavior,
-and panic-close execution type. Live supervision and Rust backtests both consume the resolved
-per-coin values. Coins without an HSL patch inherit the main side config.
-
-The signal mode remains one global setting. Per-coin HSL patches are rejected in `pside` and
-`unified` modes, and a signal-mode value inside an override cannot switch or authorize the patch.
-See [Coin Overrides](coin_overrides.md) for the full field list, precedence, and examples.
-
-This is separate from auto-unstuck and the realized-loss gate:
-
-1. Auto-unstuck gradually trims stuck positions while continuing to trade.
-2. The realized-loss gate blocks loss-realizing closes below a configured balance floor.
-3. HSL is the last-resort supervisory stop. It can switch one `pside` into reduced-risk modes and, at RED, force panic exits and halt only that `pside`.
-
-See also:
-
-1. [Risk Management](risk_management.md)
-2. [Configuration](configuration.md)
-3. [HSL Reference](equity_hard_stop_loss_reference.md)
-4. [HSL Cooldown Contracts](equity_hard_stop_loss_cooldown_contracts.md)
-
-## How It Works
-
-HSL uses a collateral-FX-robust drawdown metric based on reconstructed strategy PnL rather than raw exchange equity peaks.
-
-High level for each `pside` controller:
-
-1. Reconstruct the HSL signal according to `live.hsl_signal_mode`
-2. Track a rolling rebased `peak_strategy_equity_pside`
-3. Compute raw drawdown and an EMA-smoothed drawdown
-4. Use `drawdown_score = min(drawdown_raw, drawdown_ema)` as the trigger metric
-
-In `coin` mode, the same tier/EMA/cooldown machinery is fed a coin-local drawdown ratio instead
-of a rebased strategy-equity curve:
+For each scope, add realized cashflows and unrealized PnL in currency before computing
+drawdown. Within the configured lookback and current reset episode:
 
 ```text
-peak_realized = max(realized_pnl_cumsum for coin+pside inside lookback)
-last_realized = last(realized_pnl_cumsum for coin+pside inside lookback)
-drawdown_usd = max(0.0, peak_realized - (last_realized + current_upnl))
-slot_budget = balance / applicable_n_positions
-drawdown_raw = drawdown_usd / slot_budget
+X[t] = cumulative net realized PnL[t] + unrealized PnL[t]
+current_equity = budget + unrealized PnL[last]
+equity[t] = current_equity + X[t] - X[last]
+peak[t] = cumulative_max(equity)[t]
+raw_drawdown[t] = (peak[t] - equity[t]) / peak[t]
+smoothed[t] = EMA(raw_drawdown, span=ema_span_minutes, adjust=False)[t]
+score = min(raw_drawdown[last], smoothed[last])
+RED = score > red_threshold
 ```
 
-Live uses configured `n_positions`. Backtests use configured slots normally and
-effective tradability-aware slots when `backtest.dynamic_wel_by_tradability` is
-enabled. TWEL controls whether the side is active but does not scale either HSL
-denominator.
-
-This avoids false triggers caused only by collateral price moves when strategy PnL itself has not deteriorated.
-
-## Tiers
-
-Each `pside` has four tiers:
-
-1. `green`: normal trading
-2. `yellow`: warning tier
-3. `orange`: reduced-risk mode
-4. `red`: hard stop
-
-Tier thresholds are derived from that `pside`'s `hsl_red_threshold`:
-
-1. yellow threshold = `hsl_tier_ratios.yellow * hsl_red_threshold`
-2. orange threshold = `hsl_tier_ratios.orange * hsl_red_threshold`
-3. red threshold = `hsl_red_threshold`
-
-### ORANGE behavior
-
-`hsl_orange_tier_mode` controls what happens in ORANGE for that `pside`:
-
-1. `graceful_stop`
-2. `tp_only_with_active_entry_cancellation`
-
-### RED behavior
-
-At RED for one `pside`:
-
-1. that `pside` is forced into panic mode
-2. positions on that `pside` are closed using `hsl_panic_close_order_type`
-3. the bot waits until all positions on that `pside` are fully closed
-4. that `pside` halts
-5. optional cooldown-based restart may occur for that `pside`
-
-The opposite `pside` can continue running if its own HSL remains green/orange/yellow.
-
-In both live and backtests, `hsl_no_restart_drawdown_threshold` is evaluated against persistent cross-restart HSL drawdown for that `pside`, not just the local RED-halt snapshot. Values below `hsl_red_threshold` are treated as `hsl_red_threshold`.
-
-### Episode And Restart Replay Contract
-
-An HSL episode ends when its configured scope becomes fully flat:
-
-1. `coin`: the affected `coin+pside` position is fully closed
-2. `pside`: all positions on that `pside` are fully closed
-3. `unified`: all account positions are fully closed
-
-Every episode end resets the scope's drawdown tracker after the flattening fill. The close may be a
-panic, take-profit, grid close, manual close, or other exchange fill. A panic order type is not
-required. If the episode saw RED, its cooldown begins at that same flattening fill.
-
-This contract applies both to live runtime and to restart-time history replay.
-
-For restart-time price reconstruction, Passivbot uses available 1m candles first. If the exchange
-does not retain the older part of the requested window at that resolution, Passivbot progressively
-uses 5m, 15m, and 1h candles for that older prefix. This deliberately trades old price-path
-precision for robust reconstruction; fill timestamps, realized PnL, fees, and episode boundaries
-remain exact. Coarser sources and their contributed minute counts are included in replay metadata.
-
-In practical terms, restart replay must recognize any historical fill that fully flattened the
-configured scope as an episode boundary even if:
-
-1. the close was split across multiple fills
-2. re-entry happened later in the same minute
-3. the old pre-panic drawdown would otherwise still be above the RED threshold
-
-Without this reset, a restarted bot could incorrectly inherit stale prior-episode peaks and enter a
-new cooldown after restart. Missing flatten-fill evidence defers finalization; current time is never
-used as a substitute episode boundary. `hsl_no_restart_drawdown_threshold` is the intended
-protection against repeated unfavorable restart cycles, not stale prior-episode equity tracking.
-
-### Live Cooldown Intervention Policy
-
-Live trading has one extra case that backtests do not: a human can open a position on a `pside`
-that is currently halted in RED cooldown.
-
-`live.hsl_position_during_cooldown_policy` controls what happens next:
-
-1. `panic`
-   - panic-close that position immediately
-   - once the configured scope is fully closed, restart the cooldown timer from its flattening fill
-   - this is the safest default
-2. `normal`
-   - treat the position as an explicit operator override
-   - while that `pside` still has no open positions, the bot remains halted and will not open fresh initials on its own
-   - clear the halt for that `pside`
-   - reconstruct HSL drawdown and the rolling peak from the proven intervention entry, retaining its fees and subsequent losses
-   - retain the halt and required protection if the episode cannot yet be reconstructed from authoritative history
-3. `manual`
-   - keep the original cooldown deadline
-   - leave the position in `manual` mode and do not let the bot resume normal trading on that `pside`
-4. `tp_only`
-   - keep the original cooldown deadline
-   - block new entries on that `pside`
-   - allow Passivbot to manage closes only
-5. `graceful_stop`
-   - keep the original cooldown deadline
-   - manage the existing position with `graceful_stop` semantics while still blocking fresh initials
-
-This policy is live-only. Backtests do not model human intervention during cooldown.
-
-## Parameters
-
-Each `pside` has the same HSL parameter set:
-
-1. `hsl_enabled`
-   - enables HSL on that `pside`
-2. `hsl_red_threshold`
-   - RED trigger drawdown score
-3. `hsl_ema_span_minutes`
-   - EMA span used for smoothed drawdown
-   - in backtests, if this is smaller than `backtest.candle_interval_minutes`, HSL falls back to a one-sample EMA, which disables smoothing
-4. `hsl_cooldown_minutes_after_red`
-   - wait time before auto-restart after RED
-   - `0` means no auto-restart
-5. `hsl_no_restart_drawdown_threshold`
-   - terminal no-restart threshold for that `pside`
-   - evaluated against persistent cross-restart HSL drawdown
-   - values below `hsl_red_threshold` are clamped to `hsl_red_threshold`
-6. `hsl_tier_ratios.yellow`
-   - yellow threshold multiplier
-7. `hsl_tier_ratios.orange`
-   - orange threshold multiplier
-8. `hsl_orange_tier_mode`
-   - ORANGE behavior selector
-9. `hsl_panic_close_order_type`
-   - `market` or `limit`
-
-Live-only HSL parameter:
-
-10. `live.hsl_position_during_cooldown_policy`
-    - controls how the live bot responds if an open position appears on a halted `pside` during RED cooldown
-    - supported values are listed in the section above
-
-## Backtest Behavior
-
-Backtests honor the same side-specific HSL config surface as live.
-
-Important backtest details:
-
-1. `hsl_panic_close_order_type = "limit"`
-   - panic exits use the normal backtest crossed-limit execution model
-2. `hsl_panic_close_order_type = "market"`
-   - panic exits use simulated taker execution on the next bar
-   - slippage is controlled by `backtest.market_order_slippage_pct`
-   - live panic market exits use the exchange adapter's order semantics and live exchange/CCXT slippage controls, not `backtest.market_order_slippage_pct`
-3. Backtests export both:
-   - operational HSL telemetry under `hard_stop_*`
-   - collateral-agnostic strategy-equity risk metrics under `*_strategy_eq`
-4. In `coin` signal mode, fixed-denominator backtests use configured `n_positions` like live. When `backtest.dynamic_wel_by_tradability=true`, coin-HSL uses the same effective tradability-aware `n_positions` as the simulated entry budget.
-
-Main optimizer-facing strategy-equity risk metrics:
-
-1. `drawdown_worst_strategy_eq`
-2. `drawdown_worst_ema_strategy_eq`
-3. `drawdown_worst_mean_1pct_strategy_eq`
-4. `drawdown_worst_mean_1pct_ema_strategy_eq`
-5. `strategy_eq_recovery_days_max`
-6. `strategy_eq_recovery_days_mean_worst_1pct`
-
-For the shared EMA-smoothed metrics, long and short each use their own configured
-`hsl_ema_span_minutes`. The shared values are reported conservatively as `max(long, short)`
-rather than trying to invent one combined EMA span.
-
-Useful side-specific strategy-equity metrics:
-
-1. `drawdown_worst_strategy_eq_long`
-2. `drawdown_worst_strategy_eq_short`
-3. `drawdown_worst_ema_strategy_eq_long`
-4. `drawdown_worst_ema_strategy_eq_short`
-5. `drawdown_worst_mean_1pct_strategy_eq_long`
-6. `drawdown_worst_mean_1pct_strategy_eq_short`
-7. `drawdown_worst_mean_1pct_ema_strategy_eq_long`
-8. `drawdown_worst_mean_1pct_ema_strategy_eq_short`
-9. `peak_recovery_days_strategy_eq_long`
-10. `peak_recovery_days_strategy_eq_short`
-11. `hard_stop_triggers_long`
-12. `hard_stop_triggers_short`
-13. `hard_stop_restarts_long`
-14. `hard_stop_restarts_short`
-
-Useful global HSL backtest metrics include:
-
-1. `hard_stop_triggers`
-2. `hard_stop_restarts`
-3. `hard_stop_triggers_per_year`
-4. `hard_stop_restarts_per_year`
-5. `hard_stop_restarts_per_year_long`
-6. `hard_stop_restarts_per_year_short`
-7. `hard_stop_time_in_yellow_pct`
-8. `hard_stop_time_in_orange_pct`
-9. `hard_stop_time_in_red_pct`
-10. `hard_stop_duration_minutes_mean`
-11. `hard_stop_duration_minutes_max`
-12. `hard_stop_trigger_drawdown_mean`
-13. `hard_stop_panic_close_loss_sum`
-14. `hard_stop_panic_close_loss_max`
-15. `hard_stop_panic_close_loss_drawdown_pct_min`
-16. `hard_stop_panic_close_loss_drawdown_pct_mean`
-17. `hard_stop_panic_close_loss_drawdown_pct_max`
-18. `hard_stop_flatten_time_minutes_mean`
-19. `hard_stop_post_restart_retrigger_pct`
-20. `hard_stop_halt_to_restart_equity_loss_pct`
-
-## Interpreting HSL Metrics
-
-The shared HSL metrics are account-level summaries. They are not split into `_usd` and `_btc`, and
-the tier-time metrics are based on the worst active tier across long and short at each sampled
-moment.
-
-### Tier-time metrics
-
-1. `hard_stop_time_in_yellow_pct`
-   - Fraction of sampled runtime where the account-level HSL tier was YELLOW.
-   - Useful as an early-warning “stress frequency” metric.
-   - High values mean the bot spends a lot of time near the danger zone even if RED is rare.
-2. `hard_stop_time_in_orange_pct`
-   - Fraction of sampled runtime where the worst active HSL tier was ORANGE.
-   - High values mean the bot often spends time in reduced-risk behavior such as graceful stop or
-     TP-only-with-entry-cancellation.
-3. `hard_stop_time_in_red_pct`
-   - Fraction of sampled runtime where the worst active HSL tier was RED.
-   - This is usually the clearest “how often was the system in emergency mode” metric.
-   - In practice, you normally want this close to zero. Even small values can be meaningful because
-     RED includes forced position closing and halted time.
-
-### Trigger and halt metrics
-
-1. `hard_stop_trigger_drawdown_mean`
-   - Mean drawdown score at the moment RED triggers fired.
-   - Use this to see whether triggers happen barely above threshold or only after deeper damage.
-2. `hard_stop_duration_minutes_mean`
-   - Average elapsed minutes from RED halt start until that halt fully ends.
-   - Includes position closing and, when enabled, cooldown waiting before restart.
-3. `hard_stop_duration_minutes_max`
-   - Longest single halt duration observed during the run.
-   - Useful for spotting rare but operationally painful stalls.
-4. `hard_stop_flatten_time_minutes_mean`
-   - Average time from RED trigger until all positions on the triggered `pside` are fully closed.
-   - This isolates execution/exit latency from the later cooldown portion of the halt.
-
-### Restart quality metrics
-
-1. `hard_stop_post_restart_retrigger_pct`
-   - Fraction of cooldown restarts that later retriggered RED.
-   - High values usually mean cooldowns are too short, thresholds are too permissive, or the
-     strategy tends to restart into the same adverse regime.
-2. `hard_stop_halt_to_restart_equity_loss_pct`
-   - Panic-close loss accumulated across HSL events, normalized by starting balance.
-   - This estimates how expensive HSL-triggered emergency exits were over the whole run.
-
-As a rule of thumb:
-
-1. `hard_stop_time_in_red_pct` and `hard_stop_post_restart_retrigger_pct` are often the most
-   actionable first-pass stability metrics.
-2. `hard_stop_trigger_drawdown_mean` helps tune thresholds.
-3. `hard_stop_flatten_time_minutes_mean` helps compare `market` vs `limit` panic-close behavior.
-
-## Optimizer Support
-
-Some HSL parameters can be optimized through `optimize.bounds` using side-specific prefixes:
-
-1. `long_hsl_red_threshold`
-2. `long_hsl_ema_span_minutes`
-3. `long_hsl_cooldown_minutes_after_red`
-4. `short_hsl_red_threshold`
-5. `short_hsl_ema_span_minutes`
-6. `short_hsl_cooldown_minutes_after_red`
-
-`long_hsl_no_restart_drawdown_threshold` and `short_hsl_no_restart_drawdown_threshold` are intentionally not part of the default optimize bounds.
-
-Optimizer runs instead disable terminal no-restart by default through:
-
-1. `optimize.fixed_runtime_overrides["bot.long.hsl.no_restart_drawdown_threshold"] = 1.0`
-2. `optimize.fixed_runtime_overrides["bot.short.hsl.no_restart_drawdown_threshold"] = 1.0`
-
-The optimizer should constrain risk through canonical `*_strategy_eq` metrics rather than by terminating candidates early with terminal no-restart.
-
-## Notes
-
-1. Runtime HSL behavior is side-specific by `pside`.
-2. Global `*_strategy_eq` metrics are the canonical optimizer and whole-account risk-inspection metrics; deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.
-3. HSL is intended as a supervisory backstop, not as a replacement for sane wallet-exposure settings.
-
-## Stateless Restart Behavior
-
-Live HSL startup behavior is reconstructed from exchange-derived account history plus current exchange state. Restart behavior must not depend on any local latch file being present on disk.
-
-For the ongoing edge-case checklist and parity notes, see:
-
-1. [HSL Reference](equity_hard_stop_loss_reference.md)
+Only the current score authorizes panic. Historical threshold crossings do not latch RED.
+Recovery to GREEN retires unfilled panic orders, including after a partial panic close.
+
+The first raw drawdown seeds the EMA. Fractional spans are preserved. Repeated updates
+within a minute replace that minute's sample rather than repeatedly advancing the EMA.
+Known fill boundaries are evaluated before an episode reset or reopening. Nonpositive
+historical peaks and extreme numeric histories use explicit, reported approximations.
+Thresholds and saved fitness from older HSL versions are not interchangeable.
+Migrate and re-backtest configurations before upgrading. Pre-v8.6 inputs with
+HSL enabled or an authored `always`/`never` restart choice require explicit
+`passivbot tool migrate-hsl` conversion even when `live.hsl_engine` is absent.
+This check includes file-backed coin overrides, legacy `-lc` references and
+external `--suite-config` scenarios, evaluated against the raw base schema before
+normalization. Moving an old HSL policy into an external file is not migration.
+`config_version` records the source file schema and cannot be overridden at runtime;
+changing its CLI value is not a supported migration path.
+Disabled old policies without a restart choice can be hydrated, but enabling HSL
+later still requires an explicit restart choice.
+
+## Best-effort history
+
+Missing, delayed, conflicting or incomplete historical fills and candles are estimation
+inputs, not a requirement for perfect reconstruction before HSL can act. The shared Rust
+evaluator preserves usable cashflows and reconciles history to current positions, reporting
+approximation reasons. Restored evidence replaces estimates on subsequent evaluation.
+
+Historical valuation uses minute closes for both long and short positions. When true 1m
+candles are absent, the finest available completed 5m/15m/1h candle is expanded along a
+deterministic OHLC zigzag. Remaining gaps use forward-fill, then backfill for a missing
+prefix inside the lookback. Live valuation ends at a fresh current mark. A historical
+wick that recovers before the close is not an additional HSL sample.
+
+With no usable history, current size, basis and mark still define current UPNL. The
+estimator uses an entry-equity reference `budget` and one drawdown sample; it does
+not invent an earlier zero sample to dilute the EMA. For loss `L`, the minimal signal is
+`L / budget`: a 100 loss against a 1,000 budget gives 10%.
+Current equity may be zero or negative; this is a loss signal, not missing input. This is
+part of the same evaluator, not a separately timed fallback. Available history is not
+arbitrarily discarded to use this shorter path.
+
+Estimation can produce earlier or later stops than complete evidence. Completely missing
+realized losses cannot be recovered from current positions alone. Diagnostics expose this
+uncertainty; they are not trading authority. Fresh usable current balance, positions and
+required marks remain mandatory, and exchange writes also require current order state.
+Other strategy consumers retain their own input requirements.
+
+## Stops, cooldown and restart
+
+Trading has GREEN and RED behavior; there are no YELLOW/ORANGE trading tiers or separate
+terminal drawdown threshold. Only the latest episode matters. Evaluate its terminal accounting sample, including the
+final realized PnL and fees, before resetting the peak and EMA. If that terminal score
+exceeds RED, the flat scope is eligible for cooldown regardless of the closing order type.
+An earlier RED followed by terminal GREEN does not start cooldown. For an eligible scope:
+
+- `restart_after_red_policy=always` permits restart after cooldown. Zero cooldown means
+  no wait, subject to current HSL and ordinary strategy requirements.
+- `restart_after_red_policy=never` prevents automatic restart while the stop remains
+  inside the configured lookback. It is not a permanent, locally persisted halt.
+
+Fresh exchange positions establish flatness even if the closing fill is missing. Prefer
+its reconstructed timestamp; otherwise estimate cooldown from the last retained causal
+fill in that scope. Repeated observations do not renew it. A delayed final fill may correct
+the anchor and restore remaining cooldown. No retained fills means no historical cooldown.
+Aggregate flatness requires every selected position to be zero, not zero net exposure.
+
+Any renewed exposure clears the preceding cooldown and begins normal evaluation of the
+new episode. Fresh losses in that new episode can independently produce current RED.
+
+Cooldown is reconstructed each evaluation. A balance/budget change or corrected history
+can remove or restore terminal RED; any remaining duration is measured from the original
+estimated flatten timestamp, never from the time of reclassification. This also applies
+to the lookback-bounded `never` restriction.
+
+All history and lifecycle anchors outside the lookback are forgotten, including `never`
+halts. Equal exchange evidence and configuration reconstruct
+equal decisions after restart. A previous RED decision that produced no recoverable
+exchange evidence has no separate local authority. No local journal supplies trading authority.
+Repeated stops under `always` have no second, terminal accumulated-loss threshold.
+
+## Configuration and live validation
+
+Follow the [migration rules](configuration.md#hsl-configuration):
+enabled scopes need an explicit restart choice and a 1–90 day lookback; unified requires
+an explicit portfolio policy. Removed tier fields, intervention values, optimizer paths
+and cached fitness must not silently become different policies.
+
+Offline reference, unit, native parity and fake-exchange tests do not establish actual
+exchange execution correctness. Use the [live validation and rollback checklist](hsl_live_validation.md)
+for an operator-approved trial. Upgrading source does not restart running processes; deployment remains an operator decision.
+
+
+See the [validation matrix](hsl_testing.md) for reproducible checks and their limits.
+
+## Simulator replay performance
+
+The simulator can discard completed episodes that no longer affect current panic or the
+latest cooldown. Before its first entry, a single preceding flat sample preserves the zero
+EMA seed. These are suffixes of the configured lookback; no older evidence is imported.
+
+With unchanged fills, balance budget and slot count, consecutive minute observations can
+advance the same numerical signal without rebuilding fills and candles. On ordinary fills or
+budget changes within a proven episode, the simulator can extend its factual PNL/UPNL trace
+and replay the shared controller with the new inputs. Episode changes, lookback boundary
+crossings, estimated opening changes and sensitive numeric comparisons rebuild the full
+shared reconstruction. Rebuilding or discarding either cache preserves trading decisions.
+These disposable caches do not authorize trading independently and are not persisted.
+
+
+## Offline GPU optimization
+
+Single- and multi-coin GPU optimization support HSL for both supported strategy families
+and all three signal modes. Unified mode uses the explicit `bot.hsl` policy and portfolio
+HSL bounds; coin and pside modes use their directional policies. They use bounded per-candidate history, recompute drawdown when its equity anchor
+changes, and derive current panic and terminal cooldown without latching past decisions.
+The same Rust-owned shader source runs on Metal and CUDA. Candidate batches are partitioned
+to keep history scratch below 512 MiB; temporal replay rebinds that scratch explicitly.
+History stores two floats per minute plus summaries of completed 64-minute blocks;
+partial boundary blocks are evaluated directly, including same-minute replacement peaks.
+
+Select `optimize.backend=gpu` with 1m candles. Multi-coin scenarios support one or both position sides, effective coin overrides,
+and one shared portfolio controller in unified mode. Existing GPU metric and execution
+restrictions still apply. Saved
+checkpoints include the calculation contract and effective policies; incompatible resume is
+rejected. GPU float32 results are screening estimates; exact Rust backtests remain
+authoritative for retained candidates. This offline path does not execute live orders.
+Run the reproducible timing fixtures with:
+
+```sh
+PYTHONPATH=src python tests/hsl_gpu_benchmark.py --minutes 4000 --candidates 16
+PYTHONPATH=src python tests/hsl_gpu_benchmark.py --coins 2 --mode unified --minutes 4000 --candidates 16
+```
+
+Hardware parity tests cover changing budgets, sliding windows, fractional EMA spans,
+current RED recovery, terminal accounting, cooldown reclassification, candidate batching,
+and full versus chunked replay. A successful GPU fixture is not live-exchange evidence.

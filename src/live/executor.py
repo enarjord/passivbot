@@ -8,7 +8,7 @@ import time
 from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException, FatalBotException
-from live import hsl_protection, hsl_revised_live, position_fill_sync
+from live import hsl_live, position_fill_sync
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
@@ -165,8 +165,7 @@ def _cancel_first_scope(bot, order: dict) -> tuple[str, str] | None:
     if not symbol:
         return None
     effective_hedge_mode = bool(
-        getattr(bot, "_config_hedge_mode", False)
-        and getattr(bot, "hedge_mode", False)
+        getattr(bot, "_config_hedge_mode", False) and getattr(bot, "hedge_mode", False)
     )
     if not effective_hedge_mode:
         return symbol, ""
@@ -174,58 +173,6 @@ def _cancel_first_scope(bot, order: dict) -> tuple[str, str] | None:
     if position_side not in {"long", "short"}:
         return None
     return symbol, position_side
-
-
-def _filter_hsl_replay_pending_creates(
-    bot, passivbot_cls, orders: list[dict], order_wave
-) -> list[dict]:
-    pending_pairs = set(
-        getattr(bot, "_equity_hard_stop_coin_replay_pending_pairs", set()) or set()
-    )
-    # Replay can fail before discovering its pending set. Derive unknown pairs
-    # from actual creates so a newly selected flat symbol cannot bypass the gate.
-    if getattr(bot, "_risk_input_recovery", None) is not None:
-        mode = bot._equity_hard_stop_signal_mode()
-        ready_pairs = getattr(bot, "_equity_hard_stop_coin_replay_ready_pairs", set())
-        for order in orders:
-            side = str(order.get("position_side") or order.get("positionSide") or "").lower()
-            symbol = str(order.get("symbol") or "")
-            enabled = bot._equity_hard_stop_enabled(side, **({"symbol": symbol} if mode == "coin" else {}))
-            ready = ((getattr(bot, "_equity_hard_stop_coin_initialized", False)
-                      or (side, symbol) in ready_pairs) if mode == "coin"
-                     else bot._equity_hard_stop_runtime_initialized(side))
-            if enabled and not ready:
-                pending_pairs.add((side, symbol))
-    if not pending_pairs:
-        return orders
-    blocked = [
-        order
-        for order in orders
-        if not _order_is_protective_create(order)
-        and not hsl_protection.allows_held_entries(bot, str(order.get("position_side") or ""), str(order.get("symbol") or ""))
-        and (
-            str(order.get("position_side") or order.get("positionSide") or "").lower(),
-            str(order.get("symbol") or ""),
-        )
-        in pending_pairs
-    ]
-    if not blocked:
-        return orders
-    blocked_ids = {id(order) for order in blocked}
-    if order_wave is not None:
-        order_wave["skipped_create"] += len(blocked)
-    passivbot_cls._emit_execution_create_filter_event(
-        bot,
-        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
-        status="skipped",
-        reason_code=ReasonCodes.HSL_REPLAY_PENDING,
-        order_count=len(blocked),
-        symbols=_symbols_from_orders(blocked),
-        wave=order_wave,
-        message="initial-entry creates skipped until HSL replay is ready",
-        data={"pending_pairs_count": len(pending_pairs)},
-    )
-    return [order for order in orders if id(order) not in blocked_ids]
 
 
 def _symbols_from_orders(orders: list[dict]) -> list[str]:
@@ -290,7 +237,9 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
     state = getattr(bot, "_order_churn_gate_state", None)
     if state is None:
         return orders
-    activation_count = int(bot.live_value("order_replacement_churn_gate_activation_count"))
+    activation_count = int(
+        bot.live_value("order_replacement_churn_gate_activation_count")
+    )
     admission_orders = list(orders)
     if activation_count <= 0:
         for order in admission_orders:
@@ -320,9 +269,7 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
     projected_usage = state.action_attempt_count(
         now_monotonic=now_monotonic, window_seconds=window_seconds
     )
-    threshold = float(
-        bot.live_value("order_replacement_churn_gate_market_dist_pct")
-    )
+    threshold = float(bot.live_value("order_replacement_churn_gate_market_dist_pct"))
     admission: dict[int, tuple[str, bool]] = {}
     for order in admission_orders:
         churn_evidenced = bool(order.get("_churn_evidence"))
@@ -402,12 +349,16 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
             activation_count,
             suppressed,
         )
-        _record_fresh_entry_orders(bot, "record_blocked_orders", deferred, "order_churn_gate")
+        _record_fresh_entry_orders(
+            bot, "record_blocked_orders", deferred, "order_churn_gate"
+        )
         reason_codes = {
             "allowance_exhausted": ReasonCodes.ORDER_CHURN_ALLOWANCE_EXHAUSTED,
             "market_distance_unavailable": ReasonCodes.ORDER_CHURN_MARKET_DATA_UNAVAILABLE,
         }
-        for reason in sorted({str(order.get("_churn_gate_reason")) for order in deferred}):
+        for reason in sorted(
+            {str(order.get("_churn_gate_reason")) for order in deferred}
+        ):
             grouped = [
                 order
                 for order in deferred
@@ -681,16 +632,6 @@ async def execute_order_plan(
                     len(to_cancel),
                     len(to_create),
                 )
-    before_hsl_filter = list(to_create)
-    to_create = _filter_hsl_replay_pending_creates(
-        bot, passivbot_cls, to_create, order_wave
-    )
-    _record_fresh_entry_orders(
-        bot,
-        "record_blocked_orders",
-        _orders_removed_by_identity(before_hsl_filter, to_create),
-        "hsl_replay_pending",
-    )
     if bot.debug_mode:
         if to_cancel:
             logging.info(
@@ -831,8 +772,7 @@ async def execute_order_plan(
                         max(delay for _order, delay in recent_execution_deferred)
                     ),
                     "delays_sample_ms": [
-                        int(delay)
-                        for _order, delay in recent_execution_deferred[:8]
+                        int(delay) for _order, delay in recent_execution_deferred[:8]
                     ],
                 },
             )
@@ -907,9 +847,7 @@ async def execute_order_plan(
                     eligibility_now_ms=config_eligibility_now_ms,
                 )
             else:
-                configured_symbols = await bot.update_exchange_configs(
-                    creation_symbols
-                )
+                configured_symbols = await bot.update_exchange_configs(creation_symbols)
             if bot._shutdown_requested():
                 bot._order_wave_in_progress = None
                 bot._fresh_entry_eligibility_trace = None
@@ -954,11 +892,11 @@ async def execute_order_plan(
                         level="warning",
                         message="create orders skipped while exchange config update is pending",
                         data={
-                            "configured_symbols_count": len(configured_symbols or set()),
-                            "pending_symbols_count": len(pending_config),
-                            "protective_allowed_count": len(
-                                protective_config_bypasses
+                            "configured_symbols_count": len(
+                                configured_symbols or set()
                             ),
+                            "pending_symbols_count": len(pending_config),
+                            "protective_allowed_count": len(protective_config_bypasses),
                         },
                     )
                     pending_config_error_budget = (
@@ -987,8 +925,9 @@ async def execute_order_plan(
             )
         before_market_filter = len(to_create_mod)
         to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
-            bot, to_create_mod,
-            **({"planning_snapshot": snapshot} if hsl_revised_live.selected(bot) else {}),
+            bot,
+            to_create_mod,
+            planning_snapshot=snapshot,
         )
         if order_wave is not None:
             order_wave["skipped_create"] += max(
@@ -1039,7 +978,9 @@ async def execute_order_plan(
                     symbols=_symbols_from_orders(blocked),
                     wave=order_wave,
                     message="create orders skipped because account state changed after planning",
-                    data={"blocked_symbols_count": len(set(_symbols_from_orders(blocked)))},
+                    data={
+                        "blocked_symbols_count": len(set(_symbols_from_orders(blocked)))
+                    },
                 )
                 logging.info(
                     "[order] account state changed after planning; skipped %d creates until refresh and replanning",
@@ -1093,13 +1034,19 @@ async def execute_order_plan(
 
 def record_create_connector_admission(bot, order: dict) -> None:
     """Publish ownership only after the final guarded transport admission."""
-    if position_fill_sync.defer_submission(lambda: record_create_connector_admission(bot, order)):
+    if position_fill_sync.defer_submission(
+        lambda: record_create_connector_admission(bot, order)
+    ):
         return
     passivbot_cls = _pb_attr("Passivbot")
     context = getattr(bot, "_execution_connector_call_context", None) or {}
     wave = context.get("wave")
     index = next(
-        (idx for idx, candidate in enumerate(context.get("orders", [])) if candidate is order),
+        (
+            idx
+            for idx, candidate in enumerate(context.get("orders", []))
+            if candidate is order
+        ),
         None,
     )
     passivbot_cls._record_emitted_order_custom_id(bot, order, status="submitted")
@@ -1119,20 +1066,39 @@ def record_create_connector_admission(bot, order: dict) -> None:
 
 def record_cancel_connector_admission(bot, order: dict) -> None:
     """Cancellation provenance starts only after final transport admission."""
-    if position_fill_sync.defer_submission(lambda: record_cancel_connector_admission(bot, order)):
+    if position_fill_sync.defer_submission(
+        lambda: record_cancel_connector_admission(bot, order)
+    ):
         return
     passivbot_cls = _pb_attr("Passivbot")
     context = getattr(bot, "_execution_connector_call_context", None) or {}
-    index = next((idx for idx, candidate in enumerate(context.get("orders", []))
-                  if candidate is order), None)
+    index = next(
+        (
+            idx
+            for idx, candidate in enumerate(context.get("orders", []))
+            if candidate is order
+        ),
+        None,
+    )
     bot.add_to_recent_order_cancellations(order)
-    bot.log_order_action(order, "cancelling order", context=order.get("_context", "plan_sync"),
-                         level=logging.DEBUG, delta=order.get("_delta"))
+    bot.log_order_action(
+        order,
+        "cancelling order",
+        context=order.get("_context", "plan_sync"),
+        level=logging.DEBUG,
+        delta=order.get("_delta"),
+    )
     bot._log_order_action_summary({order["symbol"]: [order]}, "cancel")
     passivbot_cls._emit_execution_order_event(
-        bot, event_type=EventTypes.EXECUTION_CANCEL_SENT, order=order,
-        action="cancel", status="started", reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
-        index=index, wave=context.get("wave"))
+        bot,
+        event_type=EventTypes.EXECUTION_CANCEL_SENT,
+        order=order,
+        action="cancel",
+        status="started",
+        reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
+        index=index,
+        wave=context.get("wave"),
+    )
 
 
 async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
@@ -1581,7 +1547,9 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             )
             if not (
                 _live_event_console_available(bot, passivbot_cls)
-                and getattr(getattr(bot, "_live_event_pipeline", None), "console_sink", None)
+                and getattr(
+                    getattr(bot, "_live_event_pipeline", None), "console_sink", None
+                )
                 is not None
             ):
                 logging.info(
@@ -1589,7 +1557,5 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                     "before next cycle | symbols=%s",
                     passivbot_cls._log_symbols(ambiguous_symbols, limit=12),
                 )
-        _request_authoritative_confirmation(
-            bot, passivbot_cls, confirmation_surfaces
-        )
+        _request_authoritative_confirmation(bot, passivbot_cls, confirmation_surfaces)
     return to_return

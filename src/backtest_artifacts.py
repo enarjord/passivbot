@@ -7,7 +7,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-
 HLCV_COLUMNS = ("high", "low", "close", "volume")
 
 
@@ -63,7 +62,9 @@ def _normalize_timestamp_column(df: pd.DataFrame) -> pd.DataFrame:
         if first_col is not None and str(first_col).startswith("Unnamed"):
             out = out.rename(columns={first_col: "timestamp"})
     else:
-        generated_index_cols = [col for col in out.columns if str(col).startswith("Unnamed")]
+        generated_index_cols = [
+            col for col in out.columns if str(col).startswith("Unnamed")
+        ]
         if generated_index_cols:
             out = out.drop(columns=generated_index_cols)
     if "timestamp" in out.columns:
@@ -94,13 +95,19 @@ class BacktestArtifact:
         if self.hlcvs.ndim != 3:
             raise ValueError(f"expected hlcvs shape (T, N, C), got {self.hlcvs.shape}")
         if idx < 0 or idx >= self.hlcvs.shape[1]:
-            raise IndexError(f"coin index {idx} for {coin!r} outside hlcvs shape {self.hlcvs.shape}")
+            raise IndexError(
+                f"coin index {idx} for {coin!r} outside hlcvs shape {self.hlcvs.shape}"
+            )
         coin_hlcvs = self.hlcvs[:, idx, :]
         if coin_hlcvs.shape[1] < 3:
-            raise ValueError(f"expected at least high/low/close columns, got {coin_hlcvs.shape}")
+            raise ValueError(
+                f"expected at least high/low/close columns, got {coin_hlcvs.shape}"
+            )
         columns = list(HLCV_COLUMNS[: min(len(HLCV_COLUMNS), coin_hlcvs.shape[1])])
         df = pd.DataFrame(coin_hlcvs[:, : len(columns)], columns=columns)
-        df.insert(0, "timestamp", pd.to_datetime(self.timestamps.astype(np.int64), unit="ms"))
+        df.insert(
+            0, "timestamp", pd.to_datetime(self.timestamps.astype(np.int64), unit="ms")
+        )
         return df
 
     def workspace(self) -> dict[str, Any]:
@@ -139,16 +146,23 @@ def load_backtest_artifact(artifact_dir: str | Path) -> BacktestArtifact:
     report_path = artifact_dir / "hsl_report.json"
     hsl_report = None
     if report_path.exists():
-        from hsl_revised_reporting import revised_report
-        hsl_report = revised_report({"revised": _load_json(report_path)})
+        from hsl_reporting import hsl_report
+
+        hsl_report = hsl_report({"hsl": _load_json(report_path)})
 
     fills = _normalize_timestamp_column(_read_csv_if_exists(artifact_dir / "fills.csv"))
     balance_and_equity = _normalize_timestamp_column(
-        _read_csv_if_exists(artifact_dir / "balance_and_equity.csv.gz", compression="gzip")
+        _read_csv_if_exists(
+            artifact_dir / "balance_and_equity.csv.gz", compression="gzip"
+        )
     )
 
-    hlcvs_path = _resolve_artifact_path(dataset, "hlcvs_file", artifact_dir=artifact_dir)
-    timestamps_path = _resolve_artifact_path(dataset, "timestamps_file", artifact_dir=artifact_dir)
+    hlcvs_path = _resolve_artifact_path(
+        dataset, "hlcvs_file", artifact_dir=artifact_dir
+    )
+    timestamps_path = _resolve_artifact_path(
+        dataset, "timestamps_file", artifact_dir=artifact_dir
+    )
     btc_path = _resolve_artifact_path(
         dataset, "btc_usd_prices_file", artifact_dir=artifact_dir, required=False
     )
@@ -165,7 +179,9 @@ def load_backtest_artifact(artifact_dir: str | Path) -> BacktestArtifact:
     if not coin_index and coins:
         coin_index = {coin: idx for idx, coin in enumerate(coins)}
     if not coins and coin_index:
-        coins = [coin for coin, _idx in sorted(coin_index.items(), key=lambda item: item[1])]
+        coins = [
+            coin for coin, _idx in sorted(coin_index.items(), key=lambda item: item[1])
+        ]
 
     return BacktestArtifact(
         artifact_dir=artifact_dir,
@@ -196,7 +212,9 @@ def load_backtest_artifact_workspace(artifact_dir: str | Path) -> dict[str, Any]
     return load_backtest_artifact(artifact_dir).workspace()
 
 
-def candles_for_coin(artifact: BacktestArtifact | dict[str, Any], coin: str) -> pd.DataFrame:
+def candles_for_coin(
+    artifact: BacktestArtifact | dict[str, Any], coin: str
+) -> pd.DataFrame:
     artifact = _coerce_artifact(artifact)
     return artifact.candles_for_coin(coin)
 
@@ -213,13 +231,17 @@ def _coerce_artifact(artifact: BacktestArtifact | dict[str, Any]) -> BacktestArt
     )
 
 
-def _parse_optional_date(value: str | pd.Timestamp | None, *, name: str) -> pd.Timestamp | None:
+def _parse_optional_date(
+    value: str | pd.Timestamp | None, *, name: str
+) -> pd.Timestamp | None:
     if value in (None, ""):
         return None
     try:
         return pd.to_datetime(value)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be parseable as a datetime; got {value!r}") from exc
+        raise ValueError(
+            f"{name} must be parseable as a datetime; got {value!r}"
+        ) from exc
 
 
 def _filter_time_window(
@@ -317,7 +339,9 @@ def _plot_fill_markers(ax, fills: pd.DataFrame) -> None:
 
 
 def _plot_position_prices(ax, candles: pd.DataFrame, fills: pd.DataFrame) -> None:
-    if fills.empty or not {"timestamp", "type", "pprice", "psize"}.issubset(fills.columns):
+    if fills.empty or not {"timestamp", "type", "pprice", "psize"}.issubset(
+        fills.columns
+    ):
         return
     candle_index = pd.DatetimeIndex(candles["timestamp"])
     type_series = fills["type"].astype(str)
@@ -362,7 +386,9 @@ def plot_fills_for_coin(
     try:
         from plotting import plt
     except ImportError as exc:  # pragma: no cover
-        raise ImportError("matplotlib/plotting helpers are required for plot_fills_for_coin") from exc
+        raise ImportError(
+            "matplotlib/plotting helpers are required for plot_fills_for_coin"
+        ) from exc
 
     artifact = _coerce_artifact(artifact)
     candles = artifact.candles_for_coin(coin)
@@ -379,8 +405,22 @@ def plot_fills_for_coin(
     fig, ax = plt.subplots(figsize=figsize)
     ax.plot(candles["timestamp"], candles["close"], "y-", label="close", zorder=1.0)
     if include_high_low:
-        ax.plot(candles["timestamp"], candles["low"], "g--", alpha=0.75, label="low", zorder=0.9)
-        ax.plot(candles["timestamp"], candles["high"], "g-.", alpha=0.55, label="high", zorder=0.8)
+        ax.plot(
+            candles["timestamp"],
+            candles["low"],
+            "g--",
+            alpha=0.75,
+            label="low",
+            zorder=0.9,
+        )
+        ax.plot(
+            candles["timestamp"],
+            candles["high"],
+            "g-.",
+            alpha=0.55,
+            label="high",
+            zorder=0.8,
+        )
     _plot_fill_markers(ax, fills)
     _plot_position_prices(ax, candles, fills)
     ax.set_title(f"Fills {coin}")

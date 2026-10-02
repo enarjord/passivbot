@@ -1,7 +1,6 @@
 from collections.abc import Mapping
 from typing import Any
 
-
 CURRENCY_METRICS = {
     "adg",
     "adg_per_exposure_long",
@@ -158,8 +157,6 @@ SHARED_METRICS = {
     "hard_stop_restarts_per_year_long",
     "hard_stop_restarts_per_year_short",
     "hard_stop_halt_to_restart_equity_loss_pct",
-    "hard_stop_time_in_yellow_pct",
-    "hard_stop_time_in_orange_pct",
     "hard_stop_time_in_red_pct",
     "hard_stop_duration_minutes_mean",
     "hard_stop_duration_minutes_max",

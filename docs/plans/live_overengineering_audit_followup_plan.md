@@ -142,8 +142,6 @@ Required before change: a consumer-by-consumer contract table. Risk enforcement,
 balance accounting, trailing state, diagnostics, and display do not
 automatically need identical fidelity.
 
-### 3. HSL replay and restart state
-
 Question: can restart recovery derive the required state from exchange state,
 fills, candles, and config with fewer replay modes and transition flags?
 

@@ -221,7 +221,7 @@ The supported slice is intentionally narrow:
   fail closed. Non-`normal` forced modes remain accepted for either side because they are
   backtest-inert. Trailing
   Martingale also resolves all four `entry.ema_gate_mode` values per coin and side. In one-sided
-  `live.hsl_signal_mode: coin` runs, all ten HSL
+  `live.hsl_signal_mode: coin` runs, all six HSL
   leaves documented in `coin_overrides.md` are also supported. Fused dual-side EMA Anchor and
   Trailing Martingale coin mode resolve the same HSL leaves independently for long and short.
   CPU-compatible per-coin `live.leverage` and non-`normal` forced modes on either side are accepted
@@ -234,27 +234,24 @@ The supported slice is intentionally narrow:
   count. Market panic orders fill on
   the next valid bar at its close shifted adversely by `backtest.market_order_slippage_pct`, rounded
   directionally to the exchange price step, and charged the resolved taker fee. The Metal proxy
-  models tunable RED
-  threshold, drawdown-EMA span, and cooldown, plus fixed yellow/orange ratios, orange entry
-  suppression, RED latching, panic flattening, two-sample flat confirmation,
-  positive-cooldown restart, zero-cooldown indefinite halt, cumulative no-restart peak tracking,
-  effective coin-slot scaling, and terminal no-restart policy. For a finite
-  `live.pnls_max_lookback_days`, the single-coin `coin`-mode directional kernels expire
-  candidate-local realized-PnL fill events with the same rolling-window rule as exact Rust.
-  Other HSL topologies deliberately retain all-history realized-PnL and strategy-equity peaks as
-  a conservative envelope over Rust's rolling peak: they may trigger HSL early after an old peak
-  ages out, but cannot suppress a drawdown for that reason. The selected history must have no
-  internal invalid candles between its first and last valid samples. Thresholds in the
-  float32-unrepresentable interval immediately below `1.0` fail closed. Exact validation and
-  drift gates remain authoritative. Optimization may use normalized HSL lifecycle and risk
-  signals: yearly trigger/restart rates, time in RED, halt-duration summaries, trigger drawdown,
-  post-restart retriggers, panic-loss drawdown mean/max, and halt-to-restart equity loss. Raw event
-  counts, yellow/orange occupancy, absolute panic-loss totals/maxima, minimum panic-loss drawdown,
-  and mean flatten time remain exact-analysis diagnostics.
+  models the same current-equity-anchored drawdown, fractional EMA and latest-episode
+  cooldown contract as Rust. Only current RED authorizes panic; price recovery retires
+  panic orders. Terminal RED can start cooldown, renewed exposure clears it, and
+  `never` expires with the configured lookback. Zero cooldown under `always` allows
+  immediate restart. All modes retain a bounded 1–90 day history with exact window
+  expiration; no old all-history peak is carried forward as an alternative signal.
+  Enabled HSL requires 1m candles. The selected history must have no internal invalid
+  candles between its first and last valid samples. Exact validation and drift gates
+  remain authoritative for float32 screening. Optimization can use supported normalized
+  HSL lifecycle and risk signals, including trigger/restart rates, time in RED,
+  halt-duration summaries and panic-loss drawdown. Raw event counts, absolute panic-loss
+  totals and mean flatten time remain exact-analysis diagnostics. See the
+  [HSL guide](equity_hard_stop_loss.md#offline-gpu-optimization) for the signal and
+  runtime contract and [GPU limitations](#deliberate-current-limitations) for metric support.
   One-sided coin-mode multi-coin runs may resolve all canonical HSL settings independently per
   coin, including HSL enablement and limit/market panic execution. Dual-side multi-coin EMA Anchor
   and Trailing Martingale use fused shared-account kernels for unified, pside, and coin signals,
-  so shared event-loss, warning-tier overlap, and the other HSL lifecycle/panic-loss metrics are
+  so shared event-loss and the other HSL lifecycle/panic-loss metrics are
   available. The worst and mean-worst-1% EMA-smoothed strategy-equity drawdown metrics are also
   available for the account and each side. The mean-worst-1% proxy uses an opt-in bounded
   logarithmic histogram whose only approximation is the partially selected cutoff bin; exact Rust
@@ -287,11 +284,9 @@ The supported slice is intentionally narrow:
   candle interval. Pending directional orders are cleared at a gap before the next valid candle.
   Normal CPU input validation stays strict.
   Finite non-positive, partially invalid, or float32-unrepresentable prices remain fail-closed
-  for GPU screening. The single-coin coin-HSL ring coalesces realized-PnL components from the same
-  candle and retains up to 8,192 event candles in the configured finite lookback; an overflow
-  beyond that bounded capacity still fails closed with a conservative full-horizon recovery
-  penalty. Independent dual-side multi-coin summaries remain
-  fail closed for these metrics because they cannot reconstruct one shared portfolio-equity curve.
+  for GPU screening. HSL history scratch is sized from the finite lookback and
+  candidate batches are bounded to the configured memory budget. Independent dual-side
+  summaries cannot replace a shared portfolio-equity controller; unified uses the fused path.
   Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One- and dual-side
@@ -1512,16 +1507,18 @@ operator-risk settings such as:
 ```json
 "optimize": {
   "fixed_runtime_overrides": {
-    "bot.long.hsl.no_restart_drawdown_threshold": 1.0,
-    "bot.short.hsl.no_restart_drawdown_threshold": 1.0
+    "bot.long.hsl.restart_after_red_policy": "always",
+    "bot.short.hsl.restart_after_red_policy": "always"
   }
 }
 ```
 
-That default override disables terminal no-restart during optimizer evaluations so candidates can
-be constrained through `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strategy_eq`,
+These explicit overrides permit restart after the configured cooldown during optimizer
+evaluations. Use `never` instead when testing a stop that lasts until its evidence expires
+from lookback. For unified mode set `bot.hsl.restart_after_red_policy` instead of side
+paths. Compare risk with `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strategy_eq`,
 `drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
-`strategy_eq_recovery_days_max` instead of being prematurely truncated.
+`strategy_eq_recovery_days_max`.
 
 When you provide many starting configs to a CPU optimizer, it bounds how many seed evaluations may
 be in flight at once. For the DEAP backend, the same cap also applies to generation offspring

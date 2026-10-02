@@ -15,7 +15,6 @@ from live.restart_smoke_plan import (
 from passivbot_cli import main as cli_main
 from tools import live_restart_smoke_plan
 
-
 INCIDENT_BUNDLE_OUTPUT_PATTERN = (
     r"/passivbot_incident_bundle_restart_smoke_\d{8}_\d{6}_\d{6}\.tar\.gz$"
 )
@@ -74,7 +73,9 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "--summary" not in report["smoke_report"]["command"]
     assert report["config_preflight"] == {
         "command_count": 1,
-        "commands": ["passivbot tool live-config-preflight configs/forager.json --compact"],
+        "commands": [
+            "passivbot tool live-config-preflight configs/forager.json --compact"
+        ],
         "execute": False,
         "skipped_without_config_path_count": 0,
         "expected_fields": [
@@ -142,20 +143,23 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert report["process_signal_safety"]["strategy"] == (
         "exact_tmux_pane_or_exact_pid_only"
     )
-    assert report["process_signal_safety"]["forbid_broad_process_pattern_signals"] is True
-    assert "pkill -f 'passivbot live'" in report["process_signal_safety"][
-        "unsafe_patterns"
-    ]
-    assert "exclude the controller process and its ancestors" in report[
-        "process_signal_safety"
-    ]["required_guards"]
-    assert all(
-        item["execute"] is False for item in report["timeout_escalation_ladder"]
+    assert (
+        report["process_signal_safety"]["forbid_broad_process_pattern_signals"] is True
     )
+    assert (
+        "pkill -f 'passivbot live'"
+        in report["process_signal_safety"]["unsafe_patterns"]
+    )
+    assert (
+        "exclude the controller process and its ancestors"
+        in report["process_signal_safety"]["required_guards"]
+    )
+    assert all(item["execute"] is False for item in report["timeout_escalation_ladder"])
     assert "ssh" in report["execution_policy"]["rejected_operations"]
-    assert "broad process-pattern kill/signal" in report["execution_policy"][
-        "rejected_operations"
-    ]
+    assert (
+        "broad process-pattern kill/signal"
+        in report["execution_policy"]["rejected_operations"]
+    )
     assert "does_not_start_passivbot_live" in report["warnings"]
     assert "stable_target_preflight_not_configured" in report["warnings"]
 
@@ -213,9 +217,10 @@ def test_live_restart_smoke_plan_binds_stable_target_preflight(tmp_path):
         "command": expected_command,
         "execute": False,
     }
-    assert report["execution_policy"][
-        "future_execution_requires_stable_target_preflight"
-    ] is True
+    assert (
+        report["execution_policy"]["future_execution_requires_stable_target_preflight"]
+        is True
+    )
     assert report["execution_policy"]["stable_target_preflight_configured"] is True
     assert "stable_target_preflight_not_configured" not in report["warnings"]
 
@@ -289,22 +294,19 @@ def test_live_restart_smoke_plan_can_focus_performance_sections(tmp_path):
 
     report = build_live_restart_smoke_plan(
         supervisor_config,
-        performance_sections=["startup_readiness", "hsl_replay_profile"],
+        performance_sections=["startup_readiness", "risk_activity"],
     )
 
     assert report["inputs"]["performance_sections"] == [
         "startup_readiness",
-        "hsl_replay_profile",
+        "risk_activity",
     ]
     assert "--performance-report" in report["incident_bundle"]["command"]
     assert (
         "--performance-section startup_readiness"
         in report["incident_bundle"]["command"]
     )
-    assert (
-        "--performance-section hsl_replay_profile"
-        in report["incident_bundle"]["command"]
-    )
+    assert "--performance-section risk_activity" in report["incident_bundle"]["command"]
     assert "--performance-section" not in report["smoke_report"]["command"]
     assert report["incident_bundle"]["execute"] is False
 
@@ -382,10 +384,7 @@ def test_live_restart_smoke_plan_can_set_log_window_unparsed_policy(tmp_path):
 
     assert report["inputs"]["log_window_unparsed_policy"] == "drop"
     assert "--log-window-unparsed-policy drop" in report["smoke_report"]["command"]
-    assert (
-        "--log-window-unparsed-policy drop"
-        in report["incident_bundle"]["command"]
-    )
+    assert "--log-window-unparsed-policy drop" in report["incident_bundle"]["command"]
 
 
 def test_live_restart_smoke_plan_redacts_and_bounds_configured_commands(tmp_path):
@@ -524,10 +523,7 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
     assert "--brief" in report["smoke_report"]["command"]
     assert "--no-event-segments" in report["incident_bundle"]["command"]
     assert "--performance-report" in report["incident_bundle"]["command"]
-    assert (
-        "--log-window-unparsed-policy keep"
-        in report["incident_bundle"]["command"]
-    )
+    assert "--log-window-unparsed-policy keep" in report["incident_bundle"]["command"]
     assert "--compact" in report["incident_bundle"]["command"]
     assert report["target_preflight"]["configured"] is True
     assert report["target_preflight"]["session_name"] == "passivbot"
@@ -690,13 +686,15 @@ def test_live_restart_smoke_plan_summary_projects_concise_commands(tmp_path, cap
     ]
     assert "passivbot tool live-smoke-report" in summary["smoke_report"]["command"]
     assert "--recent-minutes 7" in summary["smoke_report"]["command"]
-    assert "passivbot tool live-incident-bundle" in summary["incident_bundle"][
-        "command"
-    ]
+    assert (
+        "passivbot tool live-incident-bundle" in summary["incident_bundle"]["command"]
+    )
     assert summary["incident_bundle"]["execute"] is False
     assert summary["config_preflight"] == {
         "command_count": 1,
-        "commands": ["passivbot tool live-config-preflight configs/forager.json --compact"],
+        "commands": [
+            "passivbot tool live-config-preflight configs/forager.json --compact"
+        ],
         "execute": False,
         "skipped_without_config_path_count": 0,
     }
@@ -723,26 +721,26 @@ def test_live_restart_smoke_plan_summary_projects_concise_commands(tmp_path, cap
     )
     assert summary["timeout_escalation_ladder"][1]["planned_command_count"] == 2
     assert summary["execution_policy"]["execute_flag"] == "not_implemented"
-    assert summary["execution_policy"][
-        "future_execution_requires_stable_target_preflight"
-    ] is True
+    assert (
+        summary["execution_policy"]["future_execution_requires_stable_target_preflight"]
+        is True
+    )
     assert summary["execution_policy"]["stable_target_preflight_configured"] is True
     assert summary["execution_policy"]["rejected_operation_count"] >= 1
     assert summary["warnings"]["count"] == len(full_report["warnings"])
     assert summary["issues"] == {"count": 0, "items": []}
 
     assert (
-        live_restart_smoke_plan.main(
-            [str(supervisor_config), "--summary", "--compact"]
-        )
+        live_restart_smoke_plan.main([str(supervisor_config), "--summary", "--compact"])
         == 0
     )
     cli_summary = json.loads(capsys.readouterr().out)
     assert cli_summary["bots"]["count"] == 2
     assert "phases" in cli_summary
-    assert "passivbot tool live-incident-bundle" in cli_summary["incident_bundle"][
-        "command"
-    ]
+    assert (
+        "passivbot tool live-incident-bundle"
+        in cli_summary["incident_bundle"]["command"]
+    )
     assert cli_summary["config_preflight"]["command_count"] == 1
     assert "command_key" not in json.dumps(cli_summary["bots"])
 
@@ -803,7 +801,7 @@ def test_live_restart_smoke_plan_cli_can_plan_smoke_sections(tmp_path, capsys):
                 "--smoke-section",
                 "fill_refresh",
                 "--smoke-section",
-                "hsl_replay",
+                "risk_events",
                 "--compact",
             ]
         )
@@ -811,11 +809,11 @@ def test_live_restart_smoke_plan_cli_can_plan_smoke_sections(tmp_path, capsys):
     )
 
     report = json.loads(capsys.readouterr().out)
-    assert report["inputs"]["smoke_sections"] == ["fill_refresh", "hsl_replay"]
+    assert report["inputs"]["smoke_sections"] == ["fill_refresh", "risk_events"]
     assert "--section fill_refresh" in report["smoke_report"]["command"]
-    assert "--section hsl_replay" in report["smoke_report"]["command"]
+    assert "--section risk_events" in report["smoke_report"]["command"]
     assert "--smoke-section fill_refresh" in report["incident_bundle"]["command"]
-    assert "--smoke-section hsl_replay" in report["incident_bundle"]["command"]
+    assert "--smoke-section risk_events" in report["incident_bundle"]["command"]
     assert "--restart-smoke-plan" in report["incident_bundle"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
 
@@ -840,7 +838,7 @@ def test_live_restart_smoke_plan_cli_can_plan_performance_sections(tmp_path, cap
                 "--performance-section",
                 "startup_readiness",
                 "--performance-section",
-                "hsl_replay_profile",
+                "risk_activity",
                 "--compact",
             ]
         )
@@ -850,17 +848,14 @@ def test_live_restart_smoke_plan_cli_can_plan_performance_sections(tmp_path, cap
     report = json.loads(capsys.readouterr().out)
     assert report["inputs"]["performance_sections"] == [
         "startup_readiness",
-        "hsl_replay_profile",
+        "risk_activity",
     ]
     assert "--performance-report" in report["incident_bundle"]["command"]
     assert (
         "--performance-section startup_readiness"
         in report["incident_bundle"]["command"]
     )
-    assert (
-        "--performance-section hsl_replay_profile"
-        in report["incident_bundle"]["command"]
-    )
+    assert "--performance-section risk_activity" in report["incident_bundle"]["command"]
     assert "--performance-section" not in report["smoke_report"]["command"]
 
 
@@ -894,10 +889,7 @@ def test_live_restart_smoke_plan_cli_can_plan_log_window_unparsed_policy(
     report = json.loads(capsys.readouterr().out)
     assert report["inputs"]["log_window_unparsed_policy"] == "drop"
     assert "--log-window-unparsed-policy drop" in report["smoke_report"]["command"]
-    assert (
-        "--log-window-unparsed-policy drop"
-        in report["incident_bundle"]["command"]
-    )
+    assert "--log-window-unparsed-policy drop" in report["incident_bundle"]["command"]
 
 
 def test_live_restart_smoke_plan_cli_rejects_execute(capsys):
@@ -920,8 +912,7 @@ def test_live_restart_smoke_plan_cli_rejects_negative_event_scan_bounds(capsys):
 
     assert exc_info.value.code == 2
     assert (
-        "smoke_max_event_files_per_bot must be non-negative"
-        in capsys.readouterr().err
+        "smoke_max_event_files_per_bot must be non-negative" in capsys.readouterr().err
     )
 
 

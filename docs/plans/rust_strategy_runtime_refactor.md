@@ -55,9 +55,6 @@ Important current realities:
 5. Optimizer/config plumbing still carries legacy flat-key assumptions at the adapter boundary.
    - see `src/optimization/config_adapter.py`
 
-6. Live HSL control is still an adjacent controller concern, not a solved shared-engine concern.
-   - the live loop and HSL runtime still interact in Python
-   - the strategy refactor should not block on a simultaneous HSL architecture rewrite
 
 ## Phase-0 Branch Notes
 
@@ -70,11 +67,6 @@ These branch notes are the implementation baseline to preserve while extracting 
    - `runtime_compile.py` owns runtime-only aliases
    - `validate.py` owns canonical validation
 
-2. Live HSL ownership is still partially Python-side on this branch.
-   - backtest HSL is already expressed through Rust runtime inputs
-   - live still has Python-side mode control and adjacent controller behavior
-   - phase 1 of the strategy refactor must preserve the current `TradingMode` contract rather than
-     rewrite live HSL architecture
 
 3. Backtest dynamic WEL currently works by mutating runtime bot params.
    - `src/backtest.py` injects `wallet_exposure_limit = -1.0` as the dynamic-WEL sentinel when no
@@ -381,23 +373,6 @@ Recommended Rust layout:
 
 The earlier draft's basic direction was correct here.
 
-### 6. Keep HSL As A Neighboring Controller Concern In Phase 1
-
-The shared engine boundary on this branch is not identical to the final idealized architecture.
-
-On the current branch:
-
-- live HSL still influences per-side mode control from Python
-- backtest HSL is already integrated on the Rust side
-
-Therefore phase 1 should treat HSL like this:
-
-1. strategy refactor preserves the existing `TradingMode` contract into Rust
-2. shared orchestrator continues to honor `Normal`, `GracefulStop`, `TpOnly`, `Panic`, `Manual`
-3. live HSL internals are not rewritten as part of the first strategy refactor
-
-That keeps scope under control without weakening the long-term design.
-
 ### 7. Use A Small, Concrete Feature Layer First
 
 The earlier draft was right that indicator derivation should not keep growing inline in
@@ -535,7 +510,6 @@ Tasks:
 
 1. Add a short design note documenting:
    - current config pipeline ownership in `src/config/`
-   - current HSL/live-mode ownership split
    - current mutable-WEL behavior in backtest
 
 2. Add regression tests that freeze current adaptive-grid behavior.

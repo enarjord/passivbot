@@ -11,13 +11,28 @@ from .strategy_spec import (
     strategy_optimize_key_path_map,
 )
 
-
 OPTIMIZABLE_BOT_KEY_PATHS = {
     "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
     "long_filter_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
-    "long_forager_volatility_ema_span_1m": ("bot", "long", "forager", "volatility_ema_span_1m"),
-    "long_filter_volatility_ema_span_1m": ("bot", "long", "forager", "volatility_ema_span_1m"),
-    "long_forager_score_weights_volume": ("bot", "long", "forager", "score_weights", "volume"),
+    "long_forager_volatility_ema_span_1m": (
+        "bot",
+        "long",
+        "forager",
+        "volatility_ema_span_1m",
+    ),
+    "long_filter_volatility_ema_span_1m": (
+        "bot",
+        "long",
+        "forager",
+        "volatility_ema_span_1m",
+    ),
+    "long_forager_score_weights_volume": (
+        "bot",
+        "long",
+        "forager",
+        "score_weights",
+        "volume",
+    ),
     "long_forager_score_weights_ema_readiness": (
         "bot",
         "long",
@@ -32,7 +47,13 @@ OPTIMIZABLE_BOT_KEY_PATHS = {
         "score_weights",
         "volatility",
     ),
-    "short_forager_score_weights_volume": ("bot", "short", "forager", "score_weights", "volume"),
+    "short_forager_score_weights_volume": (
+        "bot",
+        "short",
+        "forager",
+        "score_weights",
+        "volume",
+    ),
     "short_forager_score_weights_ema_readiness": (
         "bot",
         "short",
@@ -47,10 +68,30 @@ OPTIMIZABLE_BOT_KEY_PATHS = {
         "score_weights",
         "volatility",
     ),
-    "short_forager_volume_ema_span_1m": ("bot", "short", "forager", "volume_ema_span_1m"),
-    "short_filter_volume_ema_span_1m": ("bot", "short", "forager", "volume_ema_span_1m"),
-    "short_forager_volatility_ema_span_1m": ("bot", "short", "forager", "volatility_ema_span_1m"),
-    "short_filter_volatility_ema_span_1m": ("bot", "short", "forager", "volatility_ema_span_1m"),
+    "short_forager_volume_ema_span_1m": (
+        "bot",
+        "short",
+        "forager",
+        "volume_ema_span_1m",
+    ),
+    "short_filter_volume_ema_span_1m": (
+        "bot",
+        "short",
+        "forager",
+        "volume_ema_span_1m",
+    ),
+    "short_forager_volatility_ema_span_1m": (
+        "bot",
+        "short",
+        "forager",
+        "volatility_ema_span_1m",
+    ),
+    "short_filter_volatility_ema_span_1m": (
+        "bot",
+        "short",
+        "forager",
+        "volatility_ema_span_1m",
+    ),
 }
 
 for _side in BOT_POSITION_SIDES:
@@ -98,9 +139,13 @@ def _strategy_path_map_for_config(config: dict) -> dict[str, tuple[str, ...]]:
 def resolve_optimizer_key_path(config: dict, key: str) -> tuple[str, ...] | None:
     canonical_key = canonical_optimizer_key(key)
     if canonical_key.startswith("hsl_"):
-        if config.get("live", {}).get("hsl_engine") == "revised" and config.get("live", {}).get("hsl_signal_mode") == "unified":
+        if config.get("live", {}).get("hsl_signal_mode") == "unified":
             field = canonical_key.removeprefix("hsl_")
-            if field in {"red_threshold", "ema_span_minutes", "cooldown_minutes_after_red"}:
+            if field in {
+                "red_threshold",
+                "ema_span_minutes",
+                "cooldown_minutes_after_red",
+            }:
                 return ("bot", "hsl", field)
         return None
     strategy_path_map = _strategy_path_map_for_config(config)
@@ -115,7 +160,11 @@ def resolve_optimizer_key_path(config: dict, key: str) -> tuple[str, ...] | None
     if pside not in BOT_POSITION_SIDES:
         return None
     bot_side = config.get("bot", {}).get(pside, {})
-    return resolve_shared_bot_path(bot_side, pside, flat_key) or ("bot", pside, flat_key)
+    return resolve_shared_bot_path(bot_side, pside, flat_key) or (
+        "bot",
+        pside,
+        flat_key,
+    )
 
 
 def canonical_path_for_bot_side_flat_key(
@@ -133,17 +182,26 @@ def canonical_path_for_bot_side_flat_key(
     if flat_key in strategy_param_keys:
         return ("bot", pside, "strategy", strategy_kind, *tuple(flat_key.split(".")))
     optimizer_path = resolve_optimizer_key_path(config, f"{pside}_{flat_key}")
-    if optimizer_path is not None and len(optimizer_path) >= 4 and optimizer_path[:3] == (
-        "bot",
-        pside,
-        "strategy",
+    if (
+        optimizer_path is not None
+        and len(optimizer_path) >= 4
+        and optimizer_path[:3]
+        == (
+            "bot",
+            pside,
+            "strategy",
+        )
     ):
         return optimizer_path
     return None
 
 
-def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str, ...] | None:
-    raw_parts = tuple(part.strip() for part in selector_or_path.split(".") if part.strip())
+def resolve_dotted_config_path(
+    config: dict, selector_or_path: str
+) -> tuple[str, ...] | None:
+    raw_parts = tuple(
+        part.strip() for part in selector_or_path.split(".") if part.strip()
+    )
     if not raw_parts:
         return ("",) if selector_or_path == "" else None
     if raw_parts[0] in BOT_POSITION_SIDES or (
@@ -155,7 +213,9 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
     else:
         parts = raw_parts
     if len(parts) == 3 and parts[0] == "bot" and parts[1] in BOT_POSITION_SIDES:
-        canonical_path = canonical_path_for_bot_side_flat_key(config, parts[1], parts[2])
+        canonical_path = canonical_path_for_bot_side_flat_key(
+            config, parts[1], parts[2]
+        )
         if canonical_path is not None:
             return canonical_path
     if (
@@ -187,7 +247,9 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
     return tuple(parts)
 
 
-def require_existing_config_path(config: dict, selector_or_path: str) -> tuple[str, ...]:
+def require_existing_config_path(
+    config: dict, selector_or_path: str
+) -> tuple[str, ...]:
     resolved = resolve_dotted_config_path(config, selector_or_path)
     if resolved is None or not resolved or any(part == "" for part in resolved):
         raise ValueError("Override paths must not be empty")
@@ -216,7 +278,9 @@ def require_existing_config_path(config: dict, selector_or_path: str) -> tuple[s
     return resolved
 
 
-def path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
+def path_matches_selector(
+    path: tuple[str, ...], selector_path: tuple[str, ...]
+) -> bool:
     if len(selector_path) > len(path):
         return False
     return all(
@@ -225,7 +289,9 @@ def path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...])
     )
 
 
-def path_suffix_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
+def path_suffix_matches_selector(
+    path: tuple[str, ...], selector_path: tuple[str, ...]
+) -> bool:
     if len(selector_path) > len(path):
         return False
     suffix = path[-len(selector_path) :] if selector_path else ()
@@ -264,7 +330,8 @@ def resolve_bound_selectors(
     bound_paths = {
         key: path
         for key in flat_bounds
-        if isinstance(key, str) and (path := resolve_optimizer_key_path(config, key)) is not None
+        if isinstance(key, str)
+        and (path := resolve_optimizer_key_path(config, key)) is not None
     }
     for selector in selectors:
         selector_path = resolve_dotted_config_path(config, str(selector))

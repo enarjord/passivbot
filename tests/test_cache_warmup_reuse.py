@@ -45,6 +45,14 @@ from hlcvs_manifest import build_hlcvs_manifest, write_hlcvs_manifest
 # ============================================================================
 
 
+@pytest.fixture(autouse=True)
+def stable_market_identity(monkeypatch):
+    # Cache identity must not depend on market files in the caller's cwd.
+    monkeypatch.setattr(
+        "backtest.coin_to_symbol", lambda coin, *_args, **_kwargs: str(coin)
+    )
+
+
 def _base_config(**overrides):
     """Minimal config sufficient for cache hash computation."""
     cfg = {
@@ -96,7 +104,9 @@ def _allow_legacy_cache(cfg):
     return cfg
 
 
-def _write_fake_cache(cache_dir, *, compress=False, warmup_minutes=None, write_manifest=True):
+def _write_fake_cache(
+    cache_dir, *, compress=False, warmup_minutes=None, write_manifest=True
+):
     """Write minimal valid cache files so load_coins_hlcvs_from_cache succeeds."""
     cache_dir_path = Path(cache_dir)
     os.makedirs(cache_dir, exist_ok=True)
@@ -112,11 +122,17 @@ def _write_fake_cache(cache_dir, *, compress=False, warmup_minutes=None, write_m
     json.dump(mss, open(os.path.join(cache_dir, "market_specific_settings.json"), "w"))
 
     if compress:
-        with gzip.open(os.path.join(cache_dir, "hlcvs.npy.gz"), "wb", compresslevel=1) as f:
+        with gzip.open(
+            os.path.join(cache_dir, "hlcvs.npy.gz"), "wb", compresslevel=1
+        ) as f:
             np.save(f, hlcvs)
-        with gzip.open(os.path.join(cache_dir, "btc_usd_prices.npy.gz"), "wb", compresslevel=1) as f:
+        with gzip.open(
+            os.path.join(cache_dir, "btc_usd_prices.npy.gz"), "wb", compresslevel=1
+        ) as f:
             np.save(f, btc_usd)
-        with gzip.open(os.path.join(cache_dir, "timestamps.npy.gz"), "wb", compresslevel=1) as f:
+        with gzip.open(
+            os.path.join(cache_dir, "timestamps.npy.gz"), "wb", compresslevel=1
+        ) as f:
             np.save(f, timestamps)
     else:
         np.save(os.path.join(cache_dir, "hlcvs.npy"), hlcvs)
@@ -198,7 +214,9 @@ class TestCacheHashIndependence:
             "short": ["BTC/USDT:USDT"],
         }
 
-        assert get_cache_hash(cfg_long, "binance") == get_cache_hash(cfg_short, "binance")
+        assert get_cache_hash(cfg_long, "binance") == get_cache_hash(
+            cfg_short, "binance"
+        )
 
     def test_different_dates_different_hash(self):
         """Changing start_date still produces a different hash."""
@@ -355,15 +373,29 @@ class TestLegacyCacheCompatibility:
 
 class TestTradableCoverageGuard:
     def test_rejects_when_warmup_consumes_all_valid_rows(self):
-        mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 10, "warmup_minutes": 11}}
+        mss = {
+            "BTC": {
+                "first_valid_index": 0,
+                "last_valid_index": 10,
+                "warmup_minutes": 11,
+            }
+        }
 
         with pytest.raises(ValueError, match="no tradable candles"):
             assert_hlcv_has_tradable_coverage(["BTC"], mss)
 
     def test_accepts_when_any_coin_has_tradable_rows_after_warmup(self):
         mss = {
-            "BTC": {"first_valid_index": 0, "last_valid_index": 10, "warmup_minutes": 11},
-            "ETH": {"first_valid_index": 5, "last_valid_index": 20, "warmup_minutes": 10},
+            "BTC": {
+                "first_valid_index": 0,
+                "last_valid_index": 10,
+                "warmup_minutes": 11,
+            },
+            "ETH": {
+                "first_valid_index": 5,
+                "last_valid_index": 20,
+                "warmup_minutes": 10,
+            },
         }
 
         assert_hlcv_has_tradable_coverage(["BTC", "ETH"], mss)
@@ -484,7 +516,9 @@ class TestSavePersistsWarmupMetadata:
         meta = json.load(open(os.path.join(str(cache_dir), "cache_meta.json")))
         assert meta["warmup_minutes"] == 5000
 
-    def test_force_overwrite_bypasses_existing_warmup_early_return(self, tmp_path, monkeypatch):
+    def test_force_overwrite_bypasses_existing_warmup_early_return(
+        self, tmp_path, monkeypatch
+    ):
         """Force refetch callers can replace an otherwise sufficient cache."""
         monkeypatch.chdir(tmp_path)
         cfg = _base_config()
@@ -523,7 +557,9 @@ class TestSavePersistsWarmupMetadata:
         meta = json.load(open(os.path.join(str(cache_dir), "cache_meta.json")))
         assert meta["warmup_minutes"] == 1000
 
-    def test_interrupted_save_cleans_temp_and_preserves_existing_cache(self, tmp_path, monkeypatch):
+    def test_interrupted_save_cleans_temp_and_preserves_existing_cache(
+        self, tmp_path, monkeypatch
+    ):
         """A pending interrupt during artifact save must not publish partial cache data."""
         monkeypatch.chdir(tmp_path)
         cfg = _base_config()
@@ -550,7 +586,9 @@ class TestSavePersistsWarmupMetadata:
             if stage == "hlcvs cache artifact":
                 raise asyncio.CancelledError("test interrupt")
 
-        monkeypatch.setattr("backtest.raise_if_backtest_cancel_requested", interrupt_after_hlcvs)
+        monkeypatch.setattr(
+            "backtest.raise_if_backtest_cancel_requested", interrupt_after_hlcvs
+        )
 
         with pytest.raises(asyncio.CancelledError):
             save_coins_hlcvs_to_cache(
@@ -617,7 +655,9 @@ class TestSavePersistsWarmupMetadata:
         loaded = np.load(os.path.join(str(cache_dir), "hlcvs.npy"))
         assert float(loaded[0, 0, 0]) == 0.0
         assert not list(Path(cache_dir).parent.glob(f".{Path(cache_dir).name}.tmp-*"))
-        assert not list(Path(cache_dir).parent.glob(f".{Path(cache_dir).name}.backup-*"))
+        assert not list(
+            Path(cache_dir).parent.glob(f".{Path(cache_dir).name}.backup-*")
+        )
 
     def test_save_overwrites_corrupt_manifest_cache_even_when_warmup_sufficient(
         self, tmp_path, monkeypatch
@@ -660,7 +700,9 @@ class TestSavePersistsWarmupMetadata:
 
         loaded = np.load(os.path.join(str(cache_dir), "hlcvs.npy"))
         assert float(loaded[0, 0, 0]) == 1.0
-        assert load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=1000) is not None
+        assert (
+            load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=1000) is not None
+        )
 
     def test_save_with_compression(self, tmp_path, monkeypatch):
         """cache_meta.json is written even with compressed cache."""
@@ -718,7 +760,9 @@ class TestSavePersistsWarmupMetadata:
         )
         assert cache_dir.name.endswith(f"__{cache_hash[:16]}")
 
-    def test_save_falls_back_to_count_for_more_than_five_coins(self, tmp_path, monkeypatch):
+    def test_save_falls_back_to_count_for_more_than_five_coins(
+        self, tmp_path, monkeypatch
+    ):
         """Coin label uses N_coins when the dataset contains more than five coins."""
         monkeypatch.chdir(tmp_path)
         cfg = _base_config()
@@ -844,14 +888,20 @@ class TestDescriptiveDirResolution:
         assert result is not None
         assert os.path.abspath(str(result[0])) == str(cache_dir.resolve())
         assert result[1] == ["BTC"]
-        assert os.path.abspath(str(_resolve_hlcvs_cache_dir(cache_hash))) == str(cache_dir.resolve())
+        assert os.path.abspath(str(_resolve_hlcvs_cache_dir(cache_hash))) == str(
+            cache_dir.resolve()
+        )
 
     def test_multiple_descriptive_dirs_for_same_hash_raise(self, tmp_path, monkeypatch):
         cfg = _base_config()
         cache_hash = get_cache_hash(cfg, "binance")
         root = tmp_path / "caches" / "hlcvs_data"
-        cache_dir_a = root / f"binance__BTC__2024_01_01_to_2025_06_01__{cache_hash[:16]}"
-        cache_dir_b = root / f"binance__ETH__2024_01_01_to_2025_06_01__{cache_hash[:16]}"
+        cache_dir_a = (
+            root / f"binance__BTC__2024_01_01_to_2025_06_01__{cache_hash[:16]}"
+        )
+        cache_dir_b = (
+            root / f"binance__ETH__2024_01_01_to_2025_06_01__{cache_hash[:16]}"
+        )
         _write_fake_cache(str(cache_dir_a), warmup_minutes=100)
         _write_fake_cache(str(cache_dir_b), warmup_minutes=100)
 
@@ -860,14 +910,22 @@ class TestDescriptiveDirResolution:
             load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=50)
         assert cache_hash[:16] in str(exc.value)
 
-    def test_cache_hit_uses_current_warmup_after_metadata_normalization(self, tmp_path, monkeypatch):
+    def test_cache_hit_uses_current_warmup_after_metadata_normalization(
+        self, tmp_path, monkeypatch
+    ):
         """Cache hit must apply current run warmup, not stale cached mss warmup."""
         monkeypatch.chdir(tmp_path)
         cfg = _base_config()
 
         coins = ["BTC"]
         hlcvs = np.zeros((10000, 1, 4), dtype=np.float64)
-        mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 9999, "warmup_minutes": 5000}}
+        mss = {
+            "BTC": {
+                "first_valid_index": 0,
+                "last_valid_index": 9999,
+                "warmup_minutes": 5000,
+            }
+        }
         btc_usd = np.ones(10000, dtype=np.float64)
         timestamps = np.arange(10000, dtype=np.int64) * 60_000
 
@@ -885,6 +943,8 @@ class TestDescriptiveDirResolution:
         assert result is not None
 
         mss_loaded = result[3]
-        ensure_valid_index_metadata(mss_loaded, hlcvs, coins, {"__default__": 3000, "BTC": 3000})
+        ensure_valid_index_metadata(
+            mss_loaded, hlcvs, coins, {"__default__": 3000, "BTC": 3000}
+        )
         assert mss_loaded["BTC"]["warmup_minutes"] == 3000
         assert mss_loaded["BTC"]["trade_start_index"] == 3000

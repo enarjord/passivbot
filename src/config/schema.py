@@ -4,10 +4,9 @@ from .gpu import GPU_SCREENING_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
 
-
-CONFIG_SCHEMA_VERSION = "v8.5.0"
+CONFIG_SCHEMA_VERSION = "v8.6.0"
 SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset(
-    {"v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0"}
+    {"v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0"}
 )
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This
@@ -24,26 +23,20 @@ def _get_shared_bot_defaults():
                     "unilateralness": 0.0,
                     "ema_readiness": 0.21,
                     "volatility": 0.61,
-                    "volume": 0.18
+                    "volume": 0.18,
                 },
                 "unilateralness_ema_span_1m": 60.0,
                 "volatility_ema_span_1m": 2274.0,
                 "volume_drop_pct": 0.04,
-                "volume_ema_span_1m": 310.0
+                "volume_ema_span_1m": 310.0,
             },
             "hsl": {
                 "cooldown_minutes_after_red": 2160.0,
                 "ema_span_minutes": 720.0,
                 "enabled": False,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.15,
-                "restart_after_red_policy": "threshold",
-                "tier_ratios": {
-                    "orange": 0.75,
-                    "yellow": 0.5
-                }
+                "restart_after_red_policy": "always",
             },
             "entry_cooldown": {
                 "base_duration_minutes": 24.1,
@@ -61,7 +54,7 @@ def _get_shared_bot_defaults():
                 "total_exposure_entry_gate_enabled": True,
                 "total_wallet_exposure_limit": 1.5,
                 "we_excess_allowance_mode": "bounded",
-                "we_excess_allowance_pct": 0.37
+                "we_excess_allowance_pct": 0.37,
             },
             "unstuck": {
                 "close_pct": 0.041,
@@ -71,8 +64,8 @@ def _get_shared_bot_defaults():
                 "ema_span_1": 1080.0,
                 "enabled": True,
                 "loss_allowance_pct": 0.0052,
-                "threshold": 0.466
-            }
+                "threshold": 0.466,
+            },
         },
         "short": {
             "forager": {
@@ -80,26 +73,20 @@ def _get_shared_bot_defaults():
                     "unilateralness": 0.0,
                     "ema_readiness": 0.0,
                     "volatility": 0.0,
-                    "volume": 0.0
+                    "volume": 0.0,
                 },
                 "unilateralness_ema_span_1m": 60.0,
                 "volatility_ema_span_1m": 10.0,
                 "volume_drop_pct": 0.02,
-                "volume_ema_span_1m": 60.0
+                "volume_ema_span_1m": 60.0,
             },
             "hsl": {
                 "cooldown_minutes_after_red": 1.0,
                 "ema_span_minutes": 1.0,
                 "enabled": False,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.01,
-                "restart_after_red_policy": "threshold",
-                "tier_ratios": {
-                    "orange": 0.75,
-                    "yellow": 0.5
-                }
+                "restart_after_red_policy": "always",
             },
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
@@ -117,7 +104,7 @@ def _get_shared_bot_defaults():
                 "total_exposure_entry_gate_enabled": True,
                 "total_wallet_exposure_limit": 0.0,
                 "we_excess_allowance_mode": "bounded",
-                "we_excess_allowance_pct": 0.0
+                "we_excess_allowance_pct": 0.0,
             },
             "unstuck": {
                 "close_pct": 0.01,
@@ -127,9 +114,9 @@ def _get_shared_bot_defaults():
                 "ema_span_1": 60.0,
                 "enabled": True,
                 "loss_allowance_pct": 0.005,
-                "threshold": 0.3
-            }
-        }
+                "threshold": 0.3,
+            },
+        },
     }
 
 
@@ -139,9 +126,7 @@ def get_template_config():
         {
             "config_version": CONFIG_SCHEMA_VERSION,
             "backtest": {
-                "reducer": {
-                    "default": "mean"
-                },
+                "reducer": {"default": "mean"},
                 "balance_sample_divider": 60,
                 "base_dir": "backtests",
                 "btc_collateral_cap": 0.0,
@@ -151,10 +136,7 @@ def get_template_config():
                 "compress_cache": True,
                 "dynamic_wel_by_tradability": True,
                 "end_date": "now",
-                "exchanges": [
-                    "binance",
-                    "bybit"
-                ],
+                "exchanges": ["binance", "bybit"],
                 "filter_by_min_effective_cost": False,
                 "gap_tolerance_ohlcvs_minutes": 120,
                 "hsl_detailed_report": False,
@@ -164,17 +146,12 @@ def get_template_config():
                 "maker_fee_override": 0.0004,
                 "market_order_slippage_pct": 0.0005,
                 "limit_order_fill_buffer_pct": 0.0,
-                "market_settings": {
-                    "overrides": {},
-                    "overrides_by_exchange": {}
-                },
+                "market_settings": {"overrides": {}, "overrides_by_exchange": {}},
                 "market_settings_sources": {},
                 "offline": False,
                 "ohlcv_source_dir": None,
                 "scenarios": [
-                    {
-                        "label": "base"
-                    },
+                    {"label": "base"},
                     {
                         "label": "subset_1_top",
                         "coins": [
@@ -191,8 +168,8 @@ def get_template_config():
                             "ADA",
                             "CC",
                             "ZEC",
-                            "LINK"
-                        ]
+                            "LINK",
+                        ],
                     },
                     {
                         "label": "subset_2_mid1",
@@ -209,8 +186,8 @@ def get_template_config():
                             "MNT",
                             "ASTER",
                             "WLD",
-                            "DOT"
-                        ]
+                            "DOT",
+                        ],
                     },
                     {
                         "label": "subset_3_bottom",
@@ -228,8 +205,8 @@ def get_template_config():
                             "FIL",
                             "APT",
                             "ARB",
-                            "INJ"
-                        ]
+                            "INJ",
+                        ],
                     },
                     {
                         "label": "subset_4_mix",
@@ -247,8 +224,8 @@ def get_template_config():
                             "AAVE",
                             "KAS",
                             "ENA",
-                            "ARB"
-                        ]
+                            "ARB",
+                        ],
                     },
                     {
                         "label": "subset_5_mix",
@@ -266,8 +243,8 @@ def get_template_config():
                             "ATOM",
                             "ALGO",
                             "FIL",
-                            "INJ"
-                        ]
+                            "INJ",
+                        ],
                     },
                     {
                         "label": "subset_6_mix",
@@ -284,9 +261,9 @@ def get_template_config():
                             "MORPHO",
                             "RENDER",
                             "POL",
-                            "APT"
-                        ]
-                    }
+                            "APT",
+                        ],
+                    },
                 ],
                 "start_date": "2021-04-20",
                 "starting_balance": 100000,
@@ -305,9 +282,9 @@ def get_template_config():
                     "loss_profit_ratio",
                     "strategy_eq_underwater_pct_mean",
                     "hard_stop_restarts_per_year",
-                    "hard_stop_panic_close_loss_drawdown_pct_mean"
+                    "hard_stop_panic_close_loss_drawdown_pct_mean",
                 ],
-                "volume_normalization": True
+                "volume_normalization": True,
             },
             "bot": {
                 "long": {
@@ -363,7 +340,7 @@ def get_template_config():
                         "FIL",
                         "ARB",
                         "APT",
-                        "INJ"
+                        "INJ",
                     ],
                     "short": [
                         "BTC",
@@ -406,8 +383,8 @@ def get_template_config():
                         "FIL",
                         "ARB",
                         "APT",
-                        "INJ"
-                    ]
+                        "INJ",
+                    ],
                 },
                 "auto_gs": True,
                 "balance_hysteresis_snap_pct": 0.01,
@@ -431,15 +408,8 @@ def get_template_config():
                 "forced_mode_long": "",
                 "forced_mode_short": "",
                 "hedge_mode": False,
-                "hsl_accept_incomplete_history": False,
-                "hsl_unavailable_grace_seconds": 120.0,
-                "hsl_position_during_cooldown_policy": "panic",
-                "hsl_engine": "legacy",
                 "hsl_signal_mode": "coin",
-                "ignored_coins": {
-                    "long": [],
-                    "short": []
-                },
+                "ignored_coins": {"long": [], "short": []},
                 "inactive_coin_candle_ttl_minutes": 10,
                 "leverage": 10,
                 "limit_order_create_max_market_dist_pct": 0.8,
@@ -467,14 +437,13 @@ def get_template_config():
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "pnls_max_lookback_days": 30.0,
                 "recv_window_ms": 5000,
-                "risk_input_max_attempts": 10,
                 "startup_phase_budgets": {},
                 "strategy_kind": "trailing_martingale",
                 "time_in_force": "good_till_cancelled",
                 "user": "bybit_01",
                 "warmup_concurrency": 0,
                 "warmup_jitter_seconds": 30,
-                "warmup_ratio": 0.3
+                "warmup_ratio": 0.3,
             },
             "logging": {
                 "backup_count": 5,
@@ -485,7 +454,7 @@ def get_template_config():
                 "memory_snapshot_interval_minutes": 30,
                 "persist_to_file": True,
                 "rotation": True,
-                "volume_refresh_info_threshold_seconds": 30
+                "volume_refresh_info_threshold_seconds": 30,
             },
             "monitor": {
                 "checkpoint_interval_minutes": 10.0,
@@ -502,7 +471,7 @@ def get_template_config():
                 "retain_fills": True,
                 "retain_price_ticks": True,
                 "root_dir": "monitor",
-                "snapshot_interval_seconds": 1.0
+                "snapshot_interval_seconds": 1.0,
             },
             "optimize": {
                 "bounds": get_optimize_bounds_defaults(),
@@ -515,7 +484,7 @@ def get_template_config():
                     "fixed_params": [],
                     "fixed_runtime_overrides": {
                         "bot.long.hsl.restart_after_red_policy": "always",
-                        "bot.short.hsl.restart_after_red_policy": "always"
+                        "bot.short.hsl.restart_after_red_policy": "always",
                     },
                     "iters": 200000,
                     "mutation_eta": 20,
@@ -547,7 +516,7 @@ def get_template_config():
                             "mode": "auto",
                         },
                         "screening": deepcopy(GPU_SCREENING_DEFAULTS),
-                        "validate_per_generation": 8
+                        "validate_per_generation": 8,
                     },
                     "pymoo": {
                         "algorithm": "auto",
@@ -556,9 +525,9 @@ def get_template_config():
                             "nsga3": {
                                 "ref_dirs": {
                                     "method": "das_dennis",
-                                    "n_partitions": "auto"
+                                    "n_partitions": "auto",
                                 }
-                            }
+                            },
                         },
                         "shared": {
                             "crossover_eta": 20.0,
@@ -566,8 +535,8 @@ def get_template_config():
                             "eliminate_duplicates": True,
                             "mutation_eta": 20.0,
                             "mutation_prob": "auto",
-                            "mutation_prob_per_variable": "auto"
-                        }
+                            "mutation_prob_per_variable": "auto",
+                        },
                     },
                     "round_to_n_significant_digits": 3,
                     "write_all_results": True,
@@ -577,61 +546,28 @@ def get_template_config():
                             "metric": "drawdown_worst_strategy_eq",
                             "penalize_if": "greater_than",
                             "reducer": "mean",
-                            "value": 0.8
+                            "value": 0.8,
                         },
                         {
                             "enabled": True,
                             "metric": "backtest_completion_ratio",
                             "penalize_if": "less_than",
-                            "value": 0.99
-                        }
+                            "value": 0.99,
+                        },
                     ],
                     "scoring": [
-                        {
-                            "goal": "max",
-                            "metric": "adg_strategy_eq"
-                        },
-                        {
-                            "goal": "max",
-                            "metric": "adg_strategy_eq_w"
-                        },
-                        {
-                            "goal": "max",
-                            "metric": "mdg_strategy_eq"
-                        },
-                        {
-                            "goal": "max",
-                            "metric": "sortino_ratio_strategy_eq"
-                        },
-                        {
-                            "goal": "max",
-                            "metric": "volume_pct_per_day_avg"
-                        },
-                        {
-                            "goal": "max",
-                            "metric": "sharpe_ratio_strategy_eq"
-                        },
-                        {
-                            "goal": "min",
-                            "metric": "strategy_eq_recovery_days_max"
-                        },
-                        {
-                            "goal": "min",
-                            "metric": "position_held_days_max"
-                        },
-                        {
-                            "goal": "min",
-                            "metric": "drawdown_worst_strategy_eq"
-                        },
-                        {
-                            "goal": "min",
-                            "metric": "loss_profit_ratio"
-                        },
-                        {
-                            "goal": "min",
-                            "metric": "strategy_eq_underwater_pct_mean"
-                        }
-                    ]
+                        {"goal": "max", "metric": "adg_strategy_eq"},
+                        {"goal": "max", "metric": "adg_strategy_eq_w"},
+                        {"goal": "max", "metric": "mdg_strategy_eq"},
+                        {"goal": "max", "metric": "sortino_ratio_strategy_eq"},
+                        {"goal": "max", "metric": "volume_pct_per_day_avg"},
+                        {"goal": "max", "metric": "sharpe_ratio_strategy_eq"},
+                        {"goal": "min", "metric": "strategy_eq_recovery_days_max"},
+                        {"goal": "min", "metric": "position_held_days_max"},
+                        {"goal": "min", "metric": "drawdown_worst_strategy_eq"},
+                        {"goal": "min", "metric": "loss_profit_ratio"},
+                        {"goal": "min", "metric": "strategy_eq_underwater_pct_mean"},
+                    ],
                 },
             },
         }

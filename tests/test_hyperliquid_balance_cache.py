@@ -81,7 +81,14 @@ class DummyCCA:
             "info": {
                 "marginSummary": {"accountValue": 200.0},
                 "assetPositions": [
-                    {"position": {"coin": "BTC", "szi": 1.0, "entryPx": 100.0, "unrealizedPnl": 10.0}}
+                    {
+                        "position": {
+                            "coin": "BTC",
+                            "szi": 1.0,
+                            "entryPx": 100.0,
+                            "unrealizedPnl": 10.0,
+                        }
+                    }
                 ],
             }
         }
@@ -147,7 +154,13 @@ async def test_hyperliquid_ws_order_without_reduce_only_requests_refresh_without
             "level": pylogging.DEBUG,
         },
     ]
-    assert sum("lacked authoritative order semantics" in rec.message for rec in caplog.records) == 1
+    assert (
+        sum(
+            "lacked authoritative order semantics" in rec.message
+            for rec in caplog.records
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -224,13 +237,9 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_exact_acknowledged_i
         assert order["position_side"] == position_side
         assert order["reduceOnly"] is reduce_only
         assert order["qty"] == 0.01
-        assert (
-            order["_pb_order_semantics_source"]
-            == "acknowledged_exchange_order_id"
-        )
+        assert order["_pb_order_semantics_source"] == "acknowledged_exchange_order_id"
     assert not any(
-        "lacked authoritative order semantics" in rec.message
-        for rec in caplog.records
+        "lacked authoritative order semantics" in rec.message for rec in caplog.records
     )
 
 
@@ -275,9 +284,7 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_open_snapshot_after_
             }
         ]
     }
-    bot._hl_note_authoritative_open_order_semantics(
-        bot.open_orders["BTC/USDC:USDC"]
-    )
+    bot._hl_note_authoritative_open_order_semantics(bot.open_orders["BTC/USDC:USDC"])
     # Reconciliation may remove the order before its terminal WS row arrives.
     bot.open_orders = {}
     handled = []
@@ -314,15 +321,16 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_open_snapshot_after_
     for [order] in handled:
         assert order["position_side"] == position_side
         assert order["reduceOnly"] is reduce_only
-        assert order["_pb_order_semantics_source"] == "authoritative_open_order_snapshot"
+        assert (
+            order["_pb_order_semantics_source"] == "authoritative_open_order_snapshot"
+        )
         assert order["_pb_order_update_requires_authoritative_refresh"] is True
     bot.order_matches_recent_execution = lambda _order: True
     bot.order_matches_bot_cancellation = lambda _order: True
     for batch in handled:
         assert bot._ws_order_update_is_self_echo(batch) is False
     assert not any(
-        "lacked authoritative order semantics" in rec.message
-        for rec in caplog.records
+        "lacked authoritative order semantics" in rec.message for rec in caplog.records
     )
 
 
@@ -428,8 +436,8 @@ async def test_hyperliquid_ws_order_rejects_snapshot_client_id_contradiction(
         "info": {"oid": 123, "side": "B"},
     }
 
-    snapshot_state, recovered = (
-        bot._hl_open_snapshot_ws_order_semantics_evidence(sparse)
+    snapshot_state, recovered = bot._hl_open_snapshot_ws_order_semantics_evidence(
+        sparse
     )
 
     assert snapshot_state == "invalid"
@@ -476,8 +484,8 @@ async def test_hyperliquid_ws_order_rejects_snapshot_exchange_id_contradiction(
         "info": {"oid": 123, "side": "B"},
     }
 
-    snapshot_state, recovered = (
-        bot._hl_open_snapshot_ws_order_semantics_evidence(sparse)
+    snapshot_state, recovered = bot._hl_open_snapshot_ws_order_semantics_evidence(
+        sparse
     )
 
     assert snapshot_state == "invalid"
@@ -603,12 +611,10 @@ async def test_hyperliquid_ws_open_race_waits_for_exact_create_ack(
     assert len(handled) == 1
     assert handled[0][0]["position_side"] == "long"
     assert (
-        handled[0][0]["_pb_order_semantics_source"]
-        == "acknowledged_exchange_order_id"
+        handled[0][0]["_pb_order_semantics_source"] == "acknowledged_exchange_order_id"
     )
     assert not any(
-        "lacked authoritative order semantics" in rec.message
-        for rec in caplog.records
+        "lacked authoritative order semantics" in rec.message for rec in caplog.records
     )
 
 
@@ -1025,7 +1031,12 @@ async def test_hyperliquid_ws_order_rejects_contradictory_acknowledged_semantics
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(stubbed_modules):
+async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(
+    stubbed_modules, monkeypatch
+):
+    from live.hsl_live import Owner
+
+    monkeypatch.setattr(Owner, "admit", lambda self, order: True)
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     markers = []
 
@@ -1035,7 +1046,10 @@ async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(stubbe
             assert order_id == "abc123"
             assert symbol == "BTC/USDC:USDC"
             assert params == {}
-            return {"status": "ok", "response": "Order was never placed or already canceled"}
+            return {
+                "status": "ok",
+                "response": "Order was never placed or already canceled",
+            }
 
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.user_info = {"is_vault": False}
@@ -1093,7 +1107,9 @@ async def test_hyperliquid_combined_fetch_reused(stubbed_modules):
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_snapshot_helpers_return_raw_bundle_on_cold_capture(stubbed_modules):
+async def test_hyperliquid_snapshot_helpers_return_raw_bundle_on_cold_capture(
+    stubbed_modules,
+):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
 
     bot = HyperliquidBot.__new__(HyperliquidBot)
@@ -1107,7 +1123,12 @@ async def test_hyperliquid_snapshot_helpers_return_raw_bundle_on_cold_capture(st
         "balance": {"info": {"marginSummary": {"accountValue": 200.0}}},
         "positions": {
             "core": [{"position": {"coin": "BTC", "szi": "1.0"}}],
-            "hip3": [{"fetch_spec": {"params": {"dex": "xyz"}}, "response": [{"symbol": "XYZ-SP500"}]}],
+            "hip3": [
+                {
+                    "fetch_spec": {"params": {"dex": "xyz"}},
+                    "response": [{"symbol": "XYZ-SP500"}],
+                }
+            ],
         },
     }
     normalized_positions = [
@@ -1140,14 +1161,19 @@ async def test_hyperliquid_fetch_open_orders_dedupes_parallel_routes(stubbed_mod
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.markets_dict = {
         "BTC/USDC:USDC": {"info": {}},
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
     }
     bot.positions = {
         "BTC/USDC:USDC": {"long": {"size": 0.1}, "short": {"size": 0.0}},
         "XYZ-SP500/USDC:USDC": {"long": {"size": 0.1}, "short": {"size": 0.0}},
     }
     bot._hl_state_fetch_concurrency = lambda: 2
-    bot._get_hl_dex_for_symbol = lambda symbol: "xyz" if symbol == "XYZ-SP500/USDC:USDC" else None
+    bot._get_hl_dex_for_symbol = lambda symbol: (
+        "xyz" if symbol == "XYZ-SP500/USDC:USDC" else None
+    )
 
     class _OpenOrdersCCA:
         async def fetch_open_orders(self, symbol=None, params=None):
@@ -1195,13 +1221,21 @@ async def test_hyperliquid_fetch_open_orders_dedupes_parallel_routes(stubbed_mod
     assert orders[1]["position_side"] == "long"
 
 
-def test_hyperliquid_selects_active_dex_scope_until_periodic_full_sweep(stubbed_modules, monkeypatch):
+def test_hyperliquid_selects_active_dex_scope_until_periodic_full_sweep(
+    stubbed_modules, monkeypatch
+):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
 
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.markets_dict = {
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
-        "XYZ-GOLD/USDC:USDC": {"baseName": "gold:GOLD", "info": {"baseName": "gold:GOLD"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
+        "XYZ-GOLD/USDC:USDC": {
+            "baseName": "gold:GOLD",
+            "info": {"baseName": "gold:GOLD"},
+        },
     }
     bot.active_symbols = ["XYZ-SP500/USDC:USDC"]
     bot.open_orders = {}
@@ -1228,7 +1262,10 @@ def test_hyperliquid_skips_hip3_dex_queries_when_no_active_dex_until_safety_swee
 
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.markets_dict = {
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
         "PARA-TOTAL2/USDC:USDC": {
             "baseName": "para:TOTAL2",
             "info": {"baseName": "para:TOTAL2"},
@@ -1246,7 +1283,10 @@ def test_hyperliquid_skips_hip3_dex_queries_when_no_active_dex_until_safety_swee
     dexes, full = bot._hl_select_dex_names_for_state("positions")
 
     assert (dexes, full) == ([], False)
-    assert bot._hl_last_dex_scope_summary("positions") == "positions_scope=active positions_dexes=0"
+    assert (
+        bot._hl_last_dex_scope_summary("positions")
+        == "positions_scope=active positions_dexes=0"
+    )
 
 
 def test_hyperliquid_ws_unknown_dex_activity_forces_full_sweep(stubbed_modules, caplog):
@@ -1254,8 +1294,14 @@ def test_hyperliquid_ws_unknown_dex_activity_forces_full_sweep(stubbed_modules, 
 
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.markets_dict = {
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
-        "XYZ-GOLD/USDC:USDC": {"baseName": "gold:GOLD", "info": {"baseName": "gold:GOLD"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
+        "XYZ-GOLD/USDC:USDC": {
+            "baseName": "gold:GOLD",
+            "info": {"baseName": "gold:GOLD"},
+        },
     }
     bot.active_symbols = ["XYZ-SP500/USDC:USDC"]
     bot.open_orders = {}
@@ -1265,7 +1311,14 @@ def test_hyperliquid_ws_unknown_dex_activity_forces_full_sweep(stubbed_modules, 
 
     with caplog.at_level(pylogging.INFO):
         bot._hl_note_ws_symbols_for_dex_scope(
-            [{"symbol": "XYZ-GOLD/USDC:USDC", "status": "open", "side": "buy", "amount": 0.1}]
+            [
+                {
+                    "symbol": "XYZ-GOLD/USDC:USDC",
+                    "status": "open",
+                    "side": "buy",
+                    "amount": 0.1,
+                }
+            ]
         )
 
     assert bot._hl_force_full_dex_sweep_surfaces == {"open_orders", "positions"}
@@ -1279,7 +1332,10 @@ def test_hyperliquid_unknown_dex_full_sweep_sticks_until_positions_consume_it(
 
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.markets_dict = {
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
         "PARA-TOTAL2/USDC:USDC": {
             "baseName": "para:TOTAL2",
             "info": {"baseName": "para:TOTAL2"},
@@ -1318,10 +1374,15 @@ def test_hyperliquid_non_unified_approved_hip3_requires_unified(stubbed_modules)
     }
     bot.positions = {}
     bot.markets_dict = {
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
     }
 
-    with pytest.raises(FatalBotException, match="require unifiedAccount or portfolioMargin mode"):
+    with pytest.raises(
+        FatalBotException, match="require unifiedAccount or portfolioMargin mode"
+    ):
         bot._assert_supported_live_state()
 
 
@@ -1340,7 +1401,10 @@ def test_hyperliquid_non_unified_live_hip3_state_requires_unified(stubbed_module
     }
     bot.open_orders = {}
     bot.markets_dict = {
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
     }
 
     with pytest.raises(FatalBotException, match="Unsupported HIP-3 state detected"):
@@ -1369,7 +1433,10 @@ def test_hyperliquid_unified_allows_hip3_symbols(stubbed_modules):
         ]
     }
     bot.markets_dict = {
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
     }
 
     bot._assert_supported_live_state()
@@ -1388,14 +1455,19 @@ def test_hyperliquid_portfolio_margin_allows_hip3_symbols(stubbed_modules):
     bot.positions = {}
     bot.open_orders = {}
     bot.markets_dict = {
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
     }
 
     bot._assert_supported_live_state()
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbed_modules):
+async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(
+    stubbed_modules,
+):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
 
     import asyncio
@@ -1411,12 +1483,19 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
     bot._hl_cache_generation = 0
     bot.markets_dict = {
         "BTC/USDC:USDC": {"info": {}},
-        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "XYZ-SP500/USDC:USDC": {
+            "baseName": "xyz:SP500",
+            "info": {"baseName": "xyz:SP500"},
+        },
     }
-    bot._get_hl_dex_for_symbol = lambda symbol: "xyz" if symbol == "XYZ-SP500/USDC:USDC" else None
+    bot._get_hl_dex_for_symbol = lambda symbol: (
+        "xyz" if symbol == "XYZ-SP500/USDC:USDC" else None
+    )
     bot._record_hl_live_margin_mode = lambda *args, **kwargs: None
 
-    UNIFIED_TOTAL = 50.92373263  # unified `total[USDC]` == account equity (includes perp uPNL)
+    UNIFIED_TOTAL = (
+        50.92373263  # unified `total[USDC]` == account equity (includes perp uPNL)
+    )
     CORE_UPNL = 1.234567  # core perp uPNL, surfaced only via info.position
     HIP3_UPNL = -0.456789  # HIP-3 dex uPNL, surfaced at the CCXT top level
 
@@ -1429,7 +1508,11 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
                 "total": {"USDC": UNIFIED_TOTAL},
                 "info": {
                     "balances": [
-                        {"coin": "USDC", "hold": "6.59768", "total": str(UNIFIED_TOTAL)},
+                        {
+                            "coin": "USDC",
+                            "hold": "6.59768",
+                            "total": str(UNIFIED_TOTAL),
+                        },
                     ]
                 },
             }
@@ -1486,8 +1569,15 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
     assert balance == pytest.approx(50.14595463)
     assert raw_snapshot["balance_mode"] == "unified_total"
     assert {p["symbol"] for p in positions} == {"BTC/USDC:USDC", "XYZ-SP500/USDC:USDC"}
-    assert any(p["symbol"] == "BTC/USDC:USDC" and p["margin_used"] == pytest.approx(1.039948) for p in positions)
-    assert any(p["symbol"] == "XYZ-SP500/USDC:USDC" and p["margin_used"] == pytest.approx(0.69617) for p in positions)
+    assert any(
+        p["symbol"] == "BTC/USDC:USDC" and p["margin_used"] == pytest.approx(1.039948)
+        for p in positions
+    )
+    assert any(
+        p["symbol"] == "XYZ-SP500/USDC:USDC"
+        and p["margin_used"] == pytest.approx(0.69617)
+        for p in positions
+    )
     assert bot.cca.balance_calls == 1
 
     composition = bot._normalize_balance_diagnostics(raw_snapshot["balance"])
@@ -1504,7 +1594,9 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_staged_balance_capture_reuses_unified_response(stubbed_modules):
+async def test_hyperliquid_staged_balance_capture_reuses_unified_response(
+    stubbed_modules,
+):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = HyperliquidBot.__new__(HyperliquidBot)
     calls = {"capture": 0, "balance": 0}
@@ -1513,7 +1605,9 @@ async def test_hyperliquid_staged_balance_capture_reuses_unified_response(stubbe
     class _NoBalanceFetchCCA:
         async def fetch_balance(self):
             calls["balance"] += 1
-            raise AssertionError("staged diagnostics must reuse the captured balance response")
+            raise AssertionError(
+                "staged diagnostics must reuse the captured balance response"
+            )
 
     async def fake_capture_positions_balance_staged_snapshot():
         calls["capture"] += 1
@@ -1522,7 +1616,9 @@ async def test_hyperliquid_staged_balance_capture_reuses_unified_response(stubbe
     async def passthrough_timed_fetch(_label, coro, _timings_ms):
         return await coro
 
-    bot._capture_positions_balance_staged_snapshot = fake_capture_positions_balance_staged_snapshot
+    bot._capture_positions_balance_staged_snapshot = (
+        fake_capture_positions_balance_staged_snapshot
+    )
     bot._timed_authoritative_fetch = passthrough_timed_fetch
     bot.cca = _NoBalanceFetchCCA()
 
@@ -1544,7 +1640,12 @@ def test_hyperliquid_position_unrealized_pnl_fails_loud(stubbed_modules):
     bot = HyperliquidBot.__new__(HyperliquidBot)
 
     # top-level value is preferred
-    assert bot._hl_position_unrealized_pnl({"symbol": "BTC/USDC:USDC", "unrealizedPnl": 2.5}) == 2.5
+    assert (
+        bot._hl_position_unrealized_pnl(
+            {"symbol": "BTC/USDC:USDC", "unrealizedPnl": 2.5}
+        )
+        == 2.5
+    )
     # falls back to info.position.unrealizedPnl (string)
     assert (
         bot._hl_position_unrealized_pnl(
@@ -1554,14 +1655,20 @@ def test_hyperliquid_position_unrealized_pnl_fails_loud(stubbed_modules):
     )
     # missing uPNL must hard-fail, never silently default to 0.0 (balance is trading-critical)
     with pytest.raises(KeyError):
-        bot._hl_position_unrealized_pnl({"symbol": "BTC/USDC:USDC", "info": {"position": {}}})
+        bot._hl_position_unrealized_pnl(
+            {"symbol": "BTC/USDC:USDC", "info": {"position": {}}}
+        )
     # non-finite uPNL must hard-fail
     with pytest.raises(ValueError):
-        bot._hl_position_unrealized_pnl({"symbol": "BTC/USDC:USDC", "unrealizedPnl": float("inf")})
+        bot._hl_position_unrealized_pnl(
+            {"symbol": "BTC/USDC:USDC", "unrealizedPnl": float("inf")}
+        )
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_fetch_user_abstraction_state_sets_unified_options(stubbed_modules):
+async def test_hyperliquid_fetch_user_abstraction_state_sets_unified_options(
+    stubbed_modules,
+):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
 
     bot = HyperliquidBot.__new__(HyperliquidBot)
@@ -1625,9 +1732,13 @@ async def test_hyperliquid_fetch_positions_balance_handles_missing_asset_positio
     bot._hl_cache_generation = 0
     bot._hl_unified_enabled = True
     bot._get_hl_dex_for_symbol = lambda _symbol: None
-    bot._fetch_hip3_positions = lambda include_raw=False: _return_async(([], []), include_raw)
+    bot._fetch_hip3_positions = lambda include_raw=False: _return_async(
+        ([], []), include_raw
+    )
     bot._record_hl_live_margin_mode = lambda *args, **kwargs: None
-    bot._hl_last_dex_scope_summary = lambda surface: f"{surface}_scope=active {surface}_dexes=0"
+    bot._hl_last_dex_scope_summary = (
+        lambda surface: f"{surface}_scope=active {surface}_dexes=0"
+    )
 
     class _BalanceWithoutAssetPositionsCCA:
         async def fetch_balance(self):
@@ -1714,10 +1825,14 @@ def _make_probe_bot(HyperliquidBot):
         "XYZ-SP500/USDC:USDC": 1.0,
         "BTC/USDC:USDC": 1.0,
     }
-    bot._get_hl_dex_for_symbol = lambda symbol: "xyz" if symbol == "XYZ-SP500/USDC:USDC" else None
+    bot._get_hl_dex_for_symbol = lambda symbol: (
+        "xyz" if symbol == "XYZ-SP500/USDC:USDC" else None
+    )
     bot._requires_isolated_margin = lambda symbol: False
     bot._get_margin_mode_for_symbol = lambda symbol: "cross"
-    bot._calc_leverage_for_symbol = lambda symbol: 20 if symbol in {"XYZ-SP500/USDC:USDC", "BTC/USDC:USDC"} else 5
+    bot._calc_leverage_for_symbol = lambda symbol: (
+        20 if symbol in {"XYZ-SP500/USDC:USDC", "BTC/USDC:USDC"} else 5
+    )
     bot.fetched_positions = []
     bot.open_orders = {}
     bot.stop_signal_received = False
@@ -1775,13 +1890,17 @@ async def test_update_open_orders_suppresses_missing_log_for_exact_recent_bot_ca
         return []
 
     async def fail_update_positions_and_balance():
-        raise AssertionError("should not schedule positions refresh for confirmed bot cancel")
+        raise AssertionError(
+            "should not schedule positions refresh for confirmed bot cancel"
+        )
 
     bot.fetch_open_orders = fake_fetch_open_orders
     bot.handle_balance_update = lambda source="REST": None
     bot.update_positions_and_balance = fail_update_positions_and_balance
     bot.order_was_recently_cancelled = lambda order: 0.0
-    bot.log_order_action = lambda order, action, source, **kwargs: seen.append((action, kwargs))
+    bot.log_order_action = lambda order, action, source, **kwargs: seen.append(
+        (action, kwargs)
+    )
     import passivbot as pb_mod
 
     original_utc_ms = pb_mod.utc_ms
@@ -1867,7 +1986,9 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
     async def fake_update_pnls(**_kwargs):
         return True
 
-    bot._capture_positions_balance_staged_snapshot = fake_capture_positions_balance_staged_snapshot
+    bot._capture_positions_balance_staged_snapshot = (
+        fake_capture_positions_balance_staged_snapshot
+    )
     bot.fetch_open_orders = fake_fetch_open_orders
     bot.update_pnls = fake_update_pnls
     bot.log_position_changes = fake_log_position_changes
@@ -1876,7 +1997,8 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
     bot.order_was_recently_cancelled = lambda order: 0.0
     bot.log_order_action = lambda *args, **kwargs: None
 
-    ok = await bot.refresh_authoritative_state()
+    bot._begin_authoritative_refresh_epoch()
+    ok = await bot._refresh_authoritative_state_staged()
 
     expected_balance = 50.499284
     assert ok is True
@@ -1944,31 +2066,55 @@ async def test_hyperliquid_open_orders_refresh_does_not_republish_same_hip3_effe
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("unified", [True, False])
-async def test_hyperliquid_protective_positions_do_not_consume_balance(stubbed_modules, unified):
+async def test_hyperliquid_protective_positions_do_not_consume_balance(
+    stubbed_modules, unified
+):
     from unittest.mock import AsyncMock
+
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot._hl_unified_enabled = unified
     core_symbol = "BTC/USDC:USDC"
     hip3_symbol = "XYZ-SP500/USDC:USDC"
     bot.cca = types.SimpleNamespace(
-        fetch_balance=AsyncMock(side_effect=AssertionError("balance must not be fetched")),
-        fetch_positions=AsyncMock(return_value=[{
-            "symbol": core_symbol, "contracts": 2.0, "side": "short", "entryPrice": 100.0,
-        }]),
+        fetch_balance=AsyncMock(
+            side_effect=AssertionError("balance must not be fetched")
+        ),
+        fetch_positions=AsyncMock(
+            return_value=[
+                {
+                    "symbol": core_symbol,
+                    "contracts": 2.0,
+                    "side": "short",
+                    "entryPrice": 100.0,
+                }
+            ]
+        ),
     )
-    hip3_position = {"symbol": hip3_symbol, "position_side": "long", "size": 1.0, "price": 50.0}
+    hip3_position = {
+        "symbol": hip3_symbol,
+        "position_side": "long",
+        "size": 1.0,
+        "price": 50.0,
+    }
     bot._fetch_hip3_positions = AsyncMock(return_value=[hip3_position])
     bot.fetch_open_orders = AsyncMock(return_value=[])
     bot._get_hl_dex_for_symbol = lambda symbol: "xyz" if symbol == hip3_symbol else ""
     bot._record_hl_live_margin_mode = lambda *args: None
     bot._preserve_position_timing = lambda *args: None
+
     async def timed(_label, coro, _timings):
         return await coro
+
     bot._timed_authoritative_fetch = timed
-    snapshot = await bot.capture_authoritative_state_staged_snapshot({"positions", "open_orders"}, {})
+    snapshot = await bot.capture_authoritative_state_staged_snapshot(
+        {"positions", "open_orders"}, {}
+    )
     assert "balance" not in snapshot
-    assert [(p["symbol"], p["size"]) for p in snapshot["positions"]] == [(core_symbol, -2.0), (hip3_symbol, 1.0)]
+    assert [(p["symbol"], p["size"]) for p in snapshot["positions"]] == [
+        (core_symbol, -2.0),
+        (hip3_symbol, 1.0),
+    ]
     bot.cca.fetch_balance.assert_not_awaited()
     bot.cca.fetch_positions.assert_awaited_once_with()
     bot._fetch_hip3_positions.assert_awaited_once_with()
@@ -1976,8 +2122,11 @@ async def test_hyperliquid_protective_positions_do_not_consume_balance(stubbed_m
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_protective_positions_propagate_partial_failure(stubbed_modules):
+async def test_hyperliquid_protective_positions_propagate_partial_failure(
+    stubbed_modules,
+):
     from unittest.mock import AsyncMock
+
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.cca = types.SimpleNamespace(fetch_positions=AsyncMock(return_value=[]))

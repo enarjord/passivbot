@@ -77,20 +77,6 @@ instructions. At the baseline, the problem was fragmentation, not absence:
 
 Recent live work on VPS5 and the local Bybit bot showed why this matters:
 
-- A one-candle open-tail EMA miss needed logs from normal text output, monitor
-  events, candle health diagnostics, and code inspection to reconstruct.
-- GateIO HSL startup failed terminally, but the causal chain crossed fill
-  replay, candle replay, balance/equity timeline generation, and HSL replay.
-- VPS5 CPU and memory pressure made it clear that observability must be bounded,
-  sampled, and moved off the hot path where possible.
-- Console logs are useful for operators, but the full forensic record needs more
-  detail than a human can tail during normal operation.
-- Repeated live restarts showed that shutdown and warm-cache startup need their
-  own explicit contracts. A shutdown signal should propagate into long candle,
-  fill, account-refresh, warmup, and HSL replay work so exit is prompt and
-  bounded. A short-downtime restart should prove cached coverage and reuse it
-  where safe instead of repeating cold-start work unnecessarily.
-
 ## Target Shape
 
 Build one live event pipeline with multiple sinks. Do not merge all outputs into
@@ -121,40 +107,6 @@ decide whether an order is safe. If sinks fail or fall behind, emit/surface
 
 Each event should include a stable envelope:
 
-- `schema_version`
-- `event_id`
-- `event_type`
-- `ts_ms`
-- `monotonic_ms`
-- `level`: `trace`, `debug`, `info`, `warning`, `error`, `critical`
-- `source`: module or subsystem, for example `live`, `candles`, `fills`,
-  `orders`, `risk`, `monitor`
-- `component`: narrower producer, for example `staged_refresh`,
-  `orchestrator_payload`, `order_wave`, `hsl_coin_replay`
-- `tags`: stable hierarchy such as `["risk", "hsl", "coin"]`
-- `exchange`
-- `user`
-- `bot_id`
-- `symbol`
-- `pside`
-- `side`
-- `order_id`
-- `client_order_id`
-- `cycle_id`
-- `snapshot_id`
-- `plan_id`
-- `action_id`
-- `remote_call_id`
-- `remote_call_group_id`
-- `status`: `started`, `succeeded`, `failed`, `deferred`, `skipped`,
-  `recovered`, `degraded`
-- `reason_code`
-- `message`: short human text
-- `data`: bounded JSON object with event-specific fields
-- `raw_ref`: optional reference to a policy-permitted bounded, scrubbed
-  diagnostic artifact that contains no raw exchange/account payload
-- `raw_hash`: hash of a source payload that is intentionally not persisted
-
 Compatibility mapping:
 
 - Current monitor `kind` maps to `event_type`.
@@ -168,65 +120,6 @@ Compatibility mapping:
 
 Start with a small event registry and expand as components migrate. Initial
 stable names:
-
-- `bot.started`
-- `bot.ready`
-- `bot.startup_timing`
-- `bot.stopping`
-- `bot.stopped`
-- `cycle.started`
-- `cycle.completed`
-- `cycle.degraded`
-- `remote_call.started`
-- `remote_call.succeeded`
-- `remote_call.failed`
-- `remote_call.throttled`
-- `cache.load.started`
-- `cache.load.completed`
-- `cache.warmup_decision`
-- `cache.flush.started`
-- `cache.flush.completed`
-- `cache.flush.degraded`
-- `data_packet.updated`
-- `snapshot.built`
-- `planning.unavailable`
-- `planning.defer_summary` (historical compatibility only; no current live producer)
-- `forager.selection`
-- `forager.feature_unavailable`
-- `ema.bundle.started`
-- `ema.bundle.completed`
-- `ema.fallback_used`
-- `ema.unavailable`
-- `candle.coverage_checked`
-- `candle.tail_projected`
-- `hsl.replay.started`
-- `hsl.replay.progress`
-- `hsl.replay.completed`
-- `hsl.replay.failed`
-- `hsl.raw_red_pending`
-- `hsl.transition`
-- `risk.mode_changed`
-- `rust_orchestrator.called`
-- `rust_orchestrator.returned`
-- `action.planned`
-- `order_wave.started`
-- `order_wave.completed`
-- `execution.create_sent`
-- `execution.create_succeeded`
-- `execution.create_failed`
-- `execution.create_rejected`
-- `execution.cancel_sent`
-- `execution.cancel_succeeded`
-- `execution.cancel_failed`
-- `execution.cancel_ambiguous_terminal`
-- `execution.ambiguous`
-- `execution.confirmation_requested`
-- `execution.confirmation_satisfied`
-- `execution.confirmation_timeout`
-- `fill.ingested`
-- `position.changed`
-- `balance.changed`
-- `sink.degraded`
 
 Names should be stable and dotted. Text prefixes can remain for console
 readability, but they should be projections of the event registry.
@@ -325,18 +218,6 @@ must itself be observable.
 
 Defaults:
 
-- EMA updates: one `ema.bundle.completed` summary per symbol set/cycle. Per-span
-  events only at TRACE or targeted debug.
-- Forager rankings: compact top-N and selected/incumbent/replacement detail at
-  INFO/DEBUG; full ranking only structured DEBUG/TRACE.
-- Remote calls: all failures and slow calls; successful calls summarized by
-  cohort at INFO/DEBUG with individual details in structured events.
-- Candle cache maintenance: summaries by symbol/timeframe; full shard details in
-  DEBUG/TRACE.
-- Planning unavailable: throttle repeats by `(symbol, pside, order_class,
-  reason_code)` and emit suppression counts.
-- HSL replay: start/progress/completion summaries, not per-row events.
-
 ## Correlation Model
 
 Post-incident reconstruction depends on correlation ids.
@@ -381,20 +262,6 @@ Every exchange/network call should eventually emit:
 - `remote_call.succeeded` or `remote_call.failed`
 
 Fields:
-
-- exchange
-- endpoint or logical operation
-- method
-- params hash and bounded params summary
-- caller/component
-- reason_code, for example `startup_account_ready`, `hsl_replay_candles`,
-  `forager_refresh_stalest`, `order_create`, `order_cancel`
-- isolated vs concurrent via `remote_call_group_id`
-- start/end timestamps
-- elapsed ms
-- timeout/retry/rate-limit metadata
-- payload size/hash and bounded normalized summary when available
-- completeness/coverage result when applicable
 
 `CandlestickManager.remote_fetch_callback` should be wired into this pipeline
 rather than staying a dead-end hook.
@@ -441,26 +308,6 @@ logging work. They should be implemented as reviewed slices with tests and live
 smoke, not hidden inside observability-only PRs or counted toward logging
 completion. Their implementation belongs in the live-operations backlog or a
 dedicated handoff.
-
-1. Shutdown contract.
-   Ctrl-C or process stop should set one shutdown intent that long-running live
-   paths observe quickly: candle warmup/fetch, fill refresh, account refresh,
-   HSL replay, background maintainers, executor waits, and lock waits. Work that
-   is not needed for safe cleanup should be cancelled or abandoned cleanly, while
-   session close and event/monitor flush still get a short bounded deadline.
-   Structured events should record `bot.stopping`, interrupted component,
-   cleanup duration, cancelled task counts, and any bounded cleanup timeout.
-2. Warm-cache fast restart.
-   If downtime is short and local cache metadata proves coverage, startup should
-   take a delta path instead of repeating cold-start warmup/replay. This must not
-   skip fresh account-critical state or weaken HSL/stateless safety. The bot
-   should emit structured startup evidence explaining which cached surfaces were
-   reused, which were refreshed, which coverage proofs were accepted/rejected,
-   and why cold-start work was still required.
-
-These goals depend on the event stream being good enough to prove whether an
-exit or restart was slow because of exchange I/O, cache coverage, HSL replay,
-lock contention, or intentional safety policy.
 
 ## Historical Migration Plan
 

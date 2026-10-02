@@ -101,7 +101,7 @@ def test_independent_default_and_mirror_fixed_override_order():
     candidate = _finalize_optimizer_vector_config(deepcopy(config))
     for side in ("long", "short"):
         assert candidate["bot"][side]["unstuck"]["ema_span_0"] == 61.25
-        assert candidate["bot"][side]["unstuck_ema_span_0"] == 61.25
+        assert "unstuck_ema_span_0" not in candidate["bot"][side]
 
 
 def test_coupling_materializes_scenario_dependencies_for_plain_saved_suite_replay():
@@ -160,7 +160,8 @@ def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
 
     cls = service.MpsSingleCoinProxy if single else service.MpsMulticoinProxy
     proxy = cls.__new__(cls)
-    proxy.hsl_engine = "legacy"
+    proxy.hsl_signal_mode = "coin"
+
     prefix = "EMA_ANCHOR" if kind == "ema_anchor" else "TRAILING_MARTINGALE"
     keys = getattr(
         model,
@@ -224,9 +225,24 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
         "ema_span_0"
     ] = 71.5
     payload = SimpleNamespace(
+        backtest_params={
+            "coins": ["BTC"],
+            "dynamic_wel_by_tradability": True,
+            "equity_hard_stop_loss": {
+                "engine": "hsl",
+                "mode": "coin",
+                "coins": {"BTC": [config["bot"][s]["hsl"] for s in ("long", "short")]},
+            },
+        },
         strategy_params_list=[{side: strategy}],
         bot_params_list=[
-            {side: {"risk_entry_cooldown_minutes": 0, "total_wallet_exposure_limit": 1}}
+            {
+                side: {
+                    "risk_entry_cooldown_minutes": 0,
+                    "total_wallet_exposure_limit": 1,
+                    "n_positions": 1,
+                }
+            }
         ],
     )
     build = (
@@ -308,6 +324,9 @@ def test_exact_suite_finalization_couples_after_context_overrides_without_mutati
         },
     )
     evaluator = SuiteEvaluator.__new__(SuiteEvaluator)
+    evaluator.base = SimpleNamespace(scoring_specs=[], limit_checks=[])
+    evaluator.objective_bases = []
+    ctx.msss = {}
     actual = evaluator.build_scenario_candidate_config(config, ctx)
     assert actual["bot"]["long"]["unstuck"]["ema_span_0"] == 401.5
     assert (

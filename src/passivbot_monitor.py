@@ -253,7 +253,9 @@ def _monitor_record_event(
     publisher = getattr(self, "monitor_publisher", None)
     if publisher is None:
         return None
-    return publisher.record_event(kind, tags, payload, ts=ts, symbol=symbol, pside=pside)
+    return publisher.record_event(
+        kind, tags, payload, ts=ts, symbol=symbol, pside=pside
+    )
 
 
 def _monitor_record_error(
@@ -296,9 +298,8 @@ def _monitor_emit_stop(
         stop_payload,
         ts=ts,
     )
-    if (
-        str(reason) != "shutdown_gracefully"
-        and not getattr(self, "_live_event_bot_stopped_emitted", False)
+    if str(reason) != "shutdown_gracefully" and not getattr(
+        self, "_live_event_bot_stopped_emitted", False
     ):
         emit_live_event = getattr(self, "_emit_live_event", None)
         if callable(emit_live_event):
@@ -322,64 +323,9 @@ def _monitor_emit_stop(
 
 
 def _monitor_hsl_section(self, *, now_ms):
-    from live.hsl_revised_live import selected
-    if selected(self):
-        from live.hsl_revised_diagnostics import snapshot
-        return snapshot(self, now_ms=now_ms)
-    return {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")}
+    from live.hsl_diagnostics import snapshot
 
-
-def _monitor_hsl_payload(self, pside: str) -> dict:
-    enabled = self._equity_hard_stop_enabled(pside)
-    state = self._hsl_state(pside)
-    last_metrics = state.get("last_metrics") or {}
-    payload = {
-        "enabled": bool(enabled),
-        "tier": str(last_metrics.get("tier", "disabled" if not enabled else "unknown")),
-        "halted": bool(state.get("halted", False)),
-        "no_restart_latched": bool(state.get("no_restart_latched", False)),
-        "pending_red_since_ms": state.get("pending_red_since_ms"),
-        "cooldown_until_ms": state.get("cooldown_until_ms"),
-        "cooldown_intervention_active": bool(state.get("cooldown_intervention_active", False)),
-        "cooldown_repanic_reset_pending": bool(state.get("cooldown_repanic_reset_pending", False)),
-        "last_metrics": dict(last_metrics) if isinstance(last_metrics, dict) else {},
-    }
-    signal_mode = getattr(self, "_equity_hard_stop_signal_mode", None)
-    if callable(signal_mode) and signal_mode() == "coin":
-        coins = {}
-        for symbol, coin_state in getattr(self, "_equity_hard_stop_coin", {}).get(pside, {}).items():
-            metrics = coin_state.get("last_metrics") or {}
-            coins[symbol] = {
-                "tier": str(metrics.get("tier", "unknown")),
-                "halted": bool(coin_state.get("halted", False)),
-                "no_restart_latched": bool(coin_state.get("no_restart_latched", False)),
-                "pending_red_since_ms": coin_state.get("pending_red_since_ms"),
-                "cooldown_until_ms": coin_state.get("cooldown_until_ms"),
-                "last_metrics": dict(metrics),
-            }
-        payload["coins"] = coins
-        if coins:
-            tiers = {"disabled": 0, "green": 1, "yellow": 2, "orange": 3, "unknown": 4, "red": 5}
-            payload["tier"] = max((c["tier"] for c in coins.values()), key=lambda t: tiers.get(t, 4))
-            for field in ("halted", "no_restart_latched"):
-                payload[field] = any(c[field] for c in coins.values())
-    health = getattr(self, "_hsl_protection_health", None)
-    payload["protective_quote_unavailable_symbols"] = sorted(
-        getattr(self, "_hsl_protective_unavailable_symbols", set())
-    )
-    if health is not None:
-        from live.hsl_protection import grace_ms
-        payload["protection_health"] = [row for row in health.payload(
-            int(self.get_exchange_time()), grace_ms(self)
-        ) if row["pside"] == pside]
-    recovery = getattr(self, "_risk_input_recovery", None)
-    if recovery is not None:
-        payload["input_recovery"] = {
-            "reason": recovery.reason,
-            "attempts": recovery.attempts,
-            "protective_exit_pending": bool(health and health.pending_exits()),
-        }
-    return {k: v for k, v in payload.items() if v is not None}
+    return snapshot(self, now_ms=now_ms)
 
 
 def _monitor_order_payload(self, order: dict, *, source: str) -> dict:
@@ -493,21 +439,22 @@ def _monitor_handle_candlestick_persist(
 
 
 def _monitor_equity(self, *, balance_raw: float, now_ms: int) -> Optional[float]:
-    """Passive account observation; revised refreshes do not run legacy callbacks.
+    """Passive account observation independent of HSL evaluation.
 
     Read only already-committed account facts and cached quotes. Missing current
     inputs mean unknown equity, not zero UPNL or the constructor's placeholder.
     This helper neither fetches data nor supplies any trading permission.
     """
-    if getattr(self, "config", {}).get("live", {}).get("hsl_engine") != "revised":
-        return float(getattr(self, "_monitor_last_equity", balance_raw) or balance_raw)
     try:
         max_age = self._live_market_snapshot_max_age_ms()
         pending = getattr(self, "_authoritative_pending_confirmations", {})
         for name in ("balance", "positions"):
             state = self.freshness_ledger.surfaces[name]
-            if (state.updated_ms <= 0 or not 0 <= now_ms - state.updated_ms <= max_age
-                    or int(pending.get(name, 0)) > state.epoch):
+            if (
+                state.updated_ms <= 0
+                or not 0 <= now_ms - state.updated_ms <= max_age
+                or int(pending.get(name, 0)) > state.epoch
+            ):
                 return None
         if not math.isfinite(balance_raw):
             return None
@@ -523,18 +470,28 @@ def _monitor_equity(self, *, balance_raw: float, now_ms: int) -> Optional[float]
                     return None
                 if size == 0.0:
                     continue
-                basis, multiplier = float(position["price"]), float(self.c_mults[symbol])
+                basis, multiplier = float(position["price"]), float(
+                    self.c_mults[symbol]
+                )
                 quote = cache.get(symbol)
-                if (not math.isfinite(basis) or basis <= 0.0
-                        or not math.isfinite(multiplier) or multiplier <= 0.0
-                        or quote is None or not quote.is_valid()
-                        or not 0 <= now_ms - quote.fetched_ms <= max_age):
+                if (
+                    not math.isfinite(basis)
+                    or basis <= 0.0
+                    or not math.isfinite(multiplier)
+                    or multiplier <= 0.0
+                    or quote is None
+                    or not quote.is_valid()
+                    or not 0 <= now_ms - quote.fetched_ms <= max_age
+                ):
                     return None
                 equity += _calc_monitor_pnl(side, basis, quote.last, size, multiplier)
         return float(equity) if math.isfinite(equity) else None
     except Exception as exc:
         # Optional telemetry must never inhibit trading or publish partial equity.
-        logging.debug("[monitor] equity observation unavailable | error_type=%s", type(exc).__name__)
+        logging.debug(
+            "[monitor] equity observation unavailable | error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
 
@@ -618,15 +575,15 @@ def _build_health_summary_payload(
                     pipeline, "consume_timing_snapshot", None
                 )
                 if callable(consume_timing_snapshot):
-                    pipeline_payload, timing_snapshot_token = (
-                        consume_timing_snapshot()
-                    )
+                    pipeline_payload, timing_snapshot_token = consume_timing_snapshot()
                 else:
                     pipeline_payload = health_snapshot()
             else:
                 pipeline_payload = health_snapshot()
         except Exception as exc:
-            logging.debug("[monitor] event pipeline health snapshot unavailable: %s", exc)
+            logging.debug(
+                "[monitor] event pipeline health snapshot unavailable: %s", exc
+            )
             pipeline_payload = {}
         if isinstance(pipeline_payload, dict):
             payload.update(pipeline_payload)
@@ -645,7 +602,9 @@ def _monitor_recent_orders_payload(
     payloads: list[dict] = []
     for order in trimmed:
         try:
-            payload = self._monitor_order_payload(order, source=str(order.get("source", "runtime")))
+            payload = self._monitor_order_payload(
+                order, source=str(order.get("source", "runtime"))
+            )
         except Exception:
             continue
         execution_ts = order.get("execution_timestamp")
@@ -674,7 +633,9 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
         symbols |= set(approved_minus_ignored.get(pside, set()) or set())
         symbols |= set(approved.get(pside, set()) or set())
         symbols |= set(ignored.get(pside, set()) or set())
-    market_snapshot_cache = getattr(getattr(self, "market_snapshot_provider", None), "_cache", {})
+    market_snapshot_cache = getattr(
+        getattr(self, "market_snapshot_provider", None), "_cache", {}
+    )
     runtime_hints = getattr(self, "_monitor_runtime_market_hints", {})
     ema_unavailable_symbols = set(
         getattr(self, "_orchestrator_ema_unavailable_symbols", set()) or set()
@@ -687,15 +648,15 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
         )
         or set()
     )
-    ema_unavailable_reasons = getattr(
-        self, "_orchestrator_ema_unavailable_reasons", {}
-    ) or {}
-    rank_feature_unavailable_by_side = getattr(
-        self, "_forager_rank_feature_unavailable_by_side", {}
-    ) or {}
-    ranking_required_by_side = getattr(
-        self, "_forager_ranking_required_by_side", {}
-    ) or {}
+    ema_unavailable_reasons = (
+        getattr(self, "_orchestrator_ema_unavailable_reasons", {}) or {}
+    )
+    rank_feature_unavailable_by_side = (
+        getattr(self, "_forager_rank_feature_unavailable_by_side", {}) or {}
+    )
+    ranking_required_by_side = (
+        getattr(self, "_forager_ranking_required_by_side", {}) or {}
+    )
     ema_bundle_completed = bool(
         getattr(self, "_orchestrator_ema_bundle_completed", False)
     )
@@ -705,15 +666,15 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
     trailing_unavailable_symbols = set(
         getattr(self, "_orchestrator_trailing_unavailable_symbols", set()) or set()
     )
-    trailing_unavailable_reasons = getattr(
-        self, "_orchestrator_trailing_unavailable_reasons", {}
-    ) or {}
-    trailing_unavailable_psides = getattr(
-        self, "_orchestrator_trailing_unavailable_psides", {}
-    ) or {}
-    fill_confirmation_diagnostics = getattr(
-        self, "_trailing_fill_confirmation_diagnostics", {}
-    ) or {}
+    trailing_unavailable_reasons = (
+        getattr(self, "_orchestrator_trailing_unavailable_reasons", {}) or {}
+    )
+    trailing_unavailable_psides = (
+        getattr(self, "_orchestrator_trailing_unavailable_psides", {}) or {}
+    )
+    fill_confirmation_diagnostics = (
+        getattr(self, "_trailing_fill_confirmation_diagnostics", {}) or {}
+    )
     now_ms = int(utc_ms())
     exchange_symbol_cooldowns = {
         str(symbol): int(until_ms)
@@ -722,9 +683,9 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
         ).items()
         if int(until_ms or 0) > now_ms
     }
-    exchange_symbol_cooldown_reasons = getattr(
-        self, "_exchange_symbol_unavailable_reason_by_symbol", {}
-    ) or {}
+    exchange_symbol_cooldown_reasons = (
+        getattr(self, "_exchange_symbol_unavailable_reason_by_symbol", {}) or {}
+    )
     out: dict[str, dict] = {}
     for symbol in sorted(symbols):
         market_active = bool(
@@ -761,8 +722,10 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
             ),
             "tradability_reasons": sorted(set(tradability_reasons)),
             "approved": {
-                "long": symbol in set(approved_minus_ignored.get("long", set()) or set()),
-                "short": symbol in set(approved_minus_ignored.get("short", set()) or set()),
+                "long": symbol
+                in set(approved_minus_ignored.get("long", set()) or set()),
+                "short": symbol
+                in set(approved_minus_ignored.get("short", set()) or set()),
             },
             "ignored": {
                 "long": symbol in set(ignored.get("long", set()) or set()),
@@ -773,7 +736,9 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
             ),
             "min_cost": float(getattr(self, "min_costs", {}).get(symbol, 0.0) or 0.0),
             "min_qty": float(getattr(self, "min_qtys", {}).get(symbol, 0.0) or 0.0),
-            "price_step": float(getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0),
+            "price_step": float(
+                getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0
+            ),
             "qty_step": float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0),
             "c_mult": float(getattr(self, "c_mults", {}).get(symbol, 0.0) or 0.0),
             "has_open_orders": bool(getattr(self, "open_orders", {}).get(symbol)),
@@ -897,7 +862,9 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
         entry_volatility_logrange_ema: dict[str, float] = {}
         for pside in ("long", "short"):
             entry_volatility_logrange_ema[pside] = float(
-                _monitor_h1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)
+                _monitor_h1_entry_logrange(
+                    self, pside, symbol, strategy_cache=strategy_cache
+                )
             )
         entry["entry_volatility_logrange_ema"] = entry_volatility_logrange_ema
         out[symbol] = entry
@@ -917,9 +884,17 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
         max_n = int(self.get_max_n_positions(pside))
         selected_symbols = sorted(
             set(getattr(self, "PB_modes", {}).get(pside, {}).keys())
-            | {sym for sym in getattr(self, "positions", {}) if self.has_position(pside, sym)}
+            | {
+                sym
+                for sym in getattr(self, "positions", {})
+                if self.has_position(pside, sym)
+            }
         )
-        held_symbols = {sym for sym in getattr(self, "positions", {}) if self.has_position(pside, sym)}
+        held_symbols = {
+            sym
+            for sym in getattr(self, "positions", {})
+            if self.has_position(pside, sym)
+        }
         entry_order_symbols = set()
         for symbol in getattr(self, "open_orders", {}):
             for order in self.open_orders.get(symbol, []):
@@ -933,7 +908,9 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
                     entry_order_symbols.add(symbol)
                     break
         pending_symbols = [
-            sym for sym in selected_symbols if sym not in held_symbols and sym not in entry_order_symbols
+            sym
+            for sym in selected_symbols
+            if sym not in held_symbols and sym not in entry_order_symbols
         ]
         out[pside] = {
             "enabled": bool(self.is_pside_enabled(pside)),
@@ -956,7 +933,9 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             "pending_symbols": pending_symbols,
             "next_symbol": pending_symbols[0] if pending_symbols else None,
             "score_weights": dict(self.bot_value(pside, "forager_score_weights") or {}),
-            "volume_drop_pct": float(self.bot_value(pside, "forager_volume_drop_pct") or 0.0),
+            "volume_drop_pct": float(
+                self.bot_value(pside, "forager_volume_drop_pct") or 0.0
+            ),
         }
         if float(out[pside]["score_weights"].get("unilateralness", 0.0)) > 0.0:
             # Enabled RMS totals come from the same Rust selection that placed
@@ -976,7 +955,8 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             continue
         try:
             min_cost_flags = {
-                sym: bool(self.effective_min_cost_is_low_enough(pside, sym)) for sym in candidate_universe
+                sym: bool(self.effective_min_cost_is_low_enough(pside, sym))
+                for sym in candidate_universe
             }
         except Exception:
             min_cost_flags = {sym: True for sym in candidate_universe}
@@ -1003,7 +983,9 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             ema_readiness_raw = None
             entry_trigger_price = None
             try:
-                entry_initial_ema_dist = float(candidate.get("entry_initial_ema_dist", 0.0) or 0.0)
+                entry_initial_ema_dist = float(
+                    candidate.get("entry_initial_ema_dist", 0.0) or 0.0
+                )
                 if pside == "long":
                     ema_lower = float(candidate.get("ema_lower", 0.0) or 0.0)
                     bid = float(candidate.get("bid", 0.0) or 0.0)
@@ -1039,9 +1021,11 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
         )
         ema_norm = _normalize_lower_is_better(
             [
-                float(feature["ema_readiness_score_raw"])
-                if feature["ema_readiness_score_raw"] is not None
-                else float("nan")
+                (
+                    float(feature["ema_readiness_score_raw"])
+                    if feature["ema_readiness_score_raw"] is not None
+                    else float("nan")
+                )
                 for feature in enabled_features
             ]
         )
@@ -1056,7 +1040,10 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
                 + float(weights.get("volatility", 0.0) or 0.0) * vola_norm
                 + float(weights.get("ema_readiness", 0.0) or 0.0) * ema_score_norm
             )
-        top_total = max(enabled_features, key=lambda feature: (feature["total_score"], feature["symbol"]))
+        top_total = max(
+            enabled_features,
+            key=lambda feature: (feature["total_score"], feature["symbol"]),
+        )
         top_volume = max(
             enabled_features,
             key=lambda feature: (feature["volume_score_raw"], feature["symbol"]),
@@ -1075,7 +1062,10 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
         if ema_candidates:
             top_ema = min(
                 ema_candidates,
-                key=lambda feature: (feature["ema_readiness_score_raw"], feature["symbol"]),
+                key=lambda feature: (
+                    feature["ema_readiness_score_raw"],
+                    feature["symbol"],
+                ),
             )
 
         def _ranking_payload(
@@ -1087,7 +1077,11 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
                 return None
             payload = {
                 "symbol": str(feature["symbol"]),
-                "raw_score": float(feature[raw_key]) if feature.get(raw_key) is not None else None,
+                "raw_score": (
+                    float(feature[raw_key])
+                    if feature.get(raw_key) is not None
+                    else None
+                ),
                 "normalized_score": float(feature.get(normalized_key, 0.0) or 0.0),
             }
             if "total_score" in feature:
@@ -1111,12 +1105,18 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
         if out[pside]["next_symbol"] is not None:
             next_symbol = str(out[pside]["next_symbol"])
             next_feature = next(
-                (feature for feature in enabled_features if feature["symbol"] == next_symbol),
+                (
+                    feature
+                    for feature in enabled_features
+                    if feature["symbol"] == next_symbol
+                ),
                 None,
             )
             if next_feature is not None:
                 if next_feature.get("entry_trigger_price") is not None:
-                    out[pside]["next_entry_trigger_price"] = float(next_feature["entry_trigger_price"])
+                    out[pside]["next_entry_trigger_price"] = float(
+                        next_feature["entry_trigger_price"]
+                    )
                 if next_feature.get("ema_readiness_score_raw") is not None:
                     out[pside]["next_entry_distance_ratio"] = float(
                         next_feature["ema_readiness_score_raw"]
@@ -1166,14 +1166,20 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
             "configured_loss_allowance_pct": float(
                 self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0
             ),
-            "configured_close_pct": float(self.bot_value(pside, "unstuck_close_pct") or 0.0),
-            "configured_threshold": float(self.bot_value(pside, "unstuck_threshold") or 0.0),
+            "configured_close_pct": float(
+                self.bot_value(pside, "unstuck_close_pct") or 0.0
+            ),
+            "configured_threshold": float(
+                self.bot_value(pside, "unstuck_threshold") or 0.0
+            ),
         }
         for key in ("allowance", "peak", "pct_from_peak"):
             if key in info:
                 side_payload[key] = float(info[key])
         if "loss_allowance_pct" in info:
-            side_payload["configured_loss_allowance_pct"] = float(info["loss_allowance_pct"])
+            side_payload["configured_loss_allowance_pct"] = float(
+                info["loss_allowance_pct"]
+            )
         override_pcts = info.get("override_loss_allowance_pcts")
         if isinstance(override_pcts, dict) and override_pcts:
             side_payload["override_loss_allowance_pcts"] = {
@@ -1342,7 +1348,9 @@ def _update_monitor_runtime_hints(
     orders: list[dict[str, Any]],
     diagnostics: Optional[dict[str, Any]] = None,
 ) -> None:
-    market_hints = self._build_monitor_runtime_market_hints(symbols, last_prices, m1_close_emas)
+    market_hints = self._build_monitor_runtime_market_hints(
+        symbols, last_prices, m1_close_emas
+    )
     self._monitor_runtime_market_hints = market_hints
     self._monitor_runtime_m1_log_range_emas = deepcopy(m1_log_range_emas)
     self._monitor_runtime_h1_log_range_emas = deepcopy(h1_log_range_emas)
@@ -1400,7 +1408,9 @@ def _build_monitor_recent_section(self) -> dict[str, Any]:
     }
 
 
-def _monitor_wallet_exposure_limit_with_allowance(self, pside: str, symbol: str) -> float:
+def _monitor_wallet_exposure_limit_with_allowance(
+    self, pside: str, symbol: str
+) -> float:
     wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
     allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
     allowance_mode = normalize_we_excess_allowance_mode(
@@ -1426,7 +1436,9 @@ def _monitor_strategy_params(self, pside, symbol, strategy_cache=None):
     return params
 
 
-def _monitor_strategy_value(self, pside: str, key: str, symbol: str, *, strategy_cache=None) -> float:
+def _monitor_strategy_value(
+    self, pside: str, key: str, symbol: str, *, strategy_cache=None
+) -> float:
     legacy_map = {
         "entry_grid_double_down_factor": "entry.double_down_factor",
         "entry_trailing_double_down_factor": "entry.double_down_factor",
@@ -1472,7 +1484,9 @@ def _monitor_entry_trailing_limit_cap(
     allowed_limit = _monitor_wallet_exposure_limit_with_allowance(self, pside, symbol)
     if allowed_limit <= 0.0:
         return None, None
-    retracement = _monitor_strategy_value(self, pside, "entry.retracement_base_pct", symbol)
+    retracement = _monitor_strategy_value(
+        self, pside, "entry.retracement_base_pct", symbol
+    )
     if retracement > 0.0:
         return allowed_limit, "trailing_only"
     return None, "grid_only"
@@ -1504,20 +1518,42 @@ def _monitor_m1_logrange_for_span(self, symbol: str, span: float) -> float:
         return 0.0
 
 
-def _monitor_h1_entry_logrange(self, pside: str, symbol: str, *, strategy_cache=None) -> float:
+def _monitor_h1_entry_logrange(
+    self, pside: str, symbol: str, *, strategy_cache=None
+) -> float:
     try:
-        span = _monitor_strategy_value(self, pside, "offset_volatility_ema_span_1h", symbol, strategy_cache=strategy_cache)
+        span = _monitor_strategy_value(
+            self,
+            pside,
+            "offset_volatility_ema_span_1h",
+            symbol,
+            strategy_cache=strategy_cache,
+        )
     except Exception:
         try:
-            span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1h", symbol, strategy_cache=strategy_cache)
+            span = _monitor_strategy_value(
+                self,
+                pside,
+                "entry_volatility_ema_span_1h",
+                symbol,
+                strategy_cache=strategy_cache,
+            )
         except Exception:
             return 0.0
     return _monitor_h1_logrange_for_span(self, symbol, span)
 
 
-def _monitor_m1_entry_logrange(self, pside: str, symbol: str, *, strategy_cache=None) -> float:
+def _monitor_m1_entry_logrange(
+    self, pside: str, symbol: str, *, strategy_cache=None
+) -> float:
     try:
-        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1m", symbol, strategy_cache=strategy_cache)
+        span = _monitor_strategy_value(
+            self,
+            pside,
+            "entry_volatility_ema_span_1m",
+            symbol,
+            strategy_cache=strategy_cache,
+        )
     except Exception:
         return 0.0
     return _monitor_m1_logrange_for_span(self, symbol, span)
@@ -1555,7 +1591,9 @@ def _build_monitor_trailing_entry_payload(
     market_entry: dict[str, Any],
     strategy_cache=None,
 ) -> Optional[dict[str, Any]]:
-    ema_bands = market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
+    ema_bands = (
+        market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
+    )
     side_ema_bands = ema_bands.get(pside, {}) if isinstance(ema_bands, dict) else {}
     if not isinstance(side_ema_bands, dict):
         return None
@@ -1578,8 +1616,16 @@ def _build_monitor_trailing_entry_payload(
         "c_mult": float(self.c_mults[symbol]),
         "ema_lower": float(side_ema_bands.get("lower", 0.0) or 0.0),
         "ema_upper": float(side_ema_bands.get("upper", 0.0) or 0.0),
-        "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)),
-        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)),
+        "h1_log_range_ema": float(
+            _monitor_h1_entry_logrange(
+                self, pside, symbol, strategy_cache=strategy_cache
+            )
+        ),
+        "m1_log_range_ema": float(
+            _monitor_m1_entry_logrange(
+                self, pside, symbol, strategy_cache=strategy_cache
+            )
+        ),
         **dict(trailing_bundle),
     }
     for key in (
@@ -1594,7 +1640,9 @@ def _build_monitor_trailing_entry_payload(
         "entry_weight_volatility_1m",
         "entry_we_weight",
     ):
-        inputs[key] = _monitor_strategy_value(self, pside, key, symbol, strategy_cache=strategy_cache)
+        inputs[key] = _monitor_strategy_value(
+            self, pside, key, symbol, strategy_cache=strategy_cache
+        )
     for key in (
         "wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
@@ -1603,9 +1651,9 @@ def _build_monitor_trailing_entry_payload(
     inputs["total_wallet_exposure_limit"] = float(
         self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
     )
-    inputs["risk_we_excess_allowance_mode"] = self.bp(
-        pside, "risk_we_excess_allowance_mode", symbol
-    ) or None
+    inputs["risk_we_excess_allowance_mode"] = (
+        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+    )
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
         return None
@@ -1625,10 +1673,14 @@ def _build_monitor_trailing_close_payload(
     trailing_bundle: dict[str, float],
     strategy_cache=None,
 ) -> Optional[dict[str, Any]]:
-    strategy_kind = str(
-        (getattr(self, "config", {}).get("live", {}) or {}).get("strategy_kind")
-        or ""
-    ).strip().lower()
+    strategy_kind = (
+        str(
+            (getattr(self, "config", {}).get("live", {}) or {}).get("strategy_kind")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if strategy_kind == "trailing_martingale":
         strategy_params = _monitor_strategy_params(self, pside, symbol, strategy_cache)
         volatility_ema_span_1m = float(strategy_params["volatility_ema_span_1m"])
@@ -1646,14 +1698,10 @@ def _build_monitor_trailing_close_payload(
                 },
                 "ema_bands": {"upper": 0.0, "lower": 0.0},
                 "volatility_ema_1m": float(
-                    _monitor_m1_logrange_for_span(
-                        self, symbol, volatility_ema_span_1m
-                    )
+                    _monitor_m1_logrange_for_span(self, symbol, volatility_ema_span_1m)
                 ),
                 "volatility_ema_1h": float(
-                    _monitor_h1_logrange_for_span(
-                        self, symbol, volatility_ema_span_1h
-                    )
+                    _monitor_h1_logrange_for_span(self, symbol, volatility_ema_span_1h)
                 ),
             },
             "bot_params": self._bot_params_to_rust_dict(pside, symbol),
@@ -1688,8 +1736,16 @@ def _build_monitor_trailing_close_payload(
             )
         ),
         "c_mult": float(self.c_mults[symbol]),
-        "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)),
-        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)),
+        "h1_log_range_ema": float(
+            _monitor_h1_entry_logrange(
+                self, pside, symbol, strategy_cache=strategy_cache
+            )
+        ),
+        "m1_log_range_ema": float(
+            _monitor_m1_entry_logrange(
+                self, pside, symbol, strategy_cache=strategy_cache
+            )
+        ),
         **dict(trailing_bundle),
     }
     for key in (
@@ -1700,7 +1756,9 @@ def _build_monitor_trailing_close_payload(
         "close_weight_volatility_1h",
         "close_weight_volatility_1m",
     ):
-        inputs[key] = _monitor_strategy_value(self, pside, key, symbol, strategy_cache=strategy_cache)
+        inputs[key] = _monitor_strategy_value(
+            self, pside, key, symbol, strategy_cache=strategy_cache
+        )
     for key in (
         "wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
@@ -1710,9 +1768,9 @@ def _build_monitor_trailing_close_payload(
     inputs["total_wallet_exposure_limit"] = float(
         self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
     )
-    inputs["risk_we_excess_allowance_mode"] = self.bp(
-        pside, "risk_we_excess_allowance_mode", symbol
-    ) or None
+    inputs["risk_we_excess_allowance_mode"] = (
+        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+    )
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
         return None
@@ -1740,7 +1798,9 @@ def _build_monitor_trailing_grid_v7_payload(
     entry_params = strategy_params.get("entry", {})
     if not isinstance(entry_params, dict):
         return None
-    ema_bands = market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
+    ema_bands = (
+        market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
+    )
     side_ema_bands = ema_bands.get(pside, {}) if isinstance(ema_bands, dict) else {}
     if not isinstance(side_ema_bands, dict):
         return None
@@ -1804,9 +1864,9 @@ def _build_monitor_trailing_section(
         balance_strategy = balance_raw
     config = getattr(self, "config", {})
     live_cfg = config.get("live", {}) if isinstance(config, dict) else {}
-    strategy_kind = str(
-        live_cfg.get("strategy_kind") or "trailing_martingale"
-    ).strip().lower()
+    strategy_kind = (
+        str(live_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
+    )
     if strategy_kind not in {"trailing_martingale", "trailing_grid_v7"}:
         reason = (
             "strategy_has_no_trailing_diagnostics"
@@ -1834,13 +1894,29 @@ def _build_monitor_trailing_section(
             continue
         if current_price <= 0.0:
             continue
-        trailing_entry = market_entry.get("trailing", {}) if isinstance(market_entry.get("trailing"), dict) else {}
-        pos_entry = self.positions.get(symbol, {}) if isinstance(self.positions.get(symbol), dict) else {}
+        trailing_entry = (
+            market_entry.get("trailing", {})
+            if isinstance(market_entry.get("trailing"), dict)
+            else {}
+        )
+        pos_entry = (
+            self.positions.get(symbol, {})
+            if isinstance(self.positions.get(symbol), dict)
+            else {}
+        )
         symbol_payload: dict[str, Any] = {}
         for pside in ("long", "short"):
-            trailing_bundle_raw = trailing_entry.get(pside, {}) if isinstance(trailing_entry.get(pside), dict) else {}
+            trailing_bundle_raw = (
+                trailing_entry.get(pside, {})
+                if isinstance(trailing_entry.get(pside), dict)
+                else {}
+            )
             trailing_bundle = _monitor_trailing_extrema(trailing_bundle_raw)
-            pos = pos_entry.get(pside, {}) if isinstance(pos_entry.get(pside), dict) else {}
+            pos = (
+                pos_entry.get(pside, {})
+                if isinstance(pos_entry.get(pside), dict)
+                else {}
+            )
             position_size = float(pos.get("size", 0.0) or 0.0)
             position_price = float(pos.get("price", 0.0) or 0.0)
             side_payload: dict[str, Any] = {"extrema": dict(trailing_bundle)}
@@ -1908,7 +1984,9 @@ def _build_monitor_position_side_payload(
     price = float(pos.get("price", 0.0) or 0.0)
     wallet_exposure = 0.0
     if size != 0.0 and balance_raw > 0.0 and symbol in self.c_mults:
-        wallet_exposure = float(pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw)
+        wallet_exposure = float(
+            pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw
+        )
     wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
     allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
     allowance_mode = normalize_we_excess_allowance_mode(
@@ -1933,7 +2011,11 @@ def _build_monitor_position_side_payload(
         "wele_ratio": wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0,
         "total_wallet_exposure": float(total_we_by_pside.get(pside, 0.0) or 0.0),
         "total_wallet_exposure_limit": twel,
-        "twel_ratio": float(total_we_by_pside.get(pside, 0.0) or 0.0) / twel if twel > 0.0 else 0.0,
+        "twel_ratio": (
+            float(total_we_by_pside.get(pside, 0.0) or 0.0) / twel
+            if twel > 0.0
+            else 0.0
+        ),
     }
     if last_price is None:
         return payload
@@ -1946,7 +2028,9 @@ def _build_monitor_position_side_payload(
     payload["price_action_distance"] = float(
         pbr.calc_pprice_diff_int(self.pside_int_map[pside], price, last_price)
     )
-    payload["upnl"] = float(_calc_monitor_pnl(pside, price, last_price, size, self.c_mults[symbol]))
+    payload["upnl"] = float(
+        _calc_monitor_pnl(pside, price, last_price, size, self.c_mults[symbol])
+    )
     return payload
 
 
@@ -1966,11 +2050,15 @@ def _build_monitor_positions_section(
             size = float(side_pos.get("size", 0.0) or 0.0)
             price = float(side_pos.get("price", 0.0) or 0.0)
             if size != 0.0 and balance_raw > 0.0 and symbol in self.c_mults:
-                total_we_by_pside[pside] += pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw
+                total_we_by_pside[pside] += (
+                    pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw
+                )
 
     for symbol in sorted(self.positions):
         pos = self.positions[symbol]
-        market_entry = market.get(symbol, {}) if isinstance(market.get(symbol), dict) else {}
+        market_entry = (
+            market.get(symbol, {}) if isinstance(market.get(symbol), dict) else {}
+        )
         last_price_raw = market_entry.get("last_price")
         last_price = float(last_price_raw) if last_price_raw is not None else None
         long_pos = pos.get("long", {}) if isinstance(pos.get("long"), dict) else {}
@@ -2001,9 +2089,6 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
     balance_raw = float(self.get_raw_balance())
     balance_snapped = float(self.get_hysteresis_snapped_balance())
     equity = _monitor_equity(self, balance_raw=balance_raw, now_ms=now_ms)
-    if (getattr(self, "config", {}).get("live", {}).get("hsl_engine") != "revised"
-            and abs(equity) < 1e-18 and balance_raw != 0.0):
-        equity = balance_raw
     account = {
         "balance_raw": balance_raw,
         "balance_snapped": balance_snapped,
@@ -2016,7 +2101,9 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
     except Exception:
         pass
     market = self._build_monitor_market_section()
-    positions = self._build_monitor_positions_section(balance_raw=balance_raw, market=market)
+    positions = self._build_monitor_positions_section(
+        balance_raw=balance_raw, market=market
+    )
 
     open_orders: dict[str, list[dict]] = {}
     for symbol in sorted(self.open_orders):
@@ -2032,8 +2119,14 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
                         "qty": abs(float(order["qty"])),
                         "price": float(order["price"]),
                         "reduce_only": bool(
-                            (order["position_side"] == "long" and order["side"] == "sell")
-                            or (order["position_side"] == "short" and order["side"] == "buy")
+                            (
+                                order["position_side"] == "long"
+                                and order["side"] == "sell"
+                            )
+                            or (
+                                order["position_side"] == "short"
+                                and order["side"] == "buy"
+                            )
                         ),
                         "pb_order_type": self._resolve_pb_order_type(order),
                     }
@@ -2050,9 +2143,11 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
             "pid": os.getpid(),
             "bot_start_ts_ms": self.start_time_ms,
             "current_cycle_ts_ms": now_ms,
-            "runtime": getattr(self, "runtime_identity", None).to_dict()
-            if getattr(self, "runtime_identity", None) is not None
-            else {},
+            "runtime": (
+                getattr(self, "runtime_identity", None).to_dict()
+                if getattr(self, "runtime_identity", None) is not None
+                else {}
+            ),
         },
         "account": account,
         "health": self._build_health_summary_payload(now_ms=now_ms),
@@ -2081,7 +2176,9 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
     }
 
 
-async def _monitor_flush_snapshot(self, *, force: bool = False, ts: Optional[int] = None) -> bool:
+async def _monitor_flush_snapshot(
+    self, *, force: bool = False, ts: Optional[int] = None
+) -> bool:
     publisher = getattr(self, "monitor_publisher", None)
     if publisher is None:
         return False

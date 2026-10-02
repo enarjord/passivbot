@@ -35,7 +35,9 @@ def test_format_exchange_config_response_is_value_safe(response, expected):
 def test_format_exchange_config_response_rejects_non_numeric_leverage(leverage):
     from exchanges.ccxt_bot import format_exchange_config_response
 
-    rendered = format_exchange_config_response({"leverage": leverage, "secret": "SECRET"})
+    rendered = format_exchange_config_response(
+        {"leverage": leverage, "secret": "SECRET"}
+    )
 
     assert rendered == "response=dict"
     assert "SECRET" not in rendered
@@ -163,7 +165,8 @@ class TestCCXTBotFetchBalance:
         )
 
         with pytest.raises(
-            KeyError, match=r"testexchange: fetch_balance response missing total\['USDC'\]"
+            KeyError,
+            match=r"testexchange: fetch_balance response missing total\['USDC'\]",
         ):
             await bot.fetch_balance()
 
@@ -297,7 +300,9 @@ class TestCCXTBotWatchOrders:
         async def mock_watch_orders():
             call_count[0] += 1
             if call_count[0] == 1:
-                return [{"id": "order1", "amount": 0.5, "info": {"positionSide": "LONG"}}]
+                return [
+                    {"id": "order1", "amount": 0.5, "info": {"positionSide": "LONG"}}
+                ]
             else:
                 # Stop after processing first batch
                 bot.stop_websocket = True
@@ -554,9 +559,7 @@ class TestCCXTBotBatchOrderDiagnostics:
         assert "RAW_SUPPRESSED_SECRET" not in caplog.text
 
     @pytest.mark.asyncio
-    async def test_restart_raise_forces_bounded_fallback(
-        self, caplog, capsys
-    ):
+    async def test_restart_raise_forces_bounded_fallback(self, caplog, capsys):
         from exchanges.ccxt_bot import CCXTBot
         from passivbot_exceptions import RestartBotException
 
@@ -628,7 +631,15 @@ class TestCCXTBotBatchOrderDiagnostics:
 
 class TestCCXTBotConnectorCallEvents:
     @pytest.mark.asyncio
-    async def test_execute_order_emits_before_connector_with_batch_ids(self):
+    async def test_execute_order_emits_before_connector_with_batch_ids(
+        self, monkeypatch
+    ):
+        # Connector diagnostics are tested after upstream admission; owner gates
+        # have separate current-account and stale-permission integration tests.
+        from live.hsl_live import Owner
+
+        monkeypatch.setattr(Owner, "admit", lambda self, order: True)
+
         from exchanges.ccxt_bot import CCXTBot
         from live.event_bus import EventTypes, ReasonCodes
 
@@ -671,7 +682,13 @@ class TestCCXTBotConnectorCallEvents:
         result = await bot.execute_order(order)
 
         assert result == {"id": "oid-1", "status": "open"}
-        assert [marker[0] for marker in markers] == ["event", "event", "connector"]
+        assert [marker[0] for marker in markers[:3]] == ["event", "event", "connector"]
+        # The completed write also requests a fresh account confirmation.
+        assert set(bot._authoritative_pending_confirmations) == {
+            "balance",
+            "positions",
+            "open_orders",
+        }
         assert markers[0][1] == EventTypes.EXECUTION_CREATE_SENT
         _, event_type, event = markers[1]
         assert event_type == EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED
@@ -682,7 +699,13 @@ class TestCCXTBotConnectorCallEvents:
         assert event["data"]["connector_method"] == "cca.create_order"
 
     @pytest.mark.asyncio
-    async def test_cancel_connector_call_survives_event_failure(self):
+    async def test_cancel_connector_call_survives_event_failure(self, monkeypatch):
+        # Connector diagnostics are tested after upstream admission; owner gates
+        # have separate current-account and stale-permission integration tests.
+        from live.hsl_live import Owner
+
+        monkeypatch.setattr(Owner, "admit", lambda self, order: True)
+
         from exchanges.ccxt_bot import CCXTBot
 
         connector_calls = []
@@ -715,7 +738,13 @@ class TestCCXTBotExecuteCancellation:
     """Tests for execute_cancellation."""
 
     @pytest.mark.asyncio
-    async def test_treats_bybit_order_not_exists_as_benign(self, caplog):
+    async def test_treats_bybit_order_not_exists_as_benign(self, caplog, monkeypatch):
+        # Connector diagnostics are tested after upstream admission; owner gates
+        # have separate current-account and stale-permission integration tests.
+        from live.hsl_live import Owner
+
+        monkeypatch.setattr(Owner, "admit", lambda self, order: True)
+
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
@@ -735,15 +764,23 @@ class TestCCXTBotExecuteCancellation:
         assert result["id"] == "abc123def456"
         assert result["symbol"] == "SUI/USDT:USDT"
         assert result["status"] == "success"
-        assert result["_passivbot_cancel_requires_full_authoritative_confirmation"] is True
+        assert (
+            result["_passivbot_cancel_requires_full_authoritative_confirmation"] is True
+        )
         assert "cancel skipped" in caplog.text
         assert "order likely already filled or cancelled" in caplog.text
         assert not any(record.levelname == "ERROR" for record in caplog.records)
 
     @pytest.mark.asyncio
     async def test_unexpected_cancel_error_propagates_without_raw_output(
-        self, caplog, capsys
+        self, caplog, capsys, monkeypatch
     ):
+        # Connector diagnostics are tested after upstream admission; owner gates
+        # have separate current-account and stale-permission integration tests.
+        from live.hsl_live import Owner
+
+        monkeypatch.setattr(Owner, "admit", lambda self, order: True)
+
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
@@ -805,8 +842,7 @@ class TestCCXTBotExecuteCancellation:
         bot._blocked_margin_symbols_warned = set()
         bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {
-            symbol: {"info": {"onlyIsolated": True}}
-            for symbol in symbols
+            symbol: {"info": {"onlyIsolated": True}} for symbol in symbols
         }
         bot.markets_dict[cross_symbol] = {"info": {}}
         bot._emit_live_event = MagicMock(return_value=object())
@@ -856,14 +892,14 @@ class TestCCXTBotExecuteCancellation:
             assert bot._filter_approved_symbols("short", {symbol}) == set()
 
         assert bot._emit_live_event.call_count == 2
-        assert [call.kwargs["pside"] for call in bot._emit_live_event.call_args_list] == [
+        assert [
+            call.kwargs["pside"] for call in bot._emit_live_event.call_args_list
+        ] == [
             "long",
             "short",
         ]
         warnings = [
-            record
-            for record in caplog.records
-            if "disabling" in record.getMessage()
+            record for record in caplog.records if "disabling" in record.getMessage()
         ]
         assert len(warnings) == 2
         assert bot._blocked_margin_symbols_warned == {
@@ -902,9 +938,7 @@ class TestCCXTBotExecuteCancellation:
             ("long", symbol, "isolated_only")
         }
         warnings = [
-            record
-            for record in caplog.records
-            if "disabling" in record.getMessage()
+            record for record in caplog.records if "disabling" in record.getMessage()
         ]
         assert len(warnings) == 1
 
@@ -1254,7 +1288,11 @@ class TestCCXTBotFetchTickers:
             return_value={
                 "BTC/USDT:USDT": {"bid": 50000.0, "ask": 50010.0, "last": 50005.0},
                 "ETH/USDT:USDT": {"bid": 3000.0, "ask": 3001.0, "last": 3000.5},
-                "DOGE/USDT:USDT": {"bid": 0.1, "ask": 0.11, "last": 0.105},  # Not in markets_dict
+                "DOGE/USDT:USDT": {
+                    "bid": 0.1,
+                    "ask": 0.11,
+                    "last": 0.105,
+                },  # Not in markets_dict
             }
         )
 
@@ -1326,7 +1364,9 @@ class TestCCXTBotFetchOHLCV:
 
         assert len(result) == 2
         assert result[0][0] == 1704067200000  # timestamp
-        bot.cca.fetch_ohlcv.assert_called_with("BTC/USDT:USDT", timeframe="1m", limit=1000)
+        bot.cca.fetch_ohlcv.assert_called_with(
+            "BTC/USDT:USDT", timeframe="1m", limit=1000
+        )
 
     @pytest.mark.asyncio
     async def test_fetch_ohlcv_raises_on_error(self):
@@ -1358,7 +1398,9 @@ class TestCCXTBotFetchOHLCV:
         result = await bot.fetch_ohlcvs_1m("BTC/USDT:USDT")
 
         assert len(result) == 1
-        bot.cca.fetch_ohlcv.assert_called_with("BTC/USDT:USDT", timeframe="1m", limit=1000)
+        bot.cca.fetch_ohlcv.assert_called_with(
+            "BTC/USDT:USDT", timeframe="1m", limit=1000
+        )
 
     @pytest.mark.asyncio
     async def test_fetch_ohlcvs_1m_with_pagination(self):

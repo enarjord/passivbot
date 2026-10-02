@@ -294,8 +294,12 @@ def make_symbol(
     short_strategy=None,
     emas=None,
 ):
-    long_bot_overrides, long_strategy_overrides = _split_bot_and_adaptive_strategy_overrides(long_bp)
-    short_bot_overrides, short_strategy_overrides = _split_bot_and_adaptive_strategy_overrides(short_bp)
+    long_bot_overrides, long_strategy_overrides = (
+        _split_bot_and_adaptive_strategy_overrides(long_bp)
+    )
+    short_bot_overrides, short_strategy_overrides = (
+        _split_bot_and_adaptive_strategy_overrides(short_bp)
+    )
     if long_strategy is None and long_strategy_overrides:
         long_strategy = adaptive_strategy_params(**long_strategy_overrides)
     if short_strategy is None and short_strategy_overrides:
@@ -342,7 +346,9 @@ def make_symbol(
     }
 
 
-def make_input(*, balance: float, global_bp=None, strategy_kind="trailing_martingale", symbols):
+def make_input(
+    *, balance: float, global_bp=None, strategy_kind="trailing_martingale", symbols
+):
     if strategy_kind == "trailing_martingale":
         for symbol in symbols:
             for pside in ("long", "short"):
@@ -350,7 +356,9 @@ def make_input(*, balance: float, global_bp=None, strategy_kind="trailing_martin
                 if current is None:
                     symbol[pside]["strategy_params"] = adaptive_strategy_params()
                 else:
-                    symbol[pside]["strategy_params"] = adaptive_strategy_params(**current)
+                    symbol[pside]["strategy_params"] = adaptive_strategy_params(
+                        **current
+                    )
     return {
         "balance": balance,
         "balance_raw": balance,
@@ -574,9 +582,10 @@ def test_live_validator_accepts_rust_market_execution_policy():
     out = compute(pbr, inp)
 
     assert any(order["execution_type"] == "market" for order in out["orders"])
-    assert reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    ) == out["orders"]
+    assert (
+        reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
+        == out["orders"]
+    )
 
 
 def test_json_rejects_invalid_order_book():
@@ -706,8 +715,7 @@ def test_live_missing_close_trailing_still_emits_wel_reducer():
     out = compute(pbr, inp)
 
     assert any(
-        order["order_type"] == "close_auto_reduce_wel_long"
-        for order in out["orders"]
+        order["order_type"] == "close_auto_reduce_wel_long" for order in out["orders"]
     )
     assert not any(
         order["pside"] == "long"
@@ -759,8 +767,7 @@ def test_live_authorized_missing_entry_ema_preserves_independent_closes():
     out = compute(pbr, inp)
 
     assert not any(
-        order["pside"] == "long"
-        and order["order_type"].startswith("entry_")
+        order["pside"] == "long" and order["order_type"].startswith("entry_")
         for order in out["orders"]
     )
     assert any(
@@ -774,9 +781,10 @@ def test_live_authorized_missing_entry_ema_preserves_independent_closes():
             "scope": "strategy_orders",
         }
     } in out["diagnostics"]["warnings"]
-    assert reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    ) == out["orders"]
+    assert (
+        reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
+        == out["orders"]
+    )
 
 
 def test_live_authorized_missing_entry_volatility_preserves_independent_closes():
@@ -821,15 +829,18 @@ def test_live_authorized_missing_entry_volatility_preserves_independent_closes()
     ]
     assert scoped_closes
     assert scoped_closes == complete_closes
-    assert out["diagnostics"]["warnings"].count(
-        {
-            "strategy_input_unavailable": {
-                "symbol_idx": 0,
-                "pside": "long",
-                "scope": "strategy_orders",
+    assert (
+        out["diagnostics"]["warnings"].count(
+            {
+                "strategy_input_unavailable": {
+                    "symbol_idx": 0,
+                    "pside": "long",
+                    "scope": "strategy_orders",
+                }
             }
-        }
-    ) == 1
+        )
+        == 1
+    )
 
 
 def test_live_authorized_missing_ema_still_emits_twel_reducer():
@@ -925,8 +936,7 @@ def test_live_authorized_missing_ema_still_emits_wel_reducer():
     assert wel_orders == complete_wel_orders
     assert wel_orders[0]["symbol_idx"] == 0
     assert not any(
-        order["pside"] == "long"
-        and order["order_type"].startswith("entry_")
+        order["pside"] == "long" and order["order_type"].startswith("entry_")
         for order in out["orders"]
     )
     assert any(
@@ -1071,7 +1081,9 @@ def test_ema_gate_mode_disabled_initial_long_uses_best_bid_without_ema():
 
     out = compute(pbr, inp)
 
-    initial = next(o for o in out["orders"] if o["order_type"] == "entry_initial_normal_long")
+    initial = next(
+        o for o in out["orders"] if o["order_type"] == "entry_initial_normal_long"
+    )
     assert initial["price"] == pytest.approx(100.0)
 
 
@@ -1097,7 +1109,9 @@ def test_ema_gate_mode_reentry_leaves_flat_initial_at_best_bid_without_ema():
 
     out = compute(pbr, inp)
 
-    initial = next(o for o in out["orders"] if o["order_type"] == "entry_initial_normal_long")
+    initial = next(
+        o for o in out["orders"] if o["order_type"] == "entry_initial_normal_long"
+    )
     assert initial["price"] == pytest.approx(100.0)
 
 
@@ -1125,7 +1139,9 @@ def test_ema_gate_mode_reentry_leaves_partial_initial_at_best_bid_without_ema():
 
     out = compute(pbr, inp)
 
-    partial = next(o for o in out["orders"] if o["order_type"] == "entry_initial_partial_long")
+    partial = next(
+        o for o in out["orders"] if o["order_type"] == "entry_initial_partial_long"
+    )
     assert partial["price"] == pytest.approx(100.0)
 
 
@@ -1159,7 +1175,9 @@ def test_ema_gate_mode_all_gates_long_reentry_price():
 
     out = compute(pbr, inp)
 
-    reentry = next(o for o in out["orders"] if o["order_type"] == "entry_grid_normal_long")
+    reentry = next(
+        o for o in out["orders"] if o["order_type"] == "entry_grid_normal_long"
+    )
     assert reentry["price"] == pytest.approx(95.0)
 
 
@@ -1176,7 +1194,9 @@ def test_ema_gate_mode_reentry_requires_ema_for_true_reentry():
                 ask=100.0,
                 long_pos_size=1.0,
                 long_pos_price=100.0,
-                long_strategy=adaptive_strategy_params(entry={"ema_gate_mode": "reentry"}),
+                long_strategy=adaptive_strategy_params(
+                    entry={"ema_gate_mode": "reentry"}
+                ),
                 emas=ema_bundle(m1_close=[]),
             )
         ],
@@ -1283,7 +1303,15 @@ def test_live_authorized_missing_ema_blocks_both_one_way_initial_sides():
 
 @pytest.mark.parametrize(
     "field",
-    ["qty_step", "price_step", "min_qty", "min_cost", "c_mult", "maker_fee", "taker_fee"],
+    [
+        "qty_step",
+        "price_step",
+        "min_qty",
+        "min_cost",
+        "c_mult",
+        "maker_fee",
+        "taker_fee",
+    ],
 )
 def test_json_rejects_missing_exchange_param(field):
     import passivbot_rust as pbr
@@ -1512,7 +1540,9 @@ def test_entry_ladder_can_stage_simultaneously_only_with_zero_cooldown():
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
 
     assert len(long_add_orders) > 1
@@ -1539,7 +1569,9 @@ def test_positive_fractional_entry_cooldown_throttles_ladder_to_one_order():
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
 
     assert len(long_add_orders) == 1
@@ -1556,7 +1588,9 @@ def test_entry_retracement_throttles_ladder_even_with_zero_cooldown():
                 0,
                 bid=100.0,
                 ask=100.0,
-                long_strategy=adaptive_strategy_params(entry={"retracement_base_pct": 0.001}),
+                long_strategy=adaptive_strategy_params(
+                    entry={"retracement_base_pct": 0.001}
+                ),
             )
         ],
     )
@@ -1566,7 +1600,9 @@ def test_entry_retracement_throttles_ladder_even_with_zero_cooldown():
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
 
     assert len(long_add_orders) == 1
@@ -1618,7 +1654,9 @@ def test_trailing_grid_v7_preserves_zero_cooldown_grid_ladder_but_not_positive_c
 
     if expected_order_count is None:
         assert len(long_add_orders) >= 2
-        assert all(order["order_type"].startswith("entry_grid_") for order in long_add_orders)
+        assert all(
+            order["order_type"].startswith("entry_grid_") for order in long_add_orders
+        )
     else:
         assert len(long_add_orders) == expected_order_count
 
@@ -1645,7 +1683,9 @@ def test_entry_cooldown_blocks_position_adding_orders_until_exact_window_expires
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
 
     assert long_add_orders == []
@@ -1673,7 +1713,9 @@ def test_entry_cooldown_keeps_one_add_order_after_window_expires():
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
 
     assert len(long_add_orders) == 1
@@ -1704,12 +1746,16 @@ def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
     long_close_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] < 0.0 and o["order_type"].startswith("close_")
+        if o["pside"] == "long"
+        and o["qty"] < 0.0
+        and o["order_type"].startswith("close_")
     ]
 
     assert long_add_orders == []
@@ -1738,7 +1784,9 @@ def test_fractional_entry_cooldown_blocks_until_seconds_elapsed_then_keeps_one_a
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
 
     assert long_add_orders == []
@@ -1748,7 +1796,9 @@ def test_fractional_entry_cooldown_blocks_until_seconds_elapsed_then_keeps_one_a
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
 
     assert len(long_add_orders) == 1
@@ -1790,12 +1840,16 @@ def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
     long_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "long"
+        and o["qty"] > 0.0
+        and o["order_type"].startswith("entry_")
     ]
     short_add_orders = [
         o
         for o in out["orders"]
-        if o["pside"] == "short" and o["qty"] < 0.0 and o["order_type"].startswith("entry_")
+        if o["pside"] == "short"
+        and o["qty"] < 0.0
+        and o["order_type"].startswith("entry_")
     ]
 
     assert long_add_orders == []
@@ -1902,9 +1956,7 @@ def test_ema_anchor_market_close_uses_executable_touch_minimum():
     inp["global"]["market_order_near_touch_threshold"] = 0.001
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
 
     close = next(
         order
@@ -1958,13 +2010,9 @@ def test_grid_market_close_uses_executable_touch_minimum(strategy_kind):
     inp["global"]["market_order_near_touch_threshold"] = 0.02
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     close = next(
-        order
-        for order in out["orders"]
-        if order["order_type"] == "close_grid_long"
+        order for order in out["orders"] if order["order_type"] == "close_grid_long"
     )
 
     assert close["execution_type"] == "market"
@@ -2008,9 +2056,7 @@ def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
     )
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
 
     prices = {order["order_type"]: order["price"] for order in out["orders"]}
     assert prices["entry_ema_anchor_long"] == 98.0
@@ -2045,9 +2091,7 @@ def test_off_tick_strategy_entry_recomputes_minimum_after_price_quantization(
     )
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     entry = next(
         order for order in out["orders"] if order["order_type"].startswith("entry_")
     )
@@ -2093,9 +2137,7 @@ def test_off_tick_strategy_entries_quantize_away_from_the_spread(
     symbol["exchange"]["price_step"] = 0.01
     inp = make_input(
         balance=1_000.0,
-        global_bp=bot_params_pair(
-            long_overrides=long_bp, short_overrides=short_bp
-        ),
+        global_bp=bot_params_pair(long_overrides=long_bp, short_overrides=short_bp),
         strategy_kind=strategy_kind,
         symbols=[symbol],
     )
@@ -2108,9 +2150,7 @@ def test_off_tick_strategy_entries_quantize_away_from_the_spread(
         }
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     entry = next(order for order in out["orders"] if order["pside"] == pside)
 
     assert entry["execution_type"] == "limit"
@@ -2158,9 +2198,7 @@ def test_next_only_short_entry_recrops_quantity_after_price_quantization(strateg
     }
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     entry = next(order for order in out["orders"] if order["pside"] == "short")
 
     assert entry["price"] == 102.0
@@ -2202,13 +2240,9 @@ def test_short_market_entry_uses_executable_bid_minimum(strategy_kind):
     inp["global"]["market_order_near_touch_threshold"] = 0.001
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     entry = next(
-        order
-        for order in out["orders"]
-        if order["order_type"].startswith("entry_")
+        order for order in out["orders"] if order["order_type"].startswith("entry_")
     )
 
     assert entry["pside"] == "short"
@@ -2236,9 +2270,7 @@ def test_trailing_martingale_partial_entry_preserves_sub_ten_decimal_price_step(
     inp = make_input(balance=1_000.0, symbols=[symbol])
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
 
     partial = next(
         order
@@ -2288,9 +2320,7 @@ def test_sub_tick_ema_anchor_bid_keeps_short_close_at_lowest_positive_tick():
     )
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
 
     short_close = next(
         order
@@ -2330,9 +2360,7 @@ def test_sub_tick_ema_anchor_bid_suppresses_long_entry_above_the_book():
     inp["global"]["market_orders_allowed"] = True
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
 
     assert not any(
         order["order_type"] == "entry_ema_anchor_long" for order in out["orders"]
@@ -2378,9 +2406,7 @@ def test_genuinely_above_tick_ema_anchor_ask_rounds_up():
     )
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
 
     short_entry = next(
         order
@@ -2423,7 +2449,9 @@ def test_ema_anchor_entry_double_down_factor_scales_same_side_qty_only():
     base_long["symbols"][0]["long"]["position"] = {"size": 0.0, "price": 0.0}
 
     scaled_long = next(
-        o for o in compute(pbr, long_inp)["orders"] if o["order_type"] == "entry_ema_anchor_long"
+        o
+        for o in compute(pbr, long_inp)["orders"]
+        if o["order_type"] == "entry_ema_anchor_long"
     )
     neutral_long = next(
         o
@@ -2456,7 +2484,9 @@ def test_ema_anchor_entry_double_down_factor_scales_same_side_qty_only():
     base_short["symbols"][0]["short"]["position"] = {"size": 0.0, "price": 0.0}
 
     scaled_short = next(
-        o for o in compute(pbr, short_inp)["orders"] if o["order_type"] == "entry_ema_anchor_short"
+        o
+        for o in compute(pbr, short_inp)["orders"]
+        if o["order_type"] == "entry_ema_anchor_short"
     )
     neutral_short = next(
         o
@@ -2554,7 +2584,9 @@ def test_twel_reduce_overweight_uses_effective_tradable_slots():
 
     out = compute(pbr, inp)
     twel_closes = [
-        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_twel_long"
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_twel_long"
     ]
     assert twel_closes
     assert {order["symbol_idx"] for order in twel_closes} == {1}
@@ -2602,7 +2634,9 @@ def test_twel_reduce_overweight_relaxes_floor_when_tradable_slots_expand():
 
     out = compute(pbr, inp)
     twel_closes = [
-        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_twel_long"
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_twel_long"
     ]
     assert twel_closes
     assert {order["symbol_idx"] for order in twel_closes} == {0}
@@ -2652,7 +2686,9 @@ def test_twel_reduce_overweight_repairs_when_no_symbols_eligible():
 
     out = compute(pbr, inp)
     twel_closes = [
-        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_twel_long"
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_twel_long"
     ]
     assert twel_closes
 
@@ -2690,7 +2726,11 @@ def test_ema_anchor_volatility_weights_widen_quotes():
                 long_strategy=base_strategy,
                 short_strategy=base_strategy,
                 emas=ema_bundle(
-                    m1_close=[[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
+                    m1_close=[
+                        [10.0, 100.0],
+                        [20.0, 100.0],
+                        [math.sqrt(10.0 * 20.0), 100.0],
+                    ],
                     m1_log_range=[[10.0, 0.01], [15.0, 0.0]],
                     h1_log_range=[[8.0, 0.0]],
                 ),
@@ -2704,10 +2744,18 @@ def test_ema_anchor_volatility_weights_widen_quotes():
     calm_out = compute(pbr, calm)
     wide_out = compute(pbr, wide)
 
-    calm_entry = next(o for o in calm_out["orders"] if o["order_type"] == "entry_ema_anchor_long")
-    calm_close = next(o for o in calm_out["orders"] if o["order_type"] == "close_ema_anchor_long")
-    wide_entry = next(o for o in wide_out["orders"] if o["order_type"] == "entry_ema_anchor_long")
-    wide_close = next(o for o in wide_out["orders"] if o["order_type"] == "close_ema_anchor_long")
+    calm_entry = next(
+        o for o in calm_out["orders"] if o["order_type"] == "entry_ema_anchor_long"
+    )
+    calm_close = next(
+        o for o in calm_out["orders"] if o["order_type"] == "close_ema_anchor_long"
+    )
+    wide_entry = next(
+        o for o in wide_out["orders"] if o["order_type"] == "entry_ema_anchor_long"
+    )
+    wide_close = next(
+        o for o in wide_out["orders"] if o["order_type"] == "close_ema_anchor_long"
+    )
 
     assert calm_entry["price"] == pytest.approx(99.0)
     assert calm_close["price"] == pytest.approx(101.0)
@@ -2755,10 +2803,17 @@ def test_ema_anchor_one_way_mode_blocks_short_entries_while_long_position_exists
 
     out = compute(pbr, inp)
 
-    assert any(o["pside"] == "long" and o["order_type"] == "entry_ema_anchor_long" for o in out["orders"])
-    assert any(o["pside"] == "long" and o["order_type"] == "close_ema_anchor_long" for o in out["orders"])
+    assert any(
+        o["pside"] == "long" and o["order_type"] == "entry_ema_anchor_long"
+        for o in out["orders"]
+    )
+    assert any(
+        o["pside"] == "long" and o["order_type"] == "close_ema_anchor_long"
+        for o in out["orders"]
+    )
     assert not any(
-        o["pside"] == "short" and o["order_type"].startswith("entry_") for o in out["orders"]
+        o["pside"] == "short" and o["order_type"].startswith("entry_")
+        for o in out["orders"]
     )
     assert out["diagnostics"]["symbol_states"][0]["short"]["active"] is False
 
@@ -2804,13 +2859,16 @@ def test_ema_anchor_one_way_mode_blocks_long_entries_while_short_position_exists
     out = compute(pbr, inp)
 
     assert any(
-        o["pside"] == "short" and o["order_type"] == "entry_ema_anchor_short" for o in out["orders"]
+        o["pside"] == "short" and o["order_type"] == "entry_ema_anchor_short"
+        for o in out["orders"]
     )
     assert any(
-        o["pside"] == "short" and o["order_type"] == "close_ema_anchor_short" for o in out["orders"]
+        o["pside"] == "short" and o["order_type"] == "close_ema_anchor_short"
+        for o in out["orders"]
     )
     assert not any(
-        o["pside"] == "long" and o["order_type"].startswith("entry_") for o in out["orders"]
+        o["pside"] == "long" and o["order_type"].startswith("entry_")
+        for o in out["orders"]
     )
     assert out["diagnostics"]["symbol_states"][0]["long"]["active"] is False
 
@@ -2866,7 +2924,9 @@ def test_side_zero_wel_excludes_only_that_side_from_active_slots():
             )
         )
 
-    out = compute(pbr, make_input(balance=1_000_000.0, global_bp=global_bp, symbols=symbols))
+    out = compute(
+        pbr, make_input(balance=1_000_000.0, global_bp=global_bp, symbols=symbols)
+    )
     states = out["diagnostics"]["symbol_states"]
 
     assert sum(state["long"]["active"] for state in states) == 3
@@ -2918,9 +2978,7 @@ def test_off_tick_book_panic_limit_is_quantized_and_passes_live_validation():
     )
     out = compute(pbr, inp)
 
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     assert len(out["orders"]) == 1
     assert out["orders"][0]["execution_type"] == "limit"
     assert out["orders"][0]["price"] == 99.99
@@ -2964,9 +3022,7 @@ def test_tick_aligned_panic_limit_does_not_skip_tick_from_float_noise(
     )
     out = compute(pbr, inp)
 
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     assert len(out["orders"]) == 1
     assert out["orders"][0]["order_type"] == f"close_panic_{pside}"
     assert out["orders"][0]["price"] == expected_price
@@ -2999,9 +3055,7 @@ def test_genuinely_above_tick_short_panic_keeps_protective_offset():
     )
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
 
     assert len(out["orders"]) == 1
     assert out["orders"][0]["order_type"] == "close_panic_short"
@@ -3026,9 +3080,7 @@ def test_low_off_tick_book_panic_limit_stays_positive_and_passes_live_validation
     )
     out = compute(pbr, inp)
 
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     assert len(out["orders"]) == 1
     assert out["orders"][0]["execution_type"] == "limit"
     assert out["orders"][0]["price"] == 0.01
@@ -3052,9 +3104,7 @@ def test_off_step_full_panic_close_passes_live_validation():
     )
     out = compute(pbr, inp)
 
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     assert len(out["orders"]) == 1
     assert out["orders"][0]["qty"] == -1.005
 
@@ -3080,9 +3130,7 @@ def test_exchange_min_qty_is_quantized_without_overshooting_aligned_values(
     inp = make_input(balance=40.0, symbols=[symbol])
     out = compute(pbr, inp)
 
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     entry = next(
         order for order in out["orders"] if order["order_type"].startswith("entry_")
     )
@@ -3102,9 +3150,7 @@ def test_positive_sub_step_effective_minimum_emits_one_contract():
             "entry_initial_qty_pct": 0.1,
         },
     )
-    symbol["exchange"].update(
-        {"qty_step": 1.0, "min_qty": 0.0, "min_cost": 1.0}
-    )
+    symbol["exchange"].update({"qty_step": 1.0, "min_qty": 0.0, "min_cost": 1.0})
     inp = make_input(
         balance=1e9,
         global_bp=bot_params_pair(
@@ -3117,9 +3163,7 @@ def test_positive_sub_step_effective_minimum_emits_one_contract():
     )
     out = compute(pbr, inp)
 
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     entry = next(
         order for order in out["orders"] if order["order_type"].startswith("entry_")
     )
@@ -3163,9 +3207,7 @@ def test_panic_close_order_type_is_side_local():
 
     out = compute(pbr, inp)
     assert inp["global"].get("market_orders_allowed", False) is False
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     by_pside = {o["pside"]: o for o in out["orders"]}
 
     assert by_pside["long"]["order_type"] == "close_panic_long"
@@ -3210,14 +3252,10 @@ def test_panic_close_order_type_rejects_invalid_symbol_value():
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
-        ({"hsl_ema_span_minutes": 0.5}, r"bot\.long\.hsl_ema_span_minutes"),
-        ({"hsl_red_threshold": 0.0}, r"bot\.long\.hsl_red_threshold"),
         (
-            {"hsl_red_threshold": 0.2, "hsl_no_restart_drawdown_threshold": 0.1},
-            r"bot\.long\.hsl_no_restart_drawdown_threshold",
+            {"risk_we_excess_allowance_pct": -0.01},
+            r"bot\.long\.risk_we_excess_allowance_pct",
         ),
-        ({"hsl_restart_after_red_policy": "sometimes"}, r"bot\.long\.hsl_restart_after_red_policy"),
-        ({"risk_we_excess_allowance_pct": -0.01}, r"bot\.long\.risk_we_excess_allowance_pct"),
         ({"unstuck_ema_dist": -1.0}, r"bot\.long\.unstuck_ema_dist"),
     ],
 )
@@ -3249,7 +3287,9 @@ def test_json_rejects_invalid_symbol_hsl_risk_unstuck_values():
         ],
     )
 
-    with pytest.raises(ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_pct"):
+    with pytest.raises(
+        ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_pct"
+    ):
         compute(pbr, inp)
 
 
@@ -3908,8 +3948,7 @@ def test_unstuck_ema_gating_disabled_skips_missing_ema_requirement():
 def test_orders_include_entries_and_closes():
     import passivbot_rust as pbr
 
-    long_bp = {
-    }
+    long_bp = {}
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
         0,
@@ -3959,7 +3998,11 @@ def test_long_grid_close_uses_position_price_anchor():
 def test_short_grid_close_uses_position_price_anchor():
     import passivbot_rust as pbr
 
-    short_bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0, "wallet_exposure_limit": 1.0}
+    short_bp = {
+        "n_positions": 1,
+        "total_wallet_exposure_limit": 1.0,
+        "wallet_exposure_limit": 1.0,
+    }
     sym = make_symbol(
         0,
         bid=100.0,
@@ -3983,7 +4026,11 @@ def test_short_grid_close_uses_position_price_anchor():
 
     out = compute(
         pbr,
-        make_input(balance=1_000.0, global_bp=bot_params_pair(short_overrides=short_bp), symbols=[sym]),
+        make_input(
+            balance=1_000.0,
+            global_bp=bot_params_pair(short_overrides=short_bp),
+            symbols=[sym],
+        ),
     )
     close = next(o for o in out["orders"] if o["order_type"] == "close_grid_short")
     assert close["price"] == pytest.approx(99.0)
@@ -4032,7 +4079,11 @@ def test_min_effective_cost_uses_strategy_initial_qty_pct():
         long_bp=long_bp,
         long_strategy=adaptive_strategy_params(entry={"initial_qty_pct": 0.1}),
     )
-    inp = make_input(balance=1_000.0, global_bp=bot_params_pair(long_overrides=long_bp), symbols=[sym])
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=long_bp),
+        symbols=[sym],
+    )
     inp["global"]["filter_by_min_effective_cost"] = True
 
     out = compute(pbr, inp)
@@ -4067,9 +4118,7 @@ def test_live_validator_accepts_real_min_effective_cost_diagnostic():
     out = compute(pbr, inp)
 
     assert out["diagnostics"]["min_effective_cost_blocks"]
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
 
 
 def test_manual_positions_consume_twel_entry_gate_budget():
@@ -4101,11 +4150,14 @@ def test_manual_positions_consume_twel_entry_gate_budget():
         long_mode="normal",
         long_bp=long_bp,
     )
-    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[manual_sym, active_sym])
+    inp = make_input(
+        balance=1_000.0, global_bp=global_bp, symbols=[manual_sym, active_sym]
+    )
 
     out = compute(pbr, inp)
     assert not any(
-        o["symbol_idx"] == 1 and o["order_type"].startswith("entry_") for o in out["orders"]
+        o["symbol_idx"] == 1 and o["order_type"].startswith("entry_")
+        for o in out["orders"]
     ), "existing manual exposure must still consume TWE before allowing bot-generated entries"
 
 
@@ -4184,14 +4236,20 @@ def test_twel_entry_gate_disabled_allows_entries_above_raw_twel():
         long_pos_price=100.0,
         long_bp=long_bp,
     )
-    active_sym = make_symbol(1, bid=100.0, ask=100.0, long_mode="normal", long_bp=long_bp)
+    active_sym = make_symbol(
+        1, bid=100.0, ask=100.0, long_mode="normal", long_bp=long_bp
+    )
 
     out = compute(
-        pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[held_sym, active_sym])
+        pbr,
+        make_input(
+            balance=1_000.0, global_bp=global_bp, symbols=[held_sym, active_sym]
+        ),
     )
 
     assert any(
-        o["symbol_idx"] == 1 and o["order_type"].startswith("entry_") for o in out["orders"]
+        o["symbol_idx"] == 1 and o["order_type"].startswith("entry_")
+        for o in out["orders"]
     )
 
 
@@ -4281,7 +4339,9 @@ def test_twel_enforcer_emits_auto_reduce():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
     out = compute(pbr, inp)
-    twel_orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+    twel_orders = [
+        o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"
+    ]
     assert twel_orders
     assert {o["symbol_idx"] for o in twel_orders} == {1}
 
@@ -4298,13 +4358,31 @@ def test_twel_enforcer_disabled_emits_no_auto_reduce():
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
     symbols = [
-        make_symbol(0, bid=50.0, ask=50.0, long_pos_size=8.0, long_pos_price=50.0, long_bp=long_bp),
-        make_symbol(1, bid=50.0, ask=50.0, long_pos_size=12.0, long_pos_price=50.0, long_bp=long_bp),
+        make_symbol(
+            0,
+            bid=50.0,
+            ask=50.0,
+            long_pos_size=8.0,
+            long_pos_price=50.0,
+            long_bp=long_bp,
+        ),
+        make_symbol(
+            1,
+            bid=50.0,
+            ask=50.0,
+            long_pos_size=12.0,
+            long_pos_price=50.0,
+            long_bp=long_bp,
+        ),
     ]
 
-    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols))
+    out = compute(
+        pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols)
+    )
 
-    assert not any(o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"])
+    assert not any(
+        o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"]
+    )
 
 
 def test_twel_reduce_portfolio_can_select_underweight_positions():
@@ -4335,8 +4413,12 @@ def test_twel_reduce_portfolio_can_select_underweight_positions():
         long_bp=long_bp,
     )
 
-    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1]))
-    twel_orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+    out = compute(
+        pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
+    )
+    twel_orders = [
+        o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"
+    ]
 
     assert {o["symbol_idx"] for o in twel_orders} == {0, 1}
 
@@ -4401,9 +4483,7 @@ def test_wel_off_tick_limit_meets_minimum_and_passes_live_validation():
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     wel_order = next(
         order
         for order in out["orders"]
@@ -4447,11 +4527,14 @@ def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
     assert "close_auto_reduce_wel_long" in order_types
     assert "close_unstuck_long" not in order_types
     assert "close_grid_long" in order_types
-    assert sum(
-        abs(o["qty"])
-        for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] < 0.0
-    ) <= 6.0 + 1e-9
+    assert (
+        sum(
+            abs(o["qty"])
+            for o in out["orders"]
+            if o["pside"] == "long" and o["qty"] < 0.0
+        )
+        <= 6.0 + 1e-9
+    )
 
 
 def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
@@ -4493,11 +4576,14 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     assert wel_order["price"] <= sym["order_book"]["bid"]
     assert "close_unstuck_short" not in order_types
     assert "close_grid_short" in order_types
-    assert sum(
-        abs(o["qty"])
-        for o in out["orders"]
-        if o["pside"] == "short" and o["qty"] > 0.0
-    ) <= 6.0 + 1e-9
+    assert (
+        sum(
+            abs(o["qty"])
+            for o in out["orders"]
+            if o["pside"] == "short" and o["qty"] > 0.0
+        )
+        <= 6.0 + 1e-9
+    )
 
 
 def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
@@ -4528,9 +4614,7 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
     inp["global"]["max_realized_loss_pct"] = 0.019
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(
-        out, {0: "BTC/USDT:USDT"}, inp
-    )
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     order_types = [o["order_type"] for o in out["orders"]]
 
     assert "close_unstuck_long" in order_types
@@ -4613,7 +4697,9 @@ def test_loss_gate_prioritizes_larger_wel_reducer_across_symbols():
 
     out = compute(pbr, inp)
     wel_orders = [
-        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_wel_long"
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_long"
     ]
 
     assert len(wel_orders) == 1
@@ -4663,11 +4749,14 @@ def test_larger_unstuck_wins_over_twel_auto_reduce_for_same_position():
     assert "close_unstuck_long" in order_types
     assert "close_auto_reduce_twel_long" not in order_types
     assert "close_grid_long" in order_types
-    assert sum(
-        abs(o["qty"])
-        for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] < 0.0
-    ) <= 6.0 + 1e-9
+    assert (
+        sum(
+            abs(o["qty"])
+            for o in out["orders"]
+            if o["pside"] == "long" and o["qty"] < 0.0
+        )
+        <= 6.0 + 1e-9
+    )
 
 
 def test_larger_short_unstuck_wins_over_twel_auto_reduce_for_same_position():
@@ -4703,11 +4792,14 @@ def test_larger_short_unstuck_wins_over_twel_auto_reduce_for_same_position():
     assert "close_unstuck_short" in order_types
     assert "close_auto_reduce_twel_short" not in order_types
     assert "close_grid_short" in order_types
-    assert sum(
-        abs(o["qty"])
-        for o in out["orders"]
-        if o["pside"] == "short" and o["qty"] > 0.0
-    ) <= 6.0 + 1e-9
+    assert (
+        sum(
+            abs(o["qty"])
+            for o in out["orders"]
+            if o["pside"] == "short" and o["qty"] > 0.0
+        )
+        <= 6.0 + 1e-9
+    )
 
 
 def test_twel_auto_reduce_includes_managed_modes_and_excludes_manual_panic():
@@ -4760,9 +4852,13 @@ def test_twel_auto_reduce_includes_managed_modes_and_excludes_manual_panic():
         ),
     ]
 
-    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols))
+    out = compute(
+        pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols)
+    )
     twel_symbols = {
-        o["symbol_idx"] for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"
+        o["symbol_idx"]
+        for o in out["orders"]
+        if o["order_type"] == "close_auto_reduce_twel_long"
     }
 
     assert twel_symbols == {0, 1}
@@ -4810,8 +4906,12 @@ def test_twel_auto_reduce_manual_panic_exposure_triggers_managed_repair():
         ),
     ]
 
-    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols))
-    twel_orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+    out = compute(
+        pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols)
+    )
+    twel_orders = [
+        o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"
+    ]
 
     assert {o["symbol_idx"] for o in twel_orders} == {0}
 
@@ -4839,12 +4939,18 @@ def test_twel_enforcer_can_reduce_below_per_slot_target():
         for idx in range(9)
     ]
 
-    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols))
-    twel_closes = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
-    assert twel_closes, "TWE above TWEL must be reduced even when every position is at/below floor"
-    assert any(o["symbol_idx"] == 0 for o in twel_closes), (
-        "TWEL repair should use the shallowest-loss candidate even when it is at/below target"
+    out = compute(
+        pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols)
     )
+    twel_closes = [
+        o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"
+    ]
+    assert (
+        twel_closes
+    ), "TWE above TWEL must be reduced even when every position is at/below floor"
+    assert any(
+        o["symbol_idx"] == 0 for o in twel_closes
+    ), "TWEL repair should use the shallowest-loss candidate even when it is at/below target"
 
 
 def test_twel_enforcer_threshold_reduces_positions_at_wel():
@@ -4875,7 +4981,9 @@ def test_twel_enforcer_threshold_reduces_positions_at_wel():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
     out = compute(pbr, inp)
-    orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+    orders = [
+        o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"
+    ]
     assert orders, (
         "TWEL enforcer should reduce positions below raw WEL when "
         "risk_twel_enforcer_threshold is below 1.0"
@@ -4916,7 +5024,9 @@ def test_twel_loss_gate_block_emits_twel_specific_warning():
 
     out = compute(pbr, inp)
 
-    assert not any(o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"])
+    assert not any(
+        o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"]
+    )
     assert any(
         b["order_type"] == "close_auto_reduce_twel_long"
         for b in out["diagnostics"]["loss_gate_blocks"]
@@ -5002,7 +5112,10 @@ def test_balance_raw_absent_falls_back_to_balance():
 @pytest.mark.parametrize(
     ("mutator", "match"),
     [
-        (lambda inp: inp.__setitem__("balance", 0.0), r"balance must be finite and > 0"),
+        (
+            lambda inp: inp.__setitem__("balance", 0.0),
+            r"balance must be finite and > 0",
+        ),
         (
             lambda inp: inp["global"].__setitem__("max_realized_loss_pct", -0.01),
             r"global\.max_realized_loss_pct must be finite and >= 0",
@@ -5296,7 +5409,9 @@ def test_next_candle_rejects_invalid_fill_buffer(buffer):
 
     symbol = make_symbol(0, bid=100.0, ask=101.0)
     symbol["next_candle"] = {
-        "low": 99.0, "high": 102.0, "tradable": True,
+        "low": 99.0,
+        "high": 102.0,
+        "tradable": True,
         "limit_order_fill_buffer_pct": buffer,
     }
     inp = make_input(balance=1000.0, symbols=[symbol])

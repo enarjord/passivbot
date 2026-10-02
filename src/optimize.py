@@ -28,7 +28,9 @@ if sys.platform.startswith("win"):
 from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension
 
 _rust_parser = argparse.ArgumentParser(add_help=False)
-_rust_parser.add_argument("--skip-rust-compile", action="store_true", help="Skip Rust build check.")
+_rust_parser.add_argument(
+    "--skip-rust-compile", action="store_true", help="Skip Rust build check."
+)
 _rust_parser.add_argument(
     "--force-rust-compile", action="store_true", help="Force rebuild of Rust extension."
 )
@@ -53,6 +55,7 @@ except Exception as exc:
 sys.argv = [sys.argv[0]] + _rust_remaining
 
 import passivbot_rust as pbr
+
 verify_loaded_runtime_extension()
 from backtest import (
     prepare_hlcvs_mss,
@@ -72,7 +75,12 @@ from cli_utils import (
     get_cli_prog,
     help_all_requested,
 )
-from config import compile_runtime_config, load_input_config, load_prepared_config, prepare_config
+from config import (
+    compile_runtime_config,
+    load_input_config,
+    load_prepared_config,
+    prepare_config,
+)
 from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
@@ -115,7 +123,13 @@ from pure_funcs import (
     str2bool,
 )
 from opt_utils import deep_updated
-from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
+from utils import (
+    date_to_ts,
+    ts_to_date,
+    utc_ms,
+    make_get_filepath,
+    format_approved_ignored_coins,
+)
 from logging_setup import configure_logging, resolve_log_level
 from materialized_cache import release_materialized_payload
 from copy import deepcopy
@@ -184,15 +198,26 @@ from suite_runner import (
     build_scenarios,
     build_suite_metrics_payload,
 )
-from metrics_schema import MetricAggregationError, build_scenario_metrics, flatten_metric_stats
+from metrics_schema import (
+    MetricAggregationError,
+    build_scenario_metrics,
+    flatten_metric_stats,
+)
 from optimization.bounds import (
     Bound,
     enforce_bounds,
     round_to_sig_digits,
 )
-from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get_anchor_plan
+from optimization.fine_tune_anchors import (
+    ANCHOR_GENE_KEY,
+    ANCHOR_PLAN_KEY,
+    get_anchor_plan,
+)
 from optimization.interrupts import OptimizerInterruptLatch
-from optimization.backend_shared import cancel_pending_async_results, stream_async_results
+from optimization.backend_shared import (
+    cancel_pending_async_results,
+    stream_async_results,
+)
 from optimization.backends import get_backend_runner
 from optimization.random_seed import seed_rngs
 from optimization.starting_config_selection import select_starting_config_artifacts
@@ -201,13 +226,17 @@ from optimization.config_adapter import (
     get_optimization_key_paths,
     resolve_optimization_bound_path,
 )
-from optimization.evaluation_payload import apply_evaluation_payload, build_evaluation_payload
+from optimization.evaluation_payload import (
+    apply_evaluation_payload,
+    build_evaluation_payload,
+)
 from optimization.prepared_dataset_identity import (
     PREPARED_DATASET_KEY,
     build_prepared_dataset_identity,
 )
 from optimization.evaluation_contract import (
     CONTRACT_KEY,
+    CONTRACT_VERSION,
     CONTRACT_CACHE_KEY,
     build_evaluation_contract,
     has_unresolved_override_files,
@@ -298,7 +327,9 @@ def _maybe_aggregate_backtest_data(
     *,
     preserve_internal_nan_gaps: bool = False,
 ):
-    candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
+    candle_interval = int(
+        config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
+    )
     if candle_interval <= 1:
         return hlcvs, timestamps, btc_usd_prices
     n_before = hlcvs.shape[0]
@@ -380,9 +411,13 @@ def _propagate_optimizer_dataset_override(
         return
     side_membership = meta.get("effective_side_membership")
     if not isinstance(side_membership, dict):
-        raise ValueError("HLCV dataset override metadata missing effective_side_membership")
+        raise ValueError(
+            "HLCV dataset override metadata missing effective_side_membership"
+        )
     missing_sides = [
-        pside for pside in ("long", "short") if not isinstance(side_membership.get(pside), list)
+        pside
+        for pside in ("long", "short")
+        if not isinstance(side_membership.get(pside), list)
     ]
     if missing_sides:
         raise ValueError(
@@ -395,7 +430,9 @@ def _propagate_optimizer_dataset_override(
         effective_start_ts = int(meta["effective_requested_start_ts"])
         effective_end_ts = int(meta["effective_end_ts"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("HLCV dataset override metadata missing effective date range") from exc
+        raise ValueError(
+            "HLCV dataset override metadata missing effective date range"
+        ) from exc
 
     config.setdefault("live", {})["approved_coins"] = deepcopy(side_membership)
     backtest = config.setdefault("backtest", {})
@@ -422,7 +459,9 @@ def _register_exchange_data(
     Register one exchange's prepared data into the optimizer's shared-memory
     pools and preserve any dataset replay policy on the evaluator config.
     """
-    coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = prepare_result
+    coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = (
+        prepare_result
+    )
     _propagate_optimizer_dataset_override(config, exchange, coins, cache_dir, mss)
     config["backtest"]["coins"][exchange] = coins
     validate_optimizer_dataset_intervals(config, mss, exchange)
@@ -437,7 +476,9 @@ def _register_exchange_data(
     )
     _stamp_optimizer_warmup(config, mss, coins)
     timestamps_dict[exchange] = (
-        None if timestamps is None else np.array(timestamps, dtype=np.int64, copy=True, order="C")
+        None
+        if timestamps is None
+        else np.array(timestamps, dtype=np.int64, copy=True, order="C")
     )
     config["backtest"]["coins"][exchange] = coins
     msss[exchange] = mss
@@ -530,7 +571,9 @@ class ResultRecorder:
                     "Pareto update | eval=%d | front=%d | objectives=%s%s",
                     self.store.n_iters,
                     len(self.store._front),
-                    _format_objectives(objectives_block, scoring_keys=self.scoring_keys),
+                    _format_objectives(
+                        objectives_block, scoring_keys=self.scoring_keys
+                    ),
                     violation_str,
                 )
 
@@ -597,7 +640,9 @@ def _optimizer_can_skip_btc_analysis(
         return False
     if btc_collateral_cap > 0.0:
         return False
-    if any(_metric_uses_btc_denominated_analysis(spec.metric) for spec in scoring_specs):
+    if any(
+        _metric_uses_btc_denominated_analysis(spec.metric) for spec in scoring_specs
+    ):
         return False
     for check in limit_checks or []:
         if _metric_uses_btc_denominated_analysis(check.get("metric")):
@@ -650,7 +695,9 @@ def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
     name = exc.__class__.__name__
     message = str(exc)
     if name == "PanicException":
-        return any(pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS)
+        return any(
+            pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS
+        )
     if isinstance(exc, ValueError):
         return "hard-stop evaluation failed" in message and any(
             pattern in message
@@ -692,7 +739,10 @@ def _close_evaluator_for_pool(evaluator_for_pool) -> bool:
 
 
 def _suite_config_implies_suite_mode(args) -> bool:
-    return bool(getattr(args, "suite_config", None)) and getattr(args, "suite", None) is None
+    return (
+        bool(getattr(args, "suite_config", None))
+        and getattr(args, "suite", None) is None
+    )
 
 
 def _build_invalid_candidate_metrics(
@@ -741,7 +791,9 @@ def _clear_candidate_metrics(individual) -> None:
 def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
     metrics = getattr(individual, "evaluation_metrics", {}) or {}
     suite_metrics = metrics.pop("suite_metrics", None)
-    config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
+    config = individual_to_config(
+        individual, optimizer_overrides, overrides_list, evaluator_config
+    )
     anchor_meta = config.get("_optimizer_anchor")
     entry = clean_config(strip_config_metadata(config))
     # Prepared dataset membership is result provenance, not user configuration.
@@ -862,7 +914,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
     stored_contract = entry.get(CONTRACT_KEY)
     if stored_contract is not None and (
-        not isinstance(stored_contract, dict) or stored_contract.get("version") != 1
+        not isinstance(stored_contract, dict)
+        or stored_contract.get("version") != CONTRACT_VERSION
     ):
         mismatches.append(
             "  - optimizer_evaluation_contract: unsupported or malformed snapshot"
@@ -887,7 +940,9 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "policy evidence; start a fresh run to record a verifiable evaluation contract"
         )
     if stored_contract is not None:
-        new_contract = config.get(CONTRACT_CACHE_KEY) or build_evaluation_contract(config)
+        new_contract = config.get(CONTRACT_CACHE_KEY) or build_evaluation_contract(
+            config
+        )
         _append_resume_section_mismatches(
             mismatches, "evaluation", stored_contract, new_contract
         )
@@ -925,7 +980,9 @@ def _append_resume_section_mismatches(
         old_value = old_section.get(key)
         new_value = new_section.get(key)
         if old_value != new_value:
-            mismatches.append(f"  - {section_name}.{key}: '{old_value}' -> '{new_value}'")
+            mismatches.append(
+                f"  - {section_name}.{key}: '{old_value}' -> '{new_value}'"
+            )
 
 
 def _resolve_resume_results_dir(resume_path: str) -> str:
@@ -945,7 +1002,9 @@ def _require_resume_checkpoint(results_dir: str) -> str:
         with open(checkpoint_path, "rb") as f:
             f.read(1)
     except OSError as exc:
-        raise ValueError(f"Cannot resume: checkpoint is not readable: {checkpoint_path}") from exc
+        raise ValueError(
+            f"Cannot resume: checkpoint is not readable: {checkpoint_path}"
+        ) from exc
     return checkpoint_path
 
 
@@ -998,10 +1057,7 @@ def _gpu_checkpoint_allows_empty_results(
 ) -> bool:
     """Permit the durable pre-result checkpoint of a GPU seed bootstrap."""
 
-    if (
-        config.get("optimize", {}).get("backend") != "gpu"
-        or checkpoint_path is None
-    ):
+    if config.get("optimize", {}).get("backend") != "gpu" or checkpoint_path is None:
         return False
     try:
         import pickle
@@ -1038,7 +1094,9 @@ def _validate_resume_results(
 ) -> int:
     results_filename = os.path.join(results_dir, "all_results.bin")
     if not os.path.isfile(results_filename):
-        raise ValueError(f"Cannot resume: all_results.bin not found: {results_filename}")
+        raise ValueError(
+            f"Cannot resume: all_results.bin not found: {results_filename}"
+        )
     if os.path.getsize(results_filename) <= 0:
         if _gpu_checkpoint_allows_empty_results(checkpoint_path, config):
             if resume_state is not None:
@@ -1079,17 +1137,25 @@ def _validate_resume_results(
                         f"Please restore the original config or start a fresh run.\n"
                     )
     except msgpack.exceptions.UnpackException as exc:
-        raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
+        raise ValueError(
+            f"Cannot resume: failed to read all_results.bin: {results_filename}"
+        ) from exc
     except ValueError:
         raise
     except Exception as exc:
-        raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
+        raise ValueError(
+            f"Cannot resume: failed to read all_results.bin: {results_filename}"
+        ) from exc
 
     if previous_evals <= 0:
-        raise ValueError(f"Cannot resume: all_results.bin contains no entries: {results_filename}")
+        raise ValueError(
+            f"Cannot resume: all_results.bin contains no entries: {results_filename}"
+        )
     if resume_state is not None:
         resume_state["previous_data"] = previous_data
-    logging.info("Resuming with %d previous evaluations from all_results.bin", previous_evals)
+    logging.info(
+        "Resuming with %d previous evaluations from all_results.bin", previous_evals
+    )
     return previous_evals
 
 
@@ -1110,7 +1176,9 @@ def _iter_strict_msgpack_objects(file_obj, filename: str, file_size: int):
                 f"Cannot resume: all_results.bin contains invalid msgpack marker: {filename}"
             ) from exc
         except Exception as exc:
-            raise ValueError(f"Cannot resume: failed to decode all_results.bin: {filename}") from exc
+            raise ValueError(
+                f"Cannot resume: failed to decode all_results.bin: {filename}"
+            ) from exc
         last_successful_offset = unpacker.tell()
         yield entry
 
@@ -1138,6 +1206,7 @@ def ea_mu_plus_lambda_stream(
     max_pending_evals=None,
 ):
     import pickle
+
     if logbook is None:
         logbook = tools.Logbook()
         logbook.header = "gen", "evals", "min", "max"
@@ -1187,7 +1256,9 @@ def ea_mu_plus_lambda_stream(
                 if bool(metrics.get("liquidated")):
                     liquidation_total += 1
                 _set_candidate_metrics(ind, metrics)
-                _record_individual_result(ind, evaluator_config, overrides_list, recorder)
+                _record_individual_result(
+                    ind, evaluator_config, overrides_list, recorder
+                )
             else:
                 _clear_candidate_metrics(ind)
             completed["count"] += 1
@@ -1199,9 +1270,13 @@ def ea_mu_plus_lambda_stream(
                 logging.info("Terminating worker pool immediately due to interrupt...")
                 pool.terminate()
                 pool_state["terminated"] = True
+
         stream_async_results(
             enumerate(individuals),
-            submit=lambda item: (pool.apply_async(toolbox.evaluate, (item[1],)), item[0]),
+            submit=lambda item: (
+                pool.apply_async(toolbox.evaluate, (item[1],)),
+                item[0],
+            ),
             poll_interval_seconds=0.1,
             on_result=_on_result,
             on_interrupt=_on_interrupt,
@@ -1259,11 +1334,15 @@ def ea_mu_plus_lambda_stream(
         dup_prev_reused = dup_reuse
         liquidation_prev_total = liquidation_total
         if verbose and record:
-            logging.debug("Logbook: %s", " ".join(f"{k}={v}" for k, v in record.items()))
+            logging.debug(
+                "Logbook: %s", " ".join(f"{k}={v}" for k, v in record.items())
+            )
 
     invalid_ind = [ind for ind in population if not ind.fitness.valid]
     if invalid_ind:
-        logging.info("Evaluating initial population (%d candidates)...", len(invalid_ind))
+        logging.info(
+            "Evaluating initial population (%d candidates)...", len(invalid_ind)
+        )
     nevals = evaluate_and_record(invalid_ind)
 
     if halloffame is not None:
@@ -1309,7 +1388,9 @@ def ea_mu_plus_lambda_stream(
                     pickle.dump(chk, f, protocol=pickle.HIGHEST_PROTOCOL)
                 os.replace(tmp_path, checkpoint_path)
             except Exception as exc:
-                raise RuntimeError(f"Failed to save checkpoint: {checkpoint_path}") from exc
+                raise RuntimeError(
+                    f"Failed to save checkpoint: {checkpoint_path}"
+                ) from exc
 
     logging.info(
         "Optimization summary | generations=%d | total_evals=%d | front=%d | duration=%.1fs",
@@ -1337,15 +1418,25 @@ def _format_bound_for_log(bound: Bound) -> str:
 def _clamp_seed_value(value, bound: Bound, sig_digits: int | None):
     if bound.is_stepped:
         return bound.quantize(float(value))
-    rounded = float(value) if sig_digits is None else round_to_sig_digits(float(value), sig_digits)
-    return bound.high if rounded > bound.high else bound.low if rounded < bound.low else rounded
+    rounded = (
+        float(value)
+        if sig_digits is None
+        else round_to_sig_digits(float(value), sig_digits)
+    )
+    return (
+        bound.high
+        if rounded > bound.high
+        else bound.low if rounded < bound.low else rounded
+    )
 
 
 def _format_clamp_samples(counter: Counter, *, limit: int = 3) -> str:
     parts = []
     for value, count in counter.most_common(limit):
         parts.append(f"{value} ({count}x)" if count > 1 else str(value))
-    remaining = sum(counter.values()) - sum(count for _value, count in counter.most_common(limit))
+    remaining = sum(counter.values()) - sum(
+        count for _value, count in counter.most_common(limit)
+    )
     if remaining > 0:
         parts.append(f"+{remaining} more")
     return ", ".join(parts)
@@ -1419,7 +1510,9 @@ def _flush_seed_bounds_adjustments(collector: dict | None) -> None:
         source_examples = ", ".join(bucket["sources"])
         source_count = len(bucket["source_set"])
         if source_count > len(bucket["sources"]):
-            source_examples = f"{source_examples}, +{source_count - len(bucket['sources'])} more"
+            source_examples = (
+                f"{source_examples}, +{source_count - len(bucket['sources'])} more"
+            )
         values = _format_clamp_samples(bucket["values"])
         plural = "values" if count != 1 else "value"
         source_label = "sources" if source_count != 1 else "source"
@@ -1439,7 +1532,9 @@ def _flush_seed_bounds_adjustments(collector: dict | None) -> None:
         )
 
 
-def individual_to_config(individual, optimizer_overrides, overrides_list, template, key_paths=None):
+def individual_to_config(
+    individual, optimizer_overrides, overrides_list, template, key_paths=None
+):
     """
     assume individual is already bound enforced (or will be after)
     """
@@ -1599,13 +1694,17 @@ class Evaluator:
                 )
                 btc_spec = self.btc_usd_specs.get(exchange)
                 if btc_spec is not None:
-                    self.shared_btc_np[exchange] = self.shared_array_manager.view(btc_spec)
+                    self.shared_btc_np[exchange] = self.shared_array_manager.view(
+                        btc_spec
+                    )
 
         self.config = config
         logging.debug("Evaluator initialization complete.")
         logging.info("Evaluator ready | exchanges=%d", len(self.exchanges))
         self.seen_hashes = seen_hashes if seen_hashes is not None else {}
-        self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
+        self.duplicate_counter = (
+            duplicate_counter if duplicate_counter is not None else {"count": 0}
+        )
         self.optimization_shape = build_optimization_shape(self.config)
         self.bounds = list(self.optimization_shape.bounds)
         self.key_paths = list(self.optimization_shape.key_paths)
@@ -1737,11 +1836,16 @@ class Evaluator:
             self.key_paths,
             overrides_list,
         )
-        from config.hsl_revised import validate_optimizer_metrics
-        validate_optimizer_metrics(config, [
-            *(spec.metric for spec in self.scoring_specs),
-            *(check["metric"] for check in self.limit_checks),
-        ], markets_by_exchange=self.msss)
+        from config.hsl import validate_optimizer_metrics
+
+        validate_optimizer_metrics(
+            config,
+            [
+                *(spec.metric for spec in self.scoring_specs),
+                *(check["metric"] for check in self.limit_checks),
+            ],
+            markets_by_exchange=self.msss,
+        )
         individual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             if individual_hash in self.seen_hashes:
@@ -1819,10 +1923,12 @@ class Evaluator:
                     exchange,
                     error,
                 )
-                objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
-                    self.config["optimize"]["scoring"],
-                    error,
-                    include_stats=True,
+                objectives, total_penalty, metrics_payload = (
+                    _build_invalid_candidate_metrics(
+                        self.config["optimize"]["scoring"],
+                        error,
+                        include_stats=True,
+                    )
                 )
                 _set_candidate_metrics(individual, metrics_payload)
                 actual_hash = calc_hash(individual)
@@ -1853,10 +1959,12 @@ class Evaluator:
                 individual_hash[:12],
                 error,
             )
-            objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
-                self.config["optimize"]["scoring"],
-                error,
-                include_stats=True,
+            objectives, total_penalty, metrics_payload = (
+                _build_invalid_candidate_metrics(
+                    self.config["optimize"]["scoring"],
+                    error,
+                    include_stats=True,
+                )
             )
             metrics_payload["liquidated"] = liquidated
             _set_candidate_metrics(individual, metrics_payload)
@@ -1873,7 +1981,8 @@ class Evaluator:
             **scenario_metrics,
             "objectives": raw_objectives,
             "unpenalized_objectives": tuple(
-                to_engine_value(spec, raw_objectives[spec.metric]) for spec in self.scoring_specs
+                to_engine_value(spec, raw_objectives[spec.metric])
+                for spec in self.scoring_specs
             ),
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
@@ -1882,7 +1991,9 @@ class Evaluator:
         actual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-        return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
+        return build_evaluation_payload(
+            objectives, total_penalty, metrics_payload, individual
+        )
 
     def build_limit_checks(self, reducer_cfg: Dict[str, Any] | None = None):
         limits = self.config["optimize"].get("limits", [])
@@ -1904,7 +2015,9 @@ class Evaluator:
         return_raw_objectives: bool = False,
     ):
         limit_metrics = analyses_combined if limit_metrics is None else limit_metrics
-        if objective_values is not None and len(objective_values) != len(self.scoring_specs):
+        if objective_values is not None and len(objective_values) != len(
+            self.scoring_specs
+        ):
             raise ValueError(
                 "optimizer objective value count does not match optimize.scoring: "
                 f"{len(objective_values)} != {len(self.scoring_specs)}"
@@ -2050,7 +2163,9 @@ class SuiteEvaluator:
         self._master_attachments: Dict[str, Dict[str, Any]] = {"hlcvs": {}, "btc": {}}
         self._master_arrays: Dict[str, Dict[str, np.ndarray]] = {"hlcvs": {}, "btc": {}}
 
-    def _ensure_master_attachment(self, spec, cache_key: str, array_type: str) -> np.ndarray:
+    def _ensure_master_attachment(
+        self, spec, cache_key: str, array_type: str
+    ) -> np.ndarray:
         """Attach to master SharedMemory if not already attached."""
         if cache_key not in self._master_arrays[array_type]:
             attachment = attach_shared_array(spec)
@@ -2069,10 +2184,14 @@ class SuiteEvaluator:
         Coin subsetting is passed through as active indices for Rust.
         """
         master_spec = ctx.master_hlcvs_specs[exchange]
-        master_array = self._ensure_master_attachment(master_spec, master_spec.name, "hlcvs")
+        master_array = self._ensure_master_attachment(
+            master_spec, master_spec.name, "hlcvs"
+        )
 
         time_slice = ctx.time_slice.get(exchange) if ctx.time_slice else None
-        coin_indices = ctx.coin_slice_indices.get(exchange) if ctx.coin_slice_indices else None
+        coin_indices = (
+            ctx.coin_slice_indices.get(exchange) if ctx.coin_slice_indices else None
+        )
 
         # Time slicing creates a VIEW (no copy, O(1) memory)
         if time_slice is not None:
@@ -2083,9 +2202,13 @@ class SuiteEvaluator:
 
         # BTC slice (time-only slicing creates a view)
         btc_view = None
-        master_btc_spec = ctx.master_btc_specs.get(exchange) if ctx.master_btc_specs else None
+        master_btc_spec = (
+            ctx.master_btc_specs.get(exchange) if ctx.master_btc_specs else None
+        )
         if master_btc_spec is not None:
-            master_btc = self._ensure_master_attachment(master_btc_spec, master_btc_spec.name, "btc")
+            master_btc = self._ensure_master_attachment(
+                master_btc_spec, master_btc_spec.name, "btc"
+            )
             if time_slice is not None:
                 start_idx, end_idx = time_slice
                 btc_view = master_btc[start_idx:end_idx]
@@ -2103,7 +2226,9 @@ class SuiteEvaluator:
             and ctx.master_hlcvs_specs[exchange] is not None
         )
 
-    def _ensure_context_attachment(self, ctx: ScenarioEvalContext, exchange: str) -> None:
+    def _ensure_context_attachment(
+        self, ctx: ScenarioEvalContext, exchange: str
+    ) -> None:
         """Attach to SharedMemory for non-lazy-slicing contexts only."""
         # Skip if using lazy slicing - slices are computed on-demand in evaluate()
         if self._uses_lazy_slicing(ctx, exchange):
@@ -2135,7 +2260,9 @@ class SuiteEvaluator:
             ctx.coin_indices.get(exchange),
         )
 
-    def build_scenario_candidate_config(self, config: Dict[str, Any], ctx: ScenarioEvalContext):
+    def build_scenario_candidate_config(
+        self, config: Dict[str, Any], ctx: ScenarioEvalContext
+    ):
         scenario_config = dict(config)
         scenario_backtest = ctx.config.get("backtest", {})
         backtest_cfg = dict(config.get("backtest", {}))
@@ -2162,14 +2289,26 @@ class SuiteEvaluator:
 
         if unstuck_ema_spans_coupled(scenario_config):
             scenario_config = apply_coupled_unstuck_ema_spans(deepcopy(scenario_config))
-        from config.hsl_revised import engine, validate_optimizer_metrics
-        if engine(scenario_config) == "revised":
-            validate_optimizer_metrics(scenario_config, [
-                *(spec.metric for spec, basis in zip(self.base.scoring_specs, self.objective_bases)
-                  if basis.scenario is None or basis.scenario == ctx.label),
-                *(check["metric"] for check in self.base.limit_checks
-                  if check.get("scenario") is None or check["scenario"] == ctx.label),
-            ], markets_by_exchange=ctx.msss)
+        from config.hsl import validate_optimizer_metrics
+
+        validate_optimizer_metrics(
+            scenario_config,
+            [
+                *(
+                    spec.metric
+                    for spec, basis in zip(
+                        self.base.scoring_specs, self.objective_bases
+                    )
+                    if basis.scenario is None or basis.scenario == ctx.label
+                ),
+                *(
+                    check["metric"]
+                    for check in self.base.limit_checks
+                    if check.get("scenario") is None or check["scenario"] == ctx.label
+                ),
+            ],
+            markets_by_exchange=ctx.msss,
+        )
         return scenario_config
 
     def _build_scenario_candidate_config(
@@ -2179,7 +2318,9 @@ class SuiteEvaluator:
 
         return self.build_scenario_candidate_config(config, ctx)
 
-    def score_scenario_results(self, scenario_results: List[ScenarioResult]) -> Dict[str, Any]:
+    def score_scenario_results(
+        self, scenario_results: List[ScenarioResult]
+    ) -> Dict[str, Any]:
         """Apply the canonical suite reducers, objectives, and limits to scenario stats."""
 
         reduce_started = time.perf_counter()
@@ -2197,7 +2338,9 @@ class SuiteEvaluator:
         for metric, agg_value in aggregated_values.items():
             flat_stats[f"{metric}_mean"] = agg_value
         required_scenario_labels = {
-            basis.scenario for basis in self.objective_bases if basis.scenario is not None
+            basis.scenario
+            for basis in self.objective_bases
+            if basis.scenario is not None
         }
         required_scenario_labels.update(
             check["scenario"]
@@ -2257,7 +2400,9 @@ class SuiteEvaluator:
         profile_enabled = _optimize_profile_enabled()
         timings: Dict[str, float] | None = {} if profile_enabled else None
         profile_total_start = _profile_start(profile_enabled)
-        individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
+        individual[:] = enforce_bounds(
+            individual, self.base.bounds, self.base.sig_digits
+        )
         config = _canonicalize_optimizer_individual(
             individual,
             self.base.config,
@@ -2288,7 +2433,9 @@ class SuiteEvaluator:
                 ]
                 for perturb_fn in perturbation_funcs:
                     perturbed = perturb_fn(individual)
-                    perturbed = enforce_bounds(perturbed, self.base.bounds, self.base.sig_digits)
+                    perturbed = enforce_bounds(
+                        perturbed, self.base.bounds, self.base.sig_digits
+                    )
                     perturbed_config = _canonicalize_optimizer_individual(
                         perturbed,
                         self.base.config,
@@ -2372,7 +2519,9 @@ class SuiteEvaluator:
                 _profile_add(timings, "payload_build_ms", phase_start)
                 try:
                     phase_start = _profile_start(profile_enabled)
-                    fills, equities_array, analysis = execute_backtest(payload, scenario_config)
+                    fills, equities_array, analysis = execute_backtest(
+                        payload, scenario_config
+                    )
                     _profile_add(timings, "rust_backtest_ms", phase_start)
                     if timings is not None and isinstance(
                         getattr(payload, "rust_profile", None), dict
@@ -2394,15 +2543,20 @@ class SuiteEvaluator:
                         exchange,
                         error,
                     )
-                    objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
-                        self.base.config["optimize"]["scoring"],
-                        error,
-                        include_stats=False,
-                        include_suite_metrics=True,
+                    objectives, total_penalty, metrics_payload = (
+                        _build_invalid_candidate_metrics(
+                            self.base.config["optimize"]["scoring"],
+                            error,
+                            include_stats=False,
+                            include_suite_metrics=True,
+                        )
                     )
                     _set_candidate_metrics(individual, metrics_payload)
                     actual_hash = calc_hash(individual)
-                    self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+                    self.base.seen_hashes[actual_hash] = (
+                        tuple(objectives),
+                        total_penalty,
+                    )
                     return build_evaluation_payload(
                         objectives,
                         total_penalty,
@@ -2429,11 +2583,13 @@ class SuiteEvaluator:
                     ctx.label,
                     error,
                 )
-                objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
-                    self.base.config["optimize"]["scoring"],
-                    error,
-                    include_stats=False,
-                    include_suite_metrics=True,
+                objectives, total_penalty, metrics_payload = (
+                    _build_invalid_candidate_metrics(
+                        self.base.config["optimize"]["scoring"],
+                        error,
+                        include_stats=False,
+                        include_suite_metrics=True,
+                    )
                 )
                 metrics_payload["liquidated"] = liquidated
                 _set_candidate_metrics(individual, metrics_payload)
@@ -2498,11 +2654,12 @@ class SuiteEvaluator:
         if timings is not None:
             timings["total_ms"] = (time.perf_counter() - profile_total_start) * 1000.0
             profile_payload = {
-                key: round(value, 3)
-                for key, value in sorted(timings.items())
+                key: round(value, 3) for key, value in sorted(timings.items())
             }
             profile_payload["scenarios"] = len(self.contexts)
-            profile_payload["exchange_evals"] = sum(len(ctx.exchanges) for ctx in self.contexts)
+            profile_payload["exchange_evals"] = sum(
+                len(ctx.exchanges) for ctx in self.contexts
+            )
             metrics_payload["profile"] = profile_payload
             rust_detail = " ".join(
                 f"{key}={profile_payload[key]:.3f}"
@@ -2528,7 +2685,9 @@ class SuiteEvaluator:
         actual_hash = calc_hash(individual)
         if self.base.use_duplicate_guard:
             self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-        return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
+        return build_evaluation_payload(
+            objectives, total_penalty, metrics_payload, individual
+        )
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -2748,13 +2907,17 @@ def _step_supported_by_range(step: Any, low: float, high: float) -> bool:
         return False
 
 
-def apply_polish_bounds(config: dict, pct: float, *, bounds_mode: str = "clamp") -> None:
+def apply_polish_bounds(
+    config: dict, pct: float, *, bounds_mode: str = "clamp"
+) -> None:
     if (
         not isinstance(pct, (int, float))
         or not math.isfinite(float(pct))
         or float(pct) < 0.0
     ):
-        raise ValueError("polish bounds percentage must be a finite non-negative number")
+        raise ValueError(
+            "polish bounds percentage must be a finite non-negative number"
+        )
     if bounds_mode not in ("clamp", "override-tunable", "override-all"):
         raise ValueError(
             "polish bounds mode must be one of: clamp, override-tunable, override-all"
@@ -2823,16 +2986,22 @@ def _format_bound_path_for_log(path) -> str:
 
 
 def _format_bound_key_for_log(config: dict, bound_key: str, path=None) -> str:
-    resolved_path = path if path is not None else resolve_optimization_bound_path(config, bound_key)
+    resolved_path = (
+        path if path is not None else resolve_optimization_bound_path(config, bound_key)
+    )
     if resolved_path is None:
         return bound_key
     return _format_bound_path_for_log(resolved_path)
 
 
-def _resolve_bound_selectors_for_config(config: dict, selectors, label: str) -> set[str]:
+def _resolve_bound_selectors_for_config(
+    config: dict, selectors, label: str
+) -> set[str]:
     flat_bounds, _ = _flat_optimize_bounds_for_config(config)
     resolved: set[str] = set()
-    selectors_sorted = sorted({str(selector).strip() for selector in selectors if str(selector).strip()})
+    selectors_sorted = sorted(
+        {str(selector).strip() for selector in selectors if str(selector).strip()}
+    )
     if not selectors_sorted:
         return resolved
     logging.info("%s selectors:", label)
@@ -2840,12 +3009,16 @@ def _resolve_bound_selectors_for_config(config: dict, selectors, label: str) -> 
         selector_matches = resolve_bound_selectors(config, [selector], flat_bounds)
         matches = sorted(selector_matches)
         if not matches:
-            logging.warning("%s selector matched no optimize bounds: %s", label, selector)
+            logging.warning(
+                "%s selector matched no optimize bounds: %s", label, selector
+            )
             continue
         logging.info("  %s ->", selector)
         for match in sorted(
             matches,
-            key=lambda key: _format_bound_key_for_log(config, key, selector_matches[key]),
+            key=lambda key: _format_bound_key_for_log(
+                config, key, selector_matches[key]
+            ),
         ):
             logging.info(
                 "    %s (%s)",
@@ -2882,14 +3055,18 @@ def _resolve_fine_tune_key_sets(
     )
     effective_fixed_params = set(config_fixed_params)
     if fine_tune_params:
-        effective_fixed_params.update(key for key in flat_bounds if key not in fine_tune_set)
+        effective_fixed_params.update(
+            key for key in flat_bounds if key not in fine_tune_set
+        )
     return flat_bounds, fine_tune_set, config_fixed_params, effective_fixed_params
 
 
 def _fix_bound_to_current_value(config: dict, bound_key: str) -> bool:
     path = resolve_optimization_bound_path(config, bound_key)
     if path is None:
-        logging.warning("fine-tune bounds: unable to resolve key '%s', skipping", bound_key)
+        logging.warning(
+            "fine-tune bounds: unable to resolve key '%s', skipping", bound_key
+        )
         return False
     target = config
     try:
@@ -2972,7 +3149,11 @@ def install_anchored_fine_tune_plan(
     flat_bounds, fine_tune_set, config_fixed_params, effective_fixed_params = (
         _resolve_fine_tune_key_sets(config, fine_tune_params)
     )
-    tunable_keys = sorted(key for key in fine_tune_set if key in flat_bounds and key not in config_fixed_params)
+    tunable_keys = sorted(
+        key
+        for key in fine_tune_set
+        if key in flat_bounds and key not in config_fixed_params
+    )
     fixed_keys = sorted(key for key in flat_bounds if key not in tunable_keys)
     if fine_tune_set:
         _log_bound_set(config, "fine-tune tunable bounds", set(tunable_keys))
@@ -2985,12 +3166,16 @@ def install_anchored_fine_tune_plan(
         )
 
     anchors = []
-    base_strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    base_strategy_kind = normalize_strategy_kind(
+        config.get("live", {}).get("strategy_kind")
+    )
     base_key_paths = get_optimization_key_paths(config)
     key_path_by_key = {key: path for key, path in base_key_paths}
     bound_by_key = {
         key: bound
-        for (key, _path), bound in zip(base_key_paths, extract_bounds_tuple_list_from_config(config))
+        for (key, _path), bound in zip(
+            base_key_paths, extract_bounds_tuple_list_from_config(config)
+        )
     }
     sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
     clamp_collector = {}
@@ -3043,7 +3228,9 @@ def install_anchored_fine_tune_plan(
                 }
             )
         except Exception as exc:
-            logging.warning("failed to use starting config as fine-tune anchor: %s", exc)
+            logging.warning(
+                "failed to use starting config as fine-tune anchor: %s", exc
+            )
     _flush_seed_bounds_adjustments(clamp_collector)
     if not anchors:
         raise ValueError(
@@ -3078,7 +3265,9 @@ def iter_extract_configs(path):
             raw = load_hjson_config(path, log_errors=False)
             yield _extract_starting_config(raw, source=path)
         except Exception as e:
-            logging.warning(f"failed to extract bot config from starting config {path}: {e}")
+            logging.warning(
+                f"failed to extract bot config from starting config {path}: {e}"
+            )
         return
     if path.endswith("_pareto.txt"):
         with open(path) as f:
@@ -3087,7 +3276,9 @@ def iter_extract_configs(path):
                     cfg = json.loads(line)
                     yield _extract_starting_config(cfg, source=path)
                 except Exception as e:
-                    logging.warning(f"failed to extract bot config from starting config {path}: {e}")
+                    logging.warning(
+                        f"failed to extract bot config from starting config {path}: {e}"
+                    )
 
 
 def _extract_starting_config(raw_config, *, source: str = "<memory>"):
@@ -3110,7 +3301,9 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
     live_cfg = current.get("live")
     if isinstance(live_cfg, dict):
         strategy_kind = live_cfg.get("strategy_kind")
-        if strategy_kind and normalize_strategy_kind(strategy_kind) != normalize_strategy_kind(None):
+        if strategy_kind and normalize_strategy_kind(
+            strategy_kind
+        ) != normalize_strategy_kind(None):
             extracted["live"] = {"strategy_kind": strategy_kind}
     optimize_cfg = current.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
@@ -3123,8 +3316,12 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
 def _build_starting_seed_config(cfg):
     if not isinstance(cfg, dict):
         raise TypeError(f"expected dict, got {type(cfg).__name__}")
-    if all(pside in cfg and isinstance(cfg.get(pside), dict) for pside in ("long", "short")):
-        extracted = {"bot": format_bot_config(cfg, verbose=False, warn_deprecations=False)}
+    if all(
+        pside in cfg and isinstance(cfg.get(pside), dict) for pside in ("long", "short")
+    ):
+        extracted = {
+            "bot": format_bot_config(cfg, verbose=False, warn_deprecations=False)
+        }
     elif "bot" in cfg and isinstance(cfg.get("bot"), dict):
         extracted = cfg
     else:
@@ -3179,9 +3376,8 @@ def preselect_starting_configs(
         max_count=max_count,
     )
     current_specs = extract_objective_specs(config)
-    if (
-        selection.selected_count < selection.filtered_count
-        and current_specs != list(selection.scoring_specs)
+    if selection.selected_count < selection.filtered_count and current_specs != list(
+        selection.scoring_specs
     ):
         logging.warning(
             "Stored starting-config optimize.scoring differs from this optimization run; "
@@ -3324,9 +3520,11 @@ def iter_anchored_fine_tune_seed_configs(config: dict):
     for anchor in anchor_plan.get("anchors") or []:
         yield {
             "bot": deepcopy(anchor.get("seed_bot") or {}),
-            "live": {"strategy_kind": anchor_plan.get("strategy_kind")}
-            if anchor_plan.get("strategy_kind")
-            else {},
+            "live": (
+                {"strategy_kind": anchor_plan.get("strategy_kind")}
+                if anchor_plan.get("strategy_kind")
+                else {}
+            ),
             "_starting_config_source": anchor.get("source", "<memory>"),
         }
 
@@ -3391,9 +3589,11 @@ def configs_to_individuals_streaming(
                 optimization_shape=optimization_shape,
                 anchor_id=resolved_anchor_id,
                 clamp_context="starting config",
-                source=cfg.get("_starting_config_source", "<memory>")
-                if isinstance(cfg, dict)
-                else "<memory>",
+                source=(
+                    cfg.get("_starting_config_source", "<memory>")
+                    if isinstance(cfg, dict)
+                    else "<memory>"
+                ),
                 clamp_collector=clamp_collector,
             )
             inds.add(tuple(individual))
@@ -3496,8 +3696,8 @@ async def main():
         metavar="SPEC",
         help=(
             "Repeatable optimize limit override. Example: "
-            "\"drawdown_worst > 0.35\" or "
-            "\"drawdown_worst_strategy_eq <= 0.5 scenario=base\". "
+            '"drawdown_worst > 0.35" or '
+            '"drawdown_worst_strategy_eq <= 0.5 scenario=base". '
             "Suite limits may use reducer=min|max|mean|std|median."
         ),
     )
@@ -3524,20 +3724,40 @@ async def main():
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
-    existing_limits = deepcopy(effective_config_payload(source_config).get("optimize", {}).get("limits"))
-    update_config_with_args(source_config, args, verbose=True, allowed_keys=allowed_config_keys)
-    cli_limits_override = _resolve_cli_limits_override(args, existing_limits=existing_limits)
+    existing_limits = deepcopy(
+        effective_config_payload(source_config).get("optimize", {}).get("limits")
+    )
+    update_config_with_args(
+        source_config, args, verbose=True, allowed_keys=allowed_config_keys
+    )
+    cli_limits_override = _resolve_cli_limits_override(
+        args, existing_limits=existing_limits
+    )
     if cli_limits_override is not None:
-        update_config_with_args(source_config,
-                                argparse.Namespace(**{"optimize.limits": cli_limits_override}),
-                                verbose=True, allowed_keys={"optimize.limits"})
+        update_config_with_args(
+            source_config,
+            argparse.Namespace(**{"optimize.limits": cli_limits_override}),
+            verbose=True,
+            allowed_keys={"optimize.limits"},
+        )
+    # External suite patches share the raw base's schema contract. Load and
+    # gate them before preparation upgrades that schema and erases provenance.
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        suite_override = load_suite_override_config(
+            args.suite_config,
+            source_config=source_config,
+            base_config_path=base_config_path,
+        )
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,
         verbose=False,
         raw_snapshot=raw_snapshot,
     )
-    from config.hsl_revised import require_runtime_support
+    from config.hsl import require_runtime_support
+
     require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
     config = parse_overrides(config, verbose=False)
     validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
@@ -3558,14 +3778,10 @@ async def main():
         TEMPLATE_CONFIG_MODE,
         ",".join(objective_metric_names(config)),
     )
-    suite_override = None
-    if args.suite_config:
-        logging.info("loading suite config %s", args.suite_config)
-        suite_override = load_suite_override_config(args.suite_config)
-        if _suite_config_implies_suite_mode(args):
-            recursive_config_update(
-                config, "backtest.suite_enabled", True, verbose=True
-            )
+    if _suite_config_implies_suite_mode(args):
+        recursive_config_update(
+            config, "backtest.suite_enabled", True, verbose=True
+        )
     suite_cfg = extract_suite_config(config, suite_override)
 
     # Handle --scenarios filter (implies --suite y)
@@ -3652,8 +3868,7 @@ async def main():
     )
     data_config = build_optimizer_data_config(config)
     allow_internal_nan_gaps = (
-        str(config.get("optimize", {}).get("backend", "")).strip().lower()
-        == "gpu"
+        str(config.get("optimize", {}).get("backend", "")).strip().lower() == "gpu"
     )
     interrupted = False
     failed = False
@@ -3682,14 +3897,20 @@ async def main():
             if not scenario_contexts:
                 raise ValueError("Suite configuration produced no scenarios.")
             _materialize_resolved_suite_dates(config, scenario_contexts)
-            logging.info("Optimizer suite enabled with %d scenario(s)", len(scenario_contexts))
+            logging.info(
+                "Optimizer suite enabled with %d scenario(s)", len(scenario_contexts)
+            )
             first_ctx = scenario_contexts[0]
             hlcvs_specs = first_ctx.hlcvs_specs
             btc_usd_specs = first_ctx.btc_usd_specs
             msss = first_ctx.msss
             timestamps_dict = first_ctx.timestamps
-            config["backtest"]["coins"] = deepcopy(first_ctx.config["backtest"]["coins"])
-            backtest_exchanges = sorted({ex for ctx in scenario_contexts for ex in ctx.exchanges})
+            config["backtest"]["coins"] = deepcopy(
+                first_ctx.config["backtest"]["coins"]
+            )
+            backtest_exchanges = sorted(
+                {ex for ctx in scenario_contexts for ex in ctx.exchanges}
+            )
 
             # Estimate memory usage (per-scenario SharedMemory, shared by all workers)
             total_shm_bytes = 0
@@ -3707,7 +3928,9 @@ async def main():
                         if spec.name in seen_specs:
                             continue
                         seen_specs.add(spec.name)
-                        total_shm_bytes += np.prod(spec.shape) * np.dtype(spec.dtype).itemsize
+                        total_shm_bytes += (
+                            np.prod(spec.shape) * np.dtype(spec.dtype).itemsize
+                        )
             if total_shm_bytes > 0:
                 total_shm_gb = total_shm_bytes / (1024**3)
                 try:
@@ -3733,7 +3956,9 @@ async def main():
                     f" | system={available_gb:.1f}GB" if available_gb else "",
                 )
                 if shm_gb is not None:
-                    logging.info("Shared memory filesystem size | /dev/shm=%.1fGB", shm_gb)
+                    logging.info(
+                        "Shared memory filesystem size | /dev/shm=%.1fGB", shm_gb
+                    )
                 if available_gb and total_shm_gb > available_gb * 0.7:
                     logging.warning(
                         "Shared memory for scenarios (%.1fGB) is high relative to RAM (%.1fGB). "
@@ -3801,9 +4026,13 @@ async def main():
             scenario_contexts=scenario_contexts,
         )
         exchanges = backtest_exchanges
-        exchanges_fname = "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)
+        exchanges_fname = (
+            "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)
+        )
         date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
-        coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
+        coins = sorted(
+            set([x for y in config["backtest"]["coins"].values() for x in y])
+        )
         suite_flag = suite_enabled or bool(args.suite)
         if suite_flag:
             coins_fname = f"suite_{len(coins)}_coins"
@@ -3870,7 +4099,9 @@ async def main():
         )
 
         if suite_enabled:
-            evaluator_for_pool = SuiteEvaluator(evaluator, scenario_contexts, reducer_cfg)
+            evaluator_for_pool = SuiteEvaluator(
+                evaluator, scenario_contexts, reducer_cfg
+            )
         else:
             evaluator_for_pool = evaluator
 
@@ -3897,7 +4128,9 @@ async def main():
         if preselected_starting_configs is not None:
             starting_config_iter = lambda _path: iter(preselected_starting_configs)
         if get_anchor_plan(config) is not None:
-            starting_config_iter = lambda _path: iter_anchored_fine_tune_seed_configs(config)
+            starting_config_iter = lambda _path: iter_anchored_fine_tune_seed_configs(
+                config
+            )
         backend_kwargs = dict(
             config=config,
             evaluator=evaluator,
@@ -3934,9 +4167,7 @@ async def main():
         interrupted = True
         logging.info("SIGINT received; starting graceful shutdown")
         pool = getattr(exc, "pool", pool)
-        pool_terminated = bool(
-            getattr(exc, "pool_terminated", pool_terminated)
-        )
+        pool_terminated = bool(getattr(exc, "pool_terminated", pool_terminated))
         pool_terminated = _terminate_optimizer_pool(pool, pool_terminated)
     except Exception as e:
         failed = True
@@ -3962,7 +4193,9 @@ async def main():
             try:
                 pool.join()
             except KeyboardInterrupt:
-                logging.info("Additional SIGINT received during pool join; continuing shutdown")
+                logging.info(
+                    "Additional SIGINT received during pool join; continuing shutdown"
+                )
         if manager is not None:
             logging.info("Shutting down multiprocessing manager...")
             try:

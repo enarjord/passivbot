@@ -436,11 +436,11 @@ def test_event_query_filters_by_problem_event_predicate(tmp_path):
                 level="info",
             ),
             _monitor_row(
-                event_type="hsl.replay.failed",
+                event_type="bot.shutdown.stage",
                 cycle_id="cy_shutdown",
                 seq=6,
                 ts=1500,
-                status="failed",
+                status="succeeded",
                 level="warning",
                 reason_code="shutdown_cancelled",
             ),
@@ -1981,10 +1981,7 @@ def test_live_event_query_cli_outputs_json_and_status(tmp_path, capsys):
         ],
     )
 
-    assert (
-        live_event_query.main([str(tmp_path / "monitor"), "--cycle-id", "cy_7"])
-        == 0
-    )
+    assert live_event_query.main([str(tmp_path / "monitor"), "--cycle-id", "cy_7"]) == 0
 
     report = json.loads(capsys.readouterr().out)
     assert report["cycle"]["cycle_id"] == "cy_7"
@@ -2478,9 +2475,7 @@ def test_live_event_query_cli_projects_event_tail_metadata(tmp_path, capsys):
 
 def test_live_event_query_cli_rejects_invalid_time_window(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc_info:
-        live_event_query.main(
-            [str(tmp_path), "--since-ms", "20", "--until-ms", "10"]
-        )
+        live_event_query.main([str(tmp_path), "--since-ms", "20", "--until-ms", "10"])
     assert exc_info.value.code == 2
     err = capsys.readouterr().err
     assert "must be <= --until-ms" in err
@@ -2541,7 +2536,9 @@ def test_live_event_query_cli_accepts_max_event_files_per_bot(tmp_path, capsys):
     assert report["cycle_ids_sample"] == [{"cycle_id": "cy_current", "events": 1}]
 
 
-def test_live_event_query_cli_rejects_negative_max_event_files_per_bot(tmp_path, capsys):
+def test_live_event_query_cli_rejects_negative_max_event_files_per_bot(
+    tmp_path, capsys
+):
     with pytest.raises(SystemExit) as exc_info:
         live_event_query.main([str(tmp_path), "--max-event-files-per-bot", "-1"])
     assert exc_info.value.code == 2
@@ -2712,9 +2709,7 @@ def test_event_query_trace_summary_counts_all_matches_beyond_limit(tmp_path):
     assert summary["sides"] == ["buy", "sell"]
     assert summary["ids"]["cycle_id"] == [{"id": "cy_9", "events": 4}]
     assert summary["ids"]["order_wave_id"] == [{"id": "ow_9", "events": 3}]
-    assert summary["ids"]["remote_call_group_id"] == [
-        {"id": "cy_9:auth", "events": 1}
-    ]
+    assert summary["ids"]["remote_call_group_id"] == [{"id": "cy_9:auth", "events": 1}]
     assert summary["order_waves"]["ow_9"] == {
         "events": 3,
         "event_types": {

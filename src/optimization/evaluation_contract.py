@@ -11,6 +11,7 @@ from optimization.evaluation_implementation import evaluation_implementation_ide
 from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 
+CONTRACT_VERSION = 2
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -21,9 +22,7 @@ BACKTEST_LIVE_KEYS = frozenset(
         "approved_coins",
         "ignored_coins",
         "strategy_kind",
-        "hsl_engine",
         "hsl_signal_mode",
-        "hsl_position_during_cooldown_policy",
         "hedge_mode",
         "max_realized_loss_pct",
         "pnls_max_lookback_days",
@@ -122,7 +121,7 @@ def build_evaluation_contract(config: dict) -> dict:
             "anchors": anchors,
         }
     return {
-        "version": 1,
+        "version": CONTRACT_VERSION,
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),
         "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),

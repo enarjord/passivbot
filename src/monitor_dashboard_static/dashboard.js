@@ -437,6 +437,16 @@
         ])
           .map(([key, value]) => `${key} ${value}`)
           .join(" · ");
+      case "hsl.status":
+        return compactEntries([
+          ["observation", payload.observation_status],
+          ["tier", payload.tier],
+          ["scopes", payload.scope_count],
+          ["sample", Array.isArray(payload.scopes) ? payload.scopes.map((scope) =>
+            `${scope.symbol || scope.signal_mode || "portfolio"}/${scope.pside || "all"} ${scope.action || scope.availability || "inactive"} raw ${fmtCompact(scope.raw, 4)} ema ${fmtCompact(scope.ema, 4)}`
+          ).join("; ") : null],
+          ["omitted", payload.omitted_scopes],
+        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
       case "hsl.transition":
         return compactEntries([
           ["tier", payload.tier],
@@ -493,9 +503,8 @@
   }
 
   function hslSummary(hsl) {
-    if (hsl.engine !== "revised") return `L ${hsl.long?.tier || "-"} / S ${hsl.short?.tier || "-"}`;
     const counts = hsl.counts || {};
-    return `revised ${hsl.signal_mode || "-"} · ${hsl.observation_status || "-"} · GREEN ${counts.green || 0} / RED ${counts.red || 0} / inactive ${counts.inactive || 0} / unavailable ${counts.unavailable || 0} / estimated ${counts.estimated || 0}`;
+    return `HSL ${hsl.signal_mode || "-"} · ${hsl.observation_status || "-"} · GREEN ${counts.green || 0} / RED ${counts.red || 0} / inactive ${counts.inactive || 0} / unavailable ${counts.unavailable || 0} / estimated ${counts.estimated || 0}`;
   }
 
   function hslScopeStatus(scope) {
@@ -571,7 +580,7 @@
       ["Uptime", fmtUptimeMs(health.uptime_ms)],
       ["HSL", hslSummary(hsl)],
     ];
-    if (hsl.engine === "revised") {
+    if (Array.isArray(hsl.scopes)) {
       for (const scope of (hsl.scopes || []).slice(0, 3)) {
         const label = [scope.symbol, scope.pside].filter(Boolean).join(" ") || "portfolio";
         rows.push([`HSL ${label}`, `${hslScopeStatus(scope)} · DD ${fmtCompact(scope.score, 4)} / ${fmtCompact(scope.threshold, 4)} · ${scope.estimated ? "estimated" : scope.availability}`]);

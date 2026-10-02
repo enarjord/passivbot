@@ -271,14 +271,6 @@ Expected metadata:
 
 Policy:
 
-- Required for order classes that depend on strategy indicators, trailing extrema, HSL replay, or
-  forager scoring.
-- Stale candles for flat symbols must not block protective management of held symbols.
-- Candle unavailability must be represented explicitly. Do not convert missing candle windows into
-  neutral EMA inputs.
-- Do not require one completed-candle signature for the entire planner cycle. The Rust consumer
-  determines whether each strategy, unstuck, or independent risk action needs an unavailable EMA.
-
 ### Fill Events
 
 Source:

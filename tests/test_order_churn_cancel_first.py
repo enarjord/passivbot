@@ -30,7 +30,6 @@ class _PlanBot:
     _config_hedge_mode = True
     hedge_mode = True
     state_change_detected_by_symbol = set()
-    _equity_hard_stop_coin_replay_pending_pairs = set()
     _order_churn_gate_state = None
 
     def __init__(self, *, cancel_error: Exception | None = None):
@@ -86,7 +85,7 @@ def execution_shell(monkeypatch):
     }
     events = []
 
-    async def keep_market_snapshot(_bot, orders):
+    async def keep_market_snapshot(_bot, orders, **kwargs):
         return list(orders)
 
     monkeypatch.setattr(Passivbot, "_begin_order_wave", lambda *args, **kwargs: wave)
@@ -345,7 +344,7 @@ async def test_final_churn_distance_recheck_runs_after_exchange_config_writes(
         bot.configured.append(list(symbols))
         return set(symbols)
 
-    async def final_market_recheck(_bot, orders):
+    async def final_market_recheck(_bot, orders, **kwargs):
         assert bot.configured == [[orders[0]["symbol"]]]
         orders[0]["_churn_gate_market_distance"] = 0.01
         return list(orders)
@@ -461,7 +460,9 @@ async def test_capacity_selects_later_admissible_order_after_churn_deferral(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("dirty_stage", ["before_execution", "configuration", "market_refresh"])
+@pytest.mark.parametrize(
+    "dirty_stage", ["before_execution", "configuration", "market_refresh"]
+)
 async def test_account_invalidation_after_planning_defers_all_ordinary_creates(
     execution_shell, monkeypatch, dirty_stage
 ):
@@ -491,13 +492,15 @@ async def test_account_invalidation_after_planning_defers_all_ordinary_creates(
             invalidate()
         return set(symbols)
 
-    async def market_refresh(_bot, orders):
+    async def market_refresh(_bot, orders, **kwargs):
         if dirty_stage == "market_refresh":
             invalidate()
         return orders
 
     bot.update_exchange_configs = configure
-    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", market_refresh)
+    monkeypatch.setattr(
+        Passivbot, "_filter_fresh_market_snapshot_creations", market_refresh
+    )
     if dirty_stage == "before_execution":
         invalidate()
 
@@ -506,7 +509,9 @@ async def test_account_invalidation_after_planning_defers_all_ordinary_creates(
     assert bot.created == []
     assert wave["skipped_create"] == 1
     assert bot.confirmations == [{"balance", "positions", "open_orders", "fills"}]
-    assert any(event["reason_code"] == ReasonCodes.STATE_CHANGE_DETECTED for event in events)
+    assert any(
+        event["reason_code"] == ReasonCodes.STATE_CHANGE_DETECTED for event in events
+    )
 
     # A newly planned authoritative cohort may trade again; invalidations do not latch.
     bot._current_planning_snapshot.account_invalidation_generation = (
@@ -514,47 +519,22 @@ async def test_account_invalidation_after_planning_defers_all_ordinary_creates(
     )
     bot.update_exchange_configs = _PlanBot.update_exchange_configs.__get__(bot)
 
-    async def fresh_market(_bot, orders):
+    async def fresh_market(_bot, orders, **kwargs):
         return orders
 
-    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", fresh_market)
-    await executor.execute_order_plan(bot, [], [desired])
-    assert bot.created == [desired]
-
-
-@pytest.mark.asyncio
-async def test_account_invalidation_preserves_dedicated_market_panic_bypass(
-    execution_shell, monkeypatch
-):
-    from types import SimpleNamespace
-    from live import reconciler
-    from live.freshness import FreshnessLedger
-
-    bot = _PlanBot()
-    ledger = FreshnessLedger()
-    ledger.begin_epoch()
-    bot._ensure_freshness_ledger = lambda: ledger
-    bot._request_authoritative_confirmation = (
-        lambda surfaces, **kwargs: bot.confirmations.append(set(surfaces))
+    monkeypatch.setattr(
+        Passivbot, "_filter_fresh_market_snapshot_creations", fresh_market
     )
-    bot._current_planning_snapshot = SimpleNamespace(account_invalidation_generation=0)
-    desired = _order("panic", execution_type="market", panic=True)
-
-    async def market_refresh(_bot, orders):
-        reconciler.mark_account_critical_state_dirty(
-            bot, reason="order_ws_fill", symbols=[desired["symbol"]], source="order_ws"
-        )
-        return orders
-
-    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", market_refresh)
-    await executor.execute_order_plan(bot, [], [desired], configure_creations=False)
+    await executor.execute_order_plan(bot, [], [desired])
     assert bot.created == [desired]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("batch_route", ["ccxt", "base", "hyperliquid"])
 @pytest.mark.parametrize("invalidate_at", ["batch_yield", "first_connector"])
-@pytest.mark.parametrize("order_kind", ["entry", "market_entry", "normal_panic", "dedicated_panic"])
+@pytest.mark.parametrize(
+    "order_kind", ["entry", "market_entry", "normal_panic", "dedicated_panic"]
+)
 async def test_account_invalidation_rechecked_inside_each_connector_task(
     execution_shell, monkeypatch, batch_route, invalidate_at, order_kind
 ):
@@ -574,6 +554,17 @@ async def test_account_invalidation_rechecked_inside_each_connector_task(
     _wave, filter_events = execution_shell
     dedicated_panic = order_kind == "dedicated_panic"
     bot = Bot()
+    # Exercise each adapter's guarded write against a changing admission fact.
+    # Full account/quote validation is covered by the owner integration suite.
+    from live import hsl_live
+
+    admitted_generation = getattr(bot, "_account_invalidation_generation", 0)
+    admission = SimpleNamespace(
+        _write_lock=asyncio.Lock(),
+        admit=lambda order: getattr(bot, "_account_invalidation_generation", 0)
+        == admitted_generation,
+    )
+    monkeypatch.setattr(hsl_live, "owner", lambda bot: admission)
     bot._current_planning_snapshot = SimpleNamespace(account_invalidation_generation=0)
     bot._order_churn_gate_state = OrderChurnGateState()
     bot._health_orders_placed = 0
@@ -661,26 +652,35 @@ async def test_account_invalidation_rechecked_inside_each_connector_task(
     bot._fresh_entry_eligibility_trace = trace
     eligibility = []
     monkeypatch.setattr(
-        Passivbot, "_emit_initial_entry_eligibility_event",
+        Passivbot,
+        "_emit_initial_entry_eligibility_event",
         lambda _bot, *, data, wave=None: eligibility.append(data),
     )
     await executor.execute_order_plan(
         bot, [], orders, configure_creations=not dedicated_panic
     )
 
-    expected_calls = 2 if dedicated_panic else int(invalidate_at == "first_connector")
+    expected_calls = int(invalidate_at == "first_connector")
     assert len(calls) == expected_calls
     assert len(eligibility) == 1
     assert sum(row["eligible_count"] for row in eligibility[0]["records"]) == (
         0 if order_kind.endswith("panic") else expected_calls
     )
-    assert sum(
-        event["event_type"] == EventTypes.EXECUTION_CREATE_SENT for event in order_events
-    ) == expected_calls
+    assert (
+        sum(
+            event["event_type"] == EventTypes.EXECUTION_CREATE_SENT
+            for event in order_events
+        )
+        == expected_calls
+    )
     assert len(bot._order_churn_gate_state.action_attempt_timestamps) == expected_calls
-    assert sum(
-        call.kwargs.get("status") == "submitted" for call in recorded_orders.call_args_list
-    ) == expected_calls
+    assert (
+        sum(
+            call.kwargs.get("status") == "submitted"
+            for call in recorded_orders.call_args_list
+        )
+        == expected_calls
+    )
     assert failures == []
     assert not any(
         event["event_type"] == EventTypes.EXECUTION_AMBIGUOUS for event in order_events

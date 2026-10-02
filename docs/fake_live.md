@@ -38,23 +38,13 @@ Use the included sample config and scenarios:
 
 ```shell
 PYTHONPATH=src python3 src/tools/run_fake_live.py \
-  configs/fake_live_hsl_btc.hjson \
+  configs/examples/fake_live_hsl.json \
   scenarios/fake_live/hsl_long_red_restart.hjson \
   --user fake_hsl_restart_test \
   --snapshot-each-step
 ```
 
 That writes an artifact directory under `artifacts/fake_live/` by default.
-
-For the terminal HSL case:
-
-```shell
-PYTHONPATH=src python3 src/tools/run_fake_live.py \
-  configs/fake_live_hsl_btc.hjson \
-  scenarios/fake_live/hsl_long_terminal_no_restart.hjson \
-  --user fake_hsl_terminal_test \
-  --snapshot-each-step
-```
 
 ## Outputs
 
@@ -149,21 +139,16 @@ Minimal shape example:
 See:
 
 - `scenarios/fake_live/hsl_long_red_restart.hjson`
-- `scenarios/fake_live/hsl_long_terminal_no_restart.hjson`
 - `scenarios/fake_live/minimal.hjson`
 
-## HSL Replay Notes
+## HSL Coverage
 
-The fake harness supports HSL RED replay cases, including:
-
-- RED trigger
-- panic close placement/fill
-- flat confirmation
-- RED finalization
-- cooldown-and-restart flows
-- terminal no-restart flows
-- manual-entry-during-cooldown flows for all supported live policies:
-  `panic`, `normal`, `manual`, `tp_only`, and `graceful_stop`
+The sample exercises a current RED signal, a market panic close and recovery to
+normal operation. The offline test suite additionally covers all three scope modes,
+partial closes, price recovery that retires panic orders, terminal-RED cooldown,
+restart from exchange observations, new exposure clearing cooldown, missing history,
+stale account/quote inputs, and bounded position-to-fill settling. See
+[HSL testing](hsl_testing.md) for the executable coverage matrix.
 
 The harness uses fake exchange time from the scenario, not wall-clock time.
 Scenario candle rows are authoritative deterministic inputs. Timelines may
@@ -223,7 +208,7 @@ Common issues:
   Add either `timeline` rows or `replay.symbols.<symbol>.candles` / `.file`.
 - Unexpected fills or no fills
   Check symbol metadata such as `price_step`, `qty_step`, `min_qty`, and `min_cost`, and inspect `snapshots/step_*.json`.
-- HSL replay does not do what you expect
+- HSL reconstruction or current decisions do not match the scenario
   Inspect `hsl_trace.json` and `fake_live.log` first. The harness uses scenario time, not wall-clock time.
 
 ## When To Use It

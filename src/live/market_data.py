@@ -155,7 +155,10 @@ def market_snapshot_ticker_strategy(bot) -> str:
 
 
 async def filter_fresh_market_snapshot_creations(
-    bot, orders: list[dict], *, planning_snapshot=None,
+    bot,
+    orders: list[dict],
+    *,
+    planning_snapshot=None,
 ) -> list[dict]:
     """Block staged order creations unless live market snapshots are still fresh."""
     if not orders:
@@ -164,11 +167,17 @@ async def filter_fresh_market_snapshot_creations(
     if not symbols:
         return orders
     if planning_snapshot is None:
-        planning_snapshot_invalid = bot._current_planning_snapshot_invalid_for_creations(symbols)
+        planning_snapshot_invalid = (
+            bot._current_planning_snapshot_invalid_for_creations(symbols)
+        )
     else:
         from live import planning_gates
-        planning_snapshot_invalid = planning_gates.current_planning_snapshot_invalid_for_creations(
-            bot, symbols, snapshot=planning_snapshot)
+
+        planning_snapshot_invalid = (
+            planning_gates.current_planning_snapshot_invalid_for_creations(
+                bot, symbols, snapshot=planning_snapshot
+            )
+        )
 
     if planning_snapshot_invalid:
         refreshable_reasons = {
@@ -255,9 +264,9 @@ async def filter_fresh_market_snapshot_creations(
             bot, orders, "pre_create_market_snapshot_unavailable"
         )
         return []
-    from live import hsl_revised_live
-    if hsl_revised_live.selected(bot):
-        hsl_revised_live.owner(bot).quotes.update(snapshots)
+    from live import hsl_live
+
+    hsl_live.owner(bot).quotes.update(snapshots)
     orders = _filter_limit_order_creations_by_market_distance(bot, orders, snapshots)
     return orders
 
@@ -357,9 +366,7 @@ def _log_limit_order_distance_skips(
     now_ms = _utc_ms()
     should_info = False
     for key in grouped:
-        last_info_ms = int(
-            bot._limit_order_distance_guard_log_state.get(key, 0) or 0
-        )
+        last_info_ms = int(bot._limit_order_distance_guard_log_state.get(key, 0) or 0)
         if now_ms - last_info_ms >= 60 * 60 * 1000:
             should_info = True
             bot._limit_order_distance_guard_log_state[key] = now_ms
@@ -373,9 +380,7 @@ def _log_limit_order_distance_skips(
             )
         )
     summary = ", ".join(
-        (
-            f"{bot._log_symbol(symbol)} {side} {pside} {pb_type or 'unknown'}={count}"
-        )
+        (f"{bot._log_symbol(symbol)} {side} {pside} {pb_type or 'unknown'}={count}")
         for (symbol, pside, side, pb_type), count in grouped.items()
     )
     log_fn = logging.info if should_info else logging.debug
@@ -481,7 +486,9 @@ async def get_live_market_snapshots(
                 headers={"Content-Type": "application/json"},
                 body=json.dumps({"type": "allMids"}),
             )
-            coin_to_sym = {v: k for k, v in bot.symbol_ids.items()} if bot.symbol_ids else {}
+            coin_to_sym = (
+                {v: k for k, v in bot.symbol_ids.items()} if bot.symbol_ids else {}
+            )
             fetched_ms = _utc_ms()
             for coin, mid_str in fetched.items():
                 sym = coin_to_sym.get(coin)

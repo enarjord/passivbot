@@ -10,11 +10,10 @@ from typing import Any
 from config.shared_bot import BOT_GROUP_FIELD_MAP, get_grouped_bot_value
 from live.smoke_report import _user_safe_display_path
 
-
 DEFAULT_SAMPLE_SIZE = 8
 HIGH_BALANCE_HYSTERESIS_WARNING_PCT = 0.05
 DEFAULT_HSL_SIGNAL_MODE = "coin"
-HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
+HSL_RISKS_DOC = "docs/equity_hard_stop_loss.md"
 SIDES = ("long", "short")
 _MISSING = object()
 CACHE_LIVE_KEYS = (
@@ -56,23 +55,12 @@ DIFF_SETTING_PATHS = (
     ("identity", "live.exchange", ("live", "exchange")),
     ("identity", "backtest.exchanges", ("backtest", "exchanges")),
     ("hsl", "live.hsl_signal_mode", ("live", "hsl_signal_mode")),
-    (
-        "hsl",
-        "live.hsl_position_during_cooldown_policy",
-        ("live", "hsl_position_during_cooldown_policy"),
-    ),
     ("hsl", "bot.long.hsl.enabled", ("bot", "long", "hsl", "enabled")),
     ("hsl", "bot.short.hsl.enabled", ("bot", "short", "hsl", "enabled")),
     ("forager", "bot.long.risk.n_positions", ("bot", "long", "risk", "n_positions")),
     ("forager", "bot.short.risk.n_positions", ("bot", "short", "risk", "n_positions")),
-    *(
-        ("forager", f"live.{key}", ("live", key))
-        for key in FORAGER_LIVE_KEYS
-    ),
-    *(
-        ("cache", f"live.{key}", ("live", key))
-        for key in CACHE_LIVE_KEYS
-    ),
+    *(("forager", f"live.{key}", ("live", key)) for key in FORAGER_LIVE_KEYS),
+    *(("cache", f"live.{key}", ("live", key)) for key in CACHE_LIVE_KEYS),
 )
 
 
@@ -268,39 +256,24 @@ def _side_coin_summary(value: Any, *, sample_size: int) -> dict[str, Any]:
 
 
 def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
-    hsl_values = {
-        key: get_grouped_bot_value(side_config, flat_key, default=None)
-        for key, flat_key in (
-            ("enabled", "hsl_enabled"),
-            ("red_threshold", "hsl_red_threshold"),
-            ("cooldown_minutes_after_red", "hsl_cooldown_minutes_after_red"),
-            ("no_restart_drawdown_threshold", "hsl_no_restart_drawdown_threshold"),
-            ("restart_after_red_policy", "hsl_restart_after_red_policy"),
-            ("ema_span_minutes", "hsl_ema_span_minutes"),
-            ("tier_ratios", "hsl_tier_ratios"),
-            ("orange_tier_mode", "hsl_orange_tier_mode"),
-            ("panic_close_order_type", "hsl_panic_close_order_type"),
-        )
+    from config.hsl import FIELDS
+
+    values = {
+        key: get_grouped_bot_value(side_config, f"hsl_{key}", default=None)
+        for key in FIELDS
     }
-    tier_ratios = (
-        hsl_values["tier_ratios"] if isinstance(hsl_values.get("tier_ratios"), dict) else {}
-    )
-    present = any(value is not None for value in hsl_values.values())
-    return {
-        "present": present,
-        "enabled": hsl_values["enabled"],
-        "red_threshold": hsl_values["red_threshold"],
-        "cooldown_minutes_after_red": hsl_values["cooldown_minutes_after_red"],
-        "no_restart_drawdown_threshold": hsl_values["no_restart_drawdown_threshold"],
-        "ema_span_minutes": hsl_values["ema_span_minutes"],
-        "tier_ratios": {
-            key: tier_ratios[key]
-            for key in ("yellow", "orange")
-            if key in tier_ratios
-        },
-        "orange_tier_mode": hsl_values["orange_tier_mode"],
-        "panic_close_order_type": hsl_values["panic_close_order_type"],
-    }
+    return {"present": any(value is not None for value in values.values()), **values}
+
+
+def _hsl_policy_reports(config):
+    """Only policies active in the configured signal topology."""
+    live = config.get("live")
+    bot = config.get("bot")
+    live = live if isinstance(live, dict) else {}
+    bot = bot if isinstance(bot, dict) else {}
+    if _effective_hsl_signal_mode(live) == "unified":
+        return {"portfolio": _hsl_side_report({"hsl": bot.get("hsl", {})})}
+    return {side: _hsl_side_report(_bot_side_config(config, side)) for side in SIDES}
 
 
 def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
@@ -313,16 +286,12 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
         )
     }
     report = {
-        "n_positions": get_grouped_bot_value(
-            side_config, "n_positions", default=None
-        ),
+        "n_positions": get_grouped_bot_value(side_config, "n_positions", default=None),
         "forager_present": any(value is not None for value in forager_values.values()),
     }
     if report["forager_present"]:
         report["settings"] = {
-            key: value
-            for key, value in forager_values.items()
-            if value is not None
+            key: value for key, value in forager_values.items() if value is not None
         }
     return report
 
@@ -335,9 +304,7 @@ def _identity_report(config: dict[str, Any], live: dict[str, Any]) -> dict[str, 
         user_exchange_hint = user.split("_", 1)[0]
     backtest = config["backtest"] if isinstance(config.get("backtest"), dict) else {}
     exchanges = (
-        backtest["exchanges"]
-        if isinstance(backtest.get("exchanges"), list)
-        else None
+        backtest["exchanges"] if isinstance(backtest.get("exchanges"), list) else None
     )
     return {
         "account": user,
@@ -349,7 +316,9 @@ def _identity_report(config: dict[str, Any], live: dict[str, Any]) -> dict[str, 
     }
 
 
-def _numeric_status(value: Any, *, allow_zero: bool = False, allow_all: bool = False) -> str:
+def _numeric_status(
+    value: Any, *, allow_zero: bool = False, allow_all: bool = False
+) -> str:
     if value is _MISSING:
         return "missing"
     if allow_all and isinstance(value, str) and value.lower() == "all":
@@ -411,7 +380,11 @@ def _balance_override_report(
     override_value: Any = _MISSING,
 ) -> dict[str, Any]:
     source = "argument" if override_value is not _MISSING else "live.balance_override"
-    raw_value = override_value if override_value is not _MISSING else live.get("balance_override", _MISSING)
+    raw_value = (
+        override_value
+        if override_value is not _MISSING
+        else live.get("balance_override", _MISSING)
+    )
     if raw_value is _MISSING:
         return {"active": False, "source": "none", "present": False}
     if raw_value in (None, ""):
@@ -571,10 +544,7 @@ def _cache_readiness_report(
     hsl_sides: dict[str, dict[str, Any]],
     balance_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    checks = {
-        key: _setting_display(live, key)
-        for key in CACHE_SETTING_CHECK_KEYS
-    }
+    checks = {key: _setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
@@ -625,7 +595,9 @@ def _cache_readiness_report(
         "max_disk_candles_per_symbol_per_tf",
         "max_memory_candles_per_symbol",
     ):
-        status = _numeric_status(_setting_value(live, key), allow_zero=key == "max_warmup_minutes")
+        status = _numeric_status(
+            _setting_value(live, key), allow_zero=key == "max_warmup_minutes"
+        )
         if status == "missing":
             _append_attention(
                 candles,
@@ -639,7 +611,9 @@ def _cache_readiness_report(
                 f"live.{key} is {status}; candle cache readiness may be degraded",
             )
 
-    warmup_ratio_status = _numeric_status(_setting_value(live, "warmup_ratio"), allow_zero=True)
+    warmup_ratio_status = _numeric_status(
+        _setting_value(live, "warmup_ratio"), allow_zero=True
+    )
     if warmup_ratio_status == "missing":
         _append_attention(
             candles,
@@ -722,7 +696,10 @@ def _cache_readiness_report(
 
     if _any_hsl_enabled(hsl_sides):
         hsl["evidence"].append(
-            {"code": "hsl_enabled", "message": "one or more HSL sides are enabled"}
+            {
+                "code": "hsl_enabled",
+                "message": "one or more effective HSL policies are enabled",
+            }
         )
         hsl["evidence"].append(
             {
@@ -750,7 +727,13 @@ def _cache_readiness_report(
                     f"live.hsl_signal_mode={signal_mode!r}"
                 ),
             )
-        if lookback_status in {"missing", "invalid", "invalid_bool", "negative", "zero"}:
+        if lookback_status in {
+            "missing",
+            "invalid",
+            "invalid_bool",
+            "negative",
+            "zero",
+        }:
             _append_attention(
                 hsl,
                 "hsl_fill_lookback_unready",
@@ -767,7 +750,10 @@ def _cache_readiness_report(
     else:
         hsl["status"] = "disabled"
         hsl["evidence"].append(
-            {"code": "hsl_disabled", "message": "no HSL side is enabled in config"}
+            {
+                "code": "hsl_disabled",
+                "message": "no effective HSL policy is enabled in config",
+            }
         )
 
     surfaces = {
@@ -780,9 +766,11 @@ def _cache_readiness_report(
     status = (
         "attention"
         if attention_count
-        else "settings_compatible_artifacts_not_checked"
-        if not_proven_count
-        else "settings_compatible"
+        else (
+            "settings_compatible_artifacts_not_checked"
+            if not_proven_count
+            else "settings_compatible"
+        )
     )
     return {
         "status": status,
@@ -898,19 +886,11 @@ def build_live_config_diff_report(
                     "after": _display_value(after),
                 }
             )
-    changes.extend(
-        _universe_diff_changes(baseline, target, sample_size=sample_size)
-    )
+    changes.extend(_universe_diff_changes(baseline, target, sample_size=sample_size))
     baseline_live = baseline["live"] if isinstance(baseline.get("live"), dict) else {}
     target_live = target["live"] if isinstance(target.get("live"), dict) else {}
-    baseline_hsl_sides = {
-        side: _hsl_side_report(_bot_side_config(baseline, side))
-        for side in SIDES
-    }
-    target_hsl_sides = {
-        side: _hsl_side_report(_bot_side_config(target, side))
-        for side in SIDES
-    }
+    baseline_hsl_sides = _hsl_policy_reports(baseline)
+    target_hsl_sides = _hsl_policy_reports(target)
     baseline_identity = _identity_report(baseline, baseline_live)
     target_identity = _identity_report(target, target_live)
     baseline_readiness = _cache_readiness_report(
@@ -1030,15 +1010,16 @@ def build_live_config_preflight_report(
             "ok": False,
             "config_path": display_path,
             "issues": [
-                _issue("error", "config_root_invalid", "config root must be a JSON object")
+                _issue(
+                    "error", "config_root_invalid", "config root must be a JSON object"
+                )
             ],
         }
 
     live = _section(parsed["live"] if "live" in parsed else None, "live", issues)
     bot = _section(parsed["bot"] if "bot" in parsed else None, "bot", issues)
     side_configs = {
-        side: bot[side] if isinstance(bot.get(side), dict) else {}
-        for side in SIDES
+        side: bot[side] if isinstance(bot.get(side), dict) else {} for side in SIDES
     }
     for side, side_config in side_configs.items():
         if not side_config and bot:
@@ -1067,11 +1048,10 @@ def build_live_config_preflight_report(
     ]
     severity_counts = Counter(issue["severity"] for issue in issues)
     identity_report = _identity_report(parsed, live)
-    hsl_sides = {
-        side: _hsl_side_report(side_config)
-        for side, side_config in side_configs.items()
-    }
-    balance_override_report = _balance_override_report(live, override_value=balance_override)
+    hsl_sides = _hsl_policy_reports(parsed)
+    balance_override_report = _balance_override_report(
+        live, override_value=balance_override
+    )
     balance_hysteresis_report = _balance_hysteresis_report(live, issues)
     hsl_signal_mode = _effective_hsl_signal_mode(live)
     if balance_override_report.get("status") in {"invalid", "invalid_bool"}:
@@ -1100,8 +1080,7 @@ def build_live_config_preflight_report(
                     "HSL signal modes 'unified' and 'pside' reconstruct "
                     "account-level equity history and are unsafe with an active "
                     "balance override; use hsl_signal_mode='coin', remove the "
-                    "balance override, disable HSL, or initialize an explicit "
-                    "HSL baseline/checkpoint before live trading"
+                    "balance override, or disable HSL before live trading"
                 ),
                 path=(
                     "argument.balance_override"
@@ -1119,9 +1098,12 @@ def build_live_config_preflight_report(
         "hsl": {
             "signal_mode": live.get("hsl_signal_mode"),
             "effective_signal_mode": hsl_signal_mode,
-            "cooldown_position_policy": live.get("hsl_position_during_cooldown_policy"),
             "balance_override": balance_override_report,
-            "sides": hsl_sides,
+            "sides": {
+                side: _hsl_side_report(side_config)
+                for side, side_config in side_configs.items()
+            },
+            "policies": hsl_sides,
         },
         "universe": {
             "approved_coins": approved,
@@ -1130,7 +1112,9 @@ def build_live_config_preflight_report(
         "forager": {
             "live_settings": _selected_values(live, FORAGER_LIVE_KEYS),
             "sides": forager_by_side,
-            "total_configured_n_positions": sum(float(value) for value in n_positions_values),
+            "total_configured_n_positions": sum(
+                float(value) for value in n_positions_values
+            ),
         },
         "risk": {
             "balance_hysteresis_snap_pct": balance_hysteresis_report,
