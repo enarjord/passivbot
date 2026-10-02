@@ -7019,10 +7019,8 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     bot.handle_balance_update.assert_not_awaited()
     await publish_protective_account_report(bot)
     bot.log_position_changes.assert_awaited_once_with([], fetched_positions)
-    if require_balance:
-        bot.handle_balance_update.assert_awaited_once_with(source="REST")
-    else:
-        bot.handle_balance_update.assert_not_awaited()
+    bot.handle_balance_update.assert_not_awaited()
+    assert hasattr(bot, "_balance_observation_signature") is require_balance
 
     assert cooldown_updates == [(("BTC/USDT:USDT",), 1_700_000_000_000)]
     assert finalized == [expected_plan]

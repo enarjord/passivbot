@@ -402,9 +402,11 @@ from hsl_fixture import load_fake_hsl_config
 
 
 @pytest.mark.asyncio
-async def test_account_reporting_after_protection_cannot_block_following_passes():
+async def test_account_reporting_after_protection_cannot_block_following_passes(monkeypatch):
     import asyncio
     from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from live import event_emitters
     from live.hsl_live import Owner
     from live.state_refresh import queue_protective_account_report
 
@@ -419,10 +421,14 @@ async def test_account_reporting_after_protection_cannot_block_following_passes(
         entered.set()
         await release.wait()
 
-    async def balance(**kwargs):
+    def balance(current_bot):
+        assert current_bot is bot
         events.append("balance-report")
 
-    bot.log_position_changes, bot.handle_balance_update = positions, balance
+    publisher = Mock(side_effect=balance)
+    monkeypatch.setattr(event_emitters, "publish_committed_balance_observation", publisher)
+    bot.log_position_changes = positions
+    bot.handle_balance_update = AsyncMock(side_effect=AssertionError("legacy balance callback forbidden"))
 
     async def refresh(**kwargs):
         queue_protective_account_report(bot, [], [], require_balance=True)
@@ -454,6 +460,8 @@ async def test_account_reporting_after_protection_cannot_block_following_passes(
         release.set()
         await instance._account_report
         assert events[-1] == "balance-report"
+        publisher.assert_called_once_with(bot)
+        bot.handle_balance_update.assert_not_awaited()
     finally:
         release.set()
         instance.cancel_inputs()
@@ -462,10 +470,11 @@ async def test_account_reporting_after_protection_cannot_block_following_passes(
 
 @pytest.mark.asyncio
 async def test_protective_reporting_coalesces_immutable_receipts_and_survives_hook_error(
-    caplog,
+    caplog, monkeypatch,
 ):
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, Mock
+    from live import event_emitters
     from live.state_refresh import (
         queue_protective_account_report,
         publish_protective_account_report,
@@ -475,14 +484,17 @@ async def test_protective_reporting_coalesces_immutable_receipts_and_survives_ho
     bot.log_position_changes = AsyncMock(
         side_effect=RuntimeError("private report details")
     )
-    bot.handle_balance_update = AsyncMock()
+    bot.handle_balance_update = AsyncMock(side_effect=AssertionError("legacy balance callback forbidden"))
+    publisher = Mock()
+    monkeypatch.setattr(event_emitters, "publish_committed_balance_observation", publisher)
     initial, middle, latest = [{"size": 0}], [{"size": 1}], [{"size": 2}]
     queue_protective_account_report(bot, initial, middle, require_balance=True)
     queue_protective_account_report(bot, middle, latest, require_balance=False)
     initial[0]["size"] = middle[0]["size"] = latest[0]["size"] = 99
     await publish_protective_account_report(bot)
     bot.log_position_changes.assert_awaited_once_with([{"size": 0}], [{"size": 2}])
-    bot.handle_balance_update.assert_awaited_once_with(source="REST")
+    publisher.assert_called_once_with(bot)
+    bot.handle_balance_update.assert_not_awaited()
     assert bot._protective_account_report is None
     assert "RuntimeError" in caplog.text and "private report details" not in caplog.text
 
