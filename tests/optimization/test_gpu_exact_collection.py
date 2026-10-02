@@ -158,6 +158,14 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
                 super().finish()
 
         monkeypatch.setattr(gpu_backend, "GenerationMilestone", Milestone)
+        ask = gpu_backend._ask_gpu_population
+
+        def timed_ask(*args, **kwargs):
+            result = ask(*args, **kwargs)
+            state.tick += 7
+            return result
+
+        monkeypatch.setattr(gpu_backend, "_ask_gpu_population", timed_ask)
         select = gpu_backend._select_exact_validations
 
         def wait_for_front(*args, **kwargs):
@@ -335,7 +343,7 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
     if stop_kind == "milestone_wait":
         assert stopped.value.code == 0 and state.waited
         assert len(state.records) == cfg["optimize"]["iters"]
-        assert state.finished and max(state.finished) == 0
+        assert state.finished and set(state.finished) == {7}
         return
     if seeded:
         assert stopped.value.code == 0

@@ -5039,6 +5039,50 @@ def test_tm_multicoin_temporal_replay_preserves_unavailable_valuation():
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize(
+    "marker,error,message",
+    [
+        (-2, ValueError, "held-position valuation"),
+        (-3, RuntimeError, "PnL history overflow"),
+        (-4, ValueError, "HSL controller inputs"),
+    ],
+)
+def test_tm_multicoin_temporal_continuation_preserves_fatal_marker(
+    side, marker, error, message
+):
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
+
+    _, row, run, data = _multicoin_exposure_fixture(
+        "trailing_martingale", side, return_context=True
+    )
+    calls = 0
+
+    def inject_failure():
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            # A completed early dispatch reported fatal input/history failure.
+            # Later real GPU dispatches must not restore state or overwrite it.
+            runner._buffers[1][1][0, 9] = marker
+
+    runner = MpsTrailingMartingaleMulticoinRunner(
+        run,
+        data,
+        side=side,
+        pnl_lookback_bars=1440,
+        max_dispatch_candidate_bars=2 * 7,
+        interrupt_check=inject_failure,
+    )
+    matrix = np.asarray([row], dtype=np.float64)
+    with pytest.raises(error, match=message):
+        runner.run(matrix)
+    assert calls > 2 and runner._buffers[1][1][0, 9].item() == marker
+    runner.interrupt_check = lambda: None
+    assert runner.run(matrix)["alive"].item()  # A new replay resets fatal state.
+
+
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_equity_recovery_includes_unrecovered_final_tail(strategy_kind, side):

@@ -6335,11 +6335,11 @@ def run_backend(
             # If interrupted there, the outer handler discards this incomplete
             # ask/tell transaction and retains the preceding safe checkpoint.
             generation_profile_started = time.perf_counter() if profile_enabled else 0.0
+            generation_milestone.begin()
             ask_started = time.perf_counter() if profile_enabled else 0.0
             population = _ask_gpu_population(algorithm, interrupt_check)
             ask_seconds = time.perf_counter() - ask_started if profile_enabled else 0.0
             generation_in_progress = True
-            generation_milestone.begin()
             rows = np.asarray(population.get("X"), dtype=np.float64)
             materialization_started = time.perf_counter() if profile_enabled else 0.0
             proxy_candidates = parameter_dicts(rows)

@@ -505,9 +505,16 @@ class SingleCoinScratchPolicy:
             # Stable memory classes keep ordinary RAM noise from resetting
             # rolling evidence/cache identity on each suite pass.
             ceiling = 1 << (ceiling.bit_length() - 1)
+        previous_ceiling = getattr(proxy, "dispatch_batch_size", None)
         proxy.dispatch_batch_size = ceiling
+        tuner = getattr(proxy, "batch_tuner", None)
+        if tuner is not None and previous_ceiling != ceiling:
+            tuner.revision += 1
         self.active = runner
-        logging.info(
+        memory_class = (ceiling, budget.bit_length())
+        changed = getattr(proxy, "_scratch_memory_class", None) != memory_class
+        proxy._scratch_memory_class = memory_class
+        (logging.info if changed else logging.debug)(
             "GPU auto-tune memory | scratch_mib=%d batch_ceiling=%d",
             budget // 1024**2,
             proxy.dispatch_batch_size,

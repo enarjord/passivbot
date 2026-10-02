@@ -698,3 +698,77 @@ def test_worker_pool_changes_invalidate_gpu_evidence_and_cache_class(tmp_path):
     assert item.controller(512, 1024, None).width == 512
     item.set_worker_count(2)
     assert item.controller(512, 1024, None).width == 512  # window saved stable 512
+
+
+@pytest.mark.parametrize("device", ["cuda", "mps"])
+def test_scratch_ceiling_change_invalidates_cpu_windows_and_bounds_info(
+    tmp_path, monkeypatch, caplog, device
+):
+    from optimization.gpu import exact_autotune
+    import logging
+
+    free = [4 * 1024**3]
+    monkeypatch.setattr(
+        exact_autotune, "resource_snapshot", lambda: {"available": free[0], "cores": 8}
+    )
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            mem_get_info=lambda: (free[0], 8 * 1024**3), empty_cache=lambda: None
+        ),
+        mps=SimpleNamespace(
+            recommended_max_memory=lambda: 8 * 1024**3,
+            driver_allocated_memory=lambda: 0,
+            empty_cache=lambda: None,
+        ),
+    )
+    proxy = SimpleNamespace(
+        _torch=torch,
+        auto_dispatch_ceiling=1024,
+        dispatch_batch_size=512,
+        checkpoint_contract={},
+        needed_metrics=[],
+        batch_tuner=SimpleNamespace(revision=0, controllers={}),
+        runner=SimpleNamespace(
+            _hsl_bytes_per_candidate=lambda: 2 * 1024**2,
+            release_replay_scratch=lambda: None,
+        ),
+    )
+    queue = exact_autotune.ExactQueueController(
+        2, 8, [proxy], cache_dir=tmp_path, hardware={"device": "fixture"}
+    )
+    workers = exact_autotune.ExactWorkerController(
+        2,
+        7,
+        [proxy],
+        per_worker=512 * 1024**2,
+        cache_dir=tmp_path,
+    )
+    policy = tune.SingleCoinScratchPolicy({"device": device})
+    with caplog.at_level(logging.DEBUG):
+        policy.activate(proxy)
+        queue.record(10, 0, 0, 10, epoch=queue.epoch, admission_stall=(0, 0))
+        workers.record(10, 0, 0, 10, epoch=workers.epoch, admission_stall=(0, 0))
+        policy.release()
+        free[0] -= 1024**2  # Ordinary free-memory noise retains the class.
+        policy.activate(proxy)
+        queue.update(1)
+        workers.update()
+        assert queue.samples and workers.samples and proxy.batch_tuner.revision == 0
+        old_epochs = (queue.epoch, workers.epoch)
+        policy.release()
+        free[0] //= 4
+        policy.activate(proxy)
+        assert proxy.dispatch_batch_size == 128 and proxy.batch_tuner.revision == 1
+        queue.update(1)
+        workers.update()
+        assert not queue.samples and not workers.samples
+        assert queue.epoch > old_epochs[0] and workers.epoch > old_epochs[1]
+        for item, epoch in zip((queue, workers), old_epochs):
+            item.record(10, 0, 10, 20, epoch=epoch)
+            assert not item.samples  # Late old-dispatch completions cannot re-enter.
+    memory_logs = [r for r in caplog.records if "GPU auto-tune memory" in r.message]
+    assert [r.levelno for r in memory_logs] == [
+        logging.INFO,
+        logging.DEBUG,
+        logging.INFO,
+    ]
