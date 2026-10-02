@@ -867,9 +867,9 @@ def test_master_v85_adaptive_policies_survive_hsl_migration(mode):
     assert migrated["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] == 3.25
     assert migrated["coin_overrides"] == source["coin_overrides"]
     bounds = migrated["optimize"]["bounds"]["long"]["entry_cooldown"]
-    assert (
-        bounds["weights_minutes"]
-        == source["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"]
-    )
-    assert not {"min_duration_minutes", "max_duration_minutes"}.intersection(bounds)
+    assert bounds["weights_minutes"] == {
+        "exposure_ratio": [2.0, 6.0, 0.25], "adverse_directionality": [8.0, 8.0],
+    }
+    assert bounds["min_duration_minutes"] == [2.0, 2.0]
+    assert bounds["max_duration_minutes"] == [90.0, 90.0]
     assert migrate(migrated) == migrated

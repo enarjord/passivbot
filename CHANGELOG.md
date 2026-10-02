@@ -15,6 +15,11 @@ since the latest release tag; these features may already be available when insta
   false missing-valuation error after terminal closes. Keep genuine valuation and controller
   failures distinct and fatal. Reduce exact HSL reconstruction allocations by borrowing immutable
   snapshot prices; historical clipping, diagnostics, and trading results remain unchanged.
+- Hydrate missing Forager unilateralness weight/span and adaptive entry cooldown
+  weight/minimum-duration optimizer bounds as fixed ranges at each side's configured
+  value. Also expose a fixed maximum-duration bound when a finite ceiling is configured;
+  a null ceiling remains unbounded. Parsed and cleaned configs expose these parameters
+  without opening new search ranges; explicit bounds are preserved.
 
 - Bound CUDA multicoin suite memory by keeping only the active market dataset resident on the
   GPU and spilling inactive immutable packing to temporary files. Release inactive proxies'

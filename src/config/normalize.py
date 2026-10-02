@@ -152,7 +152,12 @@ def normalize_config(
         tracker=tracker,
     )
     normalize_coin_override_risk_config(result, tracker=tracker)
-    ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
+    ensure_optimize_bounds_for_bot(
+        result,
+        verbose=verbose,
+        tracker=tracker,
+        source_bounds=raw_optimize_snapshot.get("bounds", {}),
+    )
     hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     reject_backtest_inherited_live_fields(result)
     sync_with_template(

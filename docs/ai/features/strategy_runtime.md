@@ -290,6 +290,13 @@ not request RMS history, allocate CPU trackers, or restrict candle intervals. Op
 dataset preflight checks finalized per-coin eligibility and overrides across reachable
 boundary configs. Entry-ineligible sides do not restrict intervals or RMS activation.
 
+Canonical loading and cleaning expose missing unilateralness weight/span and
+adaptive cooldown weight/minimum-duration optimizer bounds as fixed ranges at
+the side's configured values (using normalized Forager weights). A missing maximum
+duration bound is hydrated only for a finite ceiling; null remains unbounded.
+Explicit bounds retain their authority. Visibility must not open a search range or
+change optimizer candidate normalization or warmup for unchanged configurations.
+
 Forager may carry a complete cached observation only within the existing candidate
 age budget, without feeding invented flat returns. Cooldown requires a current
 completed window. Their values remain separate in the input envelope. Missing
