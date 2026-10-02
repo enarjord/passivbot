@@ -14,7 +14,8 @@ since the latest release tag; these features may already be available when insta
 - Let GPU replay liquidate finite depleted cash before another HSL observation, avoiding a
   false missing-valuation error after terminal closes. Keep genuine valuation and controller
   failures distinct and fatal. Reduce exact HSL reconstruction allocations by borrowing immutable
-  snapshot prices; historical clipping, diagnostics, and trading results remain unchanged.
+  snapshot prices and projecting ordered simulator closes without general candle arbitration;
+  historical clipping, diagnostics, and trading results remain unchanged.
 - Hydrate missing Forager unilateralness weight/span and adaptive entry cooldown
   weight/minimum-duration optimizer bounds as fixed ranges at each side's configured
   value. Also expose a fixed maximum-duration bound when a finite ceiling is configured;
