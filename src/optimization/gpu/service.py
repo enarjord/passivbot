@@ -2858,13 +2858,18 @@ def _prepared_multicoin_data(
             data["invariant_bytes"] / 2**30,
         )
         return data
-    data = build_mps_multicoin_data(
-        values,
-        timestamps,
-        runs=runs,
-        markets=markets,
-        include_hourly_ranges=True,
-        limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
+    from optimization.gpu.residency import current_cuda_residency
+    residency = current_cuda_residency()
+    def build(spill_dir=None):
+        kwargs = {"spill_dir": spill_dir} if spill_dir is not None else {}
+        return build_mps_multicoin_data(
+            values, timestamps, runs=runs, markets=markets, include_hourly_ranges=True,
+            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct, **kwargs,
+        )
+    data = (
+        residency.prepare(key, build)
+        if residency is not None and cache is not None and gpu_device() == "cuda"
+        else build()
     )
     if cache is not None:
         cache[key] = data
@@ -3337,6 +3342,9 @@ class MpsMulticoinProxy:
             cache=prepared_data_cache,
             limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
         )
+        from optimization.gpu.residency import current_cuda_residency
+        residency = current_cuda_residency()
+        self._cuda_residency = residency if residency is not None and residency.owns(self.data) else None
         self.metrics_data = {
             "ts0": self.data["ts0"],
             "n": self.data["n"],
@@ -3441,7 +3449,8 @@ class MpsMulticoinProxy:
                 **common_runner_kwargs,
             )
             self._runner_specs["fused"] = (fused_runner_cls, fused_kwargs)
-            self.fused_runner = fused_runner_cls(self.run, self.data, **fused_kwargs)
+            if self._cuda_residency is None:
+                self.fused_runner = fused_runner_cls(self.run, self.data, **fused_kwargs)
         else:
             runner_cls = (
                 MpsTrailingMartingaleMulticoinRunner
@@ -3468,11 +3477,18 @@ class MpsMulticoinProxy:
                     )
                     runner_kwargs["interrupt_check"] = self.interrupt_check
                 self._runner_specs[side] = (runner_cls, runner_kwargs)
-                self.runners[side] = runner_cls(
-                    self.run,
-                    self.data,
-                    **runner_kwargs,
-                )
+                if self._cuda_residency is None:
+                    self.runners[side] = runner_cls(self.run, self.data, **runner_kwargs)
+        if self._cuda_residency is not None:
+            self._cuda_residency.register(self)
+
+    def _create_runners(self):
+        for side, (runner_cls, kwargs) in self._runner_specs.items():
+            runner = runner_cls(self.run, self.data, **kwargs)
+            if side == "fused":
+                self.fused_runner = runner
+            else:
+                self.runners[side] = runner
 
     def _parameter_matrix(
         self, candidates: list[dict], side: str | None = None
@@ -3571,6 +3587,11 @@ class MpsMulticoinProxy:
     def evaluate(self, candidates: list[dict]) -> list[dict]:
         results: list[dict] = []
         torch = self._torch
+        if getattr(self, "_cuda_residency", None) is not None:
+            if not candidates:
+                self.last_profile = {}
+                return results
+            self._cuda_residency.activate(self)
         fused_runner = getattr(self, "fused_runner", None)
         profile_runners = (
             (fused_runner,)
