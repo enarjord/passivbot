@@ -569,9 +569,16 @@ def ensure_bot_defaults(
 
 
 def ensure_optimize_bounds_for_bot(
-    result: dict, *, verbose: bool = True, tracker: Optional[object] = None
+    result: dict,
+    *,
+    verbose: bool = True,
+    tracker: Optional[object] = None,
+    source_bounds: Optional[dict] = None,
 ) -> None:
     del verbose
+    from .optimize_bounds import hydrate_adaptive_optimize_bounds
+
+    hydrate_adaptive_optimize_bounds(result, source_bounds=source_bounds, tracker=tracker)
     bounds = result["optimize"]["bounds"]
     defaults = normalization_template(get_template_config(), result)["optimize"][
         "bounds"

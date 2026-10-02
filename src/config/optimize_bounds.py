@@ -1,4 +1,5 @@
 from copy import deepcopy
+import math
 from typing import Optional
 
 from .strategy_spec import (
@@ -71,6 +72,8 @@ BOT_BOUND_GROUP_BY_KEY = {
 SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     "long": {
         "forager": {
+            "score_weights_unilateralness": [0.0, 0.0],
+            "unilateralness_ema_span_1m": [60.0, 60.0],
             "score_weights_ema_readiness": [0, 1, 0.01],
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
@@ -83,7 +86,14 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "ema_span_minutes": [720, 720, 1],
             "red_threshold": [0.15, 0.15, 0.001]
         },
-        "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
+        "entry_cooldown": {
+            "base_duration_minutes": [0, 60, 0.1],
+            "min_duration_minutes": [0.0, 0.0],
+            "weights_minutes": {
+                "exposure_ratio": [0.0, 0.0],
+                "adverse_directionality": [0.0, 0.0],
+            },
+        },
         "risk": {
             "n_positions": [7, 7, 1],
             "position_exposure_enforcer_threshold": [1, 1, 0.001],
@@ -102,6 +112,8 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     },
     "short": {
         "forager": {
+            "score_weights_unilateralness": [0.0, 0.0],
+            "unilateralness_ema_span_1m": [60.0, 60.0],
             "score_weights_ema_readiness": [0, 1, 0.01],
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
@@ -114,7 +126,14 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "ema_span_minutes": [1, 720, 1],
             "red_threshold": [0.01, 0.15, 0.001]
         },
-        "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
+        "entry_cooldown": {
+            "base_duration_minutes": [0, 60, 0.1],
+            "min_duration_minutes": [0.0, 0.0],
+            "weights_minutes": {
+                "exposure_ratio": [0.0, 0.0],
+                "adverse_directionality": [0.0, 0.0],
+            },
+        },
         "risk": {
             "n_positions": [5, 5, 1],
             "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
@@ -188,6 +207,69 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     })
     return flat
 
+
+
+def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracker=None) -> None:
+    """Expose omitted adaptive bounds without opening new search ranges.
+
+    source_bounds records authored bounds before template seeding. Bot values
+    must already have their canonical defaults and normalized score weights.
+    """
+    kind = config["live"]["strategy_kind"]
+    bounds = config["optimize"]["bounds"]
+    authored = flatten_optimize_bounds(
+        bounds if source_bounds is None else source_bounds, strategy_kind=kind
+    )
+    for side in BOT_POSITION_SIDES:
+        forager = config["bot"][side]["forager"]
+        cooldown = config["bot"][side]["entry_cooldown"]
+        for group, local_key, value in (
+            (
+                "forager", "score_weights_unilateralness",
+                forager["score_weights"]["unilateralness"],
+            ),
+            ("forager", "unilateralness_ema_span_1m", forager["unilateralness_ema_span_1m"]),
+            (
+                "entry_cooldown", "weights_minutes_exposure_ratio",
+                cooldown["weights_minutes"]["exposure_ratio"],
+            ),
+            (
+                "entry_cooldown", "weights_minutes_adverse_directionality",
+                cooldown["weights_minutes"]["adverse_directionality"],
+            ),
+            ("entry_cooldown", "min_duration_minutes", cooldown["min_duration_minutes"]),
+            ("entry_cooldown", "max_duration_minutes", cooldown["max_duration_minutes"]),
+        ):
+            flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY[group][local_key]
+            bound_key = f"{side}_{flat_key}"
+            if bound_key in authored:
+                # Keep explicit nested/legacy bounds ahead of seeded shorthand
+                # defaults when the canonical grouped representation is built.
+                set_flat_optimize_bound(bounds, kind, bound_key, authored[bound_key])
+                continue
+            # Null means an unbounded duration, not a numeric optimizer endpoint.
+            if value is None:
+                continue
+            if group == "entry_cooldown" and local_key == "max_duration_minutes":
+                if not math.isfinite(float(value)):
+                    raise ValueError(f"bot.{side}.entry_cooldown.max_duration_minutes must be finite when set")
+            frozen = [value, value]
+            local_path = (
+                ("weights_minutes", local_key.removeprefix("weights_minutes_"))
+                if group == "entry_cooldown" and local_key.startswith("weights_minutes_")
+                else (local_key,)
+            )
+            target = bounds.setdefault(side, {}).setdefault(group, {})
+            for part in local_path[:-1]:
+                target = target.setdefault(part, {})
+            leaf = local_path[-1]
+            if tracker is not None:
+                path = ["optimize", "bounds", side, group, *local_path]
+                if leaf not in target:
+                    tracker.add(path, frozen)
+                elif target[leaf] != frozen:
+                    tracker.update(path, target[leaf], frozen)
+            target[leaf] = frozen
 
 
 def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:

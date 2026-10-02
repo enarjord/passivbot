@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Hydrate missing Forager unilateralness weight/span and adaptive entry cooldown
+  weight/minimum-duration optimizer bounds as fixed ranges at each side's configured
+  value. Also expose a fixed maximum-duration bound when a finite ceiling is configured;
+  a null ceiling remains unbounded. Parsed and cleaned configs expose these parameters
+  without opening new search ranges; explicit bounds are preserved.
+
 - Show each Pareto objective's full range at INFO in ascending `[min,max]` order, with `*` on
   an improved goal-directed best endpoint. Keep new tradeoffs visible when no best improves,
   and derive both endpoints from the same feasible or explicitly labelled infeasible front.

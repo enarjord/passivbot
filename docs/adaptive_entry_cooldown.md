@@ -105,10 +105,14 @@ introduce logical-order completion tracking or exempt re-entry fragments.
 
 ## Optimization and evaluation
 
-New dimensions are opt-in: add bounds under the matching nested config paths,
+Adaptive optimizer bounds are visible fixed ranges by default: widen bounds under the matching nested config paths,
 for example `optimize.bounds.long.entry_cooldown.weights_minutes.exposure_ratio`
 or `optimize.bounds.long.forager.score_weights.unilateralness`. The existing
-Forager bound shorthand also supports `score_weights_unilateralness`. Keep a
+Forager bound shorthand also supports `score_weights_unilateralness`. Missing
+unilateralness weight/span and cooldown weight/minimum-duration bounds are hydrated
+as `[configured_value, configured_value]`. A missing maximum-duration bound is
+hydrated only when the configured ceiling is finite; a null ceiling remains unbounded
+and has no numeric optimizer bound. Explicit bounds are preserved. Keep a
 finite ceiling in the base config, or supply numeric ceiling bounds, when a searched
 modifier can become positive. A ceiling search can start from the default null ceiling;
 an unbounded starting-config ceiling
