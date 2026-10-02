@@ -24,7 +24,7 @@ from rust_utils import verify_loaded_runtime_extension
 from test_hsl_backtest_config import payload
 
 
-def main():
+def fixture_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--minutes", type=int, default=10080)
     parser.add_argument("--lookback-days", type=float, default=7)
@@ -41,14 +41,10 @@ def main():
         help="Include per-minute HSL samples (requires --detailed)",
     )
     parser.add_argument("--runs", type=int, default=3)
-    options = parser.parse_args()
-    if options.hsl_detailed_report and not options.detailed:
-        parser.error("--hsl-detailed-report requires --detailed")
-    if options.runs < 1:
-        parser.error("--runs must be positive")
-    if options.minutes < 41:
-        parser.error("--minutes must be at least 41")
-    artifact = verify_loaded_runtime_extension()
+    return parser
+
+
+def build_fixture(options):
     args = list(payload(options.mode))
     marks = np.concatenate(
         [np.full(40, 100.0), np.linspace(98.0, 80.0, options.minutes - 40)]
@@ -70,6 +66,28 @@ def main():
         policies.append(hsl["portfolio"])
     for policy in policies:
         policy["red_threshold"] = options.red_threshold
+    return args
+
+
+def result_digest(result):
+    return hashlib.sha256(
+        json.dumps(
+            result, sort_keys=True, default=lambda value: value.tolist()
+        ).encode()
+    ).hexdigest()
+
+
+def main():
+    parser = fixture_parser()
+    options = parser.parse_args()
+    if options.hsl_detailed_report and not options.detailed:
+        parser.error("--hsl-detailed-report requires --detailed")
+    if options.runs < 1:
+        parser.error("--runs must be positive")
+    if options.minutes < 41:
+        parser.error("--minutes must be at least 41")
+    artifact = verify_loaded_runtime_extension()
+    args = build_fixture(options)
     timings = []
     result = None
     for _ in range(options.runs):
@@ -78,11 +96,7 @@ def main():
         result = passivbot_rust.run_backtest(*args)
         timings.append(time.perf_counter() - start)
     elapsed = statistics.median(timings)
-    digest = hashlib.sha256(
-        json.dumps(
-            result, sort_keys=True, default=lambda value: value.tolist()
-        ).encode()
-    ).hexdigest()
+    digest = result_digest(result)
     print(
         json.dumps(
             dict(

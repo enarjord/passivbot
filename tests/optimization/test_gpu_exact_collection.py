@@ -19,7 +19,17 @@ from test_hsl_offline_runtime import deny_network, offline_cli_config
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stop_kind", ["interrupt", "recorder_error", "seeded", "seeded_screened"])
+@pytest.mark.parametrize(
+    "stop_kind",
+    [
+        "interrupt",
+        "recorder_error",
+        "seeded",
+        "seeded_screened",
+        "worker_resize",
+        "worker_resize_failure",
+    ],
+)
 async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatch, stop_kind, capsys):
     import optimize
     from config.optimize_bounds import set_flat_optimize_bound
@@ -55,6 +65,53 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         drift_probes=1,
         auto_lean_parallelism=False,
     )
+    resizing = stop_kind.startswith("worker_resize")
+    if resizing:
+        cfg["optimize"]["gpu"]["exact_workers"] = None
+        monkeypatch.setattr(
+            gpu_backend,
+            "resource_snapshot",
+            lambda: dict(
+                cores=4,
+                available=1024**3,
+                rss=64 * 1024**2,
+            ),
+        )
+        monkeypatch.setattr(
+            "optimization.gpu.exact_autotune.resource_snapshot",
+            lambda: dict(
+                cores=4,
+                available=1024**3,
+                rss=64 * 1024**2,
+            ),
+        )
+        monkeypatch.setattr(
+            gpu_backend, "hardware_identity", lambda _: {"device": "test"}
+        )
+
+        class WorkerController:
+            def __init__(self, workers, *args, **kwargs):
+                self.workers = self.target = workers
+                self.epoch = 0
+                self.baseline = None
+                self.completed = 0
+                self.resized = False
+
+            def record(self, *args, epoch, **kwargs):
+                if epoch == self.epoch:
+                    self.completed += 1
+
+            def update(self):
+                if self.completed >= 2 and not self.resized:
+                    self.target = 2
+                    self.epoch += 1
+
+            def applied(self):
+                self.workers = self.target
+                self.resized = True
+                self.epoch += 1
+
+        monkeypatch.setattr(gpu_backend, "ExactWorkerController", WorkerController)
     seeded = stop_kind.startswith("seeded")
     if stop_kind == "seeded_screened":
         cfg["optimize"]["gpu"]["seed_bootstrap"]["mode"] = "screened"
@@ -68,7 +125,14 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         )
     cfg["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.01, 0.2]
 
-    state = SimpleNamespace(resuming=seeded, proxy_calls=0, pools=[], submissions=[], records=[], scopes=[])
+    state = SimpleNamespace(
+        resuming=seeded or resizing,
+        proxy_calls=0,
+        pools=[],
+        submissions=[],
+        records=[],
+        scopes=[],
+    )
     oldest_ready = threading.Event()
     recorded = threading.Event()
     original_record = optimize.ResultRecorder.record
@@ -96,6 +160,10 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
 
     class Pool:
         def __init__(self, *, processes, initializer):
+            if resizing and processes == 2 and stop_kind == "worker_resize_failure":
+                raise RuntimeError("injected replacement pool startup failure")
+            self.processes = processes
+            self.submitted = 0
             self.evaluator, self.overrides, self.n_obj, self.has_constraints = (
                 initializer.args[:4]
             )
@@ -109,9 +177,23 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
             )
 
         def apply_async(self, function, args):
-            assert function is gpu_backend._evaluate_pymoo_worker_from_globals
-            (vector,) = args
-            result = Result(self.evaluate(vector), len(state.submissions))
+            if function is gpu_backend._profiled_gpu_exact_worker:
+                vector, submitted, epoch, stall = args
+                payload = self.evaluate(vector)
+                payload.update(
+                    __gpu_profile_worker_seconds__=10,
+                    __gpu_profile_queue_wait_seconds__=0,
+                    __gpu_profile_worker_started__=submitted,
+                    __gpu_profile_worker_finished__=submitted + 10,
+                    __gpu_profile_admission_epoch__=epoch,
+                    __gpu_profile_admission_stall__=None,
+                )
+            else:
+                assert function is gpu_backend._evaluate_pymoo_worker_from_globals
+                (vector,) = args
+                payload = self.evaluate(vector)
+            result = Result(payload, len(state.submissions))
+            self.submitted += 1
             state.submissions.append(tuple(vector))
             return result
 
@@ -119,14 +201,19 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
             self.terminated = True
 
         def close(self):
-            pass
+            if resizing:
+                assert len(state.records) == sum(
+                    p.submitted for p in state.pools
+                ), "pool resized before admitted results were durably recorded"
 
         def join(self):
             pass
 
     class Proxy:
         def __init__(self, **kwargs):
-            pass
+            self.checkpoint_contract = {}
+            self.needed_metrics = []
+            self._torch = None
 
         def evaluate(self, candidates):
             state.scopes.append(work_scope())
@@ -190,6 +277,20 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit) as stopped:
         await optimize.main()
+    if resizing:
+        (artifact,) = (tmp_path / "optimize_results").rglob("all_results.bin")
+        records = list(load_results(str(artifact)))
+        assert records
+        assert not any("__gpu_profile" in json.dumps(r) for r in records)
+        if stop_kind == "worker_resize_failure":
+            assert stopped.value.code == 1
+            assert state.pools[0].terminated
+        else:
+            assert stopped.value.code == 0
+            assert [p.processes for p in state.pools] == [1, 2]
+            assert len(records) == cfg["optimize"]["iters"]
+            assert len(set(state.submissions)) == len(records)
+        return
     if seeded:
         assert stopped.value.code == 0
         artifact, = (tmp_path / "optimize_results").rglob("all_results.bin")

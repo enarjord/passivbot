@@ -20078,6 +20078,37 @@ def test_tm_directional_temporal_preserves_early_liquidation_outputs():
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+@pytest.mark.parametrize("side", ["long", "short", "both"])
+@pytest.mark.parametrize("features", [False, True])
+def test_tm_production_tuning_chunks_preserve_all_single_coin_outputs(side, features):
+    market, run, data, row, kwargs = _tm_directional_temporal_fixture(features)
+    kwargs.update(long_enabled=side != "short", short_enabled=side != "long")
+    matrix = np.asarray([row + row] * 3, dtype=np.float64)
+    expected = {
+        k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
+        for k, v in MpsTrailingMartingaleRunner(market, run, data, **kwargs)
+        .run(matrix)
+        .items()
+    }
+    runner = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
+    runner.tuning_chunk_bars = 47
+    market_storage = runner.bars.data_ptr()
+    for _ in range(2):
+        runner.release_replay_scratch()
+        assert runner.bars.data_ptr() == market_storage
+        actual = runner.run(matrix, profile=True)
+        for key, value in actual.items():
+            if isinstance(value, torch.Tensor):
+                torch.testing.assert_close(
+                    value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True
+                )
+            else:
+                assert value == expected[key]
+        assert runner.last_profile["temporal_chunk_bars"] == 47
+        assert runner.last_profile["dispatch_count"] == 33
+
+
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 def test_tm_directional_chunking_uses_actual_batch_work_and_switches_safely():
     market, run, data, row, kwargs = _tm_directional_temporal_fixture(True)
     original = MpsTrailingMartingaleRunner(market, run, data, **kwargs)

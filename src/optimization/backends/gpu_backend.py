@@ -18,6 +18,7 @@ import time
 from typing import Any
 
 import numpy as np
+import psutil
 
 from config.gpu import GPU_SCREENING_DEFAULTS, resolve_gpu_screening
 from config.metrics import resolve_metric_value
@@ -38,6 +39,7 @@ from optimization.gpu.residency import cuda_suite_residency_scope
 from optimization.progress import (
     DriftProgress,
     OptimizerProgress,
+    GenerationMilestone,
     SeedBootstrapProgress,
     gpu_work_context,
     log_tokens,
@@ -65,8 +67,16 @@ from optimization.problem import (
 )
 from utils import to_standard_exchange_name
 
-from optimization.gpu.autotune import configure_batch_tuning, is_auto
-from optimization.gpu.exact_autotune import ExactQueueController, capture_worker_rss, initial_workers
+from optimization.gpu.autotune import configure_batch_tuning, hardware_identity, is_auto
+from optimization.gpu.exact_autotune import (
+    ExactQueueController,
+    ExactWorkerController,
+    capture_worker_rss,
+    initial_workers,
+    prepared_bytes,
+    resource_snapshot,
+    MIB,
+)
 
 
 GPU_DEFAULTS = {
@@ -145,7 +155,7 @@ def _submit_gpu_exact_validation(
     interrupt_check: InterruptCheck,
     *,
     profile: bool = False,
-    admission_epoch: int | None = None,
+    admission_epoch: tuple[int | None, int | None] | None = None,
     admission_stalled_since: float | None = None,
 ):
     """Refuse new exact CPU work once the GPU interrupt latch is set."""
@@ -5077,8 +5087,19 @@ def run_backend(
         with gpu_work_context(
             generation + int(generation_in_progress), phase, progress.report,
         ):
-            return evaluate_proxy_unscoped(candidates, screening=screening)
+            try:
+                return evaluate_proxy_unscoped(candidates, screening=screening)
+            finally:
+                # Metric rows have been materialized on the host. Do not retain
+                # the final scenario's history while exact workers use host RAM.
+                for item in profile_proxies:
+                    policy = getattr(item, "scratch_policy", None)
+                    if policy is not None:
+                        policy.release()
 
+    auto_exact_workers = (
+        options["exact_workers"] is None and options["tuning_mode"] != "off"
+    )
     options["exact_workers"] = initial_workers(
         options["exact_workers"], config["optimize"]["n_cpus"], evaluator_for_pool,
         mode=options["tuning_mode"], pending=options["max_pending_exact"],
@@ -5541,17 +5562,77 @@ def run_backend(
         raise ValueError(
             "optimize.gpu.max_pending_exact must be greater than zero when set"
         )
-    queue_controller = None
-    if options["max_pending_exact"] is None and options["tuning_mode"] != "off":
-        queue_controller = ExactQueueController(
-            workers, int(options["validate_per_generation"]), profile_proxies,
+
+    def create_queue_controller(worker_count, previous_limit=None):
+        if options["max_pending_exact"] is not None or options["tuning_mode"] == "off":
+            return None
+        result = ExactQueueController(
+            worker_count,
+            int(options["validate_per_generation"]),
+            profile_proxies,
             mode=options["tuning_mode"],
-            context=dict(bounds=config["optimize"]["bounds"], screening=options["screening"],
-                         batch_size=options["batch_size"],
-                         max_dispatch_candidate_bars=options["max_dispatch_candidate_bars"]),
+            context=dict(
+                bounds=config["optimize"]["bounds"],
+                screening=options["screening"],
+                batch_size=options["batch_size"],
+                max_dispatch_candidate_bars=options["max_dispatch_candidate_bars"],
+            ),
         )
+        if previous_limit is not None:
+            result.limit = max(result.floor, min(result.ceiling, previous_limit))
+        return result
+
+    queue_controller = None
+    worker_controller = None
+    if auto_exact_workers:
+        try:
+            resources = resource_snapshot()
+            per_worker = max(
+                512 * MIB,
+                (worker_baseline_rss or resources["rss"])
+                + 2 * prepared_bytes(evaluator_for_pool),
+            )
+            worker_controller = ExactWorkerController(
+                workers,
+                min(max_pending, max(1, resources["cores"] - 1)),
+                profile_proxies,
+                per_worker=per_worker,
+                mode=options["tuning_mode"],
+                context=dict(
+                    bounds=config["optimize"]["bounds"], screening=options["screening"]
+                ),
+                hardware=hardware_identity(profile_proxies[0]._torch),
+            )
+            workers = worker_controller.workers
+        except (OSError, psutil.Error) as error:
+            logging.warning("GPU exact worker tuning unavailable: %s", error)
+    for item in profile_proxies:
+        tuner = getattr(item, "batch_tuner", None)
+        if tuner is not None and hasattr(tuner, "set_worker_count"):
+            tuner.set_worker_count(workers)
+    queue_controller = create_queue_controller(workers)
+    if queue_controller is not None:
         max_pending = queue_controller.limit
-    exact_timing_enabled = profile_enabled or queue_controller is not None
+    if worker_controller is not None:
+        worker_controller.allow_trial = (
+            lambda: queue_controller is None or queue_controller.baseline is None
+        )
+        if queue_controller is not None:
+            queue_controller.allow_trial = (
+                lambda: worker_controller.baseline is None
+                and worker_controller.target == workers
+            )
+        for item in profile_proxies:
+            tuner = getattr(item, "batch_tuner", None)
+            if tuner is not None:
+                tuner.allow_trial = lambda: (
+                    worker_controller.baseline is None
+                    and worker_controller.target == workers
+                    and (queue_controller is None or queue_controller.baseline is None)
+                )
+    exact_timing_enabled = (
+        profile_enabled or queue_controller is not None or worker_controller is not None
+    )
     initializer = functools.partial(
         initialize_pymoo_worker,
         evaluator_for_pool,
@@ -5563,6 +5644,56 @@ def run_backend(
     )
     pool = multiprocessing.Pool(processes=workers, initializer=initializer)
     pool_workers = tuple(getattr(pool, "_pool", ()) or ())
+
+    def admission_epoch():
+        return (
+            queue_controller.epoch if queue_controller else None,
+            worker_controller.epoch if worker_controller else None,
+        )
+
+    def record_timing(payload, timing, stall):
+        epoch = payload.pop("__gpu_profile_admission_epoch__", None)
+        queue_epoch, worker_epoch = epoch if isinstance(epoch, tuple) else (epoch, None)
+        if queue_controller is not None:
+            queue_controller.record(*timing, epoch=queue_epoch, admission_stall=stall)
+        if worker_controller is not None:
+            worker_controller.record(*timing, epoch=worker_epoch, admission_stall=stall)
+
+    def apply_worker_target():
+        nonlocal pool, pool_workers, workers, max_pending, queue_controller
+        if worker_controller is None or worker_controller.target == workers:
+            return
+        # The caller has drained every admitted result in durable submission
+        # order. Never cancel/replay a validation to change execution capacity.
+        pool.close()
+        pool.join()
+        workers = worker_controller.target
+        pool = multiprocessing.Pool(processes=workers, initializer=initializer)
+        pool_workers = tuple(getattr(pool, "_pool", ()) or ())
+        for item in profile_proxies:
+            tuner = getattr(item, "batch_tuner", None)
+            if tuner is not None and hasattr(tuner, "set_worker_count"):
+                tuner.set_worker_count(workers)
+        worker_controller.applied()
+        if queue_controller is not None:
+            old_epoch = queue_controller.epoch
+            queue_controller = create_queue_controller(workers, queue_controller.limit)
+            queue_controller.epoch = old_epoch + 1
+            queue_controller.allow_trial = lambda: (
+                worker_controller.baseline is None
+                and worker_controller.target == workers
+            )
+            max_pending = queue_controller.limit
+            for item in profile_proxies:
+                tuner = getattr(item, "batch_tuner", None)
+                if tuner is not None:
+                    tuner.allow_trial = lambda: (
+                        worker_controller.baseline is None
+                        and worker_controller.target == workers
+                        and queue_controller.baseline is None
+                    )
+        logging.info("GPU exact worker pool resized | workers=%d pending=0", workers)
+
     pending = {}
     submitted_hashes: set[str] = set()
     start_time = time.time()
@@ -5573,6 +5704,7 @@ def run_backend(
     last_checkpoint_at = 0.0
     last_checkpoint_exact = seed_exact_done + exact_done
     generation_in_progress = False
+    generation_milestone = GenerationMilestone()
 
     def progress_snapshot():
         return {
@@ -5580,11 +5712,14 @@ def run_backend(
             "evolution_proxy_completed_run": proxy_evaluations,
             "seed_proxy": (
                 len(starting_vectors)
-                if seed_bootstrap_mode == "screened" and seed_screen_complete else 0
+                if seed_bootstrap_mode == "screened" and seed_screen_complete
+                else 0
             ),
             "seed_exact": seed_exact_done,
             "evolution_exact": f"{exact_done}/{budget}",
             "evolution_pending": len(pending),
+            "exact_workers": workers,
+            "eta_generation": generation_milestone.eta(),
             **recorder.store.progress_snapshot(),
         }
 
@@ -5598,14 +5733,19 @@ def run_backend(
         getattr(item, "dispatch_batch_size", options["batch_size"])
         for item in profile_proxies
     })
-    log_tokens("GPU optimizer start |", [
-        f"population={population_size}", f"exact_budget={budget}",
-        f"exact_workers={workers}", f"max_pending_exact={max_pending}",
-        f"batch_setting={(config['optimize'].get('gpu') or {}).get('batch_size')}",
-        f"requested_batch_limit={options['batch_size']}",
-        f"dispatch_batch_limit={dispatch_limits[0]}..{dispatch_limits[-1]}",
-        "objective_bests=independent_exact_front_extremes (* marks improvement)",
-    ])
+    log_tokens(
+        "GPU optimizer start |",
+        [
+            f"population={population_size}",
+            f"exact_budget={budget}",
+            f"exact_workers={workers}",
+            f"max_pending_exact={max_pending}",
+            f"batch_setting={(config['optimize'].get('gpu') or {}).get('batch_size')}",
+            f"requested_batch_limit={options['batch_size']}",
+            f"initial_dispatch_batch_limit={dispatch_limits[0]}..{dispatch_limits[-1]}",
+            "objective_bests=independent_exact_front_extremes (* marks improvement)",
+        ],
+    )
 
     def checkpoint_state() -> dict:
         seed_plan = None
@@ -5821,7 +5961,7 @@ def run_backend(
                         item[3],
                         interrupt_check,
                         profile=exact_timing_enabled,
-                        admission_epoch=queue_controller.epoch if queue_controller else None,
+                        admission_epoch=admission_epoch(),
                     )
                     pending_seed[result] = item
                     cursor += 1
@@ -5851,13 +5991,7 @@ def run_backend(
                             "__gpu_profile_worker_started__", "__gpu_profile_worker_finished__",
                         )]
                         admission_stall = payload.pop("__gpu_profile_admission_stall__", None)
-                        if queue_controller is not None:
-                            queue_controller.record(
-                                *timing, epoch=payload.pop("__gpu_profile_admission_epoch__", None),
-                                admission_stall=admission_stall,
-                            )
-                        else:
-                            payload.pop("__gpu_profile_admission_epoch__", None)
+                        record_timing(payload, timing, admission_stall)
                     PymooAsyncRecordingRunner._raise_if_worker_failure(
                         payload, source_index
                     )
@@ -6066,14 +6200,17 @@ def run_backend(
                 payload.pop("__gpu_profile_admission_stall__", None)
                 if exact_timing_enabled and isinstance(payload, dict) else None
             )
-            if queue_controller is not None:
-                queue_controller.record(
-                    worker_seconds, queue_wait_seconds, worker_started, worker_finished,
-                    epoch=payload.pop("__gpu_profile_admission_epoch__", None),
-                    admission_stall=admission_stall,
+            if exact_timing_enabled and isinstance(payload, dict):
+                record_timing(
+                    payload,
+                    (
+                        worker_seconds,
+                        queue_wait_seconds,
+                        worker_started,
+                        worker_finished,
+                    ),
+                    admission_stall,
                 )
-            elif exact_timing_enabled and isinstance(payload, dict):
-                payload.pop("__gpu_profile_admission_epoch__", None)
             if profile_enabled:
                 profile_totals["exact_work"] += worker_seconds
                 profile_totals["exact_queue_wait"] += queue_wait_seconds
@@ -6164,6 +6301,14 @@ def run_backend(
         while exact_done < budget:
             interrupt_check()
             consume_ready()
+            if worker_controller is not None:
+                worker_controller.update()
+                if worker_controller.target != workers:
+                    if pending:
+                        progress.transition("exact_wait")
+                        consume_ready(wait_for_one=True)
+                        continue
+                    apply_worker_target()
             if queue_controller is not None:
                 queue_controller.update(generation)
                 max_pending = queue_controller.limit
@@ -6192,6 +6337,7 @@ def run_backend(
             population = _ask_gpu_population(algorithm, interrupt_check)
             ask_seconds = time.perf_counter() - ask_started if profile_enabled else 0.0
             generation_in_progress = True
+            generation_milestone.begin()
             rows = np.asarray(population.get("X"), dtype=np.float64)
             materialization_started = time.perf_counter() if profile_enabled else 0.0
             proxy_candidates = parameter_dicts(rows)
@@ -6355,11 +6501,13 @@ def run_backend(
                     vector,
                     interrupt_check,
                     profile=exact_timing_enabled,
-                    admission_epoch=queue_controller.epoch if queue_controller else None,
+                    admission_epoch=admission_epoch(),
                     admission_stalled_since=(
-                        admission_stall[1] if queue_controller is not None
+                        admission_stall[1]
+                        if queue_controller is not None
                         and admission_stall is not None
-                        and admission_stall[0] == queue_controller.epoch else None
+                        and admission_stall[0] == queue_controller.epoch
+                        else None
                     ),
                 )
                 pending[result] = (
@@ -6428,6 +6576,7 @@ def run_backend(
                     exact_inflight=len(pending),
                 )
 
+            generation_milestone.finish()
             progress.transition("generation_complete")
             maybe_save_checkpoint(force=True)
 

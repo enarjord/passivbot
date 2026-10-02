@@ -545,3 +545,141 @@ def test_affinity_missing_topology_uses_conservative_smt_ratio(tmp_path):
     assert tune._affinity_physical_cores([0, 1, 2, 3], 8, 16, tmp_path) == 2
     assert tune._affinity_physical_cores([0, 1, 2, 3], 8, 8, tmp_path) == 4
     assert tune._affinity_physical_cores([0], 8, 16, tmp_path) == 1
+
+
+def worker_controller(tmp_path, monkeypatch, *, workers=2, ceiling=4, mode="auto"):
+    monkeypatch.setattr(
+        tune, "resource_snapshot", lambda: {"available": 8 * 1024 * tune.MIB}
+    )
+    return tune.ExactWorkerController(
+        workers,
+        ceiling,
+        [],
+        per_worker=512 * tune.MIB,
+        mode=mode,
+        hardware={"implementation": "test"},
+        cache_dir=tmp_path,
+    )
+
+
+def worker_window(item, seconds=10, *, gap=0):
+    count = tune.WINDOW if seconds < 30 else max(4, 2 * item.workers)
+    origin = getattr(item, "test_tick", 0) + gap
+    for i in range(count):
+        began = origin + (i // item.workers) * seconds
+        item.record(seconds, 0, began, began + seconds, epoch=item.epoch)
+    item.test_tick = origin + ((count + item.workers - 1) // item.workers) * seconds
+    item.update()
+
+
+def test_worker_trial_measures_parallel_capacity_and_drains_before_application(
+    tmp_path, monkeypatch
+):
+    item = worker_controller(tmp_path, monkeypatch)
+    worker_window(item)
+    assert item.warmed and item.target == 2
+    worker_window(item, gap=10000)  # unrelated GPU-only pauses excluded
+    assert item.target == 3 and item.workers == 2 and item.baseline[0] == 2
+    epoch = item.epoch
+    item.record(10, 0, 0, 10, epoch=epoch)  # late old-pool jobs while draining
+    assert not item.samples
+    item.applied()
+    assert item.workers == 3 and item.epoch > epoch
+    worker_window(item)  # replacement pool cold window
+    assert item.baseline is not None
+    worker_window(item)
+    assert item.baseline is None and item.target == 3
+    assert item.cache.read(item.key, "exact_workers", 1, 4) == 3
+
+
+def test_worker_regression_rolls_back_and_memory_blocks_growth(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch)
+    worker_window(item)
+    worker_window(item)
+    item.applied()
+    worker_window(item, seconds=20)
+    worker_window(item, seconds=20)
+    assert item.target == 2 and item.workers == 3 and item.cooldown == 3
+    item.applied()
+    assert item.workers == 2
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: {"available": 0})
+    item.warmed = True
+    item.cooldown = 0
+    item.direction = 1
+    worker_window(item)
+    assert item.target == 2 and item.baseline is None
+
+
+def test_worker_evidence_is_bounded_epoch_scoped_and_coordinated(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch)
+    for epoch, duration in ((-1, 10), (0, float("nan")), (0, 0), (0, -1)):
+        item.record(duration, 0, 0, 10, epoch=epoch)
+    assert not item.samples
+    for i in range(100):
+        item.record(0.01, 0, i * 0.01, (i + 1) * 0.01, epoch=item.epoch)
+    assert len(item.samples) == 24
+    item.update()
+    assert not item.warmed
+    item.allow_trial = lambda: False
+    item.update()
+    epoch = item.epoch
+    item.update()
+    assert item.epoch == epoch and not item.samples  # no repeated invalidation
+    item.allow_trial = lambda: True
+    worker_window(item)
+    assert item.warmed
+
+
+def test_worker_expensive_evidence_and_cache_refresh(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch)
+    worker_window(item, seconds=60)
+    assert item.warmed
+    worker_window(item, seconds=60)
+    assert item.target == 3
+    item.applied()
+    worker_window(item, seconds=60)
+    worker_window(item, seconds=60)
+    assert item.target == 3 and item.baseline is None
+    assert worker_controller(tmp_path, monkeypatch).workers == 3
+    assert worker_controller(tmp_path, monkeypatch, mode="refresh").workers == 2
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: {"available": 0})
+    # Cache cannot authorize an unsafe growth allocation.
+    assert (
+        tune.ExactWorkerController(
+            2,
+            4,
+            [],
+            per_worker=512 * tune.MIB,
+            hardware={"implementation": "test"},
+            cache_dir=tmp_path,
+        ).workers
+        == 2
+    )
+
+
+def test_worker_trial_includes_queue_backpressure_idle_gaps(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch)
+    worker_window(item)
+    worker_window(item)
+    item.applied()
+    worker_window(item)
+    origin = item.test_tick + 1000
+    for i in range(24):
+        began = origin + (i // item.workers) * 10
+        item.record(
+            10,
+            0,
+            began,
+            began + 10,
+            epoch=item.epoch,
+            admission_stall=(origin - 300, origin),
+        )
+    item.update()
+    assert item.target == 2  # A faster pool cannot hide queue-induced starvation.
+
+
+def test_worker_invalid_stall_is_not_evidence(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch)
+    for stall in ((2, 1), (0, 11), (float("nan"), 1)):
+        item.record(10, 0, 0, 10, epoch=item.epoch, admission_stall=stall)
+    assert not item.samples and item.work_seconds == 0

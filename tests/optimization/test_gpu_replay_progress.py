@@ -106,3 +106,30 @@ def test_optional_progress_callback_failure_does_not_abort_replay(caplog):
         replay = TemporalReplayProgress(1, 10)
         replay.log("complete", 10, 60)
     assert "private detail" not in caplog.text
+
+
+def test_generation_eta_is_scoped_bounded_and_unknown_on_overrun():
+    from optimization.progress import GenerationMilestone
+
+    tick = [0.0]
+    estimate = GenerationMilestone(clock=lambda: tick[0])
+    assert estimate.eta() == "unknown"
+    estimate.begin()
+    tick[0] += 100
+    assert estimate.eta() == "unknown"  # no invented first-generation estimate
+    estimate.finish()
+    estimate.begin()
+    tick[0] += 30
+    assert estimate.eta() == "1m10s"
+    tick[0] += 100
+    assert estimate.eta() == "unknown"
+    estimate.finish()
+    assert estimate.eta() == "unknown"  # CPU admission wait isn't a GPU generation
+    for _ in range(8):
+        estimate.begin()
+        tick[0] += 60
+        estimate.finish()
+    assert len(estimate.completed) == 5
+    estimate.begin()
+    tick[0] += 10
+    assert estimate.eta() == "50s"

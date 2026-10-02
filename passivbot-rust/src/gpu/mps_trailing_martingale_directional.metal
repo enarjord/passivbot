@@ -2274,7 +2274,7 @@ inline void passivbot_single_coin_impl(
         pnl_lookback_bars, hsl_initialize, !hsl_unified || !hsl_long_owner);
     for (int k = replay_start; k < replay_stop; ++k) {
         if (!long_hsl.hsl_valid || !short_hsl.hsl_valid) {
-            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
             return;
         }
         const int bo = k * 5;
@@ -4469,7 +4469,7 @@ inline void passivbot_single_coin_impl(
                 kf, interval_ms
             );
             if (!hsl_update_valid) {
-                scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+                scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
                 return;
             }
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED

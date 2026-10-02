@@ -567,6 +567,11 @@ inline bool finish_hsl_episode_at_flat(
     float kf,
     float interval_ms
 ) {
+    // A closing fill can exhaust raw cash before the kernel's end-of-bar
+    // liquidation check. There is no remaining HSL budget to observe; retain
+    // the controller and let liquidation record its floor sample. Non-finite
+    // budgets still reach HSL validation and remain fatal.
+    if (isfinite(balance) && balance <= 0.0f) return true;
     observe_hsl(h, balance, realized_pnl, 0.0f, false, int(kf), true);
     return true;
 }

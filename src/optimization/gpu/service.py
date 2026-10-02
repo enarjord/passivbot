@@ -823,7 +823,7 @@ def _log_mps_dispatch_cap(
     if dispatch_batch_size >= requested_batch_size:
         return
     logging.warning(
-        "GPU MPS dispatch safety cap active | requested_batch=%d dispatch_batch=%d "
+        "GPU dispatch safety cap active | requested_batch=%d dispatch_batch=%d "
         "bars=%d coins=%d sides=%d max_candidate_bars=%d",
         requested_batch_size,
         dispatch_batch_size,
@@ -2203,6 +2203,9 @@ class MpsSingleCoinProxy:
         *,
         end_step: int | None = None,
     ) -> list[dict]:
+        scratch_policy = getattr(self, "scratch_policy", None)
+        if scratch_policy is not None and candidates:
+            scratch_policy.activate(self)
         results: list[dict] = []
         torch = self._torch
         full_candle_count = max(

@@ -17,12 +17,13 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "mode,coin_count,suite",
-    [(m, c, False) for m in ("coin", "pside", "unified") for c in (1, 2)]
-    + [(m, 2, True) for m in ("coin", "pside", "unified")],
+    "mode,coin_count,suite,resize,auto_batch",
+    [(m, c, False, False, False) for m in ("coin", "pside", "unified") for c in (1, 2)]
+    + [(m, 2, True, False, False) for m in ("coin", "pside", "unified")]
+    + [("coin", 1, False, True, False), ("coin", 1, False, False, True)],
 )
 async def test_hsl_gpu_optimizer_cli_is_offline(
-    tmp_path, monkeypatch, mode, coin_count, suite
+    tmp_path, monkeypatch, mode, coin_count, suite, resize, auto_batch
 ):
     from optimize import main
     from optimization.shape import build_optimization_shape
@@ -60,6 +61,61 @@ async def test_hsl_gpu_optimizer_cli_is_offline(
         validate_per_generation=2,
         drift_probes=1,
     )
+    released = []
+    if auto_batch:
+        from optimization.gpu.autotune import SingleCoinScratchPolicy
+
+        cfg["optimize"]["gpu"]["batch_size"] = None
+        release = SingleCoinScratchPolicy.release
+
+        def record_release(policy):
+            if policy.active is not None:
+                released.append(policy.active)
+            return release(policy)
+
+        monkeypatch.setattr(SingleCoinScratchPolicy, "release", record_release)
+    if resize:
+        from optimization.backends import gpu_backend
+
+        # Force only the execution-policy decision. Use real process pools,
+        # native Rust evaluations, GPU metrics, recording, and checkpoints.
+        cfg["optimize"]["gpu"]["exact_workers"] = None
+        monkeypatch.setattr(gpu_backend, "initial_workers", lambda *args, **kwargs: 1)
+        monkeypatch.setattr(
+            gpu_backend,
+            "resource_snapshot",
+            lambda: dict(
+                cores=3,
+                available=4 * 1024**3,
+                rss=512 * 1024**2,
+            ),
+        )
+        decisions = []
+
+        class WorkerController:
+            def __init__(self, workers, *args, **kwargs):
+                self.workers = self.target = workers
+                self.epoch = 0
+                self.baseline = None
+                self.done = 0
+                self.changed = False
+
+            def record(self, *args, epoch, **kwargs):
+                if epoch == self.epoch:
+                    self.done += 1
+
+            def update(self):
+                if self.done >= 2 and not self.changed:
+                    self.target = 2
+                    self.epoch += 1
+
+            def applied(self):
+                self.workers = self.target
+                self.epoch += 1
+                self.changed = True
+                decisions.append(self.workers)
+
+        monkeypatch.setattr(gpu_backend, "ExactWorkerController", WorkerController)
     shape = build_optimization_shape(cfg)
     for key, path in shape.key_paths:
         value = cfg
@@ -113,6 +169,12 @@ async def test_hsl_gpu_optimizer_cli_is_offline(
     with artifacts[0].open("rb") as f:
         records = list(msgpack.Unpacker(f, raw=False))
     assert records
+    assert not any("__gpu_profile" in json.dumps(record) for record in records)
+    if resize:
+        assert decisions == [2]
+    if auto_batch:
+        assert len(released) >= 2
+        assert all(not runner._hsl_scratch_buffers for runner in released)
     checkpoint = artifacts[0].parent / "checkpoint.pkl"
     state = pickle.loads(checkpoint.read_bytes())
     assert state["generation"] > 0

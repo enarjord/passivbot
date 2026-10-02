@@ -983,6 +983,12 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   rolling front gate. `drift_probes` must remain below
   `validate_per_generation` so each generation requests proxy-front safety evidence. A partial
   final validation batch scales its reserved probe count down proportionally.
+- Automatic single-coin HSL batches budget active history scratch from current free memory
+  (35%, capped at 2 GiB) while retaining the dispatch work cap and device headroom guard.
+  Completed scenario scratch is released before another scenario and before CPU validation
+  waits. Long single-coin Trailing Martingale replays gather bounded temporal timing evidence
+  on either or both enabled sides, without extra calibration candidates. Fixed batch sizes
+  and `tuning_mode=off` retain their configured execution policy.
 - `exact_workers` defaults to `null`; omitted, `null`, and `"auto"` values select initial
   hardware/RAM-aware sizing. It counts physical cores within CPU affinity (including SMT siblings),
   and uses cgroup-v2 CPU/memory limits
@@ -991,8 +997,18 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   largest prepared candle view
   (at least 512 MiB per worker). Suite scenarios sharing data are not summed as independent
   copies. A positive fixed queue limit also bounds automatic worker sizing. This is a sizing
-  estimate, not an OOM guarantee or an empirical optimum. Worker count stays fixed during a run.
-  Resource-detection failures warn and inherit `optimize.n_cpus`.
+  estimate, not an OOM guarantee or an empirical optimum. Auto mode subsequently trials
+  worker counts one core at a time using completed CPU intervals, coordinated with queue
+  and GPU trials. A regular window requires 24 timings and 30 full-pool-equivalent
+  seconds; expensive jobs require at least four timings (and two per worker), a
+  30-second median, and 120 active seconds. Queue-induced admission stalls count toward
+  measured throughput; unrelated GPU-only pauses do not create evidence.
+  The first window for a replacement pool is cold. Larger pools need a 5% gain;
+  smaller pools can retain throughput within 2%. Growth also requires current RAM
+  headroom. Admitted results are drained and durably collected in order before replacing
+  the pool; no validation is cancelled or repeated to resize it. Changing worker count
+  invalidates GPU/queue evidence and admission epochs. Compatible local measurements
+  are advisory starting points. Resource-detection failures warn and inherit `optimize.n_cpus`.
   Explicit `0` retains the legacy rule of inheriting `optimize.n_cpus`; positive numbers stay fixed.
 - `max_pending_exact` also defaults to `null`; omitted, `null`, or `"auto"` values enable
   continuous exact-validation queue tuning. It starts at twice the larger of workers and

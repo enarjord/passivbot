@@ -5549,7 +5549,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             }
         }
         if (!(valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
             return;
         }
 }
@@ -6509,7 +6509,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             }
         }
         if (!(valid_hsl_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
-            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
             return;
         }
 }

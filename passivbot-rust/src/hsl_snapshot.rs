@@ -284,20 +284,18 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
         );
         let limit = p.position_at.min(p.fills_at.unwrap_or(input.now));
         fills.retain(|f| f.timestamp <= limit);
-        let prices = p
-            .prices
-            .iter()
-            .filter(|(t, _)| input.start <= **t && **t <= input.now.min(p.prices_at))
-            .map(|(t, p)| (*t, *p))
-            .collect();
-        let h = history::reconstruct(&history::Input {
-            fills_before_same_time_price: input.fills_before_same_time_price,
-            start: input.start,
-            end: input.now,
-            position: p.position.clone(),
-            fills: fills.clone(),
-            prices,
-        })?;
+        let h = history::reconstruct_with_prices(
+            &history::Input {
+                fills_before_same_time_price: input.fills_before_same_time_price,
+                start: input.start,
+                end: input.now,
+                position: p.position.clone(),
+                fills: fills.clone(),
+                prices: BTreeMap::new(),
+            },
+            &p.prices,
+            input.now.min(p.prices_at),
+        )?;
         reasons.extend(h.reasons.iter().cloned());
         pairs.push(PreparedPair {
             symbol: p.symbol.clone(),
