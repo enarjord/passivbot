@@ -813,8 +813,10 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 
 CUDA multicoin suites keep one distinct market dataset resident in VRAM at a time. Immutable
 packed inputs for inactive datasets live in run-local files in the system temporary directory;
-compatible scenarios still share a dataset and can batch together. Allow temporary disk space for
-all distinct packed datasets and upload time when switching between them. Normal completion,
+compatible scenarios still share a dataset and can batch together. Inactive proxies sharing that
+dataset release their replay and output buffers when its representative proxy changes. Allow
+temporary disk space for all distinct packed datasets and upload time when switching between them.
+Normal completion,
 errors, and handled interruption remove these files. The existing 45% invariant-memory safety
 limit uses free VRAM before the first upload as its fixed run budget, reserving the remainder for
 replay and CUDA workspace. Each activation also checks currently free VRAM after releasing the

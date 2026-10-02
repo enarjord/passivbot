@@ -98,11 +98,20 @@ def _check_suite_batches(side):
         Suite(), scenarios, candidates,
         batch_compatible_scenarios=False,
     )
+    if current_cuda_residency() is not None:
+        # Separate evaluations share packed inputs but must not accumulate
+        # one runner/scratch allocation per scenario.
+        assert all(not item[1][0][1].runners for item in scenarios[:-1])
+        assert scenarios[-1][1][0][1].runners
     batched = _evaluate_gpu_suite_proxies(
         Suite(), scenarios, candidates,
         batch_compatible_scenarios=True,
     )
     np.testing.assert_equal(batched, separate)
+    if current_cuda_residency() is not None:
+        # Full batching changes representatives without changing dataset identity.
+        assert scenarios[0][1][0][1].runners
+        assert all(not item[1][0][1].runners for item in scenarios[1:])
     assert candidates == original
     profiles = [item[1][0][1].last_profile for item in scenarios]
     assert profiles[0]["actual_dispatch_batch_sizes"] == [64, 41]

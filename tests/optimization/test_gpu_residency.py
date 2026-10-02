@@ -57,8 +57,16 @@ def test_switching_evicts_all_owners_and_preserves_identity_and_values(runtime):
         assert not uploads
         assert compatible.data is first.data
         manager.activate(first)
+        first.runners["scratch"] = object()
+        first.fused_runner = object()
         manager.activate(compatible)
         assert len(uploads) == 1
+        assert first.runners == {}
+        assert first.fused_runner is None
+        assert compatible.runners
+        manager.activate(first)
+        assert compatible.runners == {}
+        assert len(uploads) == 1  # Owner changes never reupload shared market inputs.
         manager.activate(other)
         assert first.runners == compatible.runners == {}
         assert isinstance(first.data["bars"], Path)
@@ -72,6 +80,49 @@ def test_switching_evicts_all_owners_and_preserves_identity_and_values(runtime):
         manager.close()
     assert not Path(directory).exists()
     assert first.runners == {}
+
+
+@pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+def test_backend_failure_survives_cleanup_error(runtime, error, caplog):
+    torch, _ = runtime
+    failure = error("original backend failure")
+    directories = []
+    def fail_cleanup():
+        raise RuntimeError("cleanup synchronization failed")
+    @cuda_suite_residency_scope
+    def run():
+        manager = current_cuda_residency()
+        owner = proxy(manager, "a", 1)
+        manager.activate(owner)
+        directories.append(manager._directory.name)
+        torch.cuda.synchronize = fail_cleanup
+        raise failure
+    with pytest.raises(error) as caught:
+        run()
+    assert caught.value is failure
+    assert "CUDA suite cleanup failed" in caplog.text
+    assert "cleanup synchronization failed" in caplog.text
+    assert current_cuda_residency() is None
+    assert not Path(directories[0]).exists()
+
+
+def test_successful_backend_propagates_cleanup_error(runtime):
+    torch, _ = runtime
+    directories = []
+    def fail_cleanup():
+        raise RuntimeError("cleanup synchronization failed")
+    @cuda_suite_residency_scope
+    def run():
+        manager = current_cuda_residency()
+        owner = proxy(manager, "a", 1)
+        manager.activate(owner)
+        directories.append(manager._directory.name)
+        torch.cuda.synchronize = fail_cleanup
+        return "success"
+    with pytest.raises(RuntimeError, match="cleanup synchronization failed"):
+        run()
+    assert current_cuda_residency() is None
+    assert not Path(directories[0]).exists()
 
 
 def test_switching_retains_original_memory_limit(runtime):
@@ -110,6 +161,33 @@ def test_activation_failure_releases_partial_resources(runtime, stage, error):
         assert owner.runners == {}
         assert owner.fused_runner is None
         assert isinstance(owner.data["bars"], Path)
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("stage", ["upload", "runner"])
+def test_activation_failure_survives_cleanup_error(runtime, stage, caplog):
+    torch, _ = runtime
+    manager = CudaSuiteResidency()
+    owner = proxy(manager, "a", 1)
+    failure = ValueError("original activation failure")
+    def fail_cleanup():
+        raise RuntimeError("cleanup synchronization failed")
+    def fail(*args, **kwargs):
+        torch.cuda.synchronize = fail_cleanup
+        raise failure
+    if stage == "upload":
+        torch.as_tensor = fail
+    else:
+        owner._create_runners = fail
+    try:
+        with pytest.raises(ValueError) as caught:
+            manager.activate(owner)
+        assert caught.value is failure
+        assert "CUDA suite cleanup failed" in caplog.text
+        assert manager._active is None
+        assert manager._active_owner is None
+        assert owner.runners == {}
     finally:
         manager.close()
 

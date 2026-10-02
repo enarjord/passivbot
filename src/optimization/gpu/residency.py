@@ -5,6 +5,7 @@ from functools import wraps
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
+import logging
 import weakref
 
 import numpy as np
@@ -15,6 +16,13 @@ _current = ContextVar("cuda_suite_residency", default=None)
 
 def current_cuda_residency():
     return _current.get()
+
+
+def _cleanup_after_failure(cleanup, *args):
+    try:
+        cleanup(*args)
+    except BaseException:
+        logging.exception("CUDA suite cleanup failed while handling an earlier exception")
 
 
 def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None):
@@ -38,6 +46,7 @@ class CudaSuiteResidency:
         self._directory = None
         self._entries = {}
         self._active = None
+        self._active_owner = None
         self._working_set = None
 
     def prepare(self, key, builder):
@@ -50,7 +59,7 @@ class CudaSuiteResidency:
         try:
             data = builder(directory)
         except BaseException:
-            shutil.rmtree(directory)
+            _cleanup_after_failure(shutil.rmtree, directory)
             raise
         files = {name: value for name, value in data.items() if isinstance(value, Path)}
         self._entries[key] = {"data": data, "files": files, "owners": []}
@@ -63,6 +72,14 @@ class CudaSuiteResidency:
         entry = next(entry for entry in self._entries.values() if entry["data"] is proxy.data)
         entry["owners"].append(weakref.ref(proxy))
 
+    @staticmethod
+    def _clear_runners(entry):
+        for owner in entry["owners"]:
+            proxy = owner()
+            if proxy is not None:
+                proxy.runners.clear()
+                proxy.fused_runner = None
+
     def _release(self, torch):
         if self._active is None:
             return
@@ -70,14 +87,11 @@ class CudaSuiteResidency:
         try:
             torch.cuda.synchronize()
         finally:
-            for owner in entry["owners"]:
-                proxy = owner()
-                if proxy is not None:
-                    proxy.runners.clear()
-                    proxy.fused_runner = None
+            self._clear_runners(entry)
             # Keep dictionary identity for compatible suite grouping.
             entry["data"].update(entry["files"])
             self._active = None
+            self._active_owner = None
             torch.cuda.empty_cache()
 
     def activate(self, proxy):
@@ -100,14 +114,24 @@ class CudaSuiteResidency:
                     entry["data"][name] = torch.as_tensor(array, device="cuda").contiguous()
                     del array
             except BaseException:
-                self._release(torch)
+                _cleanup_after_failure(self._release, torch)
                 raise
+        elif self._active_owner is None or self._active_owner() is not proxy:
+            # Incompatible proxies and screening representatives can share the
+            # market entry. Keep its tensors, but retain only one owner's scratch.
+            try:
+                torch.cuda.synchronize()
+            finally:
+                self._clear_runners(entry)
+                self._active_owner = None
+                torch.cuda.empty_cache()
         if not proxy.runners and proxy.fused_runner is None:
             try:
                 proxy._create_runners()
             except BaseException:
-                self._release(torch)
+                _cleanup_after_failure(self._release, torch)
                 raise
+        self._active_owner = weakref.ref(proxy)
 
     def close(self):
         try:
@@ -127,10 +151,14 @@ def cuda_suite_residency_scope(func):
         residency = CudaSuiteResidency()
         token = _current.set(residency)
         try:
-            return func(*args, **kwargs)
-        finally:
             try:
+                result = func(*args, **kwargs)
+            except BaseException:
+                _cleanup_after_failure(residency.close)
+                raise
+            else:
                 residency.close()
-            finally:
-                _current.reset(token)
+                return result
+        finally:
+            _current.reset(token)
     return scoped

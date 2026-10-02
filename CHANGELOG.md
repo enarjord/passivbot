@@ -7,10 +7,12 @@ since the latest release tag; these features may already be available when insta
 ## Unreleased
 
 - Bound CUDA multicoin suite memory by keeping only the active market dataset resident on the
-  GPU and spilling inactive immutable packing to temporary files. Preserve scenario grouping,
+  GPU and spilling inactive immutable packing to temporary files. Release inactive proxies'
+  replay buffers even when they share that dataset. Preserve scenario grouping,
   screening, and exact validation. Apply the 45% invariant-memory cap to initial free VRAM and
   check current availability on every activation, avoiding failures from accumulating datasets
-  or repeatedly shrinking the budget after CUDA workspace allocation.
+  or repeatedly shrinking the budget after CUDA workspace allocation. Keep the original error
+  or interrupt when secondary cleanup fails.
 
 - Show each Pareto objective's full range at INFO in ascending `[min,max]` order, with `*` on
   an improved goal-directed best endpoint. Keep new tradeoffs visible when no best improves,
