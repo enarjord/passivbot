@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Restore startup and material balance logs for revised-HSL bots without adding market-data fetches or changing execution scheduling.
+
 - Show each Pareto objective's full range at INFO in ascending `[min,max]` order, with `*` on
   an improved goal-directed best endpoint. Keep new tradeoffs visible when no best improves,
   and derive both endpoints from the same feasible or explicitly labelled infeasible front.

@@ -126,6 +126,9 @@ async def _refresh_protective_authoritative_state(bot, *, require_balance: bool)
         sorted(bot.positions), now_ms=int(bot.get_exchange_time())
     )
     bot._finalize_authoritative_refresh_consistency(plan)
+    from live import hsl_revised_live
+    if require_balance and hsl_revised_live.selected(bot):
+        event_emitters.publish_committed_balance_observation(bot)
     return True
 
 

@@ -2110,6 +2110,12 @@ def _format_console_balance_changed(event: LiveEvent) -> str:
         f"{'snap':<5}{snapped_transition} | "
         f"equity={equity} source={source}"
     )
+    if data.get("initial_snapshot") is True:
+        rendered = (
+            f"[balance] initial raw={_format_console_number(_data_number(data, 'balance_raw'))} | "
+            f"snap={_format_console_number(_data_number(data, 'balance_snapped'))} | "
+            f"equity={equity} source={source}"
+        )
     sample = format_balance_composition_sample(data.get("balance_composition"))
     return f"{rendered} assets={sample}" if sample else rendered
 
@@ -2809,7 +2815,7 @@ def _console_sink_event_visible(event: LiveEvent) -> bool:
         data = event.data if isinstance(event.data, Mapping) else {}
         snapped_delta = _data_number(data, "balance_snapped_delta")
         # Missing or malformed materiality metadata must remain operator-visible.
-        return snapped_delta is None or snapped_delta != 0.0
+        return data.get("initial_snapshot") is True or snapped_delta is None or snapped_delta != 0.0
     return True
 
 
