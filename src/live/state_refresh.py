@@ -160,12 +160,16 @@ async def publish_protective_account_report(bot):
         return
     bot._protective_account_report = None
     old_positions, new_positions, report_balance = receipt
+
+    async def report_balance_observation():
+        event_emitters.publish_committed_balance_observation(bot)
+
     for name, operation in (
         (
             "position-change",
             lambda: bot.log_position_changes(old_positions, new_positions),
         ),
-        ("balance-change", lambda: bot.handle_balance_update(source="REST")),
+        ("balance-change", report_balance_observation),
     ):
         if bot.stop_signal_received:
             return
