@@ -72,8 +72,6 @@ BOT_BOUND_GROUP_BY_KEY = {
 SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     "long": {
         "forager": {
-            "score_weights_unilateralness": [0.0, 0.0],
-            "unilateralness_ema_span_1m": [60.0, 60.0],
             "score_weights_ema_readiness": [0, 1, 0.01],
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
@@ -86,14 +84,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "ema_span_minutes": [720, 720, 1],
             "red_threshold": [0.15, 0.15, 0.001]
         },
-        "entry_cooldown": {
-            "base_duration_minutes": [0, 60, 0.1],
-            "min_duration_minutes": [0.0, 0.0],
-            "weights_minutes": {
-                "exposure_ratio": [0.0, 0.0],
-                "adverse_directionality": [0.0, 0.0],
-            },
-        },
+        "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
             "n_positions": [7, 7, 1],
             "position_exposure_enforcer_threshold": [1, 1, 0.001],
@@ -112,8 +103,6 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     },
     "short": {
         "forager": {
-            "score_weights_unilateralness": [0.0, 0.0],
-            "unilateralness_ema_span_1m": [60.0, 60.0],
             "score_weights_ema_readiness": [0, 1, 0.01],
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
@@ -126,14 +115,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "ema_span_minutes": [1, 720, 1],
             "red_threshold": [0.01, 0.15, 0.001]
         },
-        "entry_cooldown": {
-            "base_duration_minutes": [0, 60, 0.1],
-            "min_duration_minutes": [0.0, 0.0],
-            "weights_minutes": {
-                "exposure_ratio": [0.0, 0.0],
-                "adverse_directionality": [0.0, 0.0],
-            },
-        },
+        "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
             "n_positions": [5, 5, 1],
             "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],

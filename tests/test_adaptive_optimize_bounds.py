@@ -36,8 +36,8 @@ def flat_bounds(config):
     )
 
 
-def test_template_bounds_freeze_forager_defaults():
-    cfg = get_template_config()
+def test_parsed_template_bounds_freeze_adaptive_defaults():
+    cfg = prepare_config(get_template_config(), verbose=False)
     bounds = flat_bounds(cfg)
     for side in ("long", "short"):
         forager = cfg["bot"][side]["forager"]
@@ -51,6 +51,51 @@ def test_template_bounds_freeze_forager_defaults():
         minimum = cooldown["min_duration_minutes"]
         assert bounds[f"{side}_entry_cooldown_min_duration_minutes"] == [minimum, minimum]
         assert f"{side}_entry_cooldown_max_duration_minutes" not in bounds
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
+    source = get_template_config()
+    original = flat_bounds(source)
+    for key in (
+        "forager_score_weights_unilateralness", "unilateralness_ema_span_1m",
+        "entry_cooldown_weights_minutes_exposure_ratio",
+        "entry_cooldown_weights_minutes_adverse_directionality",
+        "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
+    ):
+        assert f"{side}_{key}" not in original
+    source["bot"][side]["forager"].update(
+        score_weights={"volume": 1.0, "ema_readiness": 0.0,
+                       "volatility": 0.0, "unilateralness": 1.0},
+        unilateralness_ema_span_1m=42.5,
+    )
+    source["bot"][side]["entry_cooldown"].update(
+        min_duration_minutes=20.0, max_duration_minutes=90.0,
+        weights_minutes={"exposure_ratio": 3.25, "adverse_directionality": 2.5},
+    )
+    expected = {
+        "forager_score_weights_unilateralness": 0.5,
+        "unilateralness_ema_span_1m": 42.5,
+        "entry_cooldown_weights_minutes_exposure_ratio": 3.25,
+        "entry_cooldown_weights_minutes_adverse_directionality": 2.5,
+        "entry_cooldown_min_duration_minutes": 20.0,
+        "entry_cooldown_max_duration_minutes": 90.0,
+    }
+    parsed = prepare_config(source, verbose=False)
+    for cfg in (parsed, clean_config(source)):
+        bounds = flat_bounds(cfg)
+        for key, value in expected.items():
+            assert bounds[f"{side}_{key}"] == [value, value]
+    bounds = extract_bounds_tuple_list_from_config(parsed)
+    vector = [bound.low for bound in bounds]
+    for index, (_, path) in enumerate(get_optimization_key_paths(parsed)):
+        if path[:4] == ("bot", side, "forager", "score_weights"):
+            vector[index] = parsed["bot"][side]["forager"]["score_weights"][path[-1]]
+    candidate = build_optimizer_vector_config(vector, parsed)
+    assert candidate["bot"][side]["forager"]["score_weights"]["unilateralness"] == 0.5
+    assert candidate["bot"][side]["forager"]["unilateralness_ema_span_1m"] == 42.5
+    for key in ("weights_minutes", "min_duration_minutes", "max_duration_minutes"):
+        assert candidate["bot"][side]["entry_cooldown"][key] == parsed["bot"][side]["entry_cooldown"][key]
 
 
 @pytest.mark.parametrize("missing,wrapped", [

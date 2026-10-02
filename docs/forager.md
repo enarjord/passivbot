@@ -154,8 +154,9 @@ The optional span dimensions are `long_unilateralness_ema_span_1m` and
 `short_unilateralness_ema_span_1m`. Missing unilateralness weight and span bounds
 are hydrated as `[configured_value, configured_value]`, using the normalized
 Forager weight and the configured floating-point span for each side. New configs
-default to `[0.0, 0.0]` for the weight and `[60.0, 60.0]` for the span. These bounds
-are visible but fixed; widen them explicitly to include unilateralness in the
+default to `[0.0, 0.0]` for the weight and `[60.0, 60.0]` for the span. Templates
+leave these bounds absent until parsing derives them from the bot values. These
+bounds are visible but fixed; widen them explicitly to include unilateralness in the
 optimizer search. Explicit ranges are preserved. Canonical exports use
 `optimize.bounds.<side>.forager.score_weights_unilateralness` and
 `optimize.bounds.<side>.forager.unilateralness_ema_span_1m`.

@@ -315,8 +315,9 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     from config.optimize_bounds import flatten_optimize_bounds
 
     cfg = get_template_config()
+    parsed = prepare_config(cfg, verbose=False)
     original = flatten_optimize_bounds(
-        cfg["optimize"]["bounds"], strategy_kind=cfg["live"]["strategy_kind"]
+        parsed["optimize"]["bounds"], strategy_kind=parsed["live"]["strategy_kind"]
     )
     for side in ("long", "short"):
         assert original[f"{side}_forager_score_weights_unilateralness"] == [0.0, 0.0]
