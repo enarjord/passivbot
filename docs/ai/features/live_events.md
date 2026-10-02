@@ -70,7 +70,8 @@ Balance publication occurs on the existing aggregate raw/snapped transition or
 on a changed full normalized composition signature, including a change in an
 omitted row. Revised-HSL committed cohorts publish one initial balance snapshot, then raw/snapped or
 composition transitions, using presentation-only anchors and passive cached equity (unknown
-when current inputs are absent). Publication performs no fetches or execution scheduling.
+when current inputs are absent). Publication performs no fetches or execution scheduling. Presentation anchors advance only
+after successful event enqueue or console fallback, so transient observer failures can retry.
 Console admission thereafter remains based solely on snapped-balance materiality. Visible balance lines may append a sanitized sample of at most two
 retained assets; composition-only changes remain structured/text durable but
 stay off the console.

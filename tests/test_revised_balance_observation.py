@@ -15,6 +15,10 @@ def observation(monkeypatch):
     monkeypatch.setattr(event_emitters, "utc_ms", lambda: NOW)
     structured, console = ListEventSink(), ListEventSink()
     pipeline = LiveEventPipeline(structured_sinks=[structured], console_sink=console)
+    def emit(event_type, require_enqueue=False, defer_sync_sinks_until_enqueued=False, **kwargs):
+        return pipeline.emit(LiveEvent(event_type, **kwargs), require_enqueue=require_enqueue,
+                             defer_sync_sinks_until_enqueued=defer_sync_sinks_until_enqueued)
+
     bot = SimpleNamespace(
         config={"live": {"hsl_engine": "revised"}},
         balance_raw=100.0, balance=100.0, positions={},
@@ -25,7 +29,7 @@ def observation(monkeypatch):
         }),
         _live_market_snapshot_max_age_ms=lambda: 10_000,
         _current_live_event_cycle_id=lambda: "cy_1",
-        _emit_live_event=lambda event_type, **kwargs: pipeline.emit(LiveEvent(event_type, **kwargs)),
+        _emit_live_event=emit,
         live_event_console_enabled=True, _live_event_pipeline=pipeline,
     )
     bot.get_raw_balance = lambda: bot.balance_raw
@@ -171,3 +175,56 @@ def test_disabled_console_uses_one_legacy_fallback(observation, caplog):
         event_emitters.publish_committed_balance_observation(bot)
     assert sum("[balance]" in record.message for record in caplog.records) == 1
     assert len(flush(observation)[0]) == 2
+
+
+@pytest.mark.parametrize("transition", [False, True])
+@pytest.mark.parametrize("failure", ["none", "raise"])
+def test_failed_publication_retries_without_losing_initial_or_delta(observation, transition, failure):
+    bot, _, _, _ = observation
+    accepted = bot._emit_live_event
+    if transition:
+        event_emitters.publish_committed_balance_observation(bot)
+        bot.balance_raw = bot.balance = 110.0
+    previous = getattr(bot, "_balance_observation_signature", None)
+    def reject(event_type, **kwargs):
+        assert kwargs["require_enqueue"] is True
+        assert kwargs["defer_sync_sinks_until_enqueued"] is True
+        if failure == "raise":
+            raise RuntimeError("private-sink-secret")
+        return None
+    bot._emit_live_event = reject
+    event_emitters.publish_committed_balance_observation(bot)
+    assert getattr(bot, "_balance_observation_signature", None) == previous
+    bot._emit_live_event = accepted
+    event_emitters.publish_committed_balance_observation(bot)
+    event_emitters.publish_committed_balance_observation(bot)
+    events, console = flush(observation)
+    assert len(events) == len(console) == (2 if transition else 1)
+    assert events[-1].data.get("initial_snapshot", False) is (not transition)
+    assert events[-1].data["balance_snapped_delta"] == (10.0 if transition else 100.0)
+    assert bot.execution_scheduled is False
+
+
+def test_successful_fallback_acknowledges_without_structured_acceptance(observation, caplog):
+    bot, pipeline, _, _ = observation
+    bot.live_event_console_enabled = False
+    pipeline.console_sink = None
+    bot._emit_live_event = lambda *args, **kwargs: None
+    with caplog.at_level("INFO"):
+        event_emitters.publish_committed_balance_observation(bot)
+        event_emitters.publish_committed_balance_observation(bot)
+    assert sum("[balance]" in record.message for record in caplog.records) == 1
+    assert bot._balance_observation_signature[:2] == (100.0, 100.0)
+    assert flush(observation)[0] == []
+
+
+def test_console_failure_does_not_prevent_structured_acceptance(observation, monkeypatch):
+    bot, _, _, _ = observation
+    bot.live_event_console_enabled = False
+    def fail(*args, **kwargs):
+        raise RuntimeError("private-console-secret")
+    monkeypatch.setattr(event_emitters.logging, "info", fail)
+    event_emitters.publish_committed_balance_observation(bot)
+    assert bot._balance_observation_signature[:2] == (100.0, 100.0)
+    assert len(flush(observation)[0]) == 1
+    assert bot.execution_scheduled is False

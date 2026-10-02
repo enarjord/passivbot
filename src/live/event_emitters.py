@@ -5002,7 +5002,7 @@ def publish_committed_balance_observation(bot: Any) -> None:
             return
         initial = previous is None
         equity = _monitor_equity(bot, balance_raw=raw, now_ms=int(utc_ms()))
-        emit_balance_changed_event(
+        published = emit_balance_changed_event(
             bot,
             previous_balance_raw=0.0 if initial else previous[0],
             balance_raw=raw,
@@ -5012,12 +5012,14 @@ def publish_committed_balance_observation(bot: Any) -> None:
             source="REST",
             balance_composition=composition,
             initial_snapshot=initial,
+            require_enqueue=True,
             console_fallback=not (
                 getattr(bot, "live_event_console_enabled", False)
                 and getattr(getattr(bot, "_live_event_pipeline", None), "console_sink", None) is not None
             ),
         )
-        bot._balance_observation_signature = signature
+        if published:
+            bot._balance_observation_signature = signature
     except Exception as exc:
         logging.debug(
             "[event] failed to publish committed balance observation: %s",
@@ -5037,7 +5039,9 @@ def emit_balance_changed_event(
     balance_composition: Any = None,
     initial_snapshot: bool = False,
     console_fallback: bool = False,
-) -> None:
+    require_enqueue: bool = False,
+) -> bool:
+    published = False
     try:
         raw_delta = float(balance_raw) - float(previous_balance_raw)
         snapped_delta = float(balance_snapped) - float(previous_balance_snapped)
@@ -5057,8 +5061,16 @@ def emit_balance_changed_event(
         if composition is not None:
             data["balance_composition"] = composition
         if console_fallback and (initial_snapshot or snapped_delta != 0.0):
-            logging.info(format_console_event(LiveEvent(EventTypes.BALANCE_CHANGED, data=data)))
-        bot._emit_live_event(
+            try:
+                logging.info(format_console_event(LiveEvent(EventTypes.BALANCE_CHANGED, data=data)))
+                published = True
+            except Exception as exc:
+                logging.debug("[event] balance console fallback failed: %s", _bounded_exception_type(exc))
+        enqueue_kwargs = (
+            {"require_enqueue": True, "defer_sync_sinks_until_enqueued": True}
+            if require_enqueue else {}
+        )
+        emitted = bot._emit_live_event(
             EventTypes.BALANCE_CHANGED,
             level="info",
             component="account.balance",
@@ -5067,12 +5079,16 @@ def emit_balance_changed_event(
             status="succeeded",
             reason_code=ReasonCodes.BALANCE_CHANGED,
             data=data,
+            **enqueue_kwargs,
         )
+        published = published or emitted is not None
     except Exception as exc:
         logging.debug(
             "[event] failed to emit balance changed event: %s",
             _bounded_exception_type(exc),
         )
+
+    return published
 
 
 def _fill_coverage_summary(status: Any) -> dict[str, Any]:
