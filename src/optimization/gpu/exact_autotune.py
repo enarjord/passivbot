@@ -425,6 +425,8 @@ class ExactWorkerController:
         self.samples = deque(maxlen=WINDOW)
         self.epoch = 0
         self.revision = self.proxy_state()[0]
+        self.queue_epoch = lambda: None
+        self.queue_revision = None
         self.blocked = False
         self.baseline = None
         self.warmed = False
@@ -471,8 +473,22 @@ class ExactWorkerController:
             2 * self.per_worker, (count - self.workers + 1) * self.per_worker
         )
 
-    def record(self, work, wait, started, finished, *, epoch, admission_stall=None):
-        if epoch != self.epoch or self.target != self.workers:
+    def record(
+        self,
+        work,
+        wait,
+        started,
+        finished,
+        *,
+        epoch,
+        admission_stall=None,
+        queue_epoch=None,
+    ):
+        if (
+            epoch != self.epoch
+            or self.target != self.workers
+            or queue_epoch != self.queue_epoch()
+        ):
             return
         if (
             not all(math.isfinite(v) for v in (work, started, finished))
@@ -491,13 +507,30 @@ class ExactWorkerController:
 
     def update(self):
         revision, gpu_trial = self.proxy_state()
+        queue_revision = self.queue_epoch()
+        changed = revision != self.revision or queue_revision != self.queue_revision
         blocked = gpu_trial or not self.allow_trial()
-        if blocked or revision != self.revision:
-            if not self.blocked or revision != self.revision:
+        if blocked or changed:
+            if not self.blocked or changed:
                 self.reset()
                 self.epoch += 1
+                if changed and self.baseline is not None:
+                    # Retire incomparable trials toward the smaller pool;
+                    # future growth still requires current memory headroom.
+                    self.target = min(self.workers, self.baseline[0])
+                    self.baseline = None
+                    logging.info(
+                        "GPU exact worker auto-tune trial retired | workers=%d reason=%s",
+                        self.target,
+                        (
+                            "queue_epoch_changed"
+                            if queue_revision != self.queue_revision
+                            else "gpu_revision_changed"
+                        ),
+                    )
             self.blocked = blocked
             self.revision = revision
+            self.queue_revision = queue_revision
             return
         self.blocked = False
         if self.target != self.workers or not self.samples:
@@ -537,7 +570,11 @@ class ExactWorkerController:
                 self.cache.write(self.key, "exact_workers", self.workers, rate, elapsed)
                 self.cooldown = 1
             else:
-                self.target = previous
+                self.target = (
+                    previous
+                    if previous <= self.workers or self.can_grow(previous)
+                    else self.workers
+                )
                 self.direction *= -1
                 self.cooldown = 3
             logging.info(
@@ -575,6 +612,7 @@ class ExactWorkerController:
     def applied(self):
         self.workers = self.target
         self.revision = self.proxy_state()[0]
+        self.queue_revision = self.queue_epoch()
         self.epoch += 1
         self.reset()
         self.warmed = False  # The replacement pool's first window is cold.

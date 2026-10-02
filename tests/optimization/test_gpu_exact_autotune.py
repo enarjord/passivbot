@@ -722,3 +722,78 @@ def test_cached_ceiling_starts_with_shrink_direction(tmp_path, monkeypatch):
     item.cache.write(item.key, "exact_workers", 4, 1.0, 120)
     cached = worker_controller(tmp_path, monkeypatch)
     assert cached.workers == 4 and cached.direction == -1
+
+
+def test_seed_queue_rollback_retires_worker_evidence_and_late_completions(
+    tmp_path, monkeypatch
+):
+    queue = controller(tmp_path)
+    worker = worker_controller(tmp_path, monkeypatch)
+    worker.queue_epoch = lambda: queue.epoch
+    worker.queue_revision = queue.epoch
+    worker.warmed = True
+    window(queue)
+    window(queue)
+    assert queue.baseline is not None
+    queued_epoch = queue.epoch
+    for index in range(tune.WINDOW):
+        worker.record(
+            10,
+            0,
+            index * 10,
+            (index + 1) * 10,
+            epoch=worker.epoch,
+            queue_epoch=queued_epoch,
+            admission_stall=(index * 10, index * 10),
+        )
+    assert worker.samples  # Seed bootstrap need not update worker decisions.
+    queue.finish_bootstrap(0)
+    assert queue.baseline is None and queue.epoch != queued_epoch
+    worker.update()
+    assert (
+        not worker.samples
+        and worker.baseline is None
+        and worker.target == worker.workers
+    )
+    assert not (tmp_path / (worker.key + ".json")).exists()
+    worker.record(10, 0, 250, 260, epoch=worker.epoch, queue_epoch=queued_epoch)
+    assert not worker.samples
+    worker.record(10, 0, 260, 270, epoch=worker.epoch, queue_epoch=queue.epoch)
+    assert len(worker.samples) == 1
+
+
+@pytest.mark.parametrize("changed", ["queue", "gpu"])
+@pytest.mark.parametrize("previous", [1, 3])
+def test_worker_trial_retires_on_external_configuration_change(
+    tmp_path, monkeypatch, caplog, changed, previous
+):
+    worker = worker_controller(tmp_path, monkeypatch)
+    queue_epoch = [0]
+    worker.queue_epoch = lambda: queue_epoch[0]
+    worker.queue_revision = 0
+    worker.baseline = (previous, 1.0)
+    worker.samples.append((10, 0, 10, None))
+    old_epoch = worker.epoch
+    if changed == "queue":
+        queue_epoch[0] += 1
+    else:
+        worker.revision = ("old",)
+    with caplog.at_level("INFO"):
+        worker.update()
+    assert not worker.samples and worker.baseline is None
+    assert worker.target == min(worker.workers, previous)
+    assert worker.epoch > old_epoch
+    assert (
+        "queue_epoch_changed" if changed == "queue" else "gpu_revision_changed"
+    ) in caplog.text
+
+
+def test_rejected_shrink_cannot_restore_a_pool_without_current_headroom(
+    tmp_path, monkeypatch
+):
+    worker = worker_controller(tmp_path, monkeypatch)
+    worker.baseline = (3, 1.0)
+    worker.warmed = True
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: {"available": 0, "cores": 8})
+    worker_window(worker, seconds=20)
+    assert worker.baseline is None and worker.target == worker.workers == 2

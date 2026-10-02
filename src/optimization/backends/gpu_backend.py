@@ -5614,6 +5614,10 @@ def run_backend(
     if queue_controller is not None:
         max_pending = queue_controller.limit
     if worker_controller is not None:
+        worker_controller.queue_epoch = lambda: (
+            queue_controller.epoch if queue_controller else None
+        )
+        worker_controller.queue_revision = worker_controller.queue_epoch()
         worker_controller.allow_trial = (
             lambda: queue_controller is None or queue_controller.baseline is None
         )
@@ -5657,7 +5661,12 @@ def run_backend(
         if queue_controller is not None:
             queue_controller.record(*timing, epoch=queue_epoch, admission_stall=stall)
         if worker_controller is not None:
-            worker_controller.record(*timing, epoch=worker_epoch, admission_stall=stall)
+            worker_controller.record(
+                *timing,
+                epoch=worker_epoch,
+                admission_stall=stall,
+                queue_epoch=queue_epoch,
+            )
 
     def apply_worker_target():
         nonlocal pool, pool_workers, workers, max_pending, queue_controller
@@ -5692,6 +5701,9 @@ def run_backend(
                         and worker_controller.target == workers
                         and queue_controller.baseline is None
                     )
+        # This drained pool change preserves the prior queue limit within its
+        # new worker bounds; its new admission epoch belongs to this same trial.
+        worker_controller.queue_revision = worker_controller.queue_epoch()
         logging.info("GPU exact worker pool resized | workers=%d pending=0", workers)
 
     pending = {}

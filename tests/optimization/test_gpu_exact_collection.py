@@ -29,6 +29,7 @@ from test_hsl_offline_runtime import deny_network, offline_cli_config
         "worker_resize",
         "worker_resize_failure",
         "worker_resize_budget",
+        "worker_resize_queue",
         "milestone_wait",
     ],
 )
@@ -70,6 +71,12 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
     resizing = stop_kind.startswith("worker_resize")
     if resizing:
         cfg["optimize"]["gpu"]["exact_workers"] = None
+        if stop_kind == "worker_resize_queue":
+            cfg["optimize"]["gpu"]["max_pending_exact"] = None
+            monkeypatch.setattr(
+                "optimization.gpu.exact_autotune.hardware_identity",
+                lambda _: {"device": "test"},
+            )
         monkeypatch.setattr(
             gpu_backend,
             "resource_snapshot",
@@ -100,6 +107,8 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
                 self.resized = False
 
             def record(self, *args, epoch, **kwargs):
+                if stop_kind == "worker_resize_queue":
+                    assert isinstance(kwargs.get("queue_epoch"), int)
                 if epoch == self.epoch:
                     self.completed += 1
 
