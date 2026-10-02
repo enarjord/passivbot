@@ -315,10 +315,18 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     from config.optimize_bounds import flatten_optimize_bounds
 
     cfg = get_template_config()
+    parsed = prepare_config(cfg, verbose=False)
     original = flatten_optimize_bounds(
-        cfg["optimize"]["bounds"], strategy_kind=cfg["live"]["strategy_kind"]
+        parsed["optimize"]["bounds"], strategy_kind=parsed["live"]["strategy_kind"]
     )
-    assert not any("unilateralness" in key or "weights_minutes" in key for key in original)
+    for side in ("long", "short"):
+        assert original[f"{side}_forager_score_weights_unilateralness"] == [0.0, 0.0]
+        assert original[f"{side}_unilateralness_ema_span_1m"] == [60.0, 60.0]
+    for side in ("long", "short"):
+        assert original[f"{side}_entry_cooldown_weights_minutes_exposure_ratio"] == [0.0, 0.0]
+        assert original[f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] == [0.0, 0.0]
+        assert original[f"{side}_entry_cooldown_min_duration_minutes"] == [0.0, 0.0]
+        assert f"{side}_entry_cooldown_max_duration_minutes" not in original
     cfg["optimize"]["bounds"]["long"]["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [20.0, 80.5]
     cfg = clean_config(prepare_config(cfg, verbose=False))
@@ -676,6 +684,9 @@ def test_adverse_rms_activates_at_first_complete_return_window(side, span):
 
     cfg = _ema_anchor_config(True)
     cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = span
+    # The fixture is already parsed, so update its visible fixed history bound
+    # alongside the bot span to exercise this exact return window.
+    cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_1m"] = [span, span]
     cfg["bot"][side]["entry_cooldown"].update(
         base_duration_minutes=0.0, max_duration_minutes=60.0,
         weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 1.0},
@@ -964,6 +975,7 @@ def test_constant_clamp_cpu_needs_no_rms_history(side, interval, base, floor, ce
     )
     cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
     cfg["optimize"]["bounds"][side]["entry_cooldown"]["base_duration_minutes"] = [base, base]
+    cfg["optimize"]["bounds"][side]["entry_cooldown"]["min_duration_minutes"] = [floor, floor]
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()

@@ -227,6 +227,11 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch, b
         compress_results_file=False,
         write_all_results=True,
     )
+    # This tiny population tests checkpoint continuation, so require mutation
+    # instead of allowing duplicate elimination to exhaust unchanged offspring.
+    cfg["optimize"]["pymoo"]["shared"].update(
+        mutation_prob=1.0, mutation_prob_per_variable=0.5,
+    )
     cfg["optimize"]["bounds"]["hsl"] = {"red_threshold": [0.01, 0.1]}
     # Spawned workers and the manager also deny IP networking; local Unix IPC
     # remains available for the real multiprocessing backend.

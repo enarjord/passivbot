@@ -324,7 +324,8 @@ def test_cooldown_search_corners_respect_effective_coin_pins(side, bounds, patch
 
     if valid:
         result = prepared()
-        assert result["optimize"]["bounds"][side]["entry_cooldown"] == cfg["optimize"]["bounds"][side]["entry_cooldown"]
+        expected = prepare_config(cfg, verbose=False)["optimize"]["bounds"][side]["entry_cooldown"]
+        assert result["optimize"]["bounds"][side]["entry_cooldown"] == expected
         validate_optimize_bounds_against_bot_config(result, result["optimize"]["bounds"])
     else:
         with pytest.raises(ValueError, match="coin_overrides.BTC.*highest min_duration_minutes"):
@@ -387,7 +388,8 @@ def test_mixed_optimizer_bounds_preserve_all_adaptive_dimensions(side):
     prepared = prepare_config(cfg, verbose=False)
     for candidate in (prepared, prepare_config(clean_config(prepared), verbose=False)):
         actual = flatten_optimize_bounds(candidate["optimize"]["bounds"], strategy_kind="trailing_martingale")
-        assert actual == expected
+        assert {key: actual[key] for key in expected} == expected
+        assert all(bound[0] == bound[1] for key, bound in actual.items() if key not in expected)
         paths = dict(get_optimization_key_paths(candidate))
         for leaf in ("min_duration_minutes", "max_duration_minutes"):
             assert paths[f"{side}_entry_cooldown_{leaf}"] == ("bot", side, "entry_cooldown", leaf)
@@ -412,7 +414,8 @@ def test_coin_zero_modifier_pin_can_clear_searched_ceiling(side, modifier, origi
     result = parse_overrides(prepare_config(cfg, verbose=False), verbose=False,
         override_loader=lambda config, coin: patch if origin == "file" else {})
     assert result["coin_overrides"]["BTC"] == patch
-    assert result["optimize"]["bounds"][side]["entry_cooldown"] == cfg["optimize"]["bounds"][side]["entry_cooldown"]
+    expected = prepare_config(cfg, verbose=False)["optimize"]["bounds"][side]["entry_cooldown"]
+    assert result["optimize"]["bounds"][side]["entry_cooldown"] == expected
     # A positive effective coin modifier still requires a ceiling.
     patch["bot"][side]["entry_cooldown"]["weights_minutes"][modifier] = 1.0
     with pytest.raises(ValueError, match="finite"):

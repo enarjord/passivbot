@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Hydrate missing Forager unilateralness weight/span and adaptive entry cooldown
+  weight/minimum-duration optimizer bounds as fixed ranges at each side's configured
+  value. Also expose a fixed maximum-duration bound when a finite ceiling is configured;
+  a null ceiling remains unbounded. Parsed and cleaned configs expose these parameters
+  without opening new search ranges; explicit bounds are preserved.
+
 - Bound CUDA multicoin suite memory by keeping only the active market dataset resident on the
   GPU and spilling inactive immutable packing to temporary files. Release inactive proxies'
   replay buffers even when they share that dataset. Preserve scenario grouping,

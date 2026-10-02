@@ -802,10 +802,26 @@ def clean_config(config: dict) -> dict:
             for key in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"]
             if key in bounds
         }
-    from config.optimize_bounds import preserve_optional_adaptive_bounds
+    from config.optimize_bounds import (
+        hydrate_adaptive_optimize_bounds,
+        preserve_optional_adaptive_bounds,
+    )
 
     preserve_optional_adaptive_bounds(template, source)
     cleaned = _clean_with_template(template, source)
+    # Derive fixed weight bounds from the same normalized weights the loader
+    # will consume, while preserving the cleaner's authored bot values.
+    bound_config = {**cleaned, "bot": deepcopy(cleaned["bot"])}
+    from config.bot import normalize_forager_score_weights
+
+    for side in ("long", "short"):
+        forager = bound_config["bot"][side]["forager"]
+        forager["score_weights"] = normalize_forager_score_weights(
+            forager["score_weights"], path=f"bot.{side}.forager.score_weights"
+        )
+    hydrate_adaptive_optimize_bounds(
+        bound_config, source_bounds=source.get("optimize", {}).get("bounds", {})
+    )
     prune_inactive_strategy_subtrees(cleaned)
     prune_inactive_optimize_strategy_bounds(cleaned)
     return sort_dict_keys(cleaned)

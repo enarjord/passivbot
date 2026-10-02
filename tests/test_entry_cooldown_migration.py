@@ -217,12 +217,22 @@ def test_old_and_new_leaf_selectors_preserve_gene_identity():
     for selector in [
         "*.risk.entry_cooldown_minutes",
         "entry_cooldown_minutes",
-        "*.entry_cooldown",
     ]:
         assert set(resolve_bound_selectors(config, [selector], bounds)) == {
             "long_risk_entry_cooldown_minutes",
             "short_risk_entry_cooldown_minutes",
         }
+
+
+    assert set(resolve_bound_selectors(config, ["*.entry_cooldown"], bounds)) == {
+        f"{side}_{key}"
+        for side in ("long", "short")
+        for key in (
+            "risk_entry_cooldown_minutes", "entry_cooldown_min_duration_minutes",
+            "entry_cooldown_weights_minutes_exposure_ratio",
+            "entry_cooldown_weights_minutes_adverse_directionality",
+        )
+    }
 
 
 def test_legacy_risk_group_selector_still_includes_cooldown():
