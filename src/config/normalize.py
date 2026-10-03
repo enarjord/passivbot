@@ -56,6 +56,7 @@ def normalize_config(
     # Wrapper metadata stays on the outer document for provenance.
     flavor = detect_flavor(config, {})
     source_payload = config["config"] if flavor == "nested_current" else config
+    require_current_hsl_schema(source_payload, base_config_path=base_config_path)
     optimize_suite_defined = (
         isinstance(source_payload.get("optimize"), dict)
         and "suite" in source_payload["optimize"]
@@ -74,7 +75,6 @@ def normalize_config(
         source_payload.get("backtest", {}).get("coin_sources")
     )
     live_coin_sources_input = {}
-    require_current_hsl_schema(source_payload, base_config_path=base_config_path)
     template = normalization_template(get_template_config(), source_payload)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     if flavor == "nested_current" and isinstance(config.get("config"), dict):

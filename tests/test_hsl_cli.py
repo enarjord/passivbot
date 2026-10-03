@@ -35,9 +35,10 @@ def test_absent_engine_selector_uses_the_sole_engine():
 @pytest.mark.parametrize(
     "selector", [None, "revised", "hsl", "legacy", "unknown", True, 0]
 )
-def test_explicit_engine_selectors_require_migration(selector):
+def test_explicit_engine_selectors_require_migration_when_enabled(selector):
     config = get_template_config()
     config["live"]["hsl_engine"] = selector
+    config["bot"]["long"]["hsl"]["enabled"] = True
     with pytest.raises(ValueError, match="migrate-hsl"):
         prepare_config(config, verbose=False, target="canonical", runtime=None)
 
@@ -45,6 +46,7 @@ def test_explicit_engine_selectors_require_migration(selector):
 def test_removed_engine_requires_explicit_migration():
     config = get_template_config()
     config["live"]["hsl_engine"] = "legacy"
+    config["bot"]["long"]["hsl"]["enabled"] = True
     with pytest.raises(ValueError, match="migrate-hsl"):
         prepare_config(config, verbose=False, target="canonical", runtime=None)
 
@@ -91,3 +93,39 @@ def test_fake_hsl_example_preserves_automatic_exact_sizing():
     canonical = get_template_config()["optimize"]["gpu"]
     for field in ("exact_workers", "max_pending_exact"):
         assert policy[field] == effective[field] == canonical[field] is None
+
+
+@pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
+@pytest.mark.parametrize("enable", [False, True])
+def test_legacy_schema_gate_follows_parsed_cli_enablement(command, enable):
+    from config.hsl import generated_template
+    from config_utils import update_config_with_args
+    config = generated_template(get_template_config())
+    config["config_version"] = "v8.5.0"
+    config["live"]["hsl_engine"] = "legacy"
+    config["bot"]["long"]["hsl"]["enabled"] = not enable
+    parser = argparse.ArgumentParser()
+    keys = add_config_arguments(parser, project_template_config_for_cli(get_template_config(), command), command=command)
+    args = parser.parse_args(["--bot.long.hsl.enabled", str(enable).lower()])
+    update_config_with_args(config, args, allowed_keys=keys)
+    if enable:
+        with pytest.raises(ValueError, match="migrate-hsl"):
+            prepare_config(config, verbose=False)
+    else:
+        assert prepare_config(config, verbose=False)["bot"]["long"]["hsl"]["enabled"] is False
+
+
+@pytest.mark.parametrize("enable", [False, True])
+def test_cli_hsl_enablement_overrides_legacy_flat_alias(enable):
+    from config.hsl import generated_template
+    from config_utils import update_config_with_args
+    config = generated_template(get_template_config())
+    config["config_version"] = "v8.5.0"
+    config["bot"]["long"]["hsl_enabled"] = not enable
+    update_config_with_args(config, argparse.Namespace(**{"bot.long.hsl.enabled": enable}))
+    assert config["bot"]["long"]["hsl_enabled"] is enable
+    if enable:
+        with pytest.raises(ValueError, match="migrate-hsl"):
+            prepare_config(config, verbose=False)
+    else:
+        assert prepare_config(config, verbose=False)["bot"]["long"]["hsl"]["enabled"] is False

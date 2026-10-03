@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Allow disabled legacy HSL configurations to load with a warning after CLI changes,
+  clearing retired engine selection and dormant restart authorization. Enabled legacy HSL
+  still requires migration, including override files, optimizer fixed overrides and suite
+  scenarios. Fresh optimizer seeds accept legacy HSL parameter values best effort under
+  the main config's current policy and reevaluate fitness.
+- Add `passivbot tool migrate-hsl input.json --in-place` to atomically replace a config
+  after complete validation, preserving ownership and permissions and leaving the input unchanged on failure.
+
 - Format generated configs, dashboard config exports and crash-suite configs more compactly,
   keeping short objects and lists on one line while retaining indentation for larger sections.
   Preserve serialization policies, including strict JSON validation in

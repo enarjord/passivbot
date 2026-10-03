@@ -397,14 +397,14 @@ def test_aggregate_balance_override_constructor_rejects_before_credentials(
     [None, "v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0", "8.5.0"],
 )
 @pytest.mark.parametrize("policy", ["always", "never"])
-@pytest.mark.parametrize("location", ["base", "coin", "fixed", "scenario", "disabled"])
+@pytest.mark.parametrize("location", ["base", "coin", "fixed", "scenario"])
 def test_old_selectorless_hsl_requires_explicit_migration(version, policy, location):
     cfg = source(enabled=location == "base")
     cfg["config_version"] = version
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
-    if location in {"base", "disabled"}:
+    if location == "base":
         cfg["bot"]["long"]["hsl"]["restart_after_red_policy"] = policy
     elif location == "coin":
         cfg["coin_overrides"] = {
@@ -720,3 +720,67 @@ async def test_cli_current_external_suite_reaches_preparation(
     )
     with pytest.raises(PreparedOnly):
         await module.main()
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("selector", [None, "legacy", "revised"])
+def test_disabled_legacy_hsl_warns_and_clears_restart_authority(mode, selector, caplog):
+    cfg = source(mode, enabled=False)
+    cfg["config_version"] = "v8.5.0"
+    if selector is not None:
+        cfg["live"]["hsl_engine"] = selector
+    original = deepcopy(cfg)
+    result = prepared(cfg)
+    assert cfg == original
+    assert "HSL disabled" in caplog.text
+    assert "hsl_engine" not in result["live"]
+    path = "bot.hsl" if mode == "unified" else "bot.long.hsl"
+    block = result["bot"]["hsl"] if mode == "unified" else result["bot"]["long"]["hsl"]
+    assert block["restart_after_red_policy"] is None
+    assert block["enabled"] is False
+    # A second normalization cannot resurrect template/fixed restart choices.
+    result = prepared(result)
+    update_config_with_args(result, Namespace(**{f"{path}.enabled": True}))
+    with pytest.raises(ValueError, match="explicit choice"):
+        prepared(result)
+
+
+@pytest.mark.parametrize("enabled_before,enabled_after", [(False, True), (True, False)])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_legacy_hsl_guard_uses_cli_modified_config(enabled_before, enabled_after, wrapped):
+    cfg = source(enabled=enabled_before)
+    cfg["config_version"] = "v8.5.0"
+    cfg["live"]["hsl_engine"] = "legacy"
+    if wrapped:
+        cfg = {"config": cfg}
+    update_config_with_args(cfg, Namespace(**{"bot.long.hsl.enabled": enabled_after}))
+    if enabled_after:
+        with pytest.raises(ValueError, match="migrate-hsl"):
+            prepared(cfg)
+    else:
+        assert prepared(cfg)["bot"]["long"]["hsl"]["enabled"] is False
+
+
+@pytest.mark.parametrize("location", ["coin", "fixed", "scenario", "file"])
+def test_disabled_legacy_restart_choices_cannot_survive_in_patches(location, tmp_path):
+    from config.overrides import parse_overrides
+    cfg = source(enabled=False)
+    cfg["config_version"] = "v8.5.0"
+    policy = {"bot": {"long": {"hsl": {"enabled": False, "restart_after_red_policy": "never"}}}}
+    if location == "coin":
+        cfg["coin_overrides"] = {"TEST": policy}
+    elif location == "file":
+        (tmp_path / "coin.json").write_text(json.dumps(policy))
+        cfg["coin_overrides"] = {"TEST": {"override_config_path": "coin.json"}}
+    elif location == "fixed":
+        cfg["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.restart_after_red_policy": "never"}
+    else:
+        cfg["backtest"]["scenarios"] = [{"label": "off", "overrides": {"bot.long.hsl.restart_after_red_policy": "never"}}]
+    result = prepare_config(cfg, verbose=False, base_config_path=str(tmp_path / "base.json"))
+    if location in {"coin", "file"}:
+        result = parse_overrides(result, verbose=False)
+        assert result["coin_overrides"]["TEST"]["bot"]["long"]["hsl"].get("restart_after_red_policy") is None
+    elif location == "fixed":
+        assert result["optimize"]["fixed_runtime_overrides"].get("bot.long.hsl.restart_after_red_policy") is None
+    else:
+        assert result["backtest"]["scenarios"][0]["overrides"].get("bot.long.hsl.restart_after_red_policy") is None

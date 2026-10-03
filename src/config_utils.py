@@ -2386,6 +2386,17 @@ def update_config_with_args(
             if flat_change:
                 changed_keys.append(flat_key)
                 diffs.append(flat_change)
+        # The same flat-alias precedence applies to released HSL configs.
+        if (
+            len(path) == 4 and path[0] == "bot" and path[1] in {"long", "short"}
+            and path[2:] == ["hsl", "enabled"]
+            and "hsl_enabled" in config["bot"][path[1]]
+        ):
+            flat_key = f"bot.{path[1]}.hsl_enabled"
+            flat_change = recursive_config_update(config, flat_key, value, verbose=verbose)
+            if flat_change:
+                changed_keys.append(flat_key)
+                diffs.append(flat_change)
     if changed_keys:
         details = {"keys": changed_keys}
         if diffs:

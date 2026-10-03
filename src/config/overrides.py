@@ -653,6 +653,22 @@ def load_override_config(
         raise ValueError(
             f"coin_overrides.{coin}.override_config_path {resolved_path!r} is invalid: {exc}"
         ) from exc
+    # Returning the raw document must not restore the dormant restart choice
+    # cleared while an old base config was normalized.
+    from .hsl import clear_legacy_hsl_authorization
+    from .migrations.legacy_v7 import _parse_version_tuple
+
+    source_base = config.get("_raw_effective", config.get("_raw", config))
+    source_base = source_base.get("config", source_base)
+    base_version = _parse_version_tuple(source_base.get("config_version"))
+    file_payload = raw_snapshot.get("config", raw_snapshot)
+    file_version = _parse_version_tuple(file_payload.get("config_version"))
+    if (
+        base_version is None or base_version < (8, 6, 0)
+        or (file_version is not None and file_version < (8, 6, 0))
+        or "hsl_engine" in file_payload.get("live", {})
+    ):
+        clear_legacy_hsl_authorization(raw_snapshot)
     return raw_snapshot
 
 
