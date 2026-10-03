@@ -61,20 +61,34 @@ def json_dumps_streamlined(
 
     # Normalize once through the standard encoder: custom values, tuple values,
     # dictionary keys and validation must behave the same for every block size.
-    normalized = json.loads(serialized)
+    class ObjectPairs(list):
+        """Keep object members distinct even when encoded keys collide."""
+
+    normalized = json.loads(serialized, object_pairs_hook=ObjectPairs)
+
+    def compact(value: Any) -> str:
+        if isinstance(value, ObjectPairs):
+            entries = [
+                f"{json.dumps(key, ensure_ascii=ensure_ascii)}{separators[1]}{compact(val)}"
+                for key, val in value
+            ]
+            return "{" + separators[0].join(entries) + "}"
+        if isinstance(value, list):
+            return "[" + separators[0].join(compact(item) for item in value) + "]"
+        return json.dumps(value, ensure_ascii=ensure_ascii)
 
     def render(value: Any, level: int) -> str:
-        inline = json.dumps(value, separators=separators, ensure_ascii=ensure_ascii)
-        if len(inline) <= max_inline or not isinstance(value, (dict, list)) or not value:
+        inline = compact(value)
+        if len(inline) <= max_inline or not isinstance(value, list) or not value:
             return inline
 
         indent_str = " " * (indent * level)
         child_indent = " " * (indent * (level + 1))
-        if isinstance(value, dict):
+        if isinstance(value, ObjectPairs):
             opening, closing = "{", "}"
             entries = [
                 f"{json.dumps(key, ensure_ascii=ensure_ascii)}{separators[1]}{render(val, level + 1)}"
-                for key, val in value.items()
+                for key, val in value
             ]
         else:
             opening, closing = "[", "]"

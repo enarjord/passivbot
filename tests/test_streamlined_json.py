@@ -56,6 +56,25 @@ def test_custom_serialization_runs_once_and_preserves_unicode(max_inline):
     assert json.loads(rendered) == {"value": {"path": "example.json", "labels": ["café", "東京"]}}
 
 
+@pytest.mark.parametrize("max_inline", [0, 60, 10000])
+@pytest.mark.parametrize("separators", [(", ", ": "), (",", ":")])
+def test_encoded_key_collisions_preserve_every_object_member(max_inline, separators):
+    data = {
+        "nested": [{1: "numeric key", "1": "string key"}],
+        "other": {None: "null key", "null": "string key"},
+        "padding": "x" * 80,
+        "empty": [{}, []],
+    }
+    expected = json.dumps(data, separators=separators)
+    rendered = json_dumps_streamlined(data, max_inline=max_inline, separators=separators)
+    # A normal dict decoder would hide the lost member this regression guards.
+    assert json.loads(rendered, object_pairs_hook=list) == json.loads(
+        expected, object_pairs_hook=list
+    )
+    assert rendered.count('"1"') == 2
+    assert rendered.count('"null"') == 2
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 @pytest.mark.parametrize("max_inline", [0, 10000])
 def test_strict_numbers_fail_before_writing(value, max_inline):
