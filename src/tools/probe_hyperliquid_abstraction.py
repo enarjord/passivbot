@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 from tools.hyperliquid_probe_common import (
     add_probe_identity_args,
     create_hyperliquid_probe_session,
     load_hyperliquid_wallet,
     mask_secret,
 )
+from json_utils import json_dumps_streamlined
 
 
 def _normalize_abstraction(raw) -> str:
@@ -50,7 +50,7 @@ async def _main() -> int:
             "passivbot_unified_like": _is_unified_like(_normalize_abstraction(raw)),
             "ccxt_is_unified_enabled": bool(enabled),
         }
-        print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+        print(json_dumps_streamlined(summary, indent=2, sort_keys=True, default=str))
         return 0
     finally:
         await session.close()

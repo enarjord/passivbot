@@ -17,6 +17,7 @@ from config.load import prepare_config
 from config.schema import get_template_config
 from passivbot import BOT_CLOSE_TIMEOUT_SECONDS, setup_bot
 from utils import _build_coin_symbol_maps, filter_markets
+from json_utils import dump_json_streamlined
 
 
 DEFAULT_CAPTURE_SECTIONS = ("markets", "capabilities", "balance", "positions", "open_orders")
@@ -396,6 +397,6 @@ def dump_snapshot(snapshot: dict[str, Any], path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
-        json.dump(snapshot, f, indent=2, sort_keys=True)
+        dump_json_streamlined(snapshot, f, indent=2, sort_keys=True)
         f.write("\n")
     return path

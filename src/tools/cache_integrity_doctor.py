@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ohlcv_store import month_start_ts, rows_in_month, timeframe_to_interval_ms
+from json_utils import json_dumps_streamlined
 
 
 NUMPY_CACHE_SUFFIXES = {".npy"}
@@ -1488,7 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     report = build_cache_integrity_report(args.roots)
-    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 

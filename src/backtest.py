@@ -174,6 +174,7 @@ import passivbot_rust as pbr  # noqa: E402
 
 verify_loaded_runtime_extension()
 from tools.event_loop_policy import set_windows_event_loop_policy
+from json_utils import dump_json_streamlined
 
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
@@ -2057,7 +2058,7 @@ def _save_coins_hlcvs_artifacts_to_cache_dir(
     logging.info(f"Seconds to dump cache: {(utc_ms() - sts) / 1000:.4f}")
     candidate_report = (mss.get("__meta__", {}) or {}).get("candidate_report")
     if candidate_report is not None:
-        json.dump(
+        dump_json_streamlined(
             candidate_report,
             open(cache_dir / "candidate_report.json", "w"),
             indent=2,
@@ -2959,12 +2960,12 @@ def post_process(
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
-    json.dump(
+    dump_json_streamlined(
         analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True
     )
     if hsl_report is not None:
         with open(f"{results_path}hsl_report.json", "w", encoding="utf-8") as output:
-            json.dump(hsl_report, output, indent=2, sort_keys=True, allow_nan=False)
+            dump_json_streamlined(hsl_report, output, indent=2, sort_keys=True, allow_nan=False)
     original_config = config.get("_original_backtest_config")
     if original_config is not None:
         dump_config(

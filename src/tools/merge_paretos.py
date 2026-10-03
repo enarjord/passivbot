@@ -18,6 +18,7 @@ from pareto_explorer import (
     load_candidates,
     select_candidate,
 )
+from json_utils import dump_json_streamlined
 
 SIDES = ("long", "short")
 DEFAULT_MAX_OUTPUTS = 500
@@ -578,7 +579,7 @@ def write_outputs(
     for idx, config in enumerate(configs):
         path = output_dir / f"{idx:0{width}d}_{_json_fingerprint(config)}.json"
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, sort_keys=True)
+            dump_json_streamlined(config, f, indent=2, sort_keys=True)
             f.write("\n")
         written.append(path)
 
@@ -599,7 +600,7 @@ def write_outputs(
     }
     index_path = output_dir / "index.json"
     with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index, f, indent=2, sort_keys=True)
+        dump_json_streamlined(index, f, indent=2, sort_keys=True)
         f.write("\n")
     written.append(index_path)
     return written

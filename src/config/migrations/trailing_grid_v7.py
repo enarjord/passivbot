@@ -21,6 +21,7 @@ from config.shared_bot import (
 )
 from config.strategy_spec import get_strategy_param_keys
 from risk_limits import WE_EXCESS_ALLOWANCE_MODE_BOUNDED
+from json_utils import json_dumps_streamlined
 
 TRAILING_GRID_V7_KIND = "trailing_grid_v7"
 
@@ -1428,7 +1429,6 @@ def migrate_v7_trailing_grid_file(
     allow_manual_review_output: bool = False,
 ) -> tuple[dict, dict]:
     from config.parse import load_raw_config
-    import json
 
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -1451,7 +1451,7 @@ def migrate_v7_trailing_grid_file(
         return migrated, report
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(migrated, indent=4, sort_keys=True) + "\n", encoding="utf-8"
+        json_dumps_streamlined(migrated, indent=4, sort_keys=True) + "\n", encoding="utf-8"
     )
     report["output_written"] = True
     report["status"] = "unsafe_manual_review_output_written" if unresolved else "ok"

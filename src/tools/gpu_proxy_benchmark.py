@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import platform
 import statistics
 import time
@@ -23,6 +22,7 @@ from optimization.gpu.model import (
     build_mps_data,
     build_mps_multicoin_data,
 )
+from json_utils import json_dumps_streamlined
 
 CASES = (
     "ema-single-long",
@@ -712,7 +712,7 @@ def main(argv: list[str] | None = None) -> int:
             for name in selected
         ],
     }
-    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
     return 0
 
 

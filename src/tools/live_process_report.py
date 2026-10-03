@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from live.smoke_report import (  # noqa: E402
     build_live_process_report,
     summarize_live_process_report,
 )
+from json_utils import json_dumps_streamlined
 
 
 SAFETY_CONTRACT = {
@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         "safety": SAFETY_CONTRACT,
         "processes": output_processes,
     }
-    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 

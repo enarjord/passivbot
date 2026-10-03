@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import math
 from tools.hyperliquid_probe_common import (
     add_live_mutation_confirmation_arg,
@@ -17,6 +16,7 @@ from tools.hyperliquid_probe_common import (
     require_live_mutation_confirmation,
     round_to_step,
 )
+from json_utils import json_dumps_streamlined
 
 
 async def _main() -> int:
@@ -192,7 +192,7 @@ async def _main() -> int:
                 "after_create": after_create.get("info"),
                 "after_cancel": after_cancel.get("info"),
             }
-        print(json.dumps(output, indent=2, sort_keys=True, default=str))
+        print(json_dumps_streamlined(output, indent=2, sort_keys=True, default=str))
         return 0
     finally:
         try:

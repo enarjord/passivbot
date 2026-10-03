@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -10,6 +9,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from live.restart_executor import execute_live_restart  # noqa: E402
+from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 

@@ -6,8 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Format `passivbot tool migrate-hsl` output more compactly, keeping short objects
-  and lists on one line while retaining indentation for larger sections.
+- Format generated configs, Pareto/dashboard exports, crash suites, backtest artifacts
+  and diagnostic JSON reports more compactly, keeping short objects and lists on one line
+  while retaining indentation for larger sections. Preserve explicit compact output and
+  serialization policies, including strict JSON validation in `passivbot tool migrate-hsl`.
 
 - Allow `optimize.n_cpus: null` with GPU automatic worker sizing, and show exact-validation
   queue activity, oldest pending age, next-result estimates and elapsed phase time in the

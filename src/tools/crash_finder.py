@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
-import json
 import logging
 import re
 import shutil
@@ -23,6 +22,7 @@ from ohlcv_store import (
     timeframe_to_interval_ms,
 )
 from utils import symbol_to_coin
+from json_utils import json_dumps_streamlined
 
 
 DEFAULT_ROOT = Path("caches/ohlcvs")
@@ -993,7 +993,7 @@ def write_outputs(
     )
     _write_csv(scanned_path, scanned_rows, list(ScannedRange.__dataclass_fields__.keys()))
     _write_csv(scan_errors_path, scan_error_rows, list(ScanError.__dataclass_fields__.keys()))
-    suite_path.write_text(json.dumps(suite_payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    suite_path.write_text(json_dumps_streamlined(suite_payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     output_paths = {
         "events_csv": str(events_path),
         "clusters_csv": str(clusters_path),
@@ -1003,7 +1003,7 @@ def write_outputs(
     }
     for suffix, payload in (extra_suite_payloads or {}).items():
         extra_path = output_dir / f"crash_scenarios_{suffix}.hjson"
-        extra_path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        extra_path.write_text(json_dumps_streamlined(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
         output_paths[f"suite_{suffix}_hjson"] = str(extra_path)
     return output_paths
 
@@ -1047,14 +1047,14 @@ def write_cluster_suite_outputs(
             "direction",
         ],
     )
-    suite_path.write_text(json.dumps(suite_payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    suite_path.write_text(json_dumps_streamlined(suite_payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     output_paths = {
         "clusters_csv": str(clusters_path),
         "suite_hjson": str(suite_path),
     }
     for suffix, payload in (extra_suite_payloads or {}).items():
         extra_path = output_dir / f"crash_scenarios_{suffix}.hjson"
-        extra_path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        extra_path.write_text(json_dumps_streamlined(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
         output_paths[f"suite_{suffix}_hjson"] = str(extra_path)
 
     source_dir = clusters_csv.parent
@@ -1502,7 +1502,7 @@ def main(argv: list[str] | None = None) -> int:
     _configure_logging(args.log_level)
     payload = run_scan(args)
     if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=False))
+        print(json_dumps_streamlined(payload, indent=2, sort_keys=False))
     else:
         _print_text_summary(payload)
     return 0

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import sys
 import textwrap
 from copy import deepcopy
 from typing import Any, Mapping, Sequence
+from pathlib import Path
+
+SRC_ROOT = Path(__file__).resolve().parents[1]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from json_utils import json_dumps_streamlined
 
 
 STRATEGY_KIND = "trailing_martingale"
@@ -1867,7 +1873,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 overridden_parameters=overridden_by_side,
             )
         if args.json:
-            output = json.dumps(result, indent=2, sort_keys=True, allow_nan=False)
+            output = json_dumps_streamlined(result, indent=2, sort_keys=True, allow_nan=False)
         elif result.get("mode") == "overview":
             output = render_overview(result)
         else:

@@ -5,7 +5,6 @@ downloads, account credentials, or private configurations are used.
 """
 
 import argparse
-import json
 import statistics
 import time
 
@@ -13,6 +12,7 @@ import numpy as np
 
 from optimization.gpu.runtime import synchronize
 from tools.gpu_proxy_benchmark import _build_case, _require_mps_torch
+from json_utils import json_dumps_streamlined
 
 
 def run_benchmark(*, bars, candidates, coins, repeats):
@@ -72,7 +72,7 @@ def main(argv=None):
         if not lower <= getattr(args, name) <= upper:
             parser.error(f"--{name} must be between {lower} and {upper}")
     _require_mps_torch(parser)
-    print(json.dumps(run_benchmark(**vars(args)), indent=2))
+    print(json_dumps_streamlined(run_benchmark(**vars(args)), indent=2))
     return 0
 
 

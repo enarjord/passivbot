@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import csv
 import fnmatch
-import json
 import logging
 import math
 import os
@@ -20,6 +19,7 @@ from pareto_explorer import (
     filter_candidates,
     load_candidates,
 )
+from json_utils import json_dumps_streamlined
 
 
 CONFIG_SECTIONS = ("backtest", "bot", "coin_overrides", "live", "logging", "monitor")
@@ -641,7 +641,7 @@ def analyze_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         "plots": written_plots,
     }
     if output_dir is not None:
-        (output_dir / "summary.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        (output_dir / "summary.json").write_text(json_dumps_streamlined(payload, indent=2, sort_keys=True) + "\n")
     return payload
 
 
@@ -727,7 +727,7 @@ def _summary_to_constructor_args(item: Mapping[str, Any]) -> Dict[str, Any]:
 def run_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     payload = analyze_from_args(args)
     if getattr(args, "json_output", False):
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json_dumps_streamlined(payload, indent=2, sort_keys=True))
     else:
         print(
             format_analysis(

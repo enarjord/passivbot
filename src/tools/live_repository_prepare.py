@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from live.repository_prepare import (  # noqa: E402  # isort: skip
     DEFAULT_BUILD_TIMEOUT_S,
     prepare_live_repository,
 )
+from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
     print(
-        json.dumps(
+        json_dumps_streamlined(
             report, indent=None if args.compact else 2, sort_keys=True
         )
     )

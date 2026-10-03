@@ -32,6 +32,7 @@ from config.scoring import (
 from limit_utils import resolve_auto_limit_entries
 from metrics_schema import flatten_metric_stats
 from pareto_core import detect_latest_pareto_dir
+from json_utils import json_dumps_streamlined
 
 
 METHOD_ALIASES = {
@@ -1707,7 +1708,7 @@ def _stage_filtered(
                 f"Filtered member filename conflicts with {FILTERED_SELECTION_MANIFEST!r}."
             )
         manifest_path.write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            json_dumps_streamlined(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         return stage
@@ -1868,7 +1869,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 "manifest": str(filtered_manifest),
                 "count": len(filtered_candidates),
             }
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json_dumps_streamlined(payload, indent=2, sort_keys=True))
     else:
         output = format_selection_result(
             pareto_dir,

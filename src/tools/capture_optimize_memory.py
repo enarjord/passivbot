@@ -15,7 +15,6 @@ Watch a specific optimizer process by PID::
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import socket
@@ -25,6 +24,13 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+import sys
+
+SRC_ROOT = Path(__file__).resolve().parents[1]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from json_utils import json_dumps_streamlined
 
 
 def utc_now_iso() -> str:
@@ -317,7 +323,7 @@ def main() -> int:
         "header": header,
         "samples": samples,
     }
-    output.write_text(json.dumps(payload, indent=2))
+    output.write_text(json_dumps_streamlined(payload, indent=2))
     print(f"Wrote {output}")
     return 0
 

@@ -30,6 +30,7 @@ from logging_setup import configure_logging
 import passivbot as passivbot_mod
 from passivbot import setup_bot, shutdown_bot
 from procedures import ensure_parent_directory
+from json_utils import dump_json_streamlined
 
 MAX_CAPTURED_LIVE_EVENTS = 2_000
 
@@ -59,7 +60,7 @@ def _build_output_dir(root: str | None, scenario: dict) -> Path:
 def _dump_json(path: Path, data: Any) -> None:
     ensure_parent_directory(path)
     with path.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, sort_keys=True)
+        dump_json_streamlined(data, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
 

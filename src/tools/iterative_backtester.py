@@ -70,6 +70,7 @@ from utils import (  # noqa: E402
 from metrics_schema import build_scenario_metrics, flatten_metric_stats  # noqa: E402
 from limit_utils import expand_limit_checks, compute_limit_violation  # noqa: E402
 from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes  # noqa: E402
+from json_utils import dump_json_streamlined
 
 PENALTY_WEIGHT = 1e6
 
@@ -970,12 +971,12 @@ class IterativeBacktestSession:
         }
         payload_path = run_dir / "analysis.json"
         with payload_path.open("w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
+            dump_json_streamlined(payload, fh, indent=2, sort_keys=True)
 
         config_copy = denumpyize(config)
         cfg_path = run_dir / "config_used.json"
         with cfg_path.open("w", encoding="utf-8") as fh:
-            json.dump(config_copy, fh, indent=2, sort_keys=True)
+            dump_json_streamlined(config_copy, fh, indent=2, sort_keys=True)
 
         return run_dir
 

@@ -1,7 +1,7 @@
 import argparse
-import json
 
 from ccxt_contracts import DEFAULT_DIFF_IGNORE_PATHS, diff_snapshots, load_snapshot
+from json_utils import json_dumps_streamlined
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,7 +38,7 @@ def main() -> None:
         ignore_paths=ignore_paths,
     )
     if args.json:
-        print(json.dumps(diff, indent=2, sort_keys=True))
+        print(json_dumps_streamlined(diff, indent=2, sort_keys=True))
         return
 
     print(

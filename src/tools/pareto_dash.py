@@ -31,6 +31,7 @@ from config.scoring import (
     from_engine_value,
 )
 from limit_utils import resolve_auto_limit_entries
+from json_utils import json_dumps_streamlined
 
 
 def discover_runs(root: str) -> List[str]:
@@ -1915,7 +1916,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         config = run_data.raw_configs[selected_id]
         # Extract just the bot config for export
         bot_config = {"bot": config.get("bot", {})}
-        json_str = json.dumps(bot_config, indent=2)
+        json_str = json_dumps_streamlined(bot_config, indent=2)
 
         return f"Selected: {selected_id[:24]}...", json_str
 
@@ -1934,7 +1935,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             return no_update
         config = run_data.raw_configs[selected_id]
         bot_config = {"bot": config.get("bot", {})}
-        json_str = json.dumps(bot_config, indent=2)
+        json_str = json_dumps_streamlined(bot_config, indent=2)
         filename = f"config_{selected_id[:16]}.json"
         return dict(content=json_str, filename=filename)
 

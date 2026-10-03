@@ -49,6 +49,7 @@ from live.smoke_report import (
     project_live_smoke_report_sections,
     summarize_live_smoke_report_brief,
 )
+from json_utils import json_dumps_streamlined
 
 BUNDLE_VERSION = 1
 MONITOR_SNAPSHOT_FILE_NAMES = frozenset({"state.latest.json", "manifest.json"})
@@ -77,7 +78,7 @@ def _json_default(value: Any) -> str:
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(data, indent=2, sort_keys=True, default=_json_default) + "\n",
+        json_dumps_streamlined(data, indent=2, sort_keys=True, default=_json_default) + "\n",
         encoding="utf-8",
     )
 

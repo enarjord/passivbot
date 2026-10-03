@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from live.restart_smoke_evidence import (  # noqa: E402
     validate_live_restart_smoke_epoch_window,
     validate_live_restart_smoke_expectations,
 )
+from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 

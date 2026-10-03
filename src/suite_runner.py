@@ -59,6 +59,7 @@ from metrics_schema import (
     merge_suite_payload,
 )
 from config_utils import dump_config, sanitize_prepared_config_for_dump
+from json_utils import json_dumps_streamlined
 
 _SCENARIO_KEYS = frozenset(
     {
@@ -2265,7 +2266,7 @@ async def run_backtest_suite_async(
             for res in results
         },
     }
-    (suite_dir / "suite_summary.json").write_text(json.dumps(summary_payload, indent=2))
+    (suite_dir / "suite_summary.json").write_text(json_dumps_streamlined(summary_payload, indent=2))
     saved_config = attach_result_metrics(
         sanitize_prepared_config_for_dump(config), suite_metrics=suite_metrics
     )

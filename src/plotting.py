@@ -1,4 +1,3 @@
-import json
 import re
 import os
 from typing import Callable, Optional, Dict
@@ -34,6 +33,7 @@ from config_utils import dump_config
 from utils import make_get_filepath
 from pure_funcs import denumpyize, ts_to_date
 import passivbot_rust as pbr
+from json_utils import dump_json_streamlined
 
 plt.rcParams["figure.figsize"] = [21, 13]
 
@@ -280,7 +280,7 @@ def dump_plots(
     table = make_table(result)
 
     dump_config(result, result["plots_dirpath"] + "live_config.json")
-    json.dump(
+    dump_json_streamlined(
         denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4
     )
 

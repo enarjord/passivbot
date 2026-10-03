@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from live.log_secret_inventory import (  # noqa: E402
     build_log_secret_inventory,
     summarize_log_secret_inventory,
 )
+from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.summary:
         report = summarize_log_secret_inventory(report)
-    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
     return 0
 
 

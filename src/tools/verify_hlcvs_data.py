@@ -31,6 +31,13 @@ from typing import Any, Dict, Iterable, List, Optional
 import numpy as np
 from tqdm.auto import tqdm
 from datetime import datetime, UTC
+import sys
+
+SRC_ROOT = Path(__file__).resolve().parents[1]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from json_utils import json_dumps_streamlined
 
 DEFAULT_ROOT = Path("caches/hlcvs_data")
 
@@ -196,7 +203,7 @@ def summarize(paths: List[Path], fast: bool) -> List[DatasetSummary]:
 def print_summaries(summaries: List[DatasetSummary], json_output: bool) -> None:
     if json_output:
         payload = [summary.to_display_dict() for summary in summaries]
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json_dumps_streamlined(payload, indent=2, sort_keys=True))
         return
 
     if not summaries:
@@ -644,7 +651,7 @@ def compare_historical_hashes(
 def print_historical_summaries(summaries: List[HistoricalCoinSummary], json_output: bool) -> None:
     if json_output:
         payload = [summary.to_display_dict() for summary in summaries]
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json_dumps_streamlined(payload, indent=2, sort_keys=True))
         return
     if not summaries:
         print("No historical datasets summarised.")
