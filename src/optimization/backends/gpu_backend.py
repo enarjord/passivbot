@@ -20,7 +20,13 @@ from typing import Any
 import numpy as np
 import psutil
 
-from config.gpu import GPU_SCREENING_DEFAULTS, resolve_gpu_screening
+from config.gpu import (
+    GPU_SCREENING_DEFAULTS,
+    gpu_hsl_policy as _gpu_hsl_policy,
+    gpu_hsl_side_enabled as _gpu_hsl_side_enabled,
+    resolve_gpu_screening,
+    validate_hsl_gpu_inputs as _validate_hsl_gpu_inputs,
+)
 from config.metrics import resolve_metric_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.validate import validate_limit_order_fill_buffer_pct
@@ -608,22 +614,6 @@ def _validate_gpu_suite_override_paths(
                 "optimize.backend='pymoo' or 'deap'. "
                 f"See {GPU_CAPABILITIES_DOC}."
             )
-
-
-def _validate_hsl_gpu_inputs(config: dict) -> None:
-
-    interval = float(config.get("backtest", {}).get("candle_interval_minutes", 1))
-    if interval != 1 and any(
-        _gpu_hsl_side_enabled(config, side) for side in ("long", "short")
-    ):
-        raise ValueError("GPU HSL requires 1m candles")
-
-
-def _gpu_hsl_policy(config: dict, side: str) -> dict:
-
-    if config["live"]["hsl_signal_mode"] == "unified":
-        return config["bot"]["hsl"]
-    return config.get("bot", {}).get(side, {}).get("hsl", {})
 
 
 def _gpu_hsl_bound_map(config: dict, bound_map: dict) -> dict:
@@ -3579,23 +3569,6 @@ def _gpu_pinned_hsl_bound_contract(bound_by_key) -> dict[str, float]:
             float(bound.low), float(bound.high), rel_tol=0.0, abs_tol=1.0e-12
         )
     }
-
-
-def _gpu_hsl_side_enabled(config: dict, side: str, markets_by_exchange=None) -> bool:
-    from config.hsl import _side_has_enabled_policy
-
-    if config["live"]["hsl_signal_mode"] == "coin":
-        return _side_has_enabled_policy(config, side, markets_by_exchange)
-    globally_enabled = bool(_gpu_hsl_policy(config, side).get("enabled", False))
-    if globally_enabled:
-        return True
-    for patch in (config.get("coin_overrides") or {}).values():
-        if not isinstance(patch, dict):
-            continue
-        hsl_patch = patch.get("bot", {}).get(side, {}).get("hsl", {}) or {}
-        if isinstance(hsl_patch, dict) and bool(hsl_patch.get("enabled", False)):
-            return True
-    return False
 
 
 def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
