@@ -32,6 +32,7 @@ from limit_utils import expand_limit_checks
 from config_utils import strip_config_metadata
 from optimization.warmup import _finalize_optimizer_vector_config
 from suite_runner import apply_scenario_overrides, build_scenarios
+from utils import json_dumps_streamlined
 
 
 def _validate_optimizer_inputs(candidate, authored, *, label=None, reducer_cfg=None):
@@ -312,7 +313,9 @@ def main(argv=None):
             portfolio=portfolio,
             base_config_path=str(args.input_config),
         )
-        serialized = json.dumps(output, indent=4, allow_nan=False) + "\n"
+        # Keep strict JSON validation before creating the destination file.
+        json.dumps(output, allow_nan=False)
+        serialized = json_dumps_streamlined(output) + "\n"
         # Exclusive creation also closes the race after the existence check.
         with args.output_config.open("x") as stream:
             stream.write(serialized)
