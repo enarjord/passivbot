@@ -1,5 +1,6 @@
 """Run-local, disk-backed market packing with one active CUDA dataset."""
 
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
@@ -11,6 +12,25 @@ import weakref
 import numpy as np
 
 
+PREPARATION_CHUNK_BYTES = 8 * 2**20
+
+
+@contextmanager
+def spill_array_file(path, shape, dtype):
+    """Write a standard contiguous .npy array without mapping its output pages."""
+    dtype = np.dtype(dtype)
+    with path.open("wb") as handle:
+        np.lib.format.write_array_header_1_0(handle, {
+            "descr": np.lib.format.dtype_to_descr(dtype),
+            "fortran_order": False,
+            "shape": tuple(shape),
+        })
+        expected_end = handle.tell() + int(np.prod(shape)) * dtype.itemsize
+        yield handle
+        if handle.tell() != expected_end:
+            raise ValueError(f"Incomplete CUDA preparation array: {path.name}")
+
+
 _current = ContextVar("cuda_suite_residency", default=None)
 
 
@@ -18,9 +38,9 @@ def current_cuda_residency():
     return _current.get()
 
 
-def _cleanup_after_failure(cleanup, *args):
+def _cleanup_after_failure(cleanup, *args, **kwargs):
     try:
-        cleanup(*args)
+        cleanup(*args, **kwargs)
     except BaseException:
         logging.exception("CUDA suite cleanup failed while handling an earlier exception")
 
@@ -48,13 +68,35 @@ class CudaSuiteResidency:
         self._active = None
         self._active_owner = None
         self._working_set = None
+        self._subset_arrays = []
+
+    def _spill_directory(self):
+        if self._directory is None:
+            self._directory = TemporaryDirectory(prefix="passivbot-cuda-suite-")
+        return Path(self._directory.name)
+
+    def prepare_coin_subset(self, values, indices):
+        """Keep raw scenario selections on disk instead of in private host RAM."""
+        path = self._spill_directory() / f"subset-{len(self._subset_arrays)}.npy"
+        shape = (len(values), len(indices), values.shape[2])
+        row_bytes = max(1, int(np.prod(shape[1:])) * values.dtype.itemsize)
+        chunk_rows = max(1, PREPARATION_CHUNK_BYTES // row_bytes)
+        try:
+            with spill_array_file(path, shape, values.dtype) as handle:
+                for start in range(0, len(values), chunk_rows):
+                    chunk = np.take(values[start:start + chunk_rows], indices, axis=1)
+                    handle.write(memoryview(chunk).cast("B"))
+            array = np.load(path, mmap_mode="r", allow_pickle=False)
+        except BaseException:
+            _cleanup_after_failure(path.unlink, missing_ok=True)
+            raise
+        self._subset_arrays.append(array)
+        return array
 
     def prepare(self, key, builder):
         if key in self._entries:
             return self._entries[key]["data"]
-        if self._directory is None:
-            self._directory = TemporaryDirectory(prefix="passivbot-cuda-suite-")
-        directory = Path(self._directory.name) / str(len(self._entries))
+        directory = self._spill_directory() / str(len(self._entries))
         directory.mkdir()
         try:
             data = builder(directory)
@@ -140,6 +182,9 @@ class CudaSuiteResidency:
                 self._release(torch)
         finally:
             self._entries.clear()
+            for array in self._subset_arrays:
+                array._mmap.close()
+            self._subset_arrays.clear()
             if self._directory is not None:
                 self._directory.cleanup()
                 self._directory = None
