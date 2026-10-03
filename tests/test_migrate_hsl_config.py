@@ -133,6 +133,38 @@ def test_cli_writes_new_file_and_refuses_overwrite(tmp_path, capsys):
     assert src.read_bytes() == before
 
 
+def test_cli_streamlines_scenarios_without_changing_config(tmp_path):
+    cfg = legacy()
+    cfg["backtest"]["scenarios"] = [
+        {"label": "base"},
+        {"label": "recent", "start_date": "2025-10-02"},
+    ]
+    src, dst = tmp_path / "source.json", tmp_path / "converted.json"
+    src.write_text(json.dumps(cfg))
+    assert main([str(src), str(dst), "--restart-policy", "long=always"]) == 0
+    text = dst.read_text()
+    assert (
+        '"scenarios": [\n'
+        '            {"label": "base"},\n'
+        '            {"label": "recent", "start_date": "2025-10-02"}\n'
+        "        ]"
+    ) in text
+    assert text.endswith("\n")
+    assert json.loads(text) == migrate(
+        cfg, restart_policies={"long": "always"}, base_config_path=str(src)
+    )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_cli_nonfinite_output_does_not_create_file(tmp_path, monkeypatch, value):
+    src, dst = tmp_path / "source.json", tmp_path / "converted.json"
+    src.write_text(json.dumps(legacy()))
+    monkeypatch.setattr("tools.migrate_hsl_config.migrate", lambda *a, **kw: {"value": value})
+    with pytest.raises(SystemExit):
+        main([str(src), str(dst), "--restart-policy", "long=always"])
+    assert not dst.exists()
+
+
 @pytest.mark.parametrize(
     "extra", [[], ["--restart-policy", "long=always", "--restart-policy", "long=never"]]
 )

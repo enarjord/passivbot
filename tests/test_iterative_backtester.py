@@ -7,6 +7,26 @@ import pytest
 from tools import iterative_backtester as ib
 
 
+def test_result_files_preserve_values_with_compact_scenarios(tmp_path):
+    session = ib.IterativeBacktestSession(Path("config.json"), None, False)
+    session.session_dir = tmp_path
+    cfg = {"backtest": {"scenarios": [
+        {"label": "base"}, {"label": "recent", "start_date": "2025-10-02"},
+    ]}}
+    folder = session._write_results(
+        1, 1_700_000_000_000, {"binance": {"score": 1.0}}, {"score": 1.0},
+        cfg, (1.0, 2.0), 1.0,
+    )
+    rendered = (folder / "config_used.json").read_text()
+    assert json.loads(rendered) == cfg
+    assert '{"label": "base"}' in rendered
+    assert '{"label": "recent", "start_date": "2025-10-02"}' in rendered
+    report = json.loads((folder / "analysis.json").read_text())
+    assert report["score_vector"] == [1.0, 2.0]
+    assert report["analysis_per_exchange"] == {"binance": {"score": 1.0}}
+    assert (folder / "analysis.json").read_text() == json.dumps(report, indent=2, sort_keys=True)
+
+
 def test_parse_override_value_supports_common_scalar_types():
     assert ib.parse_override_value("true") is True
     assert ib.parse_override_value("false") is False

@@ -73,6 +73,12 @@ belong in canonical loading/formatting; runtime consumers must not reapply them.
 Keep console logs easy on human eyes and useful to both humans and agents: show meaningful
 changes, actions and concise summaries; suppress repetitive noise. Follow `logging_policy.md`.
 
+Prioritize readability for JSON clearly intended for human reading or editing, such as generated
+configs and dashboard config exports. Prefer `json_utils.dump_json_streamlined` /
+`json_dumps_streamlined` (also exported by `utils`), `passivbot tool streamline-json`, or another
+suitable formatter while preserving serialization semantics. Keep ordinary JSON serialization
+for internal outputs and outputs intended mainly for tools or AI agents.
+
 ## Scope, Testing, And Compatibility
 
 - Keep changes aligned with the requested task; avoid speculative abstractions and unrelated cleanup.
