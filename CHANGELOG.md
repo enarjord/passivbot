@@ -522,6 +522,10 @@ The earlier incremental entries are preserved in the
 - Clarified tagged releases versus `master`, corrected current schema and installation guidance,
   and consolidated the changelog's superseded implementation entries.
 
+- Reuse available position-log prices for passive balance equity diagnostics, including
+  the existing 60-second candle fallback. Label older/candle valuations as estimates and
+  explain unavailable equity without changing trading or risk freshness requirements.
+
 ## v8.1.0 - 2026-08-10
 
 - Scope coin-mode HSL fill-history readiness for `restart_after_red_policy=always` to the

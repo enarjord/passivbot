@@ -5075,10 +5075,10 @@ def publish_committed_balance_observation(bot: Any) -> None:
     """Report committed account balances without I/O or execution scheduling.
 
     These transient anchors belong only to presentation, never reconciliation.
-    Equity uses the same passive cached observation as monitor snapshots.
+    Equity reuses available position-log valuations without weakening trading freshness.
     """
     try:
-        from passivbot_monitor import _monitor_equity
+        from live.diagnostic_valuation import balance_equity_observation
 
         raw = bot.get_raw_balance()
         snapped = bot.get_hysteresis_snapped_balance()
@@ -5088,14 +5088,15 @@ def publish_committed_balance_observation(bot: Any) -> None:
         if signature == previous:
             return
         initial = previous is None
-        equity = _monitor_equity(bot, balance_raw=raw, now_ms=int(utc_ms()))
+        valuation = balance_equity_observation(bot, balance_raw=raw, now_ms=int(utc_ms()))
         published = emit_balance_changed_event(
             bot,
             previous_balance_raw=0.0 if initial else previous[0],
             balance_raw=raw,
             previous_balance_snapped=0.0 if initial else previous[1],
             balance_snapped=snapped,
-            equity=equity,
+            equity=valuation["equity"],
+            equity_observation=valuation,
             source="REST",
             balance_composition=composition,
             initial_snapshot=initial,
@@ -5123,6 +5124,7 @@ def emit_balance_changed_event(
     balance_snapped: float,
     equity: float | None,
     source: str,
+    equity_observation: dict | None = None,
     balance_composition: Any = None,
     initial_snapshot: bool = False,
     console_fallback: bool = False,
@@ -5142,6 +5144,11 @@ def emit_balance_changed_event(
             "equity": None if equity is None else float(equity),
             "source": str(source),
         }
+        if equity_observation is not None:
+            for key in ("equity_estimated", "equity_valuation_source",
+                        "equity_observation_age_ms", "equity_unavailable_reason"):
+                if key in equity_observation:
+                    data[key] = equity_observation[key]
         if initial_snapshot:
             data["initial_snapshot"] = True
         composition = public_balance_composition(balance_composition)

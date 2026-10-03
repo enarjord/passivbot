@@ -72,6 +72,15 @@ omitted row. Deferred HSL account reports publish one initial balance snapshot, 
 composition transitions, using presentation-only anchors and passive cached equity (unknown
 when current inputs are absent). Publication performs no fetches or execution scheduling. Presentation anchors advance only
 after successful event enqueue or console fallback, so transient observer failures can retry.
+Balance-log equity requires complete held-position coverage and confirmed account state. It
+may reuse quotes already obtained for position logging within its 60-second diagnostic allowance,
+including completed-candle fallback; it performs no additional fetch. Trading and risk retain their
+own stricter freshness checks. `equity_estimated`, `equity_valuation_source` (market_quote,
+completed_candle, mixed, or flat), and `equity_observation_age_ms` describe the valuation. Age is
+since observation, not the underlying candle timestamp. Older or candle-derived estimates are
+labelled on the console. Missing, invalid, stale, or pending inputs leave equity unavailable with
+`equity_unavailable_reason`; partial PnL is never published as total equity.
+
 Console admission thereafter remains based solely on snapped-balance materiality. Visible balance lines may append a sanitized sample of at most two
 retained assets; composition-only changes remain structured/text durable but
 stay off the console.

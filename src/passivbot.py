@@ -13921,12 +13921,16 @@ class Passivbot:
         table.padding_width = 0
 
         changed_symbols = list(dict.fromkeys(symbol for symbol, _pside in changed))
-        last_prices = await self._get_live_last_prices(
+        from live.diagnostic_valuation import DIAGNOSTIC_MAX_AGE_MS, remember_position_quotes
+
+        snapshots = await self._get_live_market_snapshots(
             changed_symbols,
-            max_age_ms=60_000,
+            max_age_ms=DIAGNOSTIC_MAX_AGE_MS,
             context="position_change_log",
             allow_completed_candle_fallback=True,
         )
+        remember_position_quotes(self, snapshots, positions_new, now_ms=utc_ms())
+        last_prices = {symbol: quote.last for symbol, quote in snapshots.items()}
 
         for symbol, pside in changed:
             old = psold[(symbol, pside)]

@@ -97,7 +97,7 @@ def test_raw_and_composition_only_changes_stay_durable_but_quiet(observation):
 def test_equity_uses_cached_quotes_or_is_explicitly_unknown(observation, fresh):
     bot, _, _, _ = observation
     bot.positions = {"TEST/USDT:USDT": {"long": {"size": 2.0, "price": 10.0}}}
-    quote = SimpleNamespace(last=12.0, fetched_ms=NOW if fresh else NOW - 20_000,
+    quote = SimpleNamespace(last=12.0, source="fetch_tickers", fetched_ms=NOW if fresh else NOW - 60_001,
                             is_valid=lambda: True)
     bot.market_snapshot_provider = SimpleNamespace(_cache={"TEST/USDT:USDT": quote})
     bot.c_mults = {"TEST/USDT:USDT": 1.0}
@@ -229,3 +229,35 @@ def test_console_failure_does_not_prevent_structured_acceptance(observation, mon
     assert bot._balance_observation_signature[:2] == (100.0, 100.0)
     assert len(flush(observation)[0]) == 1
     assert bot.execution_scheduled is False
+
+
+@pytest.mark.parametrize("source,age,estimated", [
+    ("fetch_tickers", 20_000, True), ("completed_candle_fallback", 0, True),
+    ("fetch_tickers", 0, False),
+])
+def test_console_labels_estimate_source_and_observation_age(observation, source, age, estimated):
+    from live.market_snapshot import MarketSnapshot
+    bot, _, _, _ = observation
+    symbol = "TEST/USDT:USDT"
+    bot.positions = {symbol: {"long": {"size": 2.0, "price": 10.0}}}
+    bot.c_mults = {symbol: 1.0}
+    bot._diagnostic_position_quotes = {symbol: MarketSnapshot(symbol, 12.0, 12.0, 12.0, NOW-age, source)}
+    event_emitters.publish_committed_balance_observation(bot)
+    events, console = flush(observation)
+    assert events[0].data["equity"] == 104.0
+    assert events[0].data["equity_estimated"] is estimated
+    rendered = format_console_event(console[0])
+    assert "equity=104" in rendered
+    assert (" estimate valuation=" in rendered) is estimated
+    if estimated:
+        assert f"observed_age_ms={age}" in rendered
+    bot.calc_upnl_sum.assert_not_awaited()
+
+
+def test_unavailable_console_reason_is_bounded(observation):
+    bot, _, _, _ = observation
+    bot._authoritative_pending_confirmations = {"positions": 2}
+    event_emitters.publish_committed_balance_observation(bot)
+    _, console = flush(observation)
+    assert "equity=-" in format_console_event(console[0])
+    assert "equity_reason=account_confirmation_pending" in format_console_event(console[0])

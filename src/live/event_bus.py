@@ -2086,6 +2086,15 @@ def _format_console_balance_changed(event: LiveEvent) -> str:
             f"snap={_format_console_number(_data_number(data, 'balance_snapped'))} | "
             f"equity={equity} source={source}"
         )
+    if data.get("equity_estimated") is True:
+        rendered += (
+            " estimate"
+            f" valuation={_format_console_label(_data_str(data, 'equity_valuation_source'))}"
+            f" observed_age_ms={_data_int(data, 'equity_observation_age_ms')}"
+        )
+    reason = _data_str(data, "equity_unavailable_reason")
+    if reason:
+        rendered += f" equity_reason={_format_console_label(reason)}"
     sample = format_balance_composition_sample(data.get("balance_composition"))
     return f"{rendered} assets={sample}" if sample else rendered
 
