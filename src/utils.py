@@ -1,6 +1,7 @@
 from simulation_data import OfflineDataError, is_offline, snapshot_file, simulation_data_policy
 import re
 import json
+from json_utils import dump_json_streamlined, json_dumps_streamlined
 import ccxt.async_support as ccxt
 import os
 import datetime
@@ -311,94 +312,6 @@ def _inline_simple_containers(text: str, max_inline: int) -> str:
             result.append(char)
             i += 1
     return "".join(result)
-
-
-def dump_json_streamlined(
-    data: Any,
-    fp,
-    *,
-    indent: int = 4,
-    max_inline: int = 60,
-    separators: tuple[str, str] = (", ", ": "),
-    sort_keys: bool = False,
-) -> None:
-    """
-    Write JSON where short lists/dicts stay on one line while larger blocks keep
-    normal indentation.
-
-    Args:
-        data: Object to serialize.
-        fp: File-like object with ``write``.
-        indent: Base indentation level (like ``json.dump``).
-        max_inline: Maximum character count (including brackets/braces) allowed
-            for an inline container.
-        separators: Passed through to ``json.dumps`` for spacing control.
-        sort_keys: Whether to sort dictionary keys.
-    """
-
-    fp.write(
-        json_dumps_streamlined(
-            data,
-            indent=indent,
-            max_inline=max_inline,
-            separators=separators,
-            sort_keys=sort_keys,
-        )
-    )
-
-
-def json_dumps_streamlined(
-    data: Any,
-    *,
-    indent: int = 4,
-    max_inline: int = 60,
-    separators: tuple[str, str] = (", ", ": "),
-    sort_keys: bool = False,
-) -> str:
-    """Return the streamlined JSON string (like ``dump_json_streamlined`` but in-memory)."""
-
-    compact_separators = separators
-
-    def _inline_repr(value: Any) -> Optional[str]:
-        try:
-            return json.dumps(value, separators=compact_separators, sort_keys=sort_keys)
-        except TypeError:
-            return None
-
-    def _render(value: Any, level: int) -> str:
-        inline = _inline_repr(value)
-        if inline is not None and len(inline) <= max_inline:
-            return inline
-
-        indent_str = " " * (indent * level)
-        child_indent = " " * (indent * (level + 1))
-
-        if isinstance(value, dict):
-            items = list(value.items())
-            if sort_keys:
-                items = sorted(items)
-            parts = ["{"]
-            total = len(items)
-            for idx, (key, val) in enumerate(items):
-                rendered = _render(val, level + 1)
-                comma = "," if idx < total - 1 else ""
-                parts.append(f"{child_indent}{json.dumps(key)}: {rendered}{comma}")
-            parts.append(f"{indent_str}}}")
-            return "\n".join(parts)
-
-        if isinstance(value, (list, tuple)):
-            total = len(value)
-            parts = ["["]
-            for idx, item in enumerate(value):
-                rendered = _render(item, level + 1)
-                comma = "," if idx < total - 1 else ""
-                parts.append(f"{child_indent}{rendered}{comma}")
-            parts.append(f"{indent_str}]")
-            return "\n".join(parts)
-
-        return json.dumps(value, separators=compact_separators)
-
-    return _render(data, 0)
 
 
 def trim_analysis_aliases(analysis: dict) -> dict:

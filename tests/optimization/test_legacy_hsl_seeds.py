@@ -93,3 +93,19 @@ def test_legacy_hsl_numeric_seed_is_clamped_instead_of_rejected(tmp_path):
     bounds = [Bound.from_config("long_hsl_red_threshold", [0.1, 0.4])]
     individuals, _ = configs_to_individuals_streaming(seeds, bounds, sig_digits=6, key_paths=key_paths)
     assert individuals == [(0.4,)]
+
+
+@pytest.mark.parametrize("field", ["red_threshold", "ema_span_minutes", "cooldown_minutes_after_red"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "NaN"])
+@pytest.mark.parametrize("artifact", ["json", "pareto"])
+def test_non_finite_legacy_hsl_seed_is_skipped(field, value, artifact, tmp_path, caplog):
+    cfg = get_template_config()
+    cfg["config_version"] = "v8.4.0"
+    cfg["bot"]["long"]["hsl"].update(enabled=True, restart_after_red_policy="threshold")
+    # HJSON treats bare NaN/Infinity as invalid syntax, so exercise its
+    # accepted string representation; Pareto JSON also accepts bare constants.
+    cfg["bot"]["long"]["hsl"][field] = str(value) if artifact == "json" else value
+    path = tmp_path / ("seed.json" if artifact == "json" else "seed_pareto.txt")
+    path.write_text(json.dumps(cfg))
+    assert extract_configs(str(path)) == []
+    assert "non-finite HSL optimizer seed value" in caplog.text

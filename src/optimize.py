@@ -3303,6 +3303,8 @@ def _format_starting_seed_bot(bot, live=None):
         if not isinstance(block, dict):
             continue
         numeric_seeds[scope] = {key: float(block[key]) for key in numeric_fields if key in block}
+        if any(not math.isfinite(value) for value in numeric_seeds[scope].values()):
+            raise ValueError(f"non-finite HSL optimizer seed value in {scope} policy")
         # Seed HSL policy is not used. Validate the bot layout with inert current
         # defaults, then leave numeric suggestions for the optimizer's bounds clamp.
         block.clear()

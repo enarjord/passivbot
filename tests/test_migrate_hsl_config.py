@@ -133,6 +133,38 @@ def test_cli_writes_new_file_and_refuses_overwrite(tmp_path, capsys):
     assert src.read_bytes() == before
 
 
+def test_cli_streamlines_scenarios_without_changing_config(tmp_path):
+    cfg = legacy()
+    cfg["backtest"]["scenarios"] = [
+        {"label": "base"},
+        {"label": "recent", "start_date": "2025-10-02"},
+    ]
+    src, dst = tmp_path / "source.json", tmp_path / "converted.json"
+    src.write_text(json.dumps(cfg))
+    assert main([str(src), str(dst), "--restart-policy", "long=always"]) == 0
+    text = dst.read_text()
+    assert (
+        '"scenarios": [\n'
+        '            {"label": "base"},\n'
+        '            {"label": "recent", "start_date": "2025-10-02"}\n'
+        "        ]"
+    ) in text
+    assert text.endswith("\n")
+    assert json.loads(text) == migrate(
+        cfg, restart_policies={"long": "always"}, base_config_path=str(src)
+    )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_cli_nonfinite_output_does_not_create_file(tmp_path, monkeypatch, value):
+    src, dst = tmp_path / "source.json", tmp_path / "converted.json"
+    src.write_text(json.dumps(legacy()))
+    monkeypatch.setattr("tools.migrate_hsl_config.migrate", lambda *a, **kw: {"value": value})
+    with pytest.raises(SystemExit):
+        main([str(src), str(dst), "--restart-policy", "long=always"])
+    assert not dst.exists()
+
+
 @pytest.mark.parametrize(
     "extra", [[], ["--restart-policy", "long=always", "--restart-policy", "long=never"]]
 )
@@ -881,11 +913,13 @@ def test_in_place_migration_validates_replaces_and_preserves_mode(tmp_path, suff
     src = tmp_path / f"source{suffix}"
     src.write_text(json.dumps(legacy()))
     src.chmod(0o640)
+    before_stat = src.stat()
     assert main([str(src), "--in-place", "--restart-policy", "long=never"]) == 0
     result = load_prepared_config(str(src), verbose=False)
     assert result["config_version"] == CONFIG_SCHEMA_VERSION
     assert result["bot"]["long"]["hsl"]["restart_after_red_policy"] == "never"
     assert src.stat().st_mode & 0o777 == 0o640
+    assert (src.stat().st_uid, src.stat().st_gid) == (before_stat.st_uid, before_stat.st_gid)
     assert list(tmp_path.iterdir()) == [src]
 
 
@@ -930,3 +964,45 @@ def test_in_place_and_output_path_are_mutually_exclusive(tmp_path):
         main([str(src), str(dst), "--in-place", "--restart-policy", "long=always"])
     assert src.read_bytes() == before
     assert not dst.exists()
+
+
+@pytest.mark.parametrize("ownership_result", ["preserved", "denied", "unchanged"])
+def test_in_place_preserves_ownership_or_keeps_original(tmp_path, monkeypatch, ownership_result):
+    import os
+    if not hasattr(os, "chown"):
+        pytest.skip("POSIX ownership test")
+    src = tmp_path / "source.json"
+    src.write_text(json.dumps(legacy()))
+    src.chmod(0o640)
+    original_bytes = src.read_bytes()
+    original_stat = src.stat()
+    owner = [original_stat.st_uid + 1000, original_stat.st_gid + 1000]
+    real_stat = Path.stat
+    calls = []
+    def simulated_stat(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if path.name.startswith(".source.json.") and path.suffix == ".tmp":
+            values = list(result)
+            values[4], values[5] = owner
+            return os.stat_result(values)
+        return result
+    def simulated_chown(path, uid, gid):
+        calls.append((uid, gid))
+        if ownership_result == "denied":
+            raise PermissionError("ownership denied")
+        if ownership_result == "preserved":
+            owner[:] = [uid, gid]
+    monkeypatch.setattr(Path, "stat", simulated_stat)
+    monkeypatch.setattr("tools.migrate_hsl_config.os.chown", simulated_chown)
+    argv = [str(src), "--in-place", "--restart-policy", "long=always"]
+    if ownership_result == "preserved":
+        assert main(argv) == 0
+        assert json.loads(src.read_text())["config_version"] == CONFIG_SCHEMA_VERSION
+    else:
+        with pytest.raises(SystemExit):
+            main(argv)
+        assert src.read_bytes() == original_bytes
+    assert calls == [(original_stat.st_uid, original_stat.st_gid)]
+    assert (src.stat().st_uid, src.stat().st_gid) == (original_stat.st_uid, original_stat.st_gid)
+    assert src.stat().st_mode & 0o777 == 0o640
+    assert list(tmp_path.iterdir()) == [src]

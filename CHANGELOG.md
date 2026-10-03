@@ -12,7 +12,13 @@ since the latest release tag; these features may already be available when insta
   scenarios. Fresh optimizer seeds accept legacy HSL parameter values best effort under
   the main config's current policy and reevaluate fitness.
 - Add `passivbot tool migrate-hsl input.json --in-place` to atomically replace a config
-  after complete validation, preserving permissions and leaving the input unchanged on failure.
+  after complete validation, preserving ownership and permissions and leaving the input unchanged on failure.
+
+- Format generated configs, dashboard config exports and crash-suite configs more compactly,
+  keeping short objects and lists on one line while retaining indentation for larger sections.
+  Preserve serialization policies, including strict JSON validation in
+  `passivbot tool migrate-hsl`; internal analysis, metadata and diagnostic reports retain
+  ordinary JSON formatting.
 
 - Allow `optimize.n_cpus: null` with GPU automatic worker sizing, and show exact-validation
   queue activity, oldest pending age, next-result estimates and elapsed phase time in the

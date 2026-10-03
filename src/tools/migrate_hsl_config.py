@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+import stat
 from pathlib import Path
 import sys
 
@@ -34,6 +35,7 @@ from limit_utils import expand_limit_checks
 from config_utils import strip_config_metadata
 from optimization.warmup import _finalize_optimizer_vector_config
 from suite_runner import apply_scenario_overrides, build_scenarios
+from json_utils import json_dumps_streamlined
 
 
 def _validate_optimizer_inputs(candidate, authored, *, label=None, reducer_cfg=None):
@@ -322,10 +324,11 @@ def main(argv=None):
             portfolio=portfolio,
             base_config_path=str(args.input_config),
         )
-        serialized = json.dumps(output, indent=4, allow_nan=False) + "\n"
+        serialized = json_dumps_streamlined(output, allow_nan=False) + "\n"
         if args.in_place:
             # Follow input symlinks just as loading does; preserve the link itself.
             target = args.input_config.resolve()
+            target_stat = target.stat()
             temporary = None
             try:
                 with tempfile.NamedTemporaryFile(
@@ -336,7 +339,16 @@ def main(argv=None):
                     stream.write(serialized)
                     stream.flush()
                     os.fsync(stream.fileno())
-                temporary.chmod(target.stat().st_mode)
+                temp_stat = temporary.stat()
+                if (temp_stat.st_uid, temp_stat.st_gid) != (target_stat.st_uid, target_stat.st_gid):
+                    if not hasattr(os, "chown"):
+                        raise OSError("cannot preserve input config ownership on this platform")
+                    os.chown(temporary, target_stat.st_uid, target_stat.st_gid)
+                    temp_stat = temporary.stat()
+                    if (temp_stat.st_uid, temp_stat.st_gid) != (target_stat.st_uid, target_stat.st_gid):
+                        raise OSError("could not preserve input config ownership")
+                # chown may clear permission bits; apply the mode afterwards.
+                temporary.chmod(stat.S_IMODE(target_stat.st_mode))
                 os.replace(temporary, target)
             finally:
                 if temporary is not None:

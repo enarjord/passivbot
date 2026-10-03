@@ -569,8 +569,13 @@ def test_migrate_v7_trailing_grid_requires_review_for_conflicting_warmup_caps():
 def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tmp_path):
     input_path = tmp_path / "legacy.json"
     output_path = tmp_path / "migrated.json"
+    source = _minimal_v7_trailing_grid_config()
+    source["backtest"]["scenarios"] = [
+        {"label": "base"},
+        {"label": "recent", "start_date": "2025-10-02"},
+    ]
     input_path.write_text(
-        json.dumps(_minimal_v7_trailing_grid_config()),
+        json.dumps(source),
         encoding="utf-8",
     )
 
@@ -581,6 +586,8 @@ def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tm
     assert output_path.with_suffix(".migration-report.json").exists()
     loaded = json.loads(output_path.read_text(encoding="utf-8"))
     assert loaded["live"]["strategy_kind"] == "trailing_grid_v7"
+    assert loaded["backtest"]["scenarios"] == source["backtest"]["scenarios"]
+    assert '{"label": "recent", "start_date": "2025-10-02"}' in output_path.read_text()
 
 
 def test_migrate_config_v7_default_report_path_never_overwrites_output_path():
