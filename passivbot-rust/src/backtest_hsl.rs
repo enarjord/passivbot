@@ -301,6 +301,7 @@ impl Backtest<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
 
     const DAY: u64 = 86_400_000;
