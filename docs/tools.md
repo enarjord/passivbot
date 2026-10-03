@@ -92,12 +92,14 @@ members contain that metric and Passivbot knows whether higher or lower is bette
 
 ## Pareto trade-off explorer
 
-`passivbot tool pareto-plot PATH` exports a standalone HTML explorer with all saved
+`passivbot tool pareto-plot [PATH]` exports a standalone HTML explorer with all saved
 objective, aggregate/mean, and statistic metrics. Choose X/Y metrics or switch to X/Y/Z
 inside the page; no rerun, server, or internet connection is needed. Use the full install
 profile (`python3 -m pip install -e ".[full]"`).
 
 ```bash
+# Omit PATH to use the latest populated optimizer Pareto front.
+passivbot tool pareto-plot --open
 passivbot tool pareto-plot optimize_results/.../pareto --open
 passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
 # Optional positional metrics set the initial axes; the HTML still includes all metrics.
@@ -106,8 +108,13 @@ passivbot tool pareto-plot optimize_results/... \
   --output plots/tradeoffs.html --open
 ```
 
-A run directory or individual candidate JSON is also accepted. Without positional metrics,
-the first two available metrics (scoring objectives first) are selected. Known metric aliases
+A run directory or individual candidate JSON is also accepted. If PATH is omitted, the tool
+uses the lexicographically latest `optimize_results/<run>/pareto` containing candidates,
+relative to the current working directory, matching the other Pareto tools. Run names include
+timestamps; directory modification times do not affect selection. Empty and sidecar-only
+fronts are skipped; malformed candidate data still fails visibly. Missing candidates produce
+a clear error. Positional initial metrics follow an explicit PATH. Without positional
+metrics, the first two available metrics (scoring objectives first) are selected. Known metric aliases
 are accepted. Metric selectors group objectives, other metrics, and named statistics;
 `stats.<metric>.<stat>` identifies an explicit statistic, such as `stats.adg_strategy_eq.mean`.
 Saved objective values take precedence over aggregates, which take precedence over means.
@@ -147,9 +154,12 @@ without recomputing a lower-dimensional Pareto front. Missing optional metrics a
 as unavailable, never zero; missing required scoring objectives still fail through the shared
 loader. JSON sidecars without scoring metadata are ignored.
 
-The default output is `pareto-plot-2d.html` or `pareto-plot-3d.html` according to the initial
-view. Use `--force` to replace existing output and `--open` to launch a browser. Regenerate
-older HTML files to obtain the new controls. Exports contain filenames and all saved metric
+Default plots go in `pareto_plots/` under the current working directory, named after the
+input: `optimize_results/<run>/pareto` or its run directory produces `pareto_plots/<run>.html`;
+a custom front directory uses its directory name, and a single JSON uses its filename stem.
+Both initial dimensions use the same filename because the HTML supports switching views.
+The generated directory is ignored by Git. `--output` overrides this location. Use `--force`
+to replace existing output and `--open` to launch a browser. Regenerate older HTML files to obtain the new controls. Exports contain filenames and all saved metric
 values, so keep plots made from private results private. Large fronts produce larger HTML files.
 
 ## Pareto transformations / static plots

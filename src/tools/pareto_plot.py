@@ -10,7 +10,7 @@ import webbrowser
 
 from config.metrics import canonicalize_metric_name
 from config.scoring import ObjectiveSpec, default_objective_goal
-from pareto_explorer import ParetoCandidate, load_candidates
+from pareto_explorer import NoParetoCandidatesError, ParetoCandidate, load_candidates
 from tools.pareto_plot_page import PAGE, SCRIPT
 
 
@@ -19,10 +19,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="passivbot tool pareto-plot",
         description="Export all saved metrics to an interactive, offline Pareto HTML explorer.",
     )
-    parser.add_argument("path", help="Pareto directory, optimizer run directory, or candidate JSON")
+    parser.add_argument("path", nargs="?", help="Pareto directory, optimizer run directory, or candidate JSON (default: latest optimize_results/<run>/pareto with candidates)")
     parser.add_argument("metrics", nargs="*", metavar="METRIC", help="Optional initial X Y [Z] metrics; choose axes in the HTML")
     parser.add_argument("--list-metrics", action="store_true", help="List available metrics and ideal directions")
-    parser.add_argument("-o", "--output", type=Path, help="HTML output (default: pareto-plot-2d/3d.html)")
+    parser.add_argument("-o", "--output", type=Path, help="HTML output (default: pareto_plots/<input-name>.html)")
     parser.add_argument("--open", action="store_true", help="Open the saved plot in the default browser")
     parser.add_argument("--force", action="store_true", help="Replace an existing HTML output file")
     return parser
@@ -123,20 +123,47 @@ def render_html(dataset: dict, selected: Sequence[str]) -> str:
     return PAGE.replace("__PLOTLY_JS__", get_plotlyjs()).replace("__APP_SCRIPT__", SCRIPT).replace("__DATA__", payload)
 
 
+def load_plot_candidates(path: str | None):
+    if path is not None:
+        return load_candidates(path)
+    root = Path("optimize_results")
+    if root.is_dir():
+        for run in sorted(root.iterdir(), key=lambda item: item.name, reverse=True):
+            front = run / "pareto"
+            if not front.is_dir():
+                continue
+            try:
+                return load_candidates(front)
+            except NoParetoCandidatesError:
+                # Skip empty/sidecar-only fronts; malformed candidates still fail visibly.
+                continue
+    raise FileNotFoundError(
+        "No Pareto path provided and no optimize_results/<run>/pareto directory "
+        "with candidate JSON files was found."
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.list_metrics and args.metrics and len(args.metrics) not in (2, 3):
         parser.error("Choose two or three initial metrics, or omit metrics to select them in the HTML.")
     try:
-        pareto_dir, candidates, scoring_specs = load_candidates(args.path)
+        pareto_dir, candidates, scoring_specs = load_plot_candidates(args.path)
         dataset = build_dataset(candidates, scoring_specs)
         if args.list_metrics:
             for metric in dataset["metrics"]:
                 print(f"{metric['key']} ({metric['goal'] or 'choose direction in HTML'}; {metric['count']}/{len(candidates)} values)")
             return 0
         selected = select_metrics(args.metrics, dataset)
-        output = (args.output or Path(f"pareto-plot-{len(selected)}d.html")).expanduser().absolute()
+        source = Path(args.path).expanduser().resolve() if args.path else pareto_dir
+        if source.is_file():
+            name = source.stem
+        elif source.name == "pareto":
+            name = source.parent.name
+        else:
+            name = source.name
+        output = (args.output or Path("pareto_plots") / f"{name}.html").expanduser().absolute()
         if output.resolve().suffix.lower() not in (".html", ".htm"):
             raise ValueError("Output must have an .html or .htm extension.")
         if output.exists() and any(output.samefile(candidate.path) for candidate in candidates):
