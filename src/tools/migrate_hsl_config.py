@@ -4,6 +4,8 @@ from argparse import ArgumentParser
 from copy import deepcopy
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 import sys
 
@@ -270,10 +272,14 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
 def main(argv=None):
     parser = ArgumentParser(
         prog="passivbot tool migrate-hsl",
-        description="Write a separate, canonically validated HSL config. No exchange access.",
+        description="Write a canonically validated HSL config. No exchange access.",
     )
     parser.add_argument("input_config", type=Path)
-    parser.add_argument("output_config", type=Path)
+    parser.add_argument("output_config", type=Path, nargs="?")
+    parser.add_argument(
+        "--in-place", action="store_true",
+        help="Atomically replace input_config after successful validation; omit output_config.",
+    )
     parser.add_argument(
         "--restart-policy",
         action="append",
@@ -287,10 +293,14 @@ def main(argv=None):
         help="JSON object containing the explicit unified bot.hsl policy",
     )
     args = parser.parse_args(argv)
+    if args.in_place and args.output_config is not None:
+        parser.error("--in-place cannot be combined with output_config")
+    if not args.in_place and args.output_config is None:
+        parser.error("supply output_config or --in-place")
     try:
-        if args.input_config.resolve() == args.output_config.resolve():
+        if not args.in_place and args.input_config.resolve() == args.output_config.resolve():
             raise ValueError("input and output must be different files")
-        if args.output_config.exists():
+        if not args.in_place and args.output_config.exists():
             raise ValueError("output already exists; choose a new output path")
         choices = {}
         for item in args.restart_policy:
@@ -313,9 +323,28 @@ def main(argv=None):
             base_config_path=str(args.input_config),
         )
         serialized = json.dumps(output, indent=4, allow_nan=False) + "\n"
-        # Exclusive creation also closes the race after the existence check.
-        with args.output_config.open("x") as stream:
-            stream.write(serialized)
+        if args.in_place:
+            # Follow input symlinks just as loading does; preserve the link itself.
+            target = args.input_config.resolve()
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=target.parent,
+                    prefix=f".{target.name}.", suffix=".tmp", delete=False,
+                ) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(serialized)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temporary.chmod(target.stat().st_mode)
+                os.replace(temporary, target)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        else:
+            # Exclusive creation also closes the race after the existence check.
+            with args.output_config.open("x") as stream:
+                stream.write(serialized)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         parser.error(str(exc))
     print("Wrote a HSL configuration. No bot was started or changed.")

@@ -1559,6 +1559,12 @@ paths. Compare risk with `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strat
 `drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
 `strategy_eq_recovery_days_max`.
 
+Legacy HSL configs supplied as starting seeds for a fresh search are loaded best effort:
+retired HSL fields are discarded and usable numeric parameters enter the current schema.
+HSL enablement and restart choices come from the main optimizer config, and seed fitness
+is reevaluated. The main config still requires explicit migration when legacy HSL is enabled;
+checkpoint/resume compatibility checks remain enforced.
+
 When you provide many starting configs to a CPU optimizer, it bounds how many seed evaluations may
 be in flight at once. For the DEAP backend, the same cap also applies to generation offspring
 evaluations:

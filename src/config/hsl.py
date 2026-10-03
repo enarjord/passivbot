@@ -53,10 +53,6 @@ def _requires_hsl_migration(node, path=""):
             continue
         if path.endswith("enabled") and value not in (False, None, 0):
             return True
-        # Disabled authored policies can later authorize CLI/scenario enablement.
-        if path.endswith("restart_after_red_policy") and isinstance(value, str):
-            if value.strip().lower() in {"always", "never"}:
-                return True
     return False
 
 
@@ -65,11 +61,14 @@ def require_current_hsl_schema(config, *, base_config_path="", additional_inputs
     from .migrations.legacy_v7 import _parse_version_tuple
 
     version = _parse_version_tuple(config.get("config_version"))
-    if version is not None and version >= (8, 6, 0):
+    retired_selector = "hsl_engine" in config.get("live", {})
+    if version is not None and version >= (8, 6, 0) and not retired_selector:
         return
     message = "pre-v8.6 HSL configuration requires explicit migration with passivbot tool migrate-hsl and re-backtesting before use"
     inputs = (config, *additional_inputs)
     if any(_requires_hsl_migration(node) for node in inputs):
+        if retired_selector:
+            engine(config)
         raise ValueError(message)
     from .overrides import load_override_config, parse_old_coin_flags
     from .parse import load_raw_config
@@ -101,6 +100,31 @@ def require_current_hsl_schema(config, *, base_config_path="", additional_inputs
             )
             if _requires_hsl_migration(authored):
                 raise ValueError(message)
+    logging.warning(
+        "Legacy HSL settings loaded with HSL disabled; retired engine selection and "
+        "restart authorization are ignored. Migrate with passivbot tool migrate-hsl "
+        "and re-backtest before enabling HSL."
+    )
+    for node in inputs:
+        clear_legacy_hsl_authorization(node)
+
+
+def clear_legacy_hsl_authorization(node, path=""):
+    """Clear dormant legacy authority in a copy, including dotted patches."""
+    if isinstance(node, dict):
+        for key in list(node):
+            if str(key).startswith("_"):
+                continue
+            leaf_path = f"{path}.{key}" if path else str(key)
+            if leaf_path.endswith("live.hsl_engine"):
+                del node[key]
+            elif _is_hsl_path(leaf_path) and leaf_path.endswith("restart_after_red_policy"):
+                del node[key]
+            else:
+                clear_legacy_hsl_authorization(node[key], leaf_path)
+    elif isinstance(node, list):
+        for value in node:
+            clear_legacy_hsl_authorization(value, path)
 
 
 def engine(config):
@@ -322,7 +346,10 @@ def validate_override_paths(config, overrides, *, allow_engine=False):
     for key in ("hsl_engine", "hsl_signal_mode"):
         if f"live.{key}" in leaves:
             selected["live"][key] = leaves[f"live.{key}"]
-    engine(selected)
+    # CLI mutation precedes the schema gate: an explicit disable must be able
+    # to retire a legacy policy before loading. Other patches remain strict.
+    if not allow_engine:
+        engine(selected)
     for path in leaves:
         validate_parameter_path(path, _mode(selected))
     validate_hsl_paths({**selected, "optimize": {"scoring": overrides}})

@@ -63,7 +63,12 @@ unstucking and PnL consumers retain their own readiness contracts.
 
 ## Configuration and removal boundary
 
-HSL has one implementation. Old configurations require migration and revalidation.
+HSL has one implementation. Old enabled configurations require migration and revalidation
+after CLI mutation, including overrides and scenarios. Disabled legacy configurations warn
+and load with engine selection and restart authorization cleared in the normalized copy.
+Fresh optimizer seeds accept legacy HSL parameter values best effort; activation/restart
+policy belongs to the main config and fitness is reevaluated. This does not relax runtime
+or checkpoint compatibility.
 Retired tier/intervention/terminal-threshold controls cannot silently acquire a different
 meaning; optimization over removed controls is rejected. Unified policy is never hydrated
 from a side or hidden template. Legacy optimizer fitness and checkpoints are not evidence

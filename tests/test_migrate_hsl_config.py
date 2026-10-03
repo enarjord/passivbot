@@ -873,3 +873,60 @@ def test_master_v85_adaptive_policies_survive_hsl_migration(mode):
     assert bounds["min_duration_minutes"] == [2.0, 2.0]
     assert bounds["max_duration_minutes"] == [90.0, 90.0]
     assert migrate(migrated) == migrated
+
+
+@pytest.mark.parametrize("suffix", [".json", ".hjson"])
+def test_in_place_migration_validates_replaces_and_preserves_mode(tmp_path, suffix):
+    from config import load_prepared_config
+    src = tmp_path / f"source{suffix}"
+    src.write_text(json.dumps(legacy()))
+    src.chmod(0o640)
+    assert main([str(src), "--in-place", "--restart-policy", "long=never"]) == 0
+    result = load_prepared_config(str(src), verbose=False)
+    assert result["config_version"] == CONFIG_SCHEMA_VERSION
+    assert result["bot"]["long"]["hsl"]["restart_after_red_policy"] == "never"
+    assert src.stat().st_mode & 0o777 == 0o640
+    assert list(tmp_path.iterdir()) == [src]
+
+
+@pytest.mark.parametrize("extra", [[], ["--restart-policy", "long=threshold"]])
+def test_failed_in_place_migration_preserves_original(tmp_path, extra):
+    src = tmp_path / "source.json"
+    src.write_text(json.dumps(legacy()))
+    before = src.read_bytes()
+    with pytest.raises(SystemExit):
+        main([str(src), "--in-place", *extra])
+    assert src.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [src]
+
+
+def test_in_place_replace_failure_preserves_original_and_cleans_temp(tmp_path, monkeypatch):
+    src = tmp_path / "source.json"
+    src.write_text(json.dumps(legacy()))
+    before = src.read_bytes()
+    def denied(*args):
+        raise OSError("replace denied")
+    monkeypatch.setattr("tools.migrate_hsl_config.os.replace", denied)
+    with pytest.raises(SystemExit):
+        main([str(src), "--in-place", "--restart-policy", "long=always"])
+    assert src.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [src]
+
+
+def test_in_place_follows_symlink_without_replacing_link(tmp_path):
+    target, link = tmp_path / "source.json", tmp_path / "link.json"
+    target.write_text(json.dumps(legacy()))
+    link.symlink_to(target)
+    assert main([str(link), "--in-place", "--restart-policy", "long=always"]) == 0
+    assert link.is_symlink()
+    assert json.loads(target.read_text())["config_version"] == CONFIG_SCHEMA_VERSION
+
+
+def test_in_place_and_output_path_are_mutually_exclusive(tmp_path):
+    src, dst = tmp_path / "source.json", tmp_path / "output.json"
+    src.write_text(json.dumps(legacy()))
+    before = src.read_bytes()
+    with pytest.raises(SystemExit):
+        main([str(src), str(dst), "--in-place", "--restart-policy", "long=always"])
+    assert src.read_bytes() == before
+    assert not dst.exists()

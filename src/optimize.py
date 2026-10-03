@@ -3281,6 +3281,39 @@ def iter_extract_configs(path):
                     )
 
 
+def _format_starting_seed_bot(bot, live=None):
+    """Normalize numeric seed parameters without inheriting HSL activation policy.
+
+    Fresh searches evaluate every seed under the main config's current policy;
+    seed enablement/restart choices and old fitness are never runtime authority.
+    """
+    from config.shared_bot import canonicalize_shared_bot_side
+
+    bot = deepcopy(bot)
+    live = deepcopy(live) if isinstance(live, dict) else {}
+    live.pop("hsl_engine", None)
+    for side in ("long", "short"):
+        if isinstance(bot.get(side), dict):
+            canonicalize_shared_bot_side(bot[side])
+    defaults = get_template_config()["bot"]["long"]["hsl"]
+    numeric_fields = ("red_threshold", "ema_span_minutes", "cooldown_minutes_after_red")
+    numeric_seeds = {}
+    for scope in ("long", "short", "portfolio"):
+        block = bot.get("hsl") if scope == "portfolio" else bot.get(scope, {}).get("hsl")
+        if not isinstance(block, dict):
+            continue
+        numeric_seeds[scope] = {key: float(block[key]) for key in numeric_fields if key in block}
+        # Seed HSL policy is not used. Validate the bot layout with inert current
+        # defaults, then leave numeric suggestions for the optimizer's bounds clamp.
+        block.clear()
+        block.update(deepcopy(defaults), enabled=False, restart_after_red_policy=None)
+    formatted = format_bot_config(bot, live_cfg=live, verbose=False, warn_deprecations=False)
+    for scope, values in numeric_seeds.items():
+        block = formatted["hsl"] if scope == "portfolio" else formatted[scope]["hsl"]
+        block.update(values)
+    return formatted
+
+
 def _extract_starting_config(raw_config, *, source: str = "<memory>"):
     if not isinstance(raw_config, dict):
         raise TypeError(f"expected dict, got {type(raw_config).__name__}")
@@ -3290,14 +3323,7 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
     bot_cfg = current.get("bot")
     if not isinstance(bot_cfg, dict):
         raise KeyError("missing bot config")
-    extracted = {
-        "bot": format_bot_config(
-            bot_cfg,
-            live_cfg=current.get("live"),
-            verbose=False,
-            warn_deprecations=False,
-        )
-    }
+    extracted = {"bot": _format_starting_seed_bot(bot_cfg, current.get("live"))}
     live_cfg = current.get("live")
     if isinstance(live_cfg, dict):
         strategy_kind = live_cfg.get("strategy_kind")
@@ -3305,10 +3331,20 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
             strategy_kind
         ) != normalize_strategy_kind(None):
             extracted["live"] = {"strategy_kind": strategy_kind}
+        if live_cfg.get("hsl_signal_mode") == "unified":
+            extracted.setdefault("live", {})["hsl_signal_mode"] = "unified"
     optimize_cfg = current.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
         extracted["optimize"] = {"bounds": deepcopy(optimize_cfg["bounds"])}
     record_source = source or "<memory>"
+    from config.migrations.legacy_v7 import _parse_version_tuple
+    version = _parse_version_tuple(current.get("config_version"))
+    if version is None or version < (8, 6, 0) or "hsl_engine" in (live_cfg or {}):
+        logging.warning(
+            "Loading legacy optimizer seed %s best effort under the current schema; "
+            "main config owns HSL activation/restart policy and all fitness is reevaluated",
+            record_source,
+        )
     extracted["_starting_config_source"] = record_source
     return extracted
 
@@ -3320,7 +3356,7 @@ def _build_starting_seed_config(cfg):
         pside in cfg and isinstance(cfg.get(pside), dict) for pside in ("long", "short")
     ):
         extracted = {
-            "bot": format_bot_config(cfg, verbose=False, warn_deprecations=False)
+            "bot": _format_starting_seed_bot(cfg)
         }
     elif "bot" in cfg and isinstance(cfg.get("bot"), dict):
         extracted = cfg

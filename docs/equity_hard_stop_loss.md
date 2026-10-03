@@ -43,16 +43,25 @@ within a minute replace that minute's sample rather than repeatedly advancing th
 Known fill boundaries are evaluated before an episode reset or reopening. Nonpositive
 historical peaks and extreme numeric histories use explicit, reported approximations.
 Thresholds and saved fitness from older HSL versions are not interchangeable.
-Migrate and re-backtest configurations before upgrading. Pre-v8.6 inputs with
-HSL enabled or an authored `always`/`never` restart choice require explicit
-`passivbot tool migrate-hsl` conversion even when `live.hsl_engine` is absent.
-This check includes file-backed coin overrides, legacy `-lc` references and
-external `--suite-config` scenarios, evaluated against the raw base schema before
-normalization. Moving an old HSL policy into an external file is not migration.
-`config_version` records the source file schema and cannot be overridden at runtime;
-changing its CLI value is not a supported migration path.
-Disabled old policies without a restart choice can be hydrated, but enabling HSL
-later still requires an explicit restart choice.
+Migrate and re-backtest configurations before enabling older HSL policies. Pre-v8.6
+inputs with HSL enabled require explicit `passivbot tool migrate-hsl` conversion,
+even when `live.hsl_engine` is absent. The check runs after CLI changes and includes
+coin overrides, legacy `-lc` references, optimizer fixed overrides and suite scenarios.
+Disabled legacy HSL settings load with a warning; retired engine selection and old
+restart authorization are cleared in the normalized copy. The source file is unchanged.
+Later enablement requires an explicit current restart choice; loading disabled settings
+is not semantic migration. Moving an enabled old policy into an external file is not migration.
+`config_version` records the source file schema and cannot be overridden at runtime.
+
+Fresh optimizer starting configs are parameter seeds: legacy enabled HSL policies are
+accepted best effort, with numeric settings normalized to the current layout. The main
+optimizer config owns HSL activation and restart policy, and fitness is reevaluated.
+This exception does not apply to the main config or checkpoint compatibility.
+
+To migrate and replace a config explicitly, use `passivbot tool migrate-hsl input.json
+--in-place --restart-policy long=always` (choose the restart policy for each required
+scope). Replacement happens only after complete validation. Back up the original yourself
+if you need to retain it; omit `--in-place` and supply an output path to save a separate file.
 
 ## Best-effort history
 
