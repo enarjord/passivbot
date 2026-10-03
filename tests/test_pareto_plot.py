@@ -285,10 +285,12 @@ def test_default_output_uses_input_name(front, tmp_path, monkeypatch, input_kind
 
 def test_omitted_path_discovers_latest_populated_run(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    for run in ["2026-01-01_old", "2026-02-01_latest", "2026-03-01_empty"]:
+    for run in ["2026-01-01_old", "2026-02-01_latest", "2026-03-01_empty", "2026-04-01_sidecar"]:
         front = tmp_path / "optimize_results" / run / "pareto"
         front.mkdir(parents=True)
-        if not run.endswith("empty"):
+        if run.endswith("sidecar"):
+            (front / "selection.json").write_text('{"selected": []}')
+        elif not run.endswith("empty"):
             write_candidate(front / f"{run}.json")
     assert cli_main(["tool", "pareto-plot"]) == 0
     output = tmp_path / "pareto_plots" / "2026-02-01_latest.html"
@@ -323,3 +325,33 @@ def test_omitted_path_without_candidates_fails_clearly(tmp_path, monkeypatch, ca
     assert exc.value.code == 2
     assert "No Pareto path provided" in capsys.readouterr().err
     assert not (tmp_path / "pareto_plots").exists()
+
+
+@pytest.mark.parametrize("bad", ["{", "{}", None])
+def test_latest_malformed_candidate_is_not_hidden_by_fallback(tmp_path, monkeypatch, bad):
+    monkeypatch.chdir(tmp_path)
+    for name in ("2026-01-01_older", "2026-02-01_latest"):
+        front = tmp_path / "optimize_results" / name / "pareto"
+        front.mkdir(parents=True)
+        write_candidate(front / "candidate.json")
+    newest = front / "candidate.json"
+    if bad is None:
+        write_candidate(newest, (None, 0.1, 2.0))
+    elif bad == "{":
+        newest.write_text(bad)
+    else:
+        data = json.loads(newest.read_text())
+        data["optimize"]["scoring"] = ["unsupported_metric"]
+        newest.write_text(json.dumps(data))
+    with pytest.raises(SystemExit):
+        pareto_plot.main([])
+    assert not (tmp_path / "pareto_plots").exists()
+
+
+def test_plot_directory_is_ignored_from_repository_subdirectories():
+    import subprocess
+    result = subprocess.run(
+        ["git", "check-ignore", "--no-index", "pareto_plots/front.html", "src/pareto_plots/front.html"],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.splitlines() == ["pareto_plots/front.html", "src/pareto_plots/front.html"]

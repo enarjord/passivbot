@@ -109,10 +109,11 @@ passivbot tool pareto-plot optimize_results/... \
 ```
 
 A run directory or individual candidate JSON is also accepted. If PATH is omitted, the tool
-uses the lexicographically latest `optimize_results/<run>/pareto` containing JSON files,
+uses the lexicographically latest `optimize_results/<run>/pareto` containing candidates,
 relative to the current working directory, matching the other Pareto tools. Run names include
-timestamps; directory modification times do not affect selection. Missing or empty results
-produce a clear error. Positional initial metrics follow an explicit PATH. Without positional
+timestamps; directory modification times do not affect selection. Empty and sidecar-only
+fronts are skipped; malformed candidate data still fails visibly. Missing candidates produce
+a clear error. Positional initial metrics follow an explicit PATH. Without positional
 metrics, the first two available metrics (scoring objectives first) are selected. Known metric aliases
 are accepted. Metric selectors group objectives, other metrics, and named statistics;
 `stats.<metric>.<stat>` identifies an explicit statistic, such as `stats.adg_strategy_eq.mean`.

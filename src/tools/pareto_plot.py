@@ -10,8 +10,7 @@ import webbrowser
 
 from config.metrics import canonicalize_metric_name
 from config.scoring import ObjectiveSpec, default_objective_goal
-from pareto_core import detect_latest_pareto_dir
-from pareto_explorer import ParetoCandidate, load_candidates
+from pareto_explorer import NoParetoCandidatesError, ParetoCandidate, load_candidates
 from tools.pareto_plot_page import PAGE, SCRIPT
 
 
@@ -20,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="passivbot tool pareto-plot",
         description="Export all saved metrics to an interactive, offline Pareto HTML explorer.",
     )
-    parser.add_argument("path", nargs="?", help="Pareto directory, optimizer run directory, or candidate JSON (default: latest optimize_results/<run>/pareto with JSON candidates)")
+    parser.add_argument("path", nargs="?", help="Pareto directory, optimizer run directory, or candidate JSON (default: latest optimize_results/<run>/pareto with candidates)")
     parser.add_argument("metrics", nargs="*", metavar="METRIC", help="Optional initial X Y [Z] metrics; choose axes in the HTML")
     parser.add_argument("--list-metrics", action="store_true", help="List available metrics and ideal directions")
     parser.add_argument("-o", "--output", type=Path, help="HTML output (default: pareto_plots/<input-name>.html)")
@@ -124,26 +123,40 @@ def render_html(dataset: dict, selected: Sequence[str]) -> str:
     return PAGE.replace("__PLOTLY_JS__", get_plotlyjs()).replace("__APP_SCRIPT__", SCRIPT).replace("__DATA__", payload)
 
 
+def load_plot_candidates(path: str | None):
+    if path is not None:
+        return load_candidates(path)
+    root = Path("optimize_results")
+    if root.is_dir():
+        for run in sorted(root.iterdir(), key=lambda item: item.name, reverse=True):
+            front = run / "pareto"
+            if not front.is_dir():
+                continue
+            try:
+                return load_candidates(front)
+            except NoParetoCandidatesError:
+                # Skip empty/sidecar-only fronts; malformed candidates still fail visibly.
+                continue
+    raise FileNotFoundError(
+        "No Pareto path provided and no optimize_results/<run>/pareto directory "
+        "with candidate JSON files was found."
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.list_metrics and args.metrics and len(args.metrics) not in (2, 3):
         parser.error("Choose two or three initial metrics, or omit metrics to select them in the HTML.")
     try:
-        input_path = Path(args.path).expanduser() if args.path else detect_latest_pareto_dir()
-        if input_path is None:
-            raise FileNotFoundError(
-                "No Pareto path provided and no optimize_results/<run>/pareto directory "
-                "with at least one *.json candidate was found."
-            )
-        pareto_dir, candidates, scoring_specs = load_candidates(input_path)
+        pareto_dir, candidates, scoring_specs = load_plot_candidates(args.path)
         dataset = build_dataset(candidates, scoring_specs)
         if args.list_metrics:
             for metric in dataset["metrics"]:
                 print(f"{metric['key']} ({metric['goal'] or 'choose direction in HTML'}; {metric['count']}/{len(candidates)} values)")
             return 0
         selected = select_metrics(args.metrics, dataset)
-        source = input_path.resolve()
+        source = Path(args.path).expanduser().resolve() if args.path else pareto_dir
         if source.is_file():
             name = source.stem
         elif source.name == "pareto":
