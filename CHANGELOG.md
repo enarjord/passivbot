@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reuse available position-log prices for passive balance equity diagnostics, including
+  the existing 60-second candle fallback. Label older/candle valuations as estimates and
+  explain unavailable equity without changing trading or risk freshness requirements.
+
 - Allow disabled legacy HSL configurations to load with a warning after CLI changes,
   clearing retired engine selection and dormant restart authorization. Enabled legacy HSL
   still requires migration, including override files, optimizer fixed overrides and suite

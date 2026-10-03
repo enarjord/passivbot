@@ -1342,14 +1342,15 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
 
     calls = []
 
-    async def _get_live_last_prices(symbols, **kwargs):
+    async def _get_live_market_snapshots(symbols, **kwargs):
         calls.append((list(symbols), kwargs))
         return {
-            "BTC/USDT:USDT": 50_000.0,
-            "ETH/USDT:USDT": 3_000.0,
+            symbol: SimpleNamespace(last=price, source="fetch_tickers",
+                                    fetched_ms=passivbot_module.utc_ms(), is_valid=lambda: True)
+            for symbol, price in {"BTC/USDT:USDT": 50_000.0, "ETH/USDT:USDT": 3_000.0}.items()
         }
 
-    bot._get_live_last_prices = _get_live_last_prices
+    bot._get_live_market_snapshots = _get_live_market_snapshots
     monkeypatch.setattr(
         passivbot_module.pbr,
         "qty_to_cost",
@@ -1380,6 +1381,19 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
     assert len(calls) == 1
     assert calls[0][0] == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
     assert calls[0][1]["context"] == "position_change_log"
+
+    from live.diagnostic_valuation import balance_equity_observation
+    now = passivbot_module.utc_ms()
+    bot.positions = {
+        "BTC/USDT:USDT": {"long": {"size": 0.01, "price": 49_000.0}},
+        "ETH/USDT:USDT": {"long": {"size": 0.2, "price": 2_900.0}},
+    }
+    bot.freshness_ledger = SimpleNamespace(surfaces={
+        name: SimpleNamespace(updated_ms=now, epoch=1) for name in ("balance", "positions")
+    })
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    assert balance_equity_observation(bot, balance_raw=1_000.0, now_ms=now)["equity"] == 1_030.0
+    assert len(calls) == 1  # Passive balance valuation did not request any more prices.
 
 
 @pytest.mark.asyncio
@@ -1419,10 +1433,10 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
         bot, Passivbot
     )
 
-    async def _get_live_last_prices(symbols, **kwargs):
-        return {symbol: 0.0 for symbol in symbols}
+    async def _get_live_market_snapshots(symbols, **kwargs):
+        return {symbol: SimpleNamespace(last=0.0, fetched_ms=passivbot_module.utc_ms()) for symbol in symbols}
 
-    bot._get_live_last_prices = _get_live_last_prices
+    bot._get_live_market_snapshots = _get_live_market_snapshots
     monkeypatch.setattr(
         passivbot_module.pbr,
         "qty_to_cost",
@@ -1501,10 +1515,10 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
         bot, Passivbot
     )
 
-    async def _get_live_last_prices(symbols, **kwargs):
-        return {symbol: 0.0 for symbol in symbols}
+    async def _get_live_market_snapshots(symbols, **kwargs):
+        return {symbol: SimpleNamespace(last=0.0, fetched_ms=passivbot_module.utc_ms()) for symbol in symbols}
 
-    bot._get_live_last_prices = _get_live_last_prices
+    bot._get_live_market_snapshots = _get_live_market_snapshots
     monkeypatch.setattr(
         passivbot_module.pbr,
         "qty_to_cost",
