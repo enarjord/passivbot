@@ -105,7 +105,7 @@ def test_formatter_import_uses_only_standard_library():
 
 @pytest.mark.parametrize("tool", [
     "capture_optimize_memory", "compare_backtests", "research_entry_timing",
-    "trailing_inspect", "verify_hlcvs_data",
+    "trailing_inspect", "verify_hlcvs_data", "fetch_balance",
 ])
 def test_standalone_tools_still_launch_without_pythonpath(tool, tmp_path):
     path = Path(__file__).resolve().parents[1] / "src" / "tools" / f"{tool}.py"

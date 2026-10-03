@@ -29,11 +29,12 @@ from pathlib import Path
 from typing import Any, Dict
 
 import ccxt
-from json_utils import json_dumps_streamlined
 
 # Direct script execution adds src/tools, rather than src, to the import path.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from json_utils import json_dumps_streamlined
 
 
 def load_api_keys(path: Path) -> Dict[str, Any]:
