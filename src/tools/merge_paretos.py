@@ -600,7 +600,7 @@ def write_outputs(
     }
     index_path = output_dir / "index.json"
     with open(index_path, "w", encoding="utf-8") as f:
-        dump_json_streamlined(index, f, indent=2, sort_keys=True)
+        json.dump(index, f, indent=2, sort_keys=True)
         f.write("\n")
     written.append(index_path)
     return written

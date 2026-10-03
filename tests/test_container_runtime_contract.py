@@ -70,7 +70,6 @@ def test_render_config_script_merges_base_config_and_env_overrides(tmp_path):
     assert payload["logging"]["persist_to_file"] is True
     assert payload["monitor"]["enabled"] is False
     assert payload["monitor"]["root_dir"] == "/data/monitor"
-    assert '"approved_coins": ["BTC", "ETH", "SOL"]' in target.read_text()
 
 
 def test_entrypoint_generates_runtime_files_and_invokes_cli(tmp_path):

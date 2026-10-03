@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -9,7 +10,6 @@ from config.migrations.trailing_grid_v7 import (
     migration_report_has_invalid_output,
     migration_report_has_unresolved,
 )
-from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_manual_review_output=args.allow_manual_review_output,
     )
     report["report_path"] = str(report_path)
-    payload = json_dumps_streamlined(report, indent=2, sort_keys=True)
+    payload = json.dumps(report, indent=2, sort_keys=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(payload + "\n", encoding="utf-8")
     if args.json:

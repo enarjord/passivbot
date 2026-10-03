@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import math
 from tools.hyperliquid_probe_common import (
     add_live_mutation_confirmation_arg,
@@ -16,7 +17,6 @@ from tools.hyperliquid_probe_common import (
     require_live_mutation_confirmation,
     round_to_step,
 )
-from json_utils import json_dumps_streamlined
 
 
 async def _main() -> int:
@@ -148,7 +148,7 @@ async def _main() -> int:
                     "before": before_balance.get("info"),
                     "after_flat": after_flat_balance.get("info"),
                 }
-            print(json_dumps_streamlined(output, indent=2, sort_keys=True, default=str))
+            print(json.dumps(output, indent=2, sort_keys=True, default=str))
             return 0
 
         entry = await session.create_order(
@@ -216,7 +216,7 @@ async def _main() -> int:
                     "after_entry": after_entry_balance.get("info"),
                     "after_resting_entry_order": after_extra_entry_order_balance.get("info"),
                 }
-            print(json_dumps_streamlined(output, indent=2, sort_keys=True, default=str))
+            print(json.dumps(output, indent=2, sort_keys=True, default=str))
             return 0
 
         close_order = None
@@ -306,7 +306,7 @@ async def _main() -> int:
                 "after_reduce_only_close_order": after_close_order_balance.get("info"),
                 "after_flat": after_flat_balance.get("info"),
             }
-        print(json_dumps_streamlined(output, indent=2, sort_keys=True, default=str))
+        print(json.dumps(output, indent=2, sort_keys=True, default=str))
         return 0
     finally:
         try:

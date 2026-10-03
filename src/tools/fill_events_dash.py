@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import atexit
+import json
 import logging
 import os
 import signal
@@ -50,7 +51,6 @@ from fill_events_manager import (
     signed_fee_paid_from_payload,
 )
 from logging_setup import configure_logging
-from json_utils import json_dumps_streamlined
 
 # Global log buffer for UI display
 _LOG_BUFFER: deque = deque(maxlen=200)
@@ -1137,7 +1137,7 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
             return dcc.send_data_frame(export_df.to_csv, "fill_events.csv", index=False)
         elif "btn-json" in trigger:
             export_data = export_df.to_dict(orient="records")
-            return dict(content=json_dumps_streamlined(export_data, indent=2), filename="fill_events.json")
+            return dict(content=json.dumps(export_data, indent=2), filename="fill_events.json")
         raise PreventUpdate
 
     # Run server

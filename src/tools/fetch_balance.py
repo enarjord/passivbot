@@ -34,8 +34,6 @@ import ccxt
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from json_utils import json_dumps_streamlined
-
 
 def load_api_keys(path: Path) -> Dict[str, Any]:
     if not path.exists():
@@ -128,7 +126,7 @@ def build_exchange(user_info: Dict[str, Any]) -> ccxt.Exchange:
 
 def pretty_print_balance(bal: Dict[str, Any]) -> None:
     # Print JSON that is stable and readable
-    print(json_dumps_streamlined(bal, indent=2, sort_keys=True, default=str))
+    print(json.dumps(bal, indent=2, sort_keys=True, default=str))
 
 
 def main() -> None:

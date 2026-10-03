@@ -9,24 +9,6 @@ from live.smoke_report import build_live_process_report, summarize_live_process_
 from tools import live_process_report
 
 
-def test_cli_readable_and_compact_json_preserve_same_report(monkeypatch, capsys):
-    processes = {
-        "ok": True, "hard_failures": 0,
-        "state_counts": {"R": 1}, "pids": [123, 456],
-    }
-    monkeypatch.setattr(
-        live_process_report, "build_live_process_report", lambda **kwargs: processes
-    )
-    assert live_process_report.main([]) == 0
-    readable = capsys.readouterr().out
-    assert '"state_counts": {"R": 1}' in readable
-    assert '"pids": [123, 456]' in readable
-    assert len(readable.splitlines()) > 1
-    assert live_process_report.main(["--compact"]) == 0
-    compact = capsys.readouterr().out
-    assert compact == json.dumps(json.loads(readable), sort_keys=True) + "\n"
-
-
 def test_build_live_process_report_samples_process_table_without_smoke_inputs(
     monkeypatch,
 ):

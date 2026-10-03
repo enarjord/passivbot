@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -27,7 +28,6 @@ from live.restart_smoke_plan import (  # noqa: E402
     build_live_restart_smoke_plan,
     summarize_live_restart_smoke_plan,
 )
-from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -253,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     if args.summary:
         report = summarize_live_restart_smoke_plan(report)
-    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 

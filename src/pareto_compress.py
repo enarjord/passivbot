@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import shutil
@@ -24,7 +25,6 @@ from pareto_explorer import (
     filter_candidates,
     load_candidates,
 )
-from json_utils import json_dumps_streamlined
 
 
 DEFAULT_METHOD = "anchors-farthest"
@@ -380,7 +380,7 @@ def _write_outputs(output_dir: Path, pareto_dir: Path, members: Sequence[Compres
         if selection_path.is_dir():
             raise IsADirectoryError(f"Output path is a directory: {selection_path}")
         logging.info("Overwriting existing output file: %s", selection_path.name)
-    selection_path.write_text(json_dumps_streamlined(_json_ready(payload), indent=2, sort_keys=True) + "\n")
+    selection_path.write_text(json.dumps(_json_ready(payload), indent=2, sort_keys=True) + "\n")
 
 
 def compress_from_args(args: argparse.Namespace) -> Dict[str, Any]:
@@ -500,7 +500,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     payload = compress_from_args(args)
     if getattr(args, "json_output", False):
-        print(json_dumps_streamlined(_json_ready(payload), indent=2, sort_keys=True))
+        print(json.dumps(_json_ready(payload), indent=2, sort_keys=True))
     else:
         print(format_compression(payload))
     return 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -14,7 +15,6 @@ from live.performance_report import (  # noqa: E402
     project_live_performance_report_sections,
     summarize_live_performance_report,
 )
-from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -184,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         report = project_live_performance_report_sections(report, args.section)
     except ValueError as exc:
         parser.error(str(exc))
-    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 
 

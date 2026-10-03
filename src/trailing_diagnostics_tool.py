@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from json_utils import json_dumps_streamlined
 
 ENTRY_CONFIG_KEYS = [
     "entry_grid_double_down_factor",
@@ -692,7 +691,7 @@ def _write_dump(state: TrailingDiagnosticsState) -> str:
         "inputs": state.inputs,
         "diagnostic": state.diagnostic(),
     }
-    path.write_text(json_dumps_streamlined(payload, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return str(path)
 
 

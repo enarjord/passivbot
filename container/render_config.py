@@ -13,7 +13,6 @@ if SRC_ROOT.exists():
     sys.path.insert(0, str(SRC_ROOT))
 
 from config.parse import load_raw_config
-from json_utils import dump_json_streamlined
 
 
 TRUE_VALUES = {"1", "true", "yes", "y", "on"}
@@ -115,7 +114,7 @@ def main() -> int:
         set_nested(config, ["monitor", "root_dir"], monitor_root)
 
     with output_path.open("w", encoding="utf-8") as f:
-        dump_json_streamlined(config, f, indent=2, sort_keys=True)
+        json.dump(config, f, indent=2, sort_keys=True)
         f.write("\n")
     return 0
 

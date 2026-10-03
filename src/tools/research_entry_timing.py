@@ -6,17 +6,10 @@ Only synthetic log returns are used. No exchange, credentials, or market downloa
 
 import argparse
 from collections import deque
+import json
 import math
 import random
 from time import perf_counter
-import sys
-from pathlib import Path
-
-SRC_ROOT = Path(__file__).resolve().parents[1]
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
-
-from json_utils import json_dumps_streamlined
 
 
 def directionality(returns, span):
@@ -125,7 +118,7 @@ def main():
     if not math.isfinite(args.span) or args.span < 1.0:
         parser.error("span must be finite and >= 1")
     print(
-        json_dumps_streamlined(
+        json.dumps(
             {
                 "span": args.span,
                 "cases": {

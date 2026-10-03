@@ -138,7 +138,6 @@ def test_dump_backtest_dataset_metadata_writes_dataset_json(tmp_path):
     assert payload["coins"] == ["BTC"]
     assert payload["hlcvs_file"] == str((cache_dir / "hlcvs.npy").resolve())
     assert Path(written) == results_path / "dataset.json"
-    assert '"coins": ["BTC"]' in Path(written).read_text()
 
 
 def test_build_backtest_dataset_metadata_tolerates_missing_cache_metadata():

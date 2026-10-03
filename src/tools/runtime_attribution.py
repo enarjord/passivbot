@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -16,7 +17,6 @@ from live.runtime_attribution import (  # noqa: E402
     DEFAULT_MAX_TOTAL_BYTES,
     build_runtime_attribution_report,
 )
-from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     except (AttributionScanLimitError, ValueError) as exc:
         print(f"passivbot tool runtime-attribution: {exc}", file=sys.stderr)
         return 2
-    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     if args.fail_on_unattributed:
         unattributed = report["summary"]["first_ingestion_status_counts"].get(
             "unattributed", 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 import time
@@ -21,7 +22,6 @@ from live.smoke_report import (  # noqa: E402
     summarize_live_smoke_report,
     summarize_live_smoke_report_brief,
 )
-from json_utils import json_dumps_streamlined
 
 
 def _since_ms_from_recent_minutes(value: float | None) -> int | None:
@@ -277,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         output = project_live_smoke_report_sections(output, args.section)
     except ValueError as exc:
         parser.error(str(exc))
-    print(json_dumps_streamlined(output, indent=None if args.compact else 2, sort_keys=True))
+    print(json.dumps(output, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 
 

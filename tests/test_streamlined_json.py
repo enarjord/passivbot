@@ -1,6 +1,5 @@
 from io import StringIO
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -101,19 +100,3 @@ def test_formatter_import_uses_only_standard_library():
         "assert json_dumps_streamlined({'x': [1, 2]}) == '{\"x\": [1, 2]}'"
     )
     subprocess.run([sys.executable, "-S", "-c", code], check=True)
-
-
-@pytest.mark.parametrize("tool", [
-    "capture_optimize_memory", "compare_backtests", "research_entry_timing",
-    "trailing_inspect", "verify_hlcvs_data", "fetch_balance",
-])
-def test_standalone_tools_still_launch_without_pythonpath(tool, tmp_path):
-    path = Path(__file__).resolve().parents[1] / "src" / "tools" / f"{tool}.py"
-    env = dict(os.environ)
-    env.pop("PYTHONPATH", None)
-    completed = subprocess.run(
-        [sys.executable, str(path), "--help"], cwd=tmp_path,
-        env=env, capture_output=True, text=True,
-    )
-    assert completed.returncode == 0, completed.stderr
-    assert "usage:" in completed.stdout

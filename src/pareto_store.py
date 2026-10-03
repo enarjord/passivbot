@@ -881,7 +881,7 @@ def main():
                 "normalized_distance": float(dists[closest_idx]),
             },
         }
-        print(json_dumps_streamlined(summary, indent=4))
+        print(json.dumps(summary, indent=4))
 
     fig = plt.figure(figsize=(12, 4))
 

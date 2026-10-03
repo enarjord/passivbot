@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -10,7 +11,6 @@ from typing import Any
 import numpy as np
 
 from ohlcv_catalog import OhlcvCatalog
-from json_utils import json_dumps_streamlined
 
 
 DEFAULT_ROOT = Path("caches/ohlcvs")
@@ -331,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
             fetch_log_limit=int(args.fetch_log_limit),
         )
         if args.json:
-            print(json_dumps_streamlined(payload, indent=2, sort_keys=True))
+            print(json.dumps(payload, indent=2, sort_keys=True))
         else:
             print_symbol_details(payload)
         return 0
@@ -343,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=int(args.limit),
     )
     if args.json:
-        print(json_dumps_streamlined(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print_overview(payload)
     return 0

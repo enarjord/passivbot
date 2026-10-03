@@ -9,7 +9,6 @@ from typing import Any
 
 from config.shared_bot import BOT_GROUP_FIELD_MAP, get_grouped_bot_value
 from live.smoke_report import _user_safe_display_path
-from json_utils import json_dumps_streamlined
 
 DEFAULT_SAMPLE_SIZE = 8
 HIGH_BALANCE_HYSTERESIS_WARNING_PCT = 0.05
@@ -1200,7 +1199,7 @@ def main(argv: list[str] | None = None) -> int:
         compare_config_path=args.compare_config_path,
         balance_override=args.balance_override,
     )
-    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 

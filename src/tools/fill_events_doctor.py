@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -14,7 +15,6 @@ if str(SRC_ROOT) not in sys.path:
 
 from fill_events_manager import BaseFetcher, FillEventsManager, _parse_log_level
 from logging_setup import configure_logging
-from json_utils import json_dumps_streamlined
 
 
 class _NoopFetcher(BaseFetcher):
@@ -54,7 +54,7 @@ async def _run(args: argparse.Namespace) -> int:
         cache_path=Path(args.cache_root) / str(args.exchange).lower() / str(args.user),
     )
     report = await manager.run_doctor(auto_repair=bool(args.repair))
-    print(json_dumps_streamlined(report, indent=2, sort_keys=True))
+    print(json.dumps(report, indent=2, sort_keys=True))
     if report.get("anomaly_events", 0) and not args.repair:
         return 2
     if report.get("anomaly_events_after", 0):

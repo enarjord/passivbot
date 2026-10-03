@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import time
 from typing import Any
 
@@ -9,7 +10,6 @@ import ccxt.async_support as ccxt_async
 
 from procedures import load_user_info
 from utils import to_ccxt_client_id
-from json_utils import json_dumps_streamlined
 
 
 PRICE_FIELDS = ("last", "bid", "ask")
@@ -293,9 +293,9 @@ async def async_main() -> int:
         await exchange.close()
 
     if args.json:
-        print(json_dumps_streamlined(result, indent=2, sort_keys=True, default=str))
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
     else:
-        print(json_dumps_streamlined(result, indent=2, sort_keys=True, default=str))
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0
 
 

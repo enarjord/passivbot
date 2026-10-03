@@ -6,7 +6,6 @@ from backtest_universe import effective_backtest_approved_coins_by_side
 from config.access import get_optional_config_value
 from config.shared_bot import get_grouped_bot_value
 from hlcvs_manifest import manifest_has_required_schema
-from json_utils import dump_json_streamlined
 
 HLCVS_CACHE_DIR_SEP = "__"
 
@@ -160,5 +159,5 @@ def dump_backtest_dataset_metadata(config: dict, exchange: str, results_path: st
     dataset_metadata = build_backtest_dataset_metadata(config, exchange)
     out_path = Path(results_path) / "dataset.json"
     with open(out_path, "w") as f:
-        dump_json_streamlined(dataset_metadata, f, indent=4, sort_keys=True)
+        json.dump(dataset_metadata, f, indent=4, sort_keys=True)
     return str(out_path)

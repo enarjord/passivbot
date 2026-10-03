@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -17,7 +18,6 @@ from live.smoke_report import (  # noqa: E402
     DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     LOG_WINDOW_UNPARSED_POLICIES,
 )
-from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -422,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 
 

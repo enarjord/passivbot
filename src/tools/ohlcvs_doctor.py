@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -10,7 +11,6 @@ import numpy as np
 
 from ohlcv_catalog import OhlcvCatalog
 from ohlcv_store import BACKTEST_OHLCV_DTYPE, month_end_ts, month_start_ts, rows_in_month
-from json_utils import json_dumps_streamlined
 
 
 DEFAULT_ROOT = Path("caches/ohlcvs")
@@ -645,7 +645,7 @@ def main(argv: list[str] | None = None) -> int:
         prune_missing_catalog=bool(args.prune_missing_catalog),
     )
     if args.json:
-        print(json_dumps_streamlined(_jsonable(report), indent=2, sort_keys=True))
+        print(json.dumps(_jsonable(report), indent=2, sort_keys=True))
     else:
         print_text_report(report)
     return 1 if report.by_severity.get("error", 0) else 0

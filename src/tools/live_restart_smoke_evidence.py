@@ -15,7 +15,6 @@ from live.restart_smoke_evidence import (  # noqa: E402
     MAX_RESTART_TARGETS,
     build_live_restart_smoke_evidence,
 )
-from json_utils import json_dumps_streamlined
 
 
 MAX_INPUT_JSON_BYTES = 16 * 1024 * 1024
@@ -88,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 

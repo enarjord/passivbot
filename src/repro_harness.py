@@ -14,7 +14,6 @@ from logging_setup import configure_logging, resolve_log_level
 from rust_utils import collect_runtime_provenance, sha256_file
 from suite_runner import extract_suite_config
 from utils import format_approved_ignored_coins
-from json_utils import json_dumps_streamlined
 
 
 class HarnessIndividual(list):
@@ -366,7 +365,7 @@ async def async_main(args: argparse.Namespace) -> int:
         metric_keys=metric_keys,
     )
     if args.json:
-        print(json_dumps_streamlined(report, indent=2, sort_keys=True))
+        print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print_report(report)
     return 0

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import math
 import statistics
 from collections import Counter
@@ -21,7 +22,6 @@ from tools.probe_ticker_capabilities import (
     timed_call as _raw_timed_call,
 )
 from utils import ts_to_date, utc_ms
-from json_utils import json_dumps_streamlined
 
 
 ACCOUNT_CRITICAL_ENDPOINTS = {
@@ -2405,10 +2405,10 @@ async def async_main() -> int:
     )
     out_path = Path(args.out) if args.out else Path("tmp") / f"ccxt_ticker_probe_{started_ms}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json_dumps_streamlined(result, indent=2, sort_keys=True, default=str) + "\n")
+    out_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str) + "\n")
     print(f"wrote {out_path}")
     if args.json:
-        print(json_dumps_streamlined(result, indent=2, sort_keys=True, default=str))
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from live.restart_smoke_orchestrator import (  # noqa: E402  # isort: skip
     DEFAULT_SMOKE_WAIT_S,
     execute_live_restart_smoke,
 )
-from json_utils import json_dumps_streamlined
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
     print(
-        json_dumps_streamlined(
+        json.dumps(
             report,
             indent=None if args.compact else 2,
             sort_keys=True,

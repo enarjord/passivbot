@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 from tools.hyperliquid_probe_common import (
     add_probe_identity_args,
     create_hyperliquid_probe_session,
@@ -10,7 +11,6 @@ from tools.hyperliquid_probe_common import (
     load_hyperliquid_wallet,
     mask_secret,
 )
-from json_utils import json_dumps_streamlined
 
 
 async def _main() -> int:
@@ -42,9 +42,9 @@ async def _main() -> int:
             "is_vault": bool(user_info.get("is_vault")),
             "balance_summary": extract_balance_summary(balance),
         }
-        print(json_dumps_streamlined(summary, indent=2, sort_keys=True, default=str))
+        print(json.dumps(summary, indent=2, sort_keys=True, default=str))
         if args.dump_raw:
-            print(json_dumps_streamlined(balance, indent=2, sort_keys=True, default=str))
+            print(json.dumps(balance, indent=2, sort_keys=True, default=str))
         return 0
     finally:
         await session.close()

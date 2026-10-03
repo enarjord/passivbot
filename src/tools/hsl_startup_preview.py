@@ -12,7 +12,6 @@ from config.shared_bot import get_grouped_bot_value
 from live.event_bus import EventTypes, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_query import discover_event_files
 from live.smoke_report import _user_safe_display_path
-from json_utils import json_dumps_streamlined
 
 SIDES = ("long", "short")
 HSL_EVENT_TYPES = {EventTypes.HSL_STATUS}
@@ -554,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         until_ms=args.until_ms,
         now_ms=args.now_ms,
     )
-    print(json_dumps_streamlined(report, indent=None if args.compact else 2, sort_keys=True))
+    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 

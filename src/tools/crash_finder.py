@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import logging
 import re
 import shutil
@@ -1502,7 +1503,7 @@ def main(argv: list[str] | None = None) -> int:
     _configure_logging(args.log_level)
     payload = run_scan(args)
     if args.json:
-        print(json_dumps_streamlined(payload, indent=2, sort_keys=False))
+        print(json.dumps(payload, indent=2, sort_keys=False))
     else:
         _print_text_summary(payload)
     return 0

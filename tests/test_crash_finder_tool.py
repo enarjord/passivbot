@@ -72,7 +72,9 @@ def test_crash_finder_identifies_clusters_and_writes_outputs(tmp_path, capsys):
         == 0
     )
 
-    payload = json.loads(capsys.readouterr().out)
+    rendered_report = capsys.readouterr().out
+    payload = json.loads(rendered_report)
+    assert rendered_report == json.dumps(payload, indent=2, sort_keys=False) + "\n"
     assert payload["symbols_scanned"] == 5
     assert payload["events_selected"] >= 4
     assert payload["clusters_selected"] == 2
@@ -96,6 +98,7 @@ def test_crash_finder_identifies_clusters_and_writes_outputs(tmp_path, capsys):
     scenarios = suite_payload["backtest"]["scenarios"]
     assert len(scenarios) == 2
     assert all("start_date" in scenario and "end_date" in scenario for scenario in scenarios)
+    assert '"exchanges": ["binance"]' in (out_dir / "crash_scenarios.hjson").read_text()
 
 
 def test_ordered_metric_does_not_treat_low_before_high_as_crash(tmp_path):

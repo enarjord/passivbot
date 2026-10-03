@@ -971,7 +971,7 @@ class IterativeBacktestSession:
         }
         payload_path = run_dir / "analysis.json"
         with payload_path.open("w", encoding="utf-8") as fh:
-            dump_json_streamlined(payload, fh, indent=2, sort_keys=True)
+            json.dump(payload, fh, indent=2, sort_keys=True)
 
         config_copy = denumpyize(config)
         cfg_path = run_dir / "config_used.json"

@@ -218,6 +218,7 @@ def test_merge_paretos_accepts_run_or_pareto_dirs_and_caps_outputs(tmp_path: Pat
     rendered = (output_dir / index["files"][0]).read_text()
     assert '"long_entry_initial_qty_pct": [0.05, 0.65, 0.01]' in rendered
     assert rendered.endswith("\n")
+    assert (output_dir / "index.json").read_text() == json.dumps(index, indent=2, sort_keys=True) + "\n"
 
 
 def test_merge_paretos_supports_nested_v8_side_risk_and_bounds(tmp_path: Path):

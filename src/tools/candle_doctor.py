@@ -40,7 +40,6 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from candlestick_manager import CANDLE_DTYPE, ONE_MIN_MS  # noqa: E402
-from json_utils import json_dumps_streamlined
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -755,7 +754,7 @@ def print_json(all_issues: List[Issue], summary: DoctorSummary) -> None:
         "summary": asdict(summary),
         "issues": [asdict(iss) for iss in all_issues],
     }
-    print(json_dumps_streamlined(output, indent=2, sort_keys=True))
+    print(json.dumps(output, indent=2, sort_keys=True))
 
 
 # ---------------------------------------------------------------------------

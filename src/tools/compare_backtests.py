@@ -11,12 +11,6 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-SRC_ROOT = Path(__file__).resolve().parents[1]
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
-
-from json_utils import json_dumps_streamlined
-
 DATASET_IDENTITY_KEYS = (
     "cache_hash",
     "exchange",
@@ -367,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     ) as exc:
         print(f"compare-backtests: {exc}", file=sys.stderr)
         return 2
-    payload = json_dumps_streamlined(report, indent=2, sort_keys=True)
+    payload = json.dumps(report, indent=2, sort_keys=True)
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(payload + "\n", encoding="utf-8")

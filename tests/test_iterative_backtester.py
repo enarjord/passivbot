@@ -24,6 +24,7 @@ def test_result_files_preserve_values_with_compact_scenarios(tmp_path):
     report = json.loads((folder / "analysis.json").read_text())
     assert report["score_vector"] == [1.0, 2.0]
     assert report["analysis_per_exchange"] == {"binance": {"score": 1.0}}
+    assert (folder / "analysis.json").read_text() == json.dumps(report, indent=2, sort_keys=True)
 
 
 def test_parse_override_value_supports_common_scalar_types():
