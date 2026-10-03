@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 
 from config import prepare_config
+from config.gpu import validate_hsl_gpu_inputs
 from config.hsl import _mode, validate_parameter_path, validate_optimizer_metrics
 from config.load import load_input_config
 from config.migrations import migrate_config_version
@@ -81,9 +82,7 @@ def _validate_optimizer_inputs(candidate, authored, *, label=None, reducer_cfg=N
         ]
     validate_optimizer_metrics(candidate, metrics)
     if optimize.get("backend") == "gpu":
-        from optimization.backends.gpu_backend import _validate_hsl_gpu_inputs
-
-        _validate_hsl_gpu_inputs(candidate)
+        validate_hsl_gpu_inputs(candidate)
 
 
 def migrate(source, *, restart_policies=None, portfolio=None, base_config_path=""):

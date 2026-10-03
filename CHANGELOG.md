@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix HSL migration on live-only installations when the config selects the GPU optimizer,
+  keeping static HSL validation independent of optional optimizer and GPU runtime imports.
+
 - Allow disabled legacy HSL configurations to load with a warning after CLI changes,
   clearing retired engine selection and dormant restart authorization. Enabled legacy HSL
   still requires migration, including override files, optimizer fixed overrides and suite

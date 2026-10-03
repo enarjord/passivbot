@@ -1,4 +1,4 @@
-"""Canonical GPU scenario-screening policy, independent of optional GPU imports."""
+"""Canonical GPU configuration policy, independent of optional runtime imports."""
 
 import json
 import math
@@ -40,3 +40,36 @@ def parse_screening_scenarios(value: str) -> list[str]:
     raw = value.strip()
     labels = json.loads(raw) if raw.startswith("[") else [label.strip() for label in raw.split(",")]
     return resolve_gpu_screening({"scenarios": labels})["scenarios"]
+
+
+def gpu_hsl_policy(config: dict, side: str) -> dict:
+
+    if config["live"]["hsl_signal_mode"] == "unified":
+        return config["bot"]["hsl"]
+    return config.get("bot", {}).get(side, {}).get("hsl", {})
+
+
+def gpu_hsl_side_enabled(config: dict, side: str, markets_by_exchange=None) -> bool:
+    from config.hsl import _side_has_enabled_policy
+
+    if config["live"]["hsl_signal_mode"] == "coin":
+        return _side_has_enabled_policy(config, side, markets_by_exchange)
+    globally_enabled = bool(gpu_hsl_policy(config, side).get("enabled", False))
+    if globally_enabled:
+        return True
+    for patch in (config.get("coin_overrides") or {}).values():
+        if not isinstance(patch, dict):
+            continue
+        hsl_patch = patch.get("bot", {}).get(side, {}).get("hsl", {}) or {}
+        if isinstance(hsl_patch, dict) and bool(hsl_patch.get("enabled", False)):
+            return True
+    return False
+
+
+def validate_hsl_gpu_inputs(config: dict) -> None:
+
+    interval = float(config.get("backtest", {}).get("candle_interval_minutes", 1))
+    if interval != 1 and any(
+        gpu_hsl_side_enabled(config, side) for side in ("long", "short")
+    ):
+        raise ValueError("GPU HSL requires 1m candles")
