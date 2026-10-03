@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -920,6 +921,92 @@ def build_mps_data(
     }
 
 
+def _pack_multicoin_price_arrays(values, markets, relation_dtype, fill_buffer):
+    candle_count, coin_count = values.shape[:2]
+    bars = np.array(values[:, :, :4], dtype=np.float32, order="C", copy=True)
+    for field in (0, 1, 3):
+        field_values = bars[:, :, field]
+        field_values[~np.isfinite(field_values)] = 0.0
+    arrays = {
+        "bars": bars,
+        "fill_ticks": np.empty((candle_count, coin_count, 2), dtype=np.int32),
+        "touch_ticks": np.empty((candle_count, coin_count, 2), dtype=np.int32),
+        "touch_nearest_ticks": np.empty((candle_count, coin_count), dtype=np.int32),
+        "touch_min_qty_bits": np.empty((candle_count, coin_count), dtype=np.int32),
+        "touch_min_qty_relation": np.empty((candle_count, coin_count), dtype=relation_dtype),
+    }
+    max_costs = []
+    for coin, market in enumerate(markets):
+        high, low, close = (values[:, coin, field] for field in range(3))
+        high_fill, low_nonfill = _strict_fill_tick_boundaries(
+            high, low, market.price_step, fill_buffer
+        )
+        touch_down, touch_up, touch_nearest = _directional_touch_ticks(close, market.price_step)
+        arrays["fill_ticks"][:, coin, 0] = high_fill
+        arrays["fill_ticks"][:, coin, 1] = low_nonfill
+        arrays["touch_ticks"][:, coin, 0] = touch_down
+        arrays["touch_ticks"][:, coin, 1] = touch_up
+        arrays["touch_nearest_ticks"][:, coin] = touch_nearest
+        bits, relation = _minimum_entry_qty_encoding(close, market)
+        arrays["touch_min_qty_bits"][:, coin] = bits
+        arrays["touch_min_qty_relation"][:, coin] = relation
+        max_costs.append(_maximum_effective_min_cost(close, market))
+    return arrays, max_costs
+
+
+def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
+                          fill_buffer, include_hourly_ranges, directory):
+    from contextlib import ExitStack
+    from tempfile import TemporaryDirectory
+    from optimization.gpu.residency import PREPARATION_CHUNK_BYTES, spill_array_file
+
+    n, coins = values.shape[:2]
+    # Packed output plus per-coin float64 scratch stays independent of history length.
+    chunk_rows = max(1, PREPARATION_CHUNK_BYTES // (coins * 45 + 256))
+    paths = {}
+    max_costs = np.zeros(coins, dtype=np.float64)
+    with TemporaryDirectory(prefix="hourly-", dir=directory) as hourly_directory, ExitStack() as stack:
+        hourly_paths = []
+        if include_hourly_ranges:
+            # Preserve the canonical hourly calculation, including partial hours,
+            # listing tails and the last known valid boundary. Only one coin's
+            # history is allocated at a time; the dense multicoin output is streamed.
+            for coin, run in enumerate(runs):
+                ranges, valid = _build_hourly_log_range(
+                    np.asarray(values[:, coin, 0], dtype=np.float64),
+                    np.asarray(values[:, coin, 1], dtype=np.float64), timestamps, run
+                )
+                path = Path(hourly_directory) / f"{coin}.npy"
+                np.save(path, np.where(valid, ranges, np.float32(-1.0)), allow_pickle=False)
+                hourly_paths.append(path)
+                del ranges, valid
+        handles = {}
+        for start in range(0, n, chunk_rows):
+            end = min(start + chunk_rows, n)
+            arrays, costs = _pack_multicoin_price_arrays(
+                values[start:end], markets, relation_dtype, fill_buffer
+            )
+            max_costs = np.maximum(max_costs, costs)
+            if include_hourly_ranges:
+                hourly = np.empty((end - start, coins), dtype=np.float32)
+                for coin, path in enumerate(hourly_paths):
+                    mapped = np.load(path, mmap_mode="r", allow_pickle=False)
+                    try:
+                        hourly[:, coin] = mapped[start:end]
+                    finally:
+                        mapped._mmap.close()
+                arrays["hour_log_ranges"] = hourly
+            for name, array in arrays.items():
+                if name not in handles:
+                    paths[name] = directory / f"{name}.npy"
+                    handles[name] = stack.enter_context(spill_array_file(
+                        paths[name], (n, *array.shape[1:]), array.dtype,
+                    ))
+                handles[name].write(memoryview(array).cast("B"))
+            del arrays
+    return paths, max_costs
+
+
 def build_mps_multicoin_data(
     hlcvs,
     timestamps_ms,
@@ -982,54 +1069,31 @@ def build_mps_multicoin_data(
         _require_contiguous_mps_hlc(
             values[:, coin, 0], values[:, coin, 1], values[:, coin, 2], run, coin=coin
         )
-    bars = np.ascontiguousarray(values[:, :, :4], dtype=np.float32)
-    # Unavailable listing/delisting tails remain outside the declared valid
-    # range. Internal missing H/L/C is rejected before reaching this packing.
-    for field in (0, 1, 3):
-        field_values = bars[:, :, field]
-        field_values[~np.isfinite(field_values)] = 0.0
-    fill_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
-    touch_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
-    touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)
-    touch_min_qty_bits = np.empty((candle_count, coin_count), dtype=np.int32)
-    # Relations encode only -1, 0, +1; CUDA can read them losslessly as bytes.
     relation_dtype = np.int8 if gpu_device(torch) == "cuda" else np.int32
-    touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=relation_dtype)
-    if include_hourly_ranges:
-        # A valid log range is always non-negative, so -1.0 is an unambiguous
-        # sentinel and avoids a second dense per-candle/per-coin validity tensor.
-        hour_log_ranges = np.full((candle_count, coin_count), -1.0, dtype=np.float32)
+    if spill_dir is not None:
+        arrays, max_costs = _spill_multicoin_arrays(
+            values, timestamps, runs, markets, relation_dtype,
+            limit_order_fill_buffer_pct, include_hourly_ranges, spill_dir,
+        )
     else:
-        hour_log_ranges = None
+        arrays, max_costs = _pack_multicoin_price_arrays(
+            values, markets, relation_dtype, limit_order_fill_buffer_pct,
+        )
+        if include_hourly_ranges:
+            hourly = np.full((candle_count, coin_count), -1.0, dtype=np.float32)
+            for coin, run in enumerate(runs):
+                ranges, valid = _build_hourly_log_range(
+                    np.asarray(values[:, coin, 0], dtype=np.float64),
+                    np.asarray(values[:, coin, 1], dtype=np.float64), timestamps, run
+                )
+                hourly[valid, coin] = ranges[valid]
+            arrays["hour_log_ranges"] = hourly
     coin_settings = np.empty((coin_count, 13), dtype=np.float32)
     for coin, (run, market) in enumerate(zip(runs, markets)):
         if run.interval_ms != interval_ms:
             raise ValueError("MPS multicoin runs must use one shared candle interval")
-        high = values[:, coin, 0].astype(np.float64, copy=False)
-        low = values[:, coin, 1].astype(np.float64, copy=False)
-        close = values[:, coin, 2].astype(np.float64, copy=False)
-        if hour_log_ranges is not None:
-            coin_hour_log_range, coin_hour_valid = _build_hourly_log_range(
-                high, low, timestamps, run
-            )
-            hour_log_ranges[coin_hour_valid, coin] = coin_hour_log_range[
-                coin_hour_valid
-            ]
-        high_fill, low_nonfill = _strict_fill_tick_boundaries(
-            high, low, market.price_step, limit_order_fill_buffer_pct
-        )
-        touch_down, touch_up, touch_nearest = _directional_touch_ticks(
-            close, market.price_step
-        )
-        fill_ticks[:, coin, 0] = high_fill
-        fill_ticks[:, coin, 1] = low_nonfill
-        touch_ticks[:, coin, 0] = touch_down
-        touch_ticks[:, coin, 1] = touch_up
-        touch_nearest_ticks[:, coin] = touch_nearest
-        min_qty_bits, min_qty_relation = _minimum_entry_qty_encoding(close, market)
-        touch_min_qty_bits[:, coin] = min_qty_bits
-        touch_min_qty_relation[:, coin] = min_qty_relation
-        max_effective_min_cost = _maximum_effective_min_cost(close, market)
+        close = values[:, coin, 2]
+        max_effective_min_cost = max_costs[coin]
         seed_index = min(max(int(run.first_valid_idx), 0), candle_count - 1)
         seed_close = float(close[seed_index])
         high_seed = float(values[seed_index, coin, 0])
@@ -1056,14 +1120,9 @@ def build_mps_multicoin_data(
             max_effective_min_cost,
         )
 
-    invariant_bytes = (
-        bars.nbytes
-        + fill_ticks.nbytes
-        + touch_ticks.nbytes
-        + touch_nearest_ticks.nbytes
-        + touch_min_qty_bits.nbytes
-        + touch_min_qty_relation.nbytes
-        + (hour_log_ranges.nbytes if hour_log_ranges is not None else 0)
+    invariant_bytes = candle_count * coin_count * (
+        16 + 8 + 8 + 4 + 4 + np.dtype(relation_dtype).itemsize
+        + (4 if include_hourly_ranges else 0)
     )
     recommended = None
     if gpu_device(torch) == "cuda" and spill_dir is None:
@@ -1090,16 +1149,10 @@ def build_mps_multicoin_data(
     first_day = int(timestamps[0] // 86_400_000)
     last_day = int(timestamps[-1] // 86_400_000)
     packed = {
-        "bars": tensor(bars, dtype=torch.float32, name="bars"),
-        "fill_ticks": tensor(fill_ticks, dtype=torch.int32, name="fill_ticks"),
-        "touch_ticks": tensor(touch_ticks, dtype=torch.int32, name="touch_ticks"),
-        "touch_nearest_ticks": tensor(touch_nearest_ticks, dtype=torch.int32, name="touch_nearest_ticks"),
-        "touch_min_qty_bits": tensor(touch_min_qty_bits, dtype=torch.int32, name="touch_min_qty_bits"),
-        "touch_min_qty_relation": tensor(
-            touch_min_qty_relation,
-            dtype=torch.int8 if relation_dtype == np.int8 else torch.int32,
-            name="touch_min_qty_relation",
-        ),
+        name: value if spill_dir is not None else tensor(value, name=name)
+        for name, value in arrays.items()
+    }
+    packed.update({
         "coin_settings": tensor(coin_settings, dtype=torch.float32, name="coin_settings"),
         "n": candle_count,
         "n_coins": coin_count,
@@ -1108,9 +1161,5 @@ def build_mps_multicoin_data(
         "start_minute_of_day": int((timestamps[0] // 60_000) % 1440),
         "start_minute_of_hour": int((timestamps[0] // 60_000) % 60),
         "invariant_bytes": invariant_bytes,
-    }
-    if hour_log_ranges is not None:
-        packed["hour_log_ranges"] = tensor(
-            hour_log_ranges, dtype=torch.float32, name="hour_log_ranges"
-        )
+    })
     return packed

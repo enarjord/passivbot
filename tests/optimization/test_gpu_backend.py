@@ -1434,7 +1434,8 @@ def test_gpu_suite_inputs_materialize_one_selected_coin():
     assert prepared[0]["coin_count"] == 1
 
 
-def test_gpu_suite_inputs_materialize_multicoin_subset():
+@pytest.mark.parametrize("device", [None, "cuda", "mps"])
+def test_gpu_suite_inputs_materialize_multicoin_subset(device, monkeypatch):
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
     config["live"]["forager_score_hysteresis_pct"] = 0.0
@@ -1460,11 +1461,25 @@ def test_gpu_suite_inputs_materialize_multicoin_subset():
         def build_scenario_candidate_config(proxy_config, _ctx):
             return copy.deepcopy(proxy_config)
 
-    prepared = _gpu_suite_scenario_inputs(config, Suite())
+    from optimization.gpu.residency import cuda_suite_residency_scope, current_cuda_residency
 
-    assert prepared[0]["coin_count"] == 3
-    assert prepared[0]["hlcvs"].shape == (10, 3, 4)
-    assert np.array_equal(prepared[0]["hlcvs"][:, 1], master[:, 2])
+    def check():
+        prepared = _gpu_suite_scenario_inputs(config, Suite())
+        assert prepared[0]["coin_count"] == 3
+        assert prepared[0]["hlcvs"].shape == (10, 3, 4)
+        np.testing.assert_array_equal(prepared[0]["hlcvs"], master[:, [0, 2, 3]])
+        if device is not None:
+            subsets = current_cuda_residency()._subset_arrays
+            assert len(subsets) == int(device == "cuda")
+            if subsets:
+                assert np.shares_memory(prepared[0]["hlcvs"], subsets[0])
+                assert not prepared[0]["hlcvs"].flags.writeable
+
+    if device is None:
+        check()
+    else:
+        monkeypatch.setattr("optimization.backends.gpu_backend.gpu_device", lambda: device)
+        cuda_suite_residency_scope(check)()
 
 
 def test_gpu_suite_inputs_accept_dual_side_multicoin_hedge_scenario():

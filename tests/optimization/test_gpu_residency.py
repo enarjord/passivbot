@@ -1,5 +1,6 @@
 """CUDA suite residency preserves packed inputs and bounds simultaneous allocation."""
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -270,7 +271,9 @@ def test_driver_workspace_does_not_shrink_budget_but_current_free_is_checked(run
 
 
 @pytest.mark.parametrize("hourly", [True, False])
-def test_disk_packing_and_activation_preserve_every_eager_array(runtime, hourly):
+@pytest.mark.parametrize("fill_buffer", [0.0, 0.0001])
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_disk_packing_and_activation_preserve_every_eager_array(runtime, hourly, fill_buffer, dtype, monkeypatch):
     from optimization.gpu.model import ProxyMarket, ProxyRun, build_mps_multicoin_data
 
     torch, uploads = runtime
@@ -279,16 +282,23 @@ def test_disk_packing_and_activation_preserve_every_eager_array(runtime, hourly)
     torch.cuda.is_available = lambda: True
     torch.cuda.mem_get_info = lambda: (1_000_000, 2_000_000)
     count = 121
+    # Force several packing chunks, including a one-row tail and hour boundaries.
+    monkeypatch.setattr("optimization.gpu.residency.PREPARATION_CHUNK_BYTES", 13 * (2 * 45 + 256))
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     close = 100 + np.sin(np.arange(count) / 7)
     values = np.stack([close + .019, close - .021, close, close * .5], axis=1)
     values = np.stack([values, values * 1.5], axis=1)
+    values = values.astype(dtype)
+    values[:3, 1] = np.nan
+    values[-2:, 1] = np.nan
+    values.flags.writeable = False  # Disk-backed scenario subsets are read-only.
     run = ProxyRun(1000, 1, 1, int(timestamps[1]), 0, int(timestamps[0]), 60_000, .05, 0, count - 1)
     market = ProxyMarket(.001, .01, .001, 5, 1, .0002)
     def build(directory=None):
         return build_mps_multicoin_data(
-            values, timestamps, runs=[run] * 2, markets=[market] * 2,
+            values, timestamps, runs=[run, replace(run, first_valid_idx=3, last_valid_idx=count - 3)], markets=[market] * 2,
             include_hourly_ranges=hourly, spill_dir=directory,
+            limit_order_fill_buffer_pct=fill_buffer,
         )
     manager = CudaSuiteResidency()
     try:
@@ -310,5 +320,114 @@ def test_disk_packing_and_activation_preserve_every_eager_array(runtime, hourly)
             else:
                 assert data[name] == value
         assert data["touch_min_qty_relation"].dtype == np.int8
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("indices", [[3, 0, 2], [2], [1, 1, 0]])
+def test_coin_subsets_stream_exact_order_without_full_private_copy(runtime, monkeypatch, indices):
+    from optimization.gpu import residency
+
+    values = np.arange(31 * 4 * 4, dtype=np.float64).reshape(31, 4, 4)
+    # A strided source must preserve its selected row/coin/channel order as well.
+    values = values[::2, :, ::2]
+    values[1, 2, 0] = np.nan
+    expected = np.take(values, indices, axis=1)
+    original_take = np.take
+    row_counts = []
+    def bounded_take(array, *args, **kwargs):
+        row_counts.append(len(array))
+        assert len(array) <= 3
+        return original_take(array, *args, **kwargs)
+    monkeypatch.setattr(residency, "PREPARATION_CHUNK_BYTES", 3 * len(indices) * values.shape[2] * values.dtype.itemsize)
+    monkeypatch.setattr(residency.np, "take", bounded_take)
+    manager = CudaSuiteResidency()
+    try:
+        selected = manager.prepare_coin_subset(values, indices)
+        assert isinstance(selected, np.memmap)
+        assert not selected.flags.writeable
+        assert selected.flags.c_contiguous
+        np.testing.assert_array_equal(selected, expected)
+        assert len(row_counts) > 1
+        directory = Path(manager._directory.name)
+    finally:
+        manager.close()
+    assert selected._mmap.closed
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize("error", [ValueError, KeyboardInterrupt])
+def test_failed_subset_stream_removes_partial_file_and_can_retry(runtime, monkeypatch, error):
+    from optimization.gpu import residency
+
+    values = np.ones((10, 3, 4))
+    original_take = np.take
+    def fail(*args, **kwargs):
+        raise error("selection failed")
+    manager = CudaSuiteResidency()
+    try:
+        monkeypatch.setattr(residency.np, "take", fail)
+        with pytest.raises(error, match="selection failed"):
+            manager.prepare_coin_subset(values, [2, 0])
+        assert list(Path(manager._directory.name).iterdir()) == []
+        monkeypatch.setattr(residency.np, "take", original_take)
+        selected = manager.prepare_coin_subset(values, [2, 0])
+        np.testing.assert_array_equal(selected, values[:, [2, 0]])
+    finally:
+        manager.close()
+
+
+def test_spilled_price_packing_never_allocates_whole_history(runtime, monkeypatch):
+    from optimization.gpu import model, residency
+
+    torch, _ = runtime
+    torch.float32, torch.int32, torch.int8 = np.float32, np.int32, np.int8
+    torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False))
+    torch.cuda.is_available = lambda: True
+    values = np.tile([101., 99., 100., 1.], (109, 3, 1))
+    timestamps = np.arange(len(values), dtype=np.int64) * 60_000
+    run = model.ProxyRun(1000, 0, 0, 0, 0, 0, 60_000, .05, 0, len(values) - 1)
+    market = model.ProxyMarket(.001, .01, .001, 1, 1, .0002)
+    original_pack = model._pack_multicoin_price_arrays
+    row_counts = []
+    def bounded_pack(chunk, *args):
+        row_counts.append(len(chunk))
+        assert len(chunk) <= 7
+        return original_pack(chunk, *args)
+    monkeypatch.setattr(residency, "PREPARATION_CHUNK_BYTES", 7 * (3 * 45 + 256))
+    monkeypatch.setattr(model, "_pack_multicoin_price_arrays", bounded_pack)
+    manager = CudaSuiteResidency()
+    try:
+        data = manager.prepare("market", lambda directory: model.build_mps_multicoin_data(
+            values, timestamps, [run] * 3, [market] * 3, spill_dir=directory,
+        ))
+        assert len(row_counts) > 1
+        for name in ("bars", "fill_ticks", "touch_ticks", "hour_log_ranges"):
+            assert np.load(data[name]).shape[0] == len(values)
+    finally:
+        manager.close()
+
+
+def test_late_chunk_tick_failure_removes_all_partial_market_files(runtime, monkeypatch):
+    from optimization.gpu import model, residency
+
+    torch, uploads = runtime
+    torch.float32, torch.int32, torch.int8 = np.float32, np.int32, np.int8
+    torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False))
+    torch.cuda.is_available = lambda: True
+    values = np.tile([101., 99., 100., 1.], (29, 2, 1))
+    values[-1, 0, 2] = 1e12
+    timestamps = np.arange(len(values), dtype=np.int64) * 60_000
+    run = model.ProxyRun(1000, 0, 0, 0, 0, 0, 60_000, .05, 0, len(values) - 1)
+    market = model.ProxyMarket(.001, .01, .001, 1, 1, .0002)
+    monkeypatch.setattr(residency, "PREPARATION_CHUNK_BYTES", 7 * (2 * 45 + 256))
+    manager = CudaSuiteResidency()
+    try:
+        with pytest.raises(ValueError, match="touch ticks exceed"):
+            manager.prepare("market", lambda directory: model.build_mps_multicoin_data(
+                values, timestamps, [run] * 2, [market] * 2, spill_dir=directory,
+            ))
+        assert not uploads
+        assert list(Path(manager._directory.name).iterdir()) == []
     finally:
         manager.close()

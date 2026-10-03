@@ -11,6 +11,7 @@ since the latest release tag; these features may already be available when insta
   Preserve serialization policies, including strict JSON validation in
   `passivbot tool migrate-hsl`; internal analysis, metadata and diagnostic reports retain
   ordinary JSON formatting.
+- Reduce CUDA optimizer suite preparation memory by streaming packed market inputs and coin subsets to run-local files instead of allocating full copies in host RAM.
 
 - Allow `optimize.n_cpus: null` with GPU automatic worker sizing, and show exact-validation
   queue activity, oldest pending age, next-result estimates and elapsed phase time in the
