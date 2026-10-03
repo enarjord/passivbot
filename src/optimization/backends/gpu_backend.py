@@ -35,7 +35,8 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_contract import CONTRACT_KEY, recorded_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.replay_progress import suite_replay_context
-from optimization.gpu.residency import cuda_suite_residency_scope
+from optimization.gpu.residency import cuda_suite_residency_scope, current_cuda_residency
+from optimization.gpu.runtime import gpu_device
 from optimization.progress import (
     DriftProgress,
     OptimizerProgress,
@@ -2192,7 +2193,11 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
                 indices = list(coin_indices)
                 # Keep full, ordered selections as views across suite scenarios.
                 if indices != list(range(values.shape[1])):
-                    values = np.take(values, indices, axis=1)
+                    residency = current_cuda_residency()
+                    if residency is not None and gpu_device() == "cuda":
+                        values = residency.prepare_coin_subset(values, indices)
+                    else:
+                        values = np.take(values, indices, axis=1)
             values = np.ascontiguousarray(values)
             coin_count = int(values.shape[1])
             _validate_scope_config(
