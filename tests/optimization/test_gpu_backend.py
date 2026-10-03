@@ -418,6 +418,15 @@ def test_gpu_options_are_additive_and_validate_ranges():
         _resolve_options(config)
 
 
+def test_gpu_preflight_accepts_nullable_cpu_count_for_automatic_workers():
+    config = _long_only_ema_config()
+    config["optimize"]["n_cpus"] = None
+    config["optimize"]["gpu"] = {}
+    options = _resolve_options(config)
+    assert options["exact_workers"] is None
+    assert options["max_pending_exact"] is None
+
+
 def test_gpu_seed_bootstrap_options_are_explicit_and_fail_closed():
     config = _long_only_ema_config()
     config["optimize"]["gpu"]["seed_bootstrap"] = {

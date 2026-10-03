@@ -769,8 +769,9 @@ The backend is hybrid rather than a replacement backtester:
 
 `optimize.iters` remains the number of evolutionary exact Rust validations. Any exact seed-
 bootstrap evaluations are additional and are reported separately. GPU screening counts and
-throughput are also logged separately. `n_cpus` controls the exact-validation worker pool; MPS
-device scheduling is managed by Metal.
+throughput are also logged separately. Exact CPU worker sizing and tuning are automatic by
+default. Set `optimize.gpu.exact_workers` to a positive count to fix the pool, or to `0` to
+inherit `optimize.n_cpus` (the `-c` CLI setting). MPS device scheduling is managed by Metal.
 
 GPU-specific settings live under `optimize.gpu`:
 
@@ -1011,6 +1012,9 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   are advisory starting points. Worker-cache memory estimates use 128 MiB classes to tolerate
   ordinary RSS noise; a cached increase still checks the entire startup pool against the
   current 60% RAM budget. Resource-detection failures warn and inherit `optimize.n_cpus`.
+  `optimize.n_cpus: null` is supported by the GPU backend when delegating to automatic
+  sizing. If sizing is disabled or detection fails with no inherited count, the fallback
+  is one worker. CPU-only backends retain their existing integer worker contract.
   Explicit `0` retains the legacy rule of inheriting `optimize.n_cpus`; positive numbers stay fixed.
 - `max_pending_exact` also defaults to `null`; omitted, `null`, or `"auto"` values enable
   continuous exact-validation queue tuning. It starts at twice the larger of workers and
@@ -1050,6 +1054,12 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
    runs, with structured `exact_progress` events after each collected batch. A collector failure
    reaches the main thread when the current proxy pass returns; no next generation or additional
    exact jobs are submitted after that failure. The collector is joined before shutdown.
+  Progress summaries report unfinished jobs separately from finished but unrecorded results,
+  the oldest pending job's age, and elapsed time in the current phase. `eta_next_exact`
+  estimates the next recordable result from at least four of the last 24 worker-reported
+  completion latencies, including CPU queue wait and excluding collection delays. The estimate
+  becomes unknown if that job exceeds the typical latency; it resets when the worker pool changes.
+  These are transient console hints and do not change result order, fitness or checkpoints.
 - GPU optimizer state is checkpointed after every completed generation and after exact-result
    batches collected outside a proxy pass. `checkpoint_interval_seconds` does not throttle these
    forced safety checkpoints. During a proxy pass, only the durable result stream advances;

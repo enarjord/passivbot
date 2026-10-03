@@ -39,6 +39,7 @@ from optimization.gpu.residency import cuda_suite_residency_scope
 from optimization.progress import (
     DriftProgress,
     OptimizerProgress,
+    ExactValidationProgress,
     GenerationMilestone,
     SeedBootstrapProgress,
     gpu_work_context,
@@ -1362,7 +1363,7 @@ def _resolve_options(config: dict) -> dict:
         if options[key] is not None and options[key] < 0:
             raise ValueError(f"optimize.gpu.{key} must be non-negative or auto")
     exact_workers = int(options["exact_workers"] or 0) or int(
-        config.get("optimize", {}).get("n_cpus", 0)
+        config.get("optimize", {}).get("n_cpus", 0) or 0
     )
     effective_pending = _resolve_max_pending_exact(options, exact_workers)
     if effective_pending < validations:
@@ -5684,6 +5685,7 @@ def run_backend(
             if tuner is not None and hasattr(tuner, "set_worker_count"):
                 tuner.set_worker_count(workers)
         worker_controller.applied()
+        exact_progress.reset_estimate()
         if queue_controller is not None:
             old_epoch = queue_controller.epoch
             queue_controller = create_queue_controller(workers, queue_controller.limit)
@@ -5717,6 +5719,7 @@ def run_backend(
     last_checkpoint_exact = seed_exact_done + exact_done
     generation_in_progress = False
     generation_milestone = GenerationMilestone()
+    exact_progress = ExactValidationProgress()
 
     def progress_snapshot():
         return {
@@ -5732,6 +5735,7 @@ def run_backend(
             "evolution_pending": len(pending),
             "exact_workers": workers,
             "eta_generation": generation_milestone.eta(),
+            **exact_progress.snapshot(),
             **recorder.store.progress_snapshot(),
         }
 
@@ -6223,6 +6227,9 @@ def run_backend(
                     ),
                     admission_stall,
                 )
+            exact_progress.completed(
+                result, worker_seconds=worker_seconds, queue_seconds=queue_wait_seconds,
+            )
             if profile_enabled:
                 profile_totals["exact_work"] += worker_seconds
                 profile_totals["exact_queue_wait"] += queue_wait_seconds
@@ -6534,6 +6541,7 @@ def run_backend(
                     bool(is_proxy_front),
                     digest,
                 )
+                exact_progress.submitted(result)
                 submitted_hashes.add(digest)
                 submitted_this_generation += 1
 

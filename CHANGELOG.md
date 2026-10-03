@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Allow `optimize.n_cpus: null` with GPU automatic worker sizing, and show exact-validation
+  queue activity, oldest pending age, next-result estimates and elapsed phase time in the
+  bounded optimizer progress summaries. Overdue or uncalibrated estimates remain unknown.
+
 - Avoid rebuilding minute-by-minute HSL valuation history for an observed flat coin/side
   with no retained fills. This speeds up exact validation in single-side optimization suites
   while preserving held-position protection, retained episode replay, and detailed HSL exports.

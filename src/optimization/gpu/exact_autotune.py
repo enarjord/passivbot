@@ -128,6 +128,9 @@ def capture_worker_rss(requested, *, mode):
 
 
 def initial_workers(requested, inherited, evaluator, *, mode, pending=None, baseline_rss=None):
+    # A nullable inherited count delegates sizing to this GPU controller. If
+    # sizing is disabled or host hints fail, one worker is a safe fallback.
+    inherited = 1 if inherited is None else inherited
     if requested is not None:
         return int(requested) or int(inherited)
     if mode == "off":

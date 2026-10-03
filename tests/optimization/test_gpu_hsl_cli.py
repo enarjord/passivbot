@@ -66,6 +66,8 @@ async def test_hsl_gpu_optimizer_cli_is_offline(
         from optimization.gpu.autotune import SingleCoinScratchPolicy
 
         cfg["optimize"]["gpu"]["batch_size"] = None
+        cfg["optimize"]["n_cpus"] = None
+        cfg["optimize"]["gpu"]["exact_workers"] = None
         release = SingleCoinScratchPolicy.release
 
         def record_release(policy):
