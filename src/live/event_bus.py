@@ -3340,6 +3340,9 @@ def _hsl_input_console(data: Mapping) -> tuple[Mapping | None, str | None]:
         (row for row in rows if row.get("unavailable_reason")),
         rows[0] if rows else None,
     )
+    unavailable = data.get("unavailable_scope")
+    if isinstance(unavailable, Mapping) and unavailable.get("unavailable_reason"):
+        row = unavailable
     if row is not None and row.get("unavailable_reason"):
         reason = re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row["unavailable_reason"]))[:64]
         return row, "unavailable_reason=" + reason
@@ -3370,22 +3373,27 @@ def _format_hsl_console(event: LiveEvent) -> str:
             for key in ("green", "red", "inactive", "unavailable", "estimated")
         ),
     ]
+    row, input_cause = _hsl_input_console(data)
+    if input_cause:
+        parts.append(input_cause)
+
+    def optional(value: str) -> None:
+        if len(" ".join((*parts, value))) <= 240:
+            parts.append(value)
+
     missing = data.get("account_unavailable")
     if isinstance(missing, list) and missing:
-        parts.append("account=" + ",".join(token(value, 12) for value in missing[:3]))
-    row, input_cause = _hsl_input_console(data)
+        optional("account=" + ",".join(token(value, 12) for value in missing[:3]))
+    stale_reasons = data.get("stale_reasons")
+    if isinstance(stale_reasons, list) and stale_reasons:
+        optional("stale_reason=" + token(stale_reasons[0], 64))
     if row is not None:
-        parts.append(
+        optional(
             "scope=" + token(row.get("symbol"), 24) + "/" + token(row.get("pside"), 5)
         )
         reasons = row.get("estimates")
         if not input_cause and isinstance(reasons, list) and reasons:
-            parts.append("estimate=" + token(reasons[0], 64))
-    if input_cause:
-        parts.append(input_cause)
-    stale_reasons = data.get("stale_reasons")
-    if isinstance(stale_reasons, list) and stale_reasons:
-        parts.insert(3, "stale_reason=" + token(stale_reasons[0], 64))
+            optional("estimate=" + token(reasons[0], 64))
     return " ".join(parts)
 
 

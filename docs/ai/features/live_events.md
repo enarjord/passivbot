@@ -486,6 +486,12 @@ unavailability reason takes priority, including in the legacy/sink-error console
 view neither fetches inputs nor changes risk reasons,
 readiness, retry policy or trading authority.
 
+An optional bounded `unavailable_scope` retains the first required-input cause before scope
+sampling, even when RED rows fill the event or monitor sample. Both consoles preserve that cause
+ahead of candle failures. Structured console records reserve space for counts and the primary
+cause, then include account, stale, scope and approximation context only while the complete
+record fits 240 characters; omitted console context remains in the structured observation.
+
 Smoke reports and dashboard event summaries consume these scoped status rows directly,
 including current raw-RED/EMA-pending loss and halted terminal timestamps. Complete
 `action_counts` and `raw_pending_scope_count` accompany sampled rows; omitted scope

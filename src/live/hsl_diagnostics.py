@@ -167,6 +167,22 @@ def record(bot, wave):
             scopes=rows[:SCOPE_LIMIT],
             omitted_scopes=max(0, len(rows) - SCOPE_LIMIT),
             candle_sources=candle_sources,
+            unavailable_scope=next(
+                (
+                    {
+                        key: row[key]
+                        for key in (
+                            "signal_mode",
+                            "symbol",
+                            "pside",
+                            "unavailable_reason",
+                        )
+                    }
+                    for row in rows
+                    if row["unavailable_reason"]
+                ),
+                None,
+            ),
         )
         # Human materiality ignores estimator-reason churn, numeric movement and
         # cycle timestamps. Include every scope before either payload sample cap:

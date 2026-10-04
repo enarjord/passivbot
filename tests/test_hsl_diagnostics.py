@@ -239,6 +239,45 @@ def test_cache_fallback_failure_is_visible_ahead_of_fetch_failure(observed):
     assert data["omitted_failures"] == 2
 
 
+def test_unavailable_cause_survives_red_scope_sample_and_fallback(observed, monkeypatch, caplog):
+    import logging
+    from types import SimpleNamespace
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    decisions = tuple(replace(wave.decisions[0], scope=replace(wave.decisions[0].scope, symbol=f"RED{i}")) for i in range(diagnostics.SCOPE_LIMIT + 1))
+    unavailable = SimpleNamespace(scope=replace(wave.decisions[0].scope, symbol="OTHER/USDT:USDT"), reason="required_input_missing")
+    monkeypatch.setattr(diagnostics, "_safe_emit", lambda *args, **kwargs: events.append(kwargs) or None)
+    with caplog.at_level(logging.INFO):
+        diagnostics.record(bot, replace(wave, decisions=decisions, unavailable=(unavailable,)))
+    data = events[-1]["data"]
+    assert len(data["scopes"]) == diagnostics.SAMPLE_LIMIT
+    assert all(row["tier"] == "red" for row in data["scopes"])
+    assert data["unavailable_scope"]["symbol"] == "OTHER/USDT:USDT"
+    text = format_console_event(LiveEvent(EventTypes.HSL_STATUS, data=data))
+    fallback = next(r.message for r in caplog.records if "[risk] HSL" in r.message)
+    for rendered in (text, fallback):
+        assert "unavailable_reason=required_input_missing" in rendered
+        assert "candle=" not in rendered
+        assert len(rendered) <= 240
+
+
+def test_combined_source_stale_account_console_is_bounded(observed):
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, _, _, _ = observed()
+    data = diagnostics.snapshot(bot, now_ms=NOW)
+    data.update(observation_status="diagnostic_unavailable", signal_mode="unified", account_unavailable=["balance", "positions", "open_orders"], stale_reasons=["account_generation_changed"], counts={key:999999 for key in data["counts"]}, candle_sources={"failures":[{"symbol":"X"*24, "timeframe":"15m", "stage":"cache", "error_type":"CandleReadBusyWithLongDiagnosticName"}]})
+    data["scopes"][0]["symbol"] = "Y" * 24
+    event = LiveEvent(EventTypes.HSL_STATUS, data=data)
+    text = format_console_event(event)
+    assert len(text) <= 240
+    assert "candle=" in text and "cache/CandleReadBusy" in text
+    assert event.data["account_unavailable"] == ["balance", "positions", "open_orders"]
+    assert event.data["stale_reasons"] == ["account_generation_changed"]
+
+
 @pytest.mark.parametrize("change", ["ttl", "confirmation", "generation"])
 def test_last_decision_is_explicitly_stale_when_current_inputs_are_not_confirmed(
     observed, change
