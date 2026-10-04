@@ -6084,6 +6084,10 @@ def run_backend(
                     # checkpoint.  Honor the configured checkpoint interval
                     # instead of rewriting the complete seed plan per seed.
                     maybe_save_checkpoint()
+                # Consume completed worker evidence before a queue trial can
+                # change its admission epoch, as in the evolution loop.
+                if worker_controller is not None:
+                    worker_controller.update()
                 if queue_controller is not None:
                     queue_controller.update(generation)
                     max_pending = queue_controller.limit

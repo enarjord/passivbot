@@ -31,6 +31,7 @@ from test_hsl_offline_runtime import deny_network, offline_cli_config
         "worker_resize_budget",
         "worker_resize_queue",
         "worker_resize_seeded",
+        "worker_resize_seeded_queue",
         "milestone_wait",
     ],
 )
@@ -70,9 +71,10 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         auto_lean_parallelism=False,
     )
     resizing = stop_kind.startswith("worker_resize")
+    worker_tuners = []
     if resizing:
         cfg["optimize"]["gpu"]["exact_workers"] = None
-        if stop_kind == "worker_resize_queue":
+        if stop_kind in {"worker_resize_queue", "worker_resize_seeded_queue"}:
             cfg["optimize"]["gpu"]["max_pending_exact"] = None
             monkeypatch.setattr(
                 "optimization.gpu.exact_autotune.hardware_identity",
@@ -102,6 +104,7 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         class WorkerController:
             def __init__(self, workers, *args, **kwargs):
                 self.workers = self.target = workers
+                worker_tuners.append(self)
                 self.epoch = 0
                 self.baseline = None
                 self.completed = 0
@@ -132,7 +135,26 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
                 self.epoch += 1
 
         monkeypatch.setattr(gpu_backend, "ExactWorkerController", WorkerController)
-    seeded = stop_kind.startswith("seeded") or stop_kind == "worker_resize_seeded"
+        if stop_kind == "worker_resize_seeded_queue":
+            # Make queue and worker growth eligible on the same seed results.
+            # Queue growth must not retire the worker window first.
+            from optimization.gpu import exact_autotune
+            monkeypatch.setattr(exact_autotune, "WINDOW", 2)
+
+            class SeedQueueController(gpu_backend.ExactQueueController):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self.warmed = True
+
+                def update(self, generation):
+                    super().update(generation)
+                    worker = worker_tuners[-1]
+                    if worker.completed >= 2 and not worker.resized:
+                        assert worker.target == 2
+                        assert self.baseline is None
+
+            monkeypatch.setattr(gpu_backend, "ExactQueueController", SeedQueueController)
+    seeded = stop_kind.startswith("seeded") or stop_kind.startswith("worker_resize_seeded")
     if stop_kind == "seeded_screened":
         cfg["optimize"]["gpu"]["seed_bootstrap"]["mode"] = "screened"
     shape = build_optimization_shape(cfg)
@@ -331,7 +353,7 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         seeds.mkdir()
         thresholds = (
             [0.03, 0.06, 0.09, 0.12, 0.15, 0.18]
-            if stop_kind == "worker_resize_seeded" else [0.05, 0.15]
+            if stop_kind.startswith("worker_resize_seeded") else [0.05, 0.15]
         )
         for index, threshold in enumerate(thresholds):
             seed_config = copy.deepcopy(cfg)
@@ -346,7 +368,7 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         records = list(load_results(str(artifact)))
         assert records
         assert not any("__gpu_profile" in json.dumps(r) for r in records)
-        if stop_kind == "worker_resize_seeded":
+        if stop_kind.startswith("worker_resize_seeded"):
             assert state.pools[0].submitted == 4
             assert all("gpu_seed_bootstrap" in entry["metrics"] for entry in records[:6])
             assert all("gpu_seed_bootstrap" not in entry["metrics"] for entry in records[6:])
