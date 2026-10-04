@@ -5640,6 +5640,7 @@ def run_backend(
         if queue_controller is not None:
             queue_controller.record(*timing, epoch=queue_epoch, admission_stall=stall)
         if worker_controller is not None:
+            worker_controller.observe_worker_memory(pool_workers)
             worker_controller.record(
                 *timing,
                 epoch=worker_epoch,
@@ -5649,7 +5650,12 @@ def run_backend(
 
     def apply_worker_target():
         nonlocal pool, pool_workers, workers, max_pending, queue_controller
-        if worker_controller is None or worker_controller.target == workers:
+        if worker_controller is None:
+            return
+        # Late jobs may raise the private-memory estimate while draining, and
+        # other processes may consume headroom after a growth proposal.
+        worker_controller.recheck_pending_growth()
+        if worker_controller.target == workers:
             return
         # The caller has drained every admitted result in durable submission
         # order. Never cancel/replay a validation to change execution capacity.
@@ -5948,7 +5954,14 @@ def run_backend(
         try:
             while cursor < len(selected) or pending_seed:
                 interrupt_check()
-                while cursor < len(selected) and len(pending_seed) < max_pending:
+                if worker_controller is not None:
+                    worker_controller.update()
+                    if worker_controller.target != workers and not pending_seed:
+                        apply_worker_target()
+                        if queue_controller is not None:
+                            queue_controller.finish_seed_screen(generation)
+                draining = worker_controller is not None and worker_controller.target != workers
+                while cursor < len(selected) and len(pending_seed) < max_pending and not draining:
                     item = selected[cursor]
                     result = _submit_gpu_exact_validation(
                         pool,
@@ -6076,6 +6089,10 @@ def run_backend(
                     # checkpoint.  Honor the configured checkpoint interval
                     # instead of rewriting the complete seed plan per seed.
                     maybe_save_checkpoint()
+                # Consume completed worker evidence before a queue trial can
+                # change its admission epoch, as in the evolution loop.
+                if worker_controller is not None:
+                    worker_controller.update()
                 if queue_controller is not None:
                     queue_controller.update(generation)
                     max_pending = queue_controller.limit

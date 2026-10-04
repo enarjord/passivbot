@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Avoid repeated unrelated execution-history scans when reconstructing backtest HSL scopes.
+- Apply GPU exact worker auto-tuning during seed validation, draining admitted work before pool changes and accounting for observed private worker memory.
+
+
 - Fix HSL migration on live-only installations when the config selects the GPU optimizer,
   keeping static HSL validation independent of optional optimizer and GPU runtime imports.
 

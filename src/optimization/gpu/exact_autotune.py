@@ -408,6 +408,7 @@ class ExactWorkerController:
         self.ceiling = max(1, ceiling)
         self.proxies = proxies
         self.per_worker = per_worker
+        self.private_worker_peak = 0
         self.cache = CalibrationCache(cache_dir)
         self.key = _digest(
             dict(
@@ -459,6 +460,43 @@ class ExactWorkerController:
     def reset(self):
         self.samples.clear()
         self.work_seconds = 0.0
+
+    def observe_worker_memory(self, workers):
+        """Refine startup's copy reserve using resident private replay memory.
+
+        Shared candle mappings and inherited libraries are paid once by the host.
+        Keep twice the largest observed private footprint plus 256 MiB for replay
+        growth; unavailable private accounting retains the startup estimate.
+        """
+        try:
+            private = [psutil.Process(w.pid).memory_full_info().uss for w in workers]
+        except (AttributeError, OSError, psutil.Error):
+            return
+        if private:
+            self.private_worker_peak = max(self.private_worker_peak, *private)
+            estimate = max(512 * MIB, 2 * self.private_worker_peak + 256 * MIB)
+            if estimate != self.per_worker:
+                logging.info(
+                    "GPU exact worker memory | private_peak_mib=%d estimated_worker_mib=%d",
+                    self.private_worker_peak // MIB, estimate // MIB,
+                )
+            self.per_worker = estimate
+            self.recheck_pending_growth()
+
+    def recheck_pending_growth(self):
+        """Retire an unapplied increase if current resource headroom no longer fits."""
+        if self.target <= self.workers or self.can_grow(self.target):
+            return
+        self.target = self.workers
+        self.baseline = None
+        self.epoch += 1
+        self.reset()
+        self.warmed = False
+        self.cooldown = 1
+        logging.info(
+            "GPU exact worker auto-tune trial retired | workers=%d reason=resource_headroom",
+            self.workers,
+        )
 
     def can_grow(self, count, *, startup=False):
         try:

@@ -816,3 +816,55 @@ def test_rejected_shrink_cannot_restore_a_pool_without_current_headroom(
     monkeypatch.setattr(tune, "resource_snapshot", lambda: {"available": 0, "cores": 8})
     worker_window(worker, seconds=20)
     assert worker.baseline is None and worker.target == worker.workers == 2
+
+
+def test_worker_growth_uses_private_memory_excludes_shared_mappings_and_keeps_peak(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch, workers=1)
+    item.per_worker = 3 * 1024 * tune.MIB
+    private = [256 * tune.MIB]
+    monkeypatch.setattr(tune.psutil, "Process", lambda pid: SimpleNamespace(
+        memory_full_info=lambda: SimpleNamespace(uss=private[0], rss=3 * 1024 * tune.MIB),
+    ))
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: dict(cores=8, available=4 * 1024 * tune.MIB))
+    assert not item.can_grow(2)
+    item.observe_worker_memory([SimpleNamespace(pid=123)])
+    assert item.per_worker == 768 * tune.MIB and item.can_grow(2)
+    private[0] = 2 * 1024 * tune.MIB
+    item.observe_worker_memory([SimpleNamespace(pid=123)])
+    peak = item.per_worker
+    assert not item.can_grow(2)
+    private[0] = 64 * tune.MIB
+    item.observe_worker_memory([SimpleNamespace(pid=123)])
+    assert item.per_worker == peak
+    monkeypatch.setattr(tune.psutil, "Process", lambda pid: SimpleNamespace())
+    item.observe_worker_memory([SimpleNamespace(pid=123)])
+    assert item.per_worker == peak
+
+
+def test_late_private_memory_growth_retires_an_unapplied_pool_trial(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch, workers=1)
+    worker_window(item)
+    worker_window(item)
+    assert item.target == 2 and item.baseline is not None
+    epoch = item.epoch
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: dict(cores=8, available=4 * 1024 * tune.MIB))
+    monkeypatch.setattr(tune.psutil, "Process", lambda pid: SimpleNamespace(
+        memory_full_info=lambda: SimpleNamespace(uss=2 * 1024 * tune.MIB),
+    ))
+    item.observe_worker_memory([SimpleNamespace(pid=123)])
+    assert item.target == item.workers == 1 and item.baseline is None
+    assert item.epoch > epoch and not item.samples and not item.warmed
+    item.record(10, 0, 0, 10, epoch=epoch)
+    assert not item.samples
+
+
+def test_pending_growth_rechecks_resources_after_the_last_job(tmp_path, monkeypatch):
+    item = worker_controller(tmp_path, monkeypatch, workers=1)
+    worker_window(item)
+    worker_window(item)
+    assert item.target == 2
+    item.recheck_pending_growth()
+    assert item.target == 2  # An increase with current headroom is retained.
+    monkeypatch.setattr(tune, "resource_snapshot", lambda: dict(cores=8, available=0))
+    item.recheck_pending_growth()
+    assert item.target == item.workers == 1 and item.baseline is None

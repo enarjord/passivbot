@@ -1455,6 +1455,78 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_executions_preserve_scope_cutoffs_and_empty_history() {
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, Input};
+        let data = candles(100, 2);
+        let btc = Array1::from_elem(100, 50000.);
+        let mut bt = make(&data, &btc);
+        bt.backtest_params.metrics_only = true;
+        for k in 0..60 {
+            fill(
+                &mut bt,
+                k,
+                0,
+                PositionSide::Long,
+                if k % 2 == 0 { 1.0 } else { -1.0 },
+                100.0,
+            );
+            for (side, coin, _mode, symbol) in [
+                (Some(SHORT), Some(0), snapshot::Mode::Coin, Some("C0")),
+                (Some(SHORT), None, snapshot::Mode::Pside, None),
+                (Some(LONG), Some(1), snapshot::Mode::Coin, Some("C1")),
+            ] {
+                let cutoff = bt.hsl_history_cutoff(side, coin);
+                assert_eq!(cutoff, Some((i64::MIN, bt.fills.len())));
+                let pside = side.map(|s| {
+                    if s == LONG {
+                        PositionSide::Long
+                    } else {
+                        PositionSide::Short
+                    }
+                });
+                let mode = || {
+                    if coin.is_some() {
+                        snapshot::Mode::Coin
+                    } else {
+                        snapshot::Mode::Pside
+                    }
+                };
+                let full = bt.hsl_inputs_at(k, mode(), pside, symbol, false).unwrap();
+                let clipped = bt
+                    .hsl_inputs_at_clipped(k, mode(), pside, symbol, false, cutoff)
+                    .unwrap();
+                assert_eq!(full.snapshot.start, clipped.snapshot.start);
+                let input = |snapshot| Input {
+                    snapshot,
+                    slots: 1,
+                    span: 3.5,
+                    threshold: 0.06,
+                    cooldown_ms: 600_000,
+                    restart: Restart::Always,
+                };
+                assert_eq!(
+                    serde_json::to_value(evaluate(input(full.snapshot)).unwrap()).unwrap(),
+                    serde_json::to_value(evaluate(input(clipped.snapshot)).unwrap()).unwrap()
+                );
+                if k % 10 == 0 {
+                    bt.hsl_cutoffs.clear();
+                    assert_eq!(bt.hsl_history_cutoff(side, coin), cutoff);
+                }
+            }
+        }
+        // The first relevant fill invalidates an empty-history prefix.
+        fill(&mut bt, 60, 0, PositionSide::Short, -1.0, 100.0);
+        let cutoff = bt.hsl_history_cutoff(Some(SHORT), Some(0));
+        assert_ne!(cutoff.unwrap().0, i64::MIN);
+        // Unrelated fills retain the selected episode, including its fill index.
+        fill(&mut bt, 61, 1, PositionSide::Long, 1.0, 200.0);
+        assert_eq!(bt.hsl_history_cutoff(Some(SHORT), Some(0)), cutoff);
+        bt.hsl_cutoffs.clear();
+        assert_eq!(bt.hsl_history_cutoff(Some(SHORT), Some(0)), cutoff);
+    }
+
+    #[test]
     fn latest_episode_suffix_preserves_current_decision() {
         use crate::hsl_controller::Restart;
         use crate::hsl_evaluator::{evaluate, Input};
