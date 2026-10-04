@@ -32,6 +32,7 @@ from test_hsl_offline_runtime import deny_network, offline_cli_config
         "worker_resize_queue",
         "worker_resize_seeded",
         "worker_resize_seeded_queue",
+        "worker_resize_seeded_denied",
         "milestone_wait",
     ],
 )
@@ -112,6 +113,12 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
 
             def observe_worker_memory(self, workers):
                 pass
+
+            def recheck_pending_growth(self):
+                if stop_kind == "worker_resize_seeded_denied":
+                    self.target = self.workers
+                    self.baseline = None
+                    self.resized = True
 
             def record(self, *args, epoch, **kwargs):
                 if stop_kind == "worker_resize_queue":
@@ -369,11 +376,14 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         assert records
         assert not any("__gpu_profile" in json.dumps(r) for r in records)
         if stop_kind.startswith("worker_resize_seeded"):
-            assert state.pools[0].submitted == 4
+            if stop_kind != "worker_resize_seeded_denied":
+                assert state.pools[0].submitted == 4
             assert all("gpu_seed_bootstrap" in entry["metrics"] for entry in records[:6])
             assert all("gpu_seed_bootstrap" not in entry["metrics"] for entry in records[6:])
             assert len(records) == cfg["optimize"]["iters"] + 6
-            assert [p.processes for p in state.pools] == [1, 2]
+            assert [p.processes for p in state.pools] == (
+                [1] if stop_kind == "worker_resize_seeded_denied" else [1, 2]
+            )
             assert len(set(state.submissions)) == len(records)
             return
         if stop_kind == "worker_resize_failure":

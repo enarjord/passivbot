@@ -481,6 +481,22 @@ class ExactWorkerController:
                     self.private_worker_peak // MIB, estimate // MIB,
                 )
             self.per_worker = estimate
+            self.recheck_pending_growth()
+
+    def recheck_pending_growth(self):
+        """Retire an unapplied increase if current resource headroom no longer fits."""
+        if self.target <= self.workers or self.can_grow(self.target):
+            return
+        self.target = self.workers
+        self.baseline = None
+        self.epoch += 1
+        self.reset()
+        self.warmed = False
+        self.cooldown = 1
+        logging.info(
+            "GPU exact worker auto-tune trial retired | workers=%d reason=resource_headroom",
+            self.workers,
+        )
 
     def can_grow(self, count, *, startup=False):
         try:

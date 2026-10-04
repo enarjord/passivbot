@@ -5650,7 +5650,12 @@ def run_backend(
 
     def apply_worker_target():
         nonlocal pool, pool_workers, workers, max_pending, queue_controller
-        if worker_controller is None or worker_controller.target == workers:
+        if worker_controller is None:
+            return
+        # Late jobs may raise the private-memory estimate while draining, and
+        # other processes may consume headroom after a growth proposal.
+        worker_controller.recheck_pending_growth()
+        if worker_controller.target == workers:
             return
         # The caller has drained every admitted result in durable submission
         # order. Never cancel/replay a validation to change execution capacity.
