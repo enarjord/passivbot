@@ -3304,7 +3304,14 @@ def _hsl_candle_source_console(data: Mapping) -> str | None:
         isinstance(failures, list) and failures and isinstance(failures[0], Mapping)
     ):
         return None
-    failure = failures[0]
+    failure = next(
+        (
+            row
+            for row in failures
+            if isinstance(row, Mapping) and row.get("stage") == "cache"
+        ),
+        failures[0],
+    )
 
     def token(value: Any, limit: int) -> str:
         return re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(value or "-"))[:limit]
@@ -3319,6 +3326,24 @@ def _hsl_candle_source_console(data: Mapping) -> str | None:
         + "/"
         + token(failure.get("error_type"), 32)
     )
+
+
+def _hsl_input_console(data: Mapping) -> tuple[Mapping | None, str | None]:
+    """Preserve required-input priority on both console paths."""
+    scopes = data.get("scopes")
+    rows = (
+        [row for row in scopes if isinstance(row, Mapping)]
+        if isinstance(scopes, list)
+        else []
+    )
+    row = next(
+        (row for row in rows if row.get("unavailable_reason")),
+        rows[0] if rows else None,
+    )
+    if row is not None and row.get("unavailable_reason"):
+        reason = re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row["unavailable_reason"]))[:64]
+        return row, "unavailable_reason=" + reason
+    return row, _hsl_candle_source_console(data)
 
 
 def _format_hsl_console(event: LiveEvent) -> str:
@@ -3348,29 +3373,16 @@ def _format_hsl_console(event: LiveEvent) -> str:
     missing = data.get("account_unavailable")
     if isinstance(missing, list) and missing:
         parts.append("account=" + ",".join(token(value, 12) for value in missing[:3]))
-    candle_cause = _hsl_candle_source_console(data)
-    scopes = data.get("scopes")
-    row = None
-    if isinstance(scopes, list) and scopes and isinstance(scopes[0], Mapping):
-        row = scopes[0]
+    row, input_cause = _hsl_input_console(data)
+    if row is not None:
         parts.append(
             "scope=" + token(row.get("symbol"), 24) + "/" + token(row.get("pside"), 5)
         )
         reasons = row.get("estimates")
-        reason = row.get("unavailable_reason") or (
-            reasons[0] if isinstance(reasons, list) and reasons else None
-        )
-        if reason and (row.get("unavailable_reason") or not candle_cause):
-            parts.append(
-                (
-                    "unavailable_reason="
-                    if row.get("unavailable_reason")
-                    else "estimate="
-                )
-                + token(reason, 64)
-            )
-    if candle_cause and (row is None or not row.get("unavailable_reason")):
-        parts.append(candle_cause)
+        if not input_cause and isinstance(reasons, list) and reasons:
+            parts.append("estimate=" + token(reasons[0], 64))
+    if input_cause:
+        parts.append(input_cause)
     stale_reasons = data.get("stale_reasons")
     if isinstance(stale_reasons, list) and stale_reasons:
         parts.insert(3, "stale_reason=" + token(stale_reasons[0], 64))

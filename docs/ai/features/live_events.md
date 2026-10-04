@@ -477,10 +477,13 @@ payloads.
 The optional `candle_sources` diagnostic describes failures in the latest already-acquired HSL
 source batches, independently of decision freshness. It contains the complete `failure_count`,
 up to 16 deterministic `failures` rows (symbol, timeframe, fetch/cache stage and bounded exception
-type), and `omitted_failures`. Exception text and raw exchange payloads are never included. Source
+type), and `omitted_failures`. Failed cache fallbacks precede fetch failures before sampling, so
+terminal source loss remains distinguishable from a fetch failure with successful cache recovery.
+Exception text and raw exchange payloads are never included. Source
 failure changes and recovery emit a status transition, including changes in omitted rows; repeated
 unchanged failures do not. The console shows one compact source cause when no current scope
-unavailability reason takes priority. This view neither fetches inputs nor changes risk reasons,
+unavailability reason takes priority, including in the legacy/sink-error console fallback. This
+view neither fetches inputs nor changes risk reasons,
 readiness, retry policy or trading authority.
 
 Smoke reports and dashboard event summaries consume these scoped status rows directly,

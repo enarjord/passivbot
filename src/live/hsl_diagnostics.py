@@ -7,7 +7,7 @@ import json
 import logging
 
 from live.diagnostic_safety import bounded_exception_type
-from live.event_bus import EventTags, EventTypes, _hsl_candle_source_console
+from live.event_bus import EventTags, EventTypes, _hsl_input_console
 from live.event_emitters import _safe_emit, _console_sink_error_count
 
 SCOPE_LIMIT = 128
@@ -28,12 +28,23 @@ def _source_failures(bot):
         for symbol, source in sorted(getattr(owner, "sources", {}).items())
         for failure in source.failures
     ]
+    rows.sort(
+        key=lambda row: (
+            row["stage"] != "cache",
+            row["symbol"],
+            row["timeframe"],
+            row["error_type"],
+        )
+    )
     signature = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
-    return dict(
-        failure_count=len(rows),
-        failures=rows[:SOURCE_FAILURE_LIMIT],
-        omitted_failures=max(0, len(rows) - SOURCE_FAILURE_LIMIT),
-    ), signature
+    return (
+        dict(
+            failure_count=len(rows),
+            failures=rows[:SOURCE_FAILURE_LIMIT],
+            omitted_failures=max(0, len(rows) - SOURCE_FAILURE_LIMIT),
+        ),
+        signature,
+    )
 
 
 def _account_unavailable(bot, now):
@@ -272,7 +283,7 @@ def _emit_status(bot, data, scope_signature):
         and console_errors_after > console_errors_before
     )
     if emitted is None or console_failed:
-        candle_cause = _hsl_candle_source_console(data)
+        _, input_cause = _hsl_input_console(data)
         logging.log(
             (
                 logging.DEBUG
@@ -287,7 +298,7 @@ def _emit_status(bot, data, scope_signature):
             counts["inactive"],
             counts["unavailable"],
             counts["estimated"],
-            " " + candle_cause if candle_cause else "",
+            " " + input_cause if input_cause else "",
         )
 
 

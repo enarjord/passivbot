@@ -171,6 +171,74 @@ def test_source_cause_survives_console_fallback(observed, monkeypatch, caplog, f
     assert len(messages[0]) <= 240
 
 
+@pytest.mark.parametrize("failure_path", ["no_pipeline", "console_sink_failure"])
+def test_unavailable_scope_has_priority_on_both_console_paths(observed, monkeypatch, caplog, failure_path):
+    import logging
+    from types import SimpleNamespace
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    # Keep a RED row first in the diagnostic sample; unavailable scope evidence
+    # still takes priority in the compact console without hiding the RED count.
+    unavailable = SimpleNamespace(
+        scope=replace(wave.decisions[0].scope, symbol="OTHER/USDT:USDT"),
+        reason="required_input_missing",
+    )
+    updated = replace(wave, unavailable=(unavailable,))
+    if failure_path == "no_pipeline":
+        monkeypatch.setattr(diagnostics, "_safe_emit", lambda *args, **kwargs: None)
+    else:
+        counter = iter((0, 1))
+        monkeypatch.setattr(
+            diagnostics, "_console_sink_error_count", lambda bot: next(counter)
+        )
+    with caplog.at_level(logging.INFO):
+        diagnostics.record(bot, updated)
+    fallback = next(r.message for r in caplog.records if "[risk] HSL" in r.message)
+    structured = format_console_event(
+        LiveEvent(EventTypes.HSL_STATUS, data=diagnostics.snapshot(bot, now_ms=NOW))
+    )
+    for text in (fallback, structured):
+        assert "unavailable_reason=required_input_missing" in text
+        assert "candle=" not in text
+        assert "red=1" in text
+        assert len(text) <= 240
+    assert "scope=OTHER/USDT:USDT/long" in structured
+
+
+def test_cache_fallback_failure_is_visible_ahead_of_fetch_failure(observed):
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    diagnostics.record(bot, wave)
+    before = format_console_event(
+        LiveEvent(EventTypes.HSL_STATUS, data=diagnostics.snapshot(bot, now_ms=NOW))
+    )
+    owner.sources[SYMBOL] = Sources(
+        (),
+        (Failure("5m", "fetch", "TimeoutError"), Failure("5m", "cache", "OSError")),
+        0,
+    )
+    diagnostics.record(bot, wave)
+    after = format_console_event(
+        LiveEvent(EventTypes.HSL_STATUS, data=diagnostics.snapshot(bot, now_ms=NOW))
+    )
+    assert "5m/fetch/TimeoutError" in before
+    assert "5m/cache/OSError" in after
+    assert before != after and len(events) == 3
+    # Severity priority applies before the source payload cap as well.
+    for i in range(diagnostics.SOURCE_FAILURE_LIMIT):
+        owner.sources[f"AAA{i:03d}"] = Sources(
+            (), (Failure("5m", "fetch", "TimeoutError"),), 0
+        )
+    diagnostics.record(bot, wave)
+    data = diagnostics.snapshot(bot, now_ms=NOW)["candle_sources"]
+    assert data["failures"][0]["stage"] == "cache"
+    assert data["omitted_failures"] == 2
+
+
 @pytest.mark.parametrize("change", ["ttl", "confirmation", "generation"])
 def test_last_decision_is_explicitly_stale_when_current_inputs_are_not_confirmed(
     observed, change
