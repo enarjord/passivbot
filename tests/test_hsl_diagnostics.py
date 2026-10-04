@@ -10,6 +10,7 @@ import pytest
 
 from live import hsl_live, hsl_diagnostics as diagnostics
 from live.hsl_runtime import Scope
+from live.hsl_candles import Sources, Failure
 from passivbot_monitor import _monitor_hsl_section
 from test_hsl_runtime import bot as make_bot, quotes, NOW, SYMBOL
 
@@ -74,6 +75,207 @@ def test_same_state_refreshes_numbers_without_repeating_status(observed):
     result = diagnostics.snapshot(bot, now_ms=NOW)
     result["scopes"][0]["action"] = "normal"
     assert diagnostics.snapshot(bot, now_ms=NOW)["scopes"][0]["action"] == "panic"
+
+
+def test_source_failure_change_and_recovery_are_passive_status_transitions(observed):
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    original_decisions = wave.decisions
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    diagnostics.record(bot, wave)
+    data = diagnostics.snapshot(bot, now_ms=NOW)
+    assert data["candle_sources"] == {
+        "failure_count": 1,
+        "failures": [
+            {
+                "symbol": SYMBOL,
+                "timeframe": "5m",
+                "stage": "fetch",
+                "error_type": "TimeoutError",
+            }
+        ],
+        "omitted_failures": 0,
+    }
+    assert len(events) == 2
+    text = format_console_event(LiveEvent(EventTypes.HSL_STATUS, data=data))
+    assert f"candle={SYMBOL}:5m/fetch/TimeoutError" in text
+    assert len(text) <= 240
+    diagnostics.record(bot, wave)
+    assert len(events) == 2
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "cache", "OSError"),), 0)
+    diagnostics.record(bot, wave)
+    assert len(events) == 3
+    owner.sources[SYMBOL] = Sources((), (), 0)
+    diagnostics.record(bot, wave)
+    assert len(events) == 4
+    assert diagnostics.snapshot(bot, now_ms=NOW)["candle_sources"]["failure_count"] == 0
+    assert wave.decisions == original_decisions
+    # Snapshot readers cannot mutate the source facts or reporting store.
+    data["candle_sources"]["failures"][0]["error_type"] = "changed"
+    assert diagnostics.snapshot(bot, now_ms=NOW)["candle_sources"]["failures"] == []
+
+
+def test_source_failure_sample_is_bounded_and_omitted_change_is_visible(observed):
+    bot, owner, wave, events = observed()
+    for i in range(diagnostics.SOURCE_FAILURE_LIMIT + 1):
+        owner.sources[f"COIN{i:03d}/USDT:USDT"] = Sources(
+            (), (Failure("15m", "fetch", "TimeoutError"),), 0
+        )
+    diagnostics.record(bot, wave)
+    data = diagnostics.snapshot(bot, now_ms=NOW)["candle_sources"]
+    assert data["failure_count"] == diagnostics.SOURCE_FAILURE_LIMIT + 1
+    assert len(data["failures"]) == diagnostics.SOURCE_FAILURE_LIMIT
+    assert data["omitted_failures"] == 1
+    owner.sources[f"COIN{diagnostics.SOURCE_FAILURE_LIMIT:03d}/USDT:USDT"] = Sources(
+        (), (Failure("15m", "fetch", "OSError"),), 0
+    )
+    diagnostics.record(bot, wave)
+    assert len(events) == 3
+
+
+def test_source_failure_console_does_not_require_a_policy_scope(observed):
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    diagnostics.record(bot, replace(wave, decisions=(), unavailable=()))
+    data = diagnostics.snapshot(bot, now_ms=NOW)
+    assert data["scopes"] == []
+    assert events[-1][1]["status"] == "degraded"
+    text = format_console_event(LiveEvent(EventTypes.HSL_STATUS, data=data))
+    assert f"candle={SYMBOL}:5m/fetch/TimeoutError" in text
+    assert len(text) <= 240
+
+
+@pytest.mark.parametrize("failure_path", ["no_pipeline", "console_sink_failure"])
+def test_source_cause_survives_console_fallback(observed, monkeypatch, caplog, failure_path):
+    import logging
+
+    bot, owner, wave, _ = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    if failure_path == "no_pipeline":
+        monkeypatch.setattr(diagnostics, "_safe_emit", lambda *args, **kwargs: None)
+    else:
+        counter = iter((0, 1))
+        monkeypatch.setattr(
+            diagnostics, "_console_sink_error_count", lambda bot: next(counter)
+        )
+    with caplog.at_level(logging.INFO):
+        diagnostics.record(bot, wave)
+    messages = [
+        record.message for record in caplog.records if "[risk] HSL" in record.message
+    ]
+    assert len(messages) == 1
+    assert f"candle={SYMBOL}:5m/fetch/TimeoutError" in messages[0]
+    assert len(messages[0]) <= 240
+
+
+@pytest.mark.parametrize("failure_path", ["no_pipeline", "console_sink_failure"])
+def test_unavailable_scope_has_priority_on_both_console_paths(observed, monkeypatch, caplog, failure_path):
+    import logging
+    from types import SimpleNamespace
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    # Keep a RED row first in the diagnostic sample; unavailable scope evidence
+    # still takes priority in the compact console without hiding the RED count.
+    unavailable = SimpleNamespace(
+        scope=replace(wave.decisions[0].scope, symbol="OTHER/USDT:USDT"),
+        reason="required_input_missing",
+    )
+    updated = replace(wave, unavailable=(unavailable,))
+    if failure_path == "no_pipeline":
+        monkeypatch.setattr(diagnostics, "_safe_emit", lambda *args, **kwargs: None)
+    else:
+        counter = iter((0, 1))
+        monkeypatch.setattr(
+            diagnostics, "_console_sink_error_count", lambda bot: next(counter)
+        )
+    with caplog.at_level(logging.INFO):
+        diagnostics.record(bot, updated)
+    fallback = next(r.message for r in caplog.records if "[risk] HSL" in r.message)
+    structured = format_console_event(
+        LiveEvent(EventTypes.HSL_STATUS, data=diagnostics.snapshot(bot, now_ms=NOW))
+    )
+    for text in (fallback, structured):
+        assert "unavailable_reason=required_input_missing" in text
+        assert "candle=" not in text
+        assert "red=1" in text
+        assert len(text) <= 240
+    assert "scope=OTHER/USDT:USDT/long" in structured
+
+
+def test_cache_fallback_failure_is_visible_ahead_of_fetch_failure(observed):
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    diagnostics.record(bot, wave)
+    before = format_console_event(
+        LiveEvent(EventTypes.HSL_STATUS, data=diagnostics.snapshot(bot, now_ms=NOW))
+    )
+    owner.sources[SYMBOL] = Sources(
+        (),
+        (Failure("5m", "fetch", "TimeoutError"), Failure("5m", "cache", "OSError")),
+        0,
+    )
+    diagnostics.record(bot, wave)
+    after = format_console_event(
+        LiveEvent(EventTypes.HSL_STATUS, data=diagnostics.snapshot(bot, now_ms=NOW))
+    )
+    assert "5m/fetch/TimeoutError" in before
+    assert "5m/cache/OSError" in after
+    assert before != after and len(events) == 3
+    # Severity priority applies before the source payload cap as well.
+    for i in range(diagnostics.SOURCE_FAILURE_LIMIT):
+        owner.sources[f"AAA{i:03d}"] = Sources(
+            (), (Failure("5m", "fetch", "TimeoutError"),), 0
+        )
+    diagnostics.record(bot, wave)
+    data = diagnostics.snapshot(bot, now_ms=NOW)["candle_sources"]
+    assert data["failures"][0]["stage"] == "cache"
+    assert data["omitted_failures"] == 2
+
+
+def test_unavailable_cause_survives_red_scope_sample_and_fallback(observed, monkeypatch, caplog):
+    import logging
+    from types import SimpleNamespace
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    decisions = tuple(replace(wave.decisions[0], scope=replace(wave.decisions[0].scope, symbol=f"RED{i}")) for i in range(diagnostics.SCOPE_LIMIT + 1))
+    unavailable = SimpleNamespace(scope=replace(wave.decisions[0].scope, symbol="OTHER/USDT:USDT"), reason="required_input_missing")
+    monkeypatch.setattr(diagnostics, "_safe_emit", lambda *args, **kwargs: events.append(kwargs) or None)
+    with caplog.at_level(logging.INFO):
+        diagnostics.record(bot, replace(wave, decisions=decisions, unavailable=(unavailable,)))
+    data = events[-1]["data"]
+    assert len(data["scopes"]) == diagnostics.SAMPLE_LIMIT
+    assert all(row["tier"] == "red" for row in data["scopes"])
+    assert data["unavailable_scope"]["symbol"] == "OTHER/USDT:USDT"
+    text = format_console_event(LiveEvent(EventTypes.HSL_STATUS, data=data))
+    fallback = next(r.message for r in caplog.records if "[risk] HSL" in r.message)
+    for rendered in (text, fallback):
+        assert "unavailable_reason=required_input_missing" in rendered
+        assert "candle=" not in rendered
+        assert len(rendered) <= 240
+
+
+def test_combined_source_stale_account_console_is_bounded(observed):
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, _, _, _ = observed()
+    data = diagnostics.snapshot(bot, now_ms=NOW)
+    data.update(observation_status="diagnostic_unavailable", signal_mode="unified", account_unavailable=["balance", "positions", "open_orders"], stale_reasons=["account_generation_changed"], counts={key:999999 for key in data["counts"]}, candle_sources={"failures":[{"symbol":"X"*24, "timeframe":"15m", "stage":"cache", "error_type":"CandleReadBusyWithLongDiagnosticName"}]})
+    data["scopes"][0]["symbol"] = "Y" * 24
+    event = LiveEvent(EventTypes.HSL_STATUS, data=data)
+    text = format_console_event(event)
+    assert len(text) <= 240
+    assert "candle=" in text and "cache/CandleReadBusy" in text
+    assert event.data["account_unavailable"] == ["balance", "positions", "open_orders"]
+    assert event.data["stale_reasons"] == ["account_generation_changed"]
 
 
 @pytest.mark.parametrize("change", ["ttl", "confirmation", "generation"])
