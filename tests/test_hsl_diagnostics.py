@@ -10,6 +10,7 @@ import pytest
 
 from live import hsl_live, hsl_diagnostics as diagnostics
 from live.hsl_runtime import Scope
+from live.hsl_candles import Sources, Failure
 from passivbot_monitor import _monitor_hsl_section
 from test_hsl_runtime import bot as make_bot, quotes, NOW, SYMBOL
 
@@ -74,6 +75,63 @@ def test_same_state_refreshes_numbers_without_repeating_status(observed):
     result = diagnostics.snapshot(bot, now_ms=NOW)
     result["scopes"][0]["action"] = "normal"
     assert diagnostics.snapshot(bot, now_ms=NOW)["scopes"][0]["action"] == "panic"
+
+
+def test_source_failure_change_and_recovery_are_passive_status_transitions(observed):
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    original_decisions = wave.decisions
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    diagnostics.record(bot, wave)
+    data = diagnostics.snapshot(bot, now_ms=NOW)
+    assert data["candle_sources"] == {
+        "failure_count": 1,
+        "failures": [
+            {
+                "symbol": SYMBOL,
+                "timeframe": "5m",
+                "stage": "fetch",
+                "error_type": "TimeoutError",
+            }
+        ],
+        "omitted_failures": 0,
+    }
+    assert len(events) == 2
+    text = format_console_event(LiveEvent(EventTypes.HSL_STATUS, data=data))
+    assert f"candle={SYMBOL}:5m/fetch/TimeoutError" in text
+    assert len(text) <= 240
+    diagnostics.record(bot, wave)
+    assert len(events) == 2
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "cache", "OSError"),), 0)
+    diagnostics.record(bot, wave)
+    assert len(events) == 3
+    owner.sources[SYMBOL] = Sources((), (), 0)
+    diagnostics.record(bot, wave)
+    assert len(events) == 4
+    assert diagnostics.snapshot(bot, now_ms=NOW)["candle_sources"]["failure_count"] == 0
+    assert wave.decisions == original_decisions
+    # Snapshot readers cannot mutate the source facts or reporting store.
+    data["candle_sources"]["failures"][0]["error_type"] = "changed"
+    assert diagnostics.snapshot(bot, now_ms=NOW)["candle_sources"]["failures"] == []
+
+
+def test_source_failure_sample_is_bounded_and_omitted_change_is_visible(observed):
+    bot, owner, wave, events = observed()
+    for i in range(diagnostics.SOURCE_FAILURE_LIMIT + 1):
+        owner.sources[f"COIN{i:03d}/USDT:USDT"] = Sources(
+            (), (Failure("15m", "fetch", "TimeoutError"),), 0
+        )
+    diagnostics.record(bot, wave)
+    data = diagnostics.snapshot(bot, now_ms=NOW)["candle_sources"]
+    assert data["failure_count"] == diagnostics.SOURCE_FAILURE_LIMIT + 1
+    assert len(data["failures"]) == diagnostics.SOURCE_FAILURE_LIMIT
+    assert data["omitted_failures"] == 1
+    owner.sources[f"COIN{diagnostics.SOURCE_FAILURE_LIMIT:03d}/USDT:USDT"] = Sources(
+        (), (Failure("15m", "fetch", "OSError"),), 0
+    )
+    diagnostics.record(bot, wave)
+    assert len(events) == 3
 
 
 @pytest.mark.parametrize("change", ["ttl", "confirmation", "generation"])

@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Expose HSL candle-source failure types and fetch/cache stages in bounded status diagnostics,
+  with a compact console cause and transitions when failures change or recover.
+
 - Avoid repeated unrelated execution-history scans when reconstructing backtest HSL scopes.
 - Apply GPU exact worker auto-tuning during seed validation, draining admitted work before pool changes and accounting for observed private worker memory.
 
