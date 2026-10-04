@@ -30,6 +30,7 @@ from test_hsl_offline_runtime import deny_network, offline_cli_config
         "worker_resize_failure",
         "worker_resize_budget",
         "worker_resize_queue",
+        "worker_resize_seeded",
         "milestone_wait",
     ],
 )
@@ -106,6 +107,9 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
                 self.completed = 0
                 self.resized = False
 
+            def observe_worker_memory(self, workers):
+                pass
+
             def record(self, *args, epoch, **kwargs):
                 if stop_kind == "worker_resize_queue":
                     assert isinstance(kwargs.get("queue_epoch"), int)
@@ -128,7 +132,7 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
                 self.epoch += 1
 
         monkeypatch.setattr(gpu_backend, "ExactWorkerController", WorkerController)
-    seeded = stop_kind.startswith("seeded")
+    seeded = stop_kind.startswith("seeded") or stop_kind == "worker_resize_seeded"
     if stop_kind == "seeded_screened":
         cfg["optimize"]["gpu"]["seed_bootstrap"]["mode"] = "screened"
     shape = build_optimization_shape(cfg)
@@ -325,7 +329,11 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
     if seeded:
         seeds = tmp_path / "seeds"
         seeds.mkdir()
-        for index, threshold in enumerate([0.05, 0.15]):
+        thresholds = (
+            [0.03, 0.06, 0.09, 0.12, 0.15, 0.18]
+            if stop_kind == "worker_resize_seeded" else [0.05, 0.15]
+        )
+        for index, threshold in enumerate(thresholds):
             seed_config = copy.deepcopy(cfg)
             seed_config["bot"]["long"]["hsl"]["red_threshold"] = threshold
             (seeds / f"seed_{index}.json").write_text(json.dumps(seed_config))
@@ -338,6 +346,14 @@ async def test_exact_collection_durable_tail_and_cli_resume(tmp_path, monkeypatc
         records = list(load_results(str(artifact)))
         assert records
         assert not any("__gpu_profile" in json.dumps(r) for r in records)
+        if stop_kind == "worker_resize_seeded":
+            assert state.pools[0].submitted == 4
+            assert all("gpu_seed_bootstrap" in entry["metrics"] for entry in records[:6])
+            assert all("gpu_seed_bootstrap" not in entry["metrics"] for entry in records[6:])
+            assert len(records) == cfg["optimize"]["iters"] + 6
+            assert [p.processes for p in state.pools] == [1, 2]
+            assert len(set(state.submissions)) == len(records)
+            return
         if stop_kind == "worker_resize_failure":
             assert stopped.value.code == 1
             assert state.pools[0].terminated

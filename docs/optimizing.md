@@ -991,7 +991,7 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   on either or both enabled sides, without extra calibration candidates. Fixed batch sizes
   and `tuning_mode=off` retain their configured execution policy.
 - `exact_workers` defaults to `null`; omitted, `null`, and `"auto"` values select initial
-  hardware/RAM-aware sizing. It counts physical cores within CPU affinity (including SMT siblings),
+  hardware/RAM-aware sizing. It counts distinct physical cores within CPU affinity, grouping SMT siblings,
   and uses cgroup-v2 CPU/memory limits
   when available, reserves one core for GPU orchestration, and budgets 60% of available RAM using
   a conservative worker estimate from process RSS before GPU proxy allocation plus twice the
@@ -1006,7 +1006,11 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   measured throughput; unrelated GPU-only pauses do not create evidence.
   The first window for a replacement pool is cold. Larger pools need a 5% gain;
   smaller pools can retain throughput within 2%. Growth also requires current RAM
-  headroom. Admitted results are drained and durably collected in order before replacing
+  headroom. After completed jobs, private worker memory refines the startup estimate:
+  twice the largest observed private footprint plus 256 MiB, with a 512 MiB floor.
+  Shared candle mappings are not charged again for each worker. If private memory accounting
+  is unavailable, the startup estimate remains in use. Worker trials run during exact seed
+  validation as well as evolution. Admitted results are drained and durably collected in order before replacing
   the pool; no validation is cancelled or repeated to resize it. Changing worker count
   invalidates GPU/queue evidence and admission epochs. Compatible local measurements
   are advisory starting points. Worker-cache memory estimates use 128 MiB classes to tolerate

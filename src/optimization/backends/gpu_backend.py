@@ -5640,6 +5640,7 @@ def run_backend(
         if queue_controller is not None:
             queue_controller.record(*timing, epoch=queue_epoch, admission_stall=stall)
         if worker_controller is not None:
+            worker_controller.observe_worker_memory(pool_workers)
             worker_controller.record(
                 *timing,
                 epoch=worker_epoch,
@@ -5948,7 +5949,14 @@ def run_backend(
         try:
             while cursor < len(selected) or pending_seed:
                 interrupt_check()
-                while cursor < len(selected) and len(pending_seed) < max_pending:
+                if worker_controller is not None:
+                    worker_controller.update()
+                    if worker_controller.target != workers and not pending_seed:
+                        apply_worker_target()
+                        if queue_controller is not None:
+                            queue_controller.finish_seed_screen(generation)
+                draining = worker_controller is not None and worker_controller.target != workers
+                while cursor < len(selected) and len(pending_seed) < max_pending and not draining:
                     item = selected[cursor]
                     result = _submit_gpu_exact_validation(
                         pool,

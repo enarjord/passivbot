@@ -45,8 +45,31 @@ impl Backtest<'_> {
     ) -> Option<(i64, usize)> {
         let key = (side, coin);
         if let Some((count, cutoff)) = self.hsl_cutoffs.get(&key) {
-            if *count == self.fills.len() {
-                return *cutoff;
+            // Only executions belonging to this scope can change its flat
+            // boundary. Other sides/coins leave the selected positions intact.
+            if *count <= self.fills.len()
+                && self.fills[*count..].iter().all(|fill| {
+                    let s = if fill.order_type.is_long() {
+                        LONG
+                    } else {
+                        SHORT
+                    };
+                    side.is_some_and(|v| v != s)
+                        || coin.is_some_and(|c| self.backtest_params.coins[c] != fill.coin)
+                })
+            {
+                let cutoff = *cutoff;
+                let cutoff = cutoff.map(|(timestamp, consumed)| {
+                    // No selected execution has ever occurred: advance the
+                    // fill-only prefix without changing the lookback timestamp.
+                    if timestamp == i64::MIN {
+                        (timestamp, self.fills.len())
+                    } else {
+                        (timestamp, consumed)
+                    }
+                });
+                self.hsl_cutoffs.insert(key, (self.fills.len(), cutoff));
+                return cutoff;
             }
         }
         let mut sizes = [
@@ -128,7 +151,10 @@ impl Backtest<'_> {
                     side.is_none_or(|v| v == s)
                         && coin.is_none_or(|c| self.backtest_params.coins[c] == fill.coin)
                 })
-                .map(|fill| ((fill.timestamp_ms as i64).saturating_sub(60_000), 0));
+                .map(|fill| ((fill.timestamp_ms as i64).saturating_sub(60_000), 0))
+                // This scope has no execution history. Skip the unrelated tape
+                // but retain the configured valuation/diagnostic window.
+                .or(Some((i64::MIN, self.fills.len())));
         }
         self.hsl_cutoffs.insert(key, (self.fills.len(), cutoff));
         cutoff
