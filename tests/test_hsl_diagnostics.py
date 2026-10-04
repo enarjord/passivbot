@@ -148,6 +148,29 @@ def test_source_failure_console_does_not_require_a_policy_scope(observed):
     assert len(text) <= 240
 
 
+@pytest.mark.parametrize("failure_path", ["no_pipeline", "console_sink_failure"])
+def test_source_cause_survives_console_fallback(observed, monkeypatch, caplog, failure_path):
+    import logging
+
+    bot, owner, wave, _ = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    if failure_path == "no_pipeline":
+        monkeypatch.setattr(diagnostics, "_safe_emit", lambda *args, **kwargs: None)
+    else:
+        counter = iter((0, 1))
+        monkeypatch.setattr(
+            diagnostics, "_console_sink_error_count", lambda bot: next(counter)
+        )
+    with caplog.at_level(logging.INFO):
+        diagnostics.record(bot, wave)
+    messages = [
+        record.message for record in caplog.records if "[risk] HSL" in record.message
+    ]
+    assert len(messages) == 1
+    assert f"candle={SYMBOL}:5m/fetch/TimeoutError" in messages[0]
+    assert len(messages[0]) <= 240
+
+
 @pytest.mark.parametrize("change", ["ttl", "confirmation", "generation"])
 def test_last_decision_is_explicitly_stale_when_current_inputs_are_not_confirmed(
     observed, change

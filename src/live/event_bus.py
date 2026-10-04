@@ -3296,6 +3296,31 @@ def format_forager_eligibility_console(data: Mapping[str, Any]) -> str:
     return message[:_FORAGER_ELIGIBILITY_CONSOLE_RECORD_LIMIT]
 
 
+def _hsl_candle_source_console(data: Mapping) -> str | None:
+    """One bounded source cause, shared by structured and fallback consoles."""
+    sources = data.get("candle_sources")
+    failures = sources.get("failures") if isinstance(sources, Mapping) else None
+    if not (
+        isinstance(failures, list) and failures and isinstance(failures[0], Mapping)
+    ):
+        return None
+    failure = failures[0]
+
+    def token(value: Any, limit: int) -> str:
+        return re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(value or "-"))[:limit]
+
+    return (
+        "candle="
+        + token(failure.get("symbol"), 24)
+        + ":"
+        + token(failure.get("timeframe"), 4)
+        + "/"
+        + token(failure.get("stage"), 5)
+        + "/"
+        + token(failure.get("error_type"), 32)
+    )
+
+
 def _format_hsl_console(event: LiveEvent) -> str:
     data = event.data
 
@@ -3323,13 +3348,7 @@ def _format_hsl_console(event: LiveEvent) -> str:
     missing = data.get("account_unavailable")
     if isinstance(missing, list) and missing:
         parts.append("account=" + ",".join(token(value, 12) for value in missing[:3]))
-    sources = data.get("candle_sources")
-    failures = sources.get("failures") if isinstance(sources, Mapping) else None
-    failure = (
-        failures[0]
-        if isinstance(failures, list) and failures and isinstance(failures[0], Mapping)
-        else None
-    )
+    candle_cause = _hsl_candle_source_console(data)
     scopes = data.get("scopes")
     row = None
     if isinstance(scopes, list) and scopes and isinstance(scopes[0], Mapping):
@@ -3341,7 +3360,7 @@ def _format_hsl_console(event: LiveEvent) -> str:
         reason = row.get("unavailable_reason") or (
             reasons[0] if isinstance(reasons, list) and reasons else None
         )
-        if reason and (row.get("unavailable_reason") or not failure):
+        if reason and (row.get("unavailable_reason") or not candle_cause):
             parts.append(
                 (
                     "unavailable_reason="
@@ -3350,17 +3369,8 @@ def _format_hsl_console(event: LiveEvent) -> str:
                 )
                 + token(reason, 64)
             )
-    if failure and (row is None or not row.get("unavailable_reason")):
-        parts.append(
-            "candle="
-            + token(failure.get("symbol"), 24)
-            + ":"
-            + token(failure.get("timeframe"), 4)
-            + "/"
-            + token(failure.get("stage"), 5)
-            + "/"
-            + token(failure.get("error_type"), 32)
-        )
+    if candle_cause and (row is None or not row.get("unavailable_reason")):
+        parts.append(candle_cause)
     stale_reasons = data.get("stale_reasons")
     if isinstance(stale_reasons, list) and stale_reasons:
         parts.insert(3, "stale_reason=" + token(stale_reasons[0], 64))

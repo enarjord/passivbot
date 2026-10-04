@@ -7,7 +7,7 @@ import json
 import logging
 
 from live.diagnostic_safety import bounded_exception_type
-from live.event_bus import EventTags, EventTypes
+from live.event_bus import EventTags, EventTypes, _hsl_candle_source_console
 from live.event_emitters import _safe_emit, _console_sink_error_count
 
 SCOPE_LIMIT = 128
@@ -272,13 +272,14 @@ def _emit_status(bot, data, scope_signature):
         and console_errors_after > console_errors_before
     )
     if emitted is None or console_failed:
+        candle_cause = _hsl_candle_source_console(data)
         logging.log(
             (
                 logging.DEBUG
                 if data.get("console_replaced_observation")
                 else logging.WARNING if unavailable else logging.INFO
             ),
-            "[risk] HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d",
+            "[risk] HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d%s",
             data["signal_mode"],
             data["observation_status"],
             counts["green"],
@@ -286,6 +287,7 @@ def _emit_status(bot, data, scope_signature):
             counts["inactive"],
             counts["unavailable"],
             counts["estimated"],
+            " " + candle_cause if candle_cause else "",
         )
 
 
