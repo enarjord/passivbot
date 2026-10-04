@@ -1106,7 +1106,7 @@ def _evaluate_gpu_suite_proxies(
 ) -> list[dict]:
     """Screen one candidate batch across suite scenarios with canonical reducers."""
 
-    from metrics_schema import build_scenario_metrics
+    from metrics_schema import MetricAggregationError, build_scenario_metrics
     from suite_runner import ScenarioResult, SuiteScenario
 
     if screening_scenarios:
@@ -1183,25 +1183,48 @@ def _evaluate_gpu_suite_proxies(
             offset += len(task_candidates)
     results = []
     for index in range(len(candidates)):
-        scenario_results = []
-        for ctx, exchange_rows in scenario_rows:
-            per_exchange = {exchange: rows[index] for exchange, rows in exchange_rows}
-            scenario_results.append(
-                ScenarioResult(
-                    scenario=SuiteScenario(
-                        label=ctx.label,
-                        start_date=None,
-                        end_date=None,
-                        coins=None,
-                        ignored_coins=None,
-                    ),
-                    per_exchange=per_exchange,
-                    metrics=build_scenario_metrics(per_exchange),
-                    elapsed_seconds=0.0,
-                    output_path=None,
+        try:
+            scenario_results = []
+            for ctx, exchange_rows in scenario_rows:
+                per_exchange = {exchange: rows[index] for exchange, rows in exchange_rows}
+                scenario_results.append(
+                    ScenarioResult(
+                        scenario=SuiteScenario(
+                            label=ctx.label,
+                            start_date=None,
+                            end_date=None,
+                            coins=None,
+                            ignored_coins=None,
+                        ),
+                        per_exchange=per_exchange,
+                        metrics=build_scenario_metrics(per_exchange),
+                        elapsed_seconds=0.0,
+                        output_path=None,
+                    )
                 )
+            scored = suite_evaluator.score_scenario_results(scenario_results)
+        except MetricAggregationError as exc:
+            # Match the CPU suite policy: reject this candidate, not the batch.
+            from optimize import _build_invalid_candidate_metrics
+
+            error = f"{exc.__class__.__name__}: {exc}"
+            logging.debug(
+                "GPU suite candidate invalid due to metric aggregation failure | index=%s | error=%s",
+                index,
+                error,
             )
-        scored = suite_evaluator.score_scenario_results(scenario_results)
+            objectives, violation, payload = _build_invalid_candidate_metrics(
+                suite_evaluator.base.config["optimize"]["scoring"],
+                error,
+                include_stats=False,
+                include_suite_metrics=True,
+            )
+            scored = {
+                "objectives": objectives,
+                "unpenalized_objectives": payload["unpenalized_objectives"],
+                "constraint_violation": violation,
+                "suite_metrics": payload["suite_metrics"],
+            }
         results.append(
             {
                 _GPU_SUITE_OBJECTIVES_KEY: tuple(scored["objectives"]),
