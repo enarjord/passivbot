@@ -467,9 +467,12 @@ async def fetch_candles_with_resolution_ladder(
     """Fetch exact 1m candles, then cover only older leading history coarsely.
 
     The first available 1m candle is the precision boundary. Higher-timeframe
-    candles may supply minutes before that boundary only when their full bucket
-    ends there or earlier; they never patch gaps at or after it. Within the
-    older prefix, the finest successful source wins.
+    candles normally supply only complete buckets ending at or before that
+    boundary. One bucket may straddle the boundary when every overlapping
+    exact 1m minute is already present; only its pre-boundary synthetic rows
+    are then eligible. Coarse candles never patch gaps at or after the
+    precision boundary. Within the older prefix, the finest successful source
+    wins.
     """
     start_minute = _floor_minute(start_ts)
     end_minute = _floor_minute(end_ts)
@@ -488,6 +491,7 @@ async def fetch_candles_with_resolution_ladder(
     rows_by_ts: Dict[int, np.void] = {}
     sources_by_ts: Dict[int, str] = {}
     failures: Dict[str, Exception] = {}
+    exact_timestamps: set[int] = set()
     precision_boundary = end_minute + ONE_MIN_MS
 
     for index, (timeframe, tf_minutes) in enumerate(CANDLE_RESOLUTION_LADDER):
@@ -515,18 +519,39 @@ async def fetch_candles_with_resolution_ladder(
             candidates = fetched
         else:
             period_ms = tf_minutes * ONE_MIN_MS
+            coarse_boundary = precision_boundary
+
+            if exact_timestamps:
+                aligned_boundary = (
+                    (precision_boundary + period_ms - 1) // period_ms
+                ) * period_ms
+
+                if (
+                    precision_boundary < aligned_boundary
+                    <= end_minute + ONE_MIN_MS
+                    and all(
+                        ts in exact_timestamps
+                        for ts in range(
+                            precision_boundary,
+                            aligned_boundary,
+                            ONE_MIN_MS,
+                        )
+                    )
+                ):
+                    coarse_boundary = aligned_boundary
+
             complete_before_boundary = (
-                fetched["ts"].astype(np.int64) + period_ms <= precision_boundary
+                fetched["ts"].astype(np.int64) + period_ms <= coarse_boundary
             )
             candidates = synthesize_1m_from_higher_tf(
                 fetched[complete_before_boundary], tf_minutes
             )
         if index == 0:
-            exact_timestamps = [
+            exact_timestamps = {
                 int(row["ts"])
                 for row in candidates
                 if start_minute <= int(row["ts"]) <= end_minute
-            ]
+            }
             if exact_timestamps:
                 precision_boundary = min(exact_timestamps)
 

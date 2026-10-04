@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix historical candle-resolution seams when retained 1m history begins inside a higher-timeframe bucket. A straddling coarse bucket may now provide only the missing pre-boundary minutes when the overlapping exact 1m interval is complete, while genuine internal 1m gaps remain unavailable.
+
 - Allow disabled legacy HSL configurations to load with a warning after CLI changes,
   clearing retired engine selection and dormant restart authorization. Enabled legacy HSL
   still requires migration, including override files, optimizer fixed overrides and suite

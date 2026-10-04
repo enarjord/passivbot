@@ -222,9 +222,11 @@
     additionally requires exact aligned coverage for 1m EMA windows because its recent endpoint
     silently tail-anchors responses. HSL restart and live trailing restart reconstruction may fetch
     1m candles first, then cover only the older leading prefix with 5m, 15m, and 1h candles. The
-    finest available source wins, source counts remain visible, and only coarse buckets ending at
-    or before the first available 1m candle are eligible, so later price action cannot leak backward
-    across the precision boundary.
+    finest available source wins and source counts remain visible. Normally only coarse buckets
+    ending at or before the first available 1m candle are eligible. One coarse bucket may straddle
+    that boundary when every overlapping exact 1m minute is already present; only synthetic rows
+    before the precision boundary are eligible, while exact 1m rows retain precedence. This bridges
+    retention-boundary seams without allowing coarse data to conceal an internal exact-era gap.
 
     Trailing still requires a nonempty exact 1m suffix and its existing dense post-fill coverage
     and bounded open-tail checks. The first post-fill minute remains the exact reset boundary;
