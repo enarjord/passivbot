@@ -134,6 +134,20 @@ def test_source_failure_sample_is_bounded_and_omitted_change_is_visible(observed
     assert len(events) == 3
 
 
+def test_source_failure_console_does_not_require_a_policy_scope(observed):
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+
+    bot, owner, wave, events = observed()
+    owner.sources[SYMBOL] = Sources((), (Failure("5m", "fetch", "TimeoutError"),), 0)
+    diagnostics.record(bot, replace(wave, decisions=(), unavailable=()))
+    data = diagnostics.snapshot(bot, now_ms=NOW)
+    assert data["scopes"] == []
+    assert events[-1][1]["status"] == "degraded"
+    text = format_console_event(LiveEvent(EventTypes.HSL_STATUS, data=data))
+    assert f"candle={SYMBOL}:5m/fetch/TimeoutError" in text
+    assert len(text) <= 240
+
+
 @pytest.mark.parametrize("change", ["ttl", "confirmation", "generation"])
 def test_last_decision_is_explicitly_stale_when_current_inputs_are_not_confirmed(
     observed, change
