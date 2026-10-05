@@ -245,3 +245,74 @@ def add_offline_coin(root, cfg):
     rows[:, :3] *= 1.1
     store = OhlcvStore(cache / "ohlcvs", OhlcvCatalog(cache / "ohlcvs/catalog.sqlite"))
     store.write_rows("binance", "1m", "ETH/USDT:USDT", stamps, rows.astype(np.float32))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("coin_count,suite", [(1, False), (2, False), (2, True)])
+async def test_gpu_optimizer_cli_twel_bounds_switch_long_input_to_short(
+    tmp_path, monkeypatch, deny_network, coin_count, suite
+):
+    from copy import deepcopy
+    import msgpack
+    from optimize import main
+    from optimization.shape import build_optimization_shape
+    from config.optimize_bounds import set_flat_optimize_bound
+
+    cfg = offline_cli_config(tmp_path, monkeypatch, "coin")
+    if coin_count == 2:
+        add_offline_coin(tmp_path, cfg)
+    cfg["live"]["approved_coins"]["short"] = list(cfg["live"]["approved_coins"]["long"])
+    cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 2.5
+    cfg["bot"]["short"]["risk"].update(n_positions=1, total_wallet_exposure_limit=0.0)
+    cfg["optimize"].update(
+        backend="gpu", iters=32, n_cpus=1, population_size=4,
+        scoring=[{"metric": "adg_usd", "goal": "max"}], limits=[], seed=42,
+        enable_overrides=[], compress_results_file=False, write_all_results=True,
+    )
+    cfg["optimize"]["gpu"].update(
+        population_size=4, batch_size=4, exact_workers=1, max_pending_exact=2,
+        validate_per_generation=2, drift_probes=1,
+    )
+    shape = build_optimization_shape(cfg)
+    for key, path in shape.key_paths:
+        value = cfg
+        for part in path:
+            value = value[part]
+        set_flat_optimize_bound(cfg["optimize"]["bounds"], "trailing_martingale", key, [value, value])
+    cfg["optimize"]["bounds"]["short"]["hsl"]["red_threshold"] = [0.01, 0.2]
+    if suite:
+        cfg["backtest"].update(
+            suite_enabled=True,
+            scenarios=[{"label": "both", "coins": ["BTC", "ETH"]}, {"label": "subset", "coins": ["ETH"]}],
+        )
+    guard = tmp_path / "guard"
+    guard.mkdir()
+    (guard / "sitecustomize.py").write_text(
+        "import socket\n_connect=socket.socket.connect\n"
+        "def connect(self, address):\n"
+        " if self.family != socket.AF_UNIX: raise AssertionError('network forbidden')\n"
+        " return _connect(self, address)\n"
+        "socket.socket.connect=connect\n"
+        "def denied(*args, **kwargs): raise AssertionError('network forbidden')\n"
+        "socket.getaddrinfo=denied\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(guard) + os.pathsep + os.environ.get("PYTHONPATH", "src"))
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(cfg))
+    monkeypatch.setattr(sys, "argv", ["optimize", str(path), "-ltwel", "0", "-stwel", "2,2", "--suite", "y" if suite else "n"])
+    with pytest.raises(SystemExit) as finished:
+        await main()
+    assert finished.value.code == 0
+    artifacts = list((tmp_path / "optimize_results").rglob("all_results.bin"))
+    assert len(artifacts) == 1
+    with artifacts[0].open("rb") as file:
+        records = list(msgpack.Unpacker(file, raw=False))
+    assert records
+    for record in records:
+        assert record["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+        assert record["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 2.0
+    state = pickle.loads((artifacts[0].parent / "checkpoint.pkl").read_bytes())
+    assert state["exact_done"] >= 32
+    assert state["generation"] > 0
+    assert state["halt_reason"] is None

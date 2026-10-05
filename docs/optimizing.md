@@ -62,6 +62,11 @@ Example:
 passivbot optimize configs/examples/default_trailing_martingale_long.json --start configs/starting_pool/
 ```
 
+Wallet exposure shortcuts `-ltwel` and `-stwel` set
+`optimize.bounds.long.risk.total_wallet_exposure_limit` and the short equivalent.
+Use a single value to fix exposure (for example `-ltwel 0`), or `LOW,HIGH[,STEP]`
+to set its search range. In live and backtest commands these shortcuts still set bot values.
+
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
 
 ### Scoring Objectives
@@ -584,6 +589,11 @@ effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
 prepared concrete dates. The checkpoint signature also records each scenario's ordered effective
 coins, side topology, and prepared candle window, so resume fails closed if preparation changes.
+
+GPU setup clamps the input bot values to optimizer bounds before determining enabled sides.
+For example, `-ltwel 0 -stwel 2,2` can switch a long-only input to short-only optimization
+when short positions and approved coins permit it. Each enabled GPU side must remain enabled
+across the entire search range; bounds that vary between disabled and enabled remain unsupported.
 
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the

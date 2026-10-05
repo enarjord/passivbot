@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add optimizer `-ltwel` and `-stwel` aliases for wallet exposure bounds, accepting fixed
+  values or ranges. GPU setup now uses the bounds-clamped seed, allowing bounds to enable
+  or disable a side relative to the input config while keeping side topology fixed throughout
+  the search.
+
 - Expose HSL candle-source failure types and fetch/cache stages in bounded status diagnostics,
   with a compact console cause and transitions when failures change or recover.
 

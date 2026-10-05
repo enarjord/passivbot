@@ -725,18 +725,28 @@ def _materialize_gpu_override_template(
     config: dict,
     overrides_list,
     *,
-    finalize_fn=None,
+    vector=None,
+    key_paths=None,
 ) -> dict:
-    """Apply exact runtime-finalization overrides to the proxy base config."""
+    """Apply exact candidate values and runtime overrides to the proxy base config."""
 
-    if not callable(finalize_fn):
-        from optimization.warmup import _finalize_optimizer_vector_config
-
-        finalize_fn = _finalize_optimizer_vector_config
-    proxy_config = finalize_fn(
-        deepcopy(config),
-        overrides_list=overrides_list,
+    from optimization.warmup import (
+        _finalize_optimizer_vector_config,
+        build_optimizer_vector_config,
     )
+
+    if vector is None:
+        proxy_config = _finalize_optimizer_vector_config(
+            deepcopy(config),
+            overrides_list=overrides_list,
+        )
+    else:
+        proxy_config = build_optimizer_vector_config(
+            vector,
+            config,
+            key_paths=key_paths,
+            overrides_list=overrides_list,
+        )
     source_strategy_kind = (
         str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
     )
@@ -753,11 +763,18 @@ def _materialize_gpu_override_template(
 
 
 def materialize_gpu_preparation_config(config: dict) -> dict:
-    """Finalize the immutable GPU template while preserving its strategy-shape guard."""
+    """Use the bounds-clamped seed for GPU capability and side-topology checks."""
 
+    from optimize import config_to_individual
+    from optimization.shape import build_optimization_shape
+
+    shape = build_optimization_shape(config)
+    vector = config_to_individual(config, shape.bounds, optimization_shape=shape)
     return _materialize_gpu_override_template(
         config,
         config.get("optimize", {}).get("enable_overrides", []),
+        vector=vector,
+        key_paths=shape.key_paths,
     )
 
 
@@ -4194,18 +4211,6 @@ def _validate_directional_search_space(
             )
 
 
-def _validate_seed_side_match(config_enabled_sides, seed_enabled_sides) -> None:
-    config_enabled_sides = set(config_enabled_sides)
-    seed_enabled_sides = set(seed_enabled_sides)
-    if config_enabled_sides != seed_enabled_sides:
-        raise ValueError(
-            "GPU foundation does not allow optimizer bounds to activate or disable "
-            "a side relative to the input config; "
-            f"config={sorted(config_enabled_sides)}, "
-            f"bounds_clamped_seed={sorted(seed_enabled_sides)}"
-        )
-
-
 def _constraint_classification_mismatch(
     proxy_violation: float, exact_payload: dict
 ) -> bool:
@@ -4546,10 +4551,7 @@ def run_backend(
         MpsSingleCoinProxy,
         mps_requested_metric_features,
     )
-    from optimization.warmup import (
-        _finalize_optimizer_vector_config,
-        validate_optimizer_effective_configs,
-    )
+    from optimization.warmup import validate_optimizer_effective_configs
 
     interrupt_check = interrupt_check or no_interrupt_requested
     interrupt_check()
@@ -4599,7 +4601,8 @@ def run_backend(
     proxy_config = _materialize_gpu_override_template(
         config,
         overrides_list,
-        finalize_fn=_finalize_optimizer_vector_config,
+        vector=base_vector,
+        key_paths=key_paths,
     )
     suite_enabled = _gpu_suite_enabled(config, evaluator, evaluator_for_pool)
     suite_inputs = (
@@ -4764,9 +4767,7 @@ def run_backend(
         enabled_sides = {
             side for side in ("long", "short") if vector_side_enabled(side)
         }
-        if suite_multicoin_sides is None:
-            _validate_seed_side_match(config_enabled_sides, enabled_sides)
-        else:
+        if suite_multicoin_sides is not None:
             # CPU suite setup requires symmetric approved coin lists. Effective
             # scenario overrides establish the common side topology and
             # are validated below after shadowing candidate bounds.
