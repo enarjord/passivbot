@@ -964,6 +964,7 @@ def create_acronym(full_name, acronyms=set()):
 #   config_key -> {
 #       "visible": ["--preferred-name", "-x"],
 #       "hidden": ["--legacy_name", "--legacy_name_with_dots"],
+#       "command_aliases": {"optimize": ["-x"]},
 #       "commands": {"live", "backtest", "optimize"},
 #       "group": {"live": "Coin Selection", ...},
 #       "type": type_converter,
@@ -1529,6 +1530,20 @@ for _pside in ("long", "short"):
             "help": f"{_help} for the {_pside} side.",
         }
 
+# Optimizer shortcuts set search bounds rather than live/backtest bot values.
+for _pside in ("long", "short"):
+    _key = f"optimize.bounds.{_pside}.risk.total_wallet_exposure_limit"
+    RESERVED_CLI_ARGS[_key] = {
+        "visible": [f"--{_key}"],
+        "command_aliases": {"optimize": [f"-{_pside[0]}twel"]},
+        "hidden": [f"--{_key.replace('.', '_')}", f"-{_pside[0]}rtwel"],
+        "type": comma_separated_values_float,
+        "metavar": "VALUE_OR_RANGE",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimize Bounds"},
+        "help": f"Wallet exposure bounds for the {_pside} side: VALUE or LOW,HIGH[,STEP].",
+    }
+
 RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
 
 
@@ -2015,15 +2030,16 @@ def add_reserved_arguments(
             if "choices" in spec:
                 register_kwargs["choices"] = spec["choices"]
 
+        visible_names = [*spec["visible"], *spec.get("command_aliases", {}).get(command, [])]
         _register_argument(
             container,
-            spec["visible"],
+            visible_names,
             spec["hidden"],
             **register_kwargs,
         )
         visible_shorts = [
             name[1:]
-            for name in spec["visible"]
+            for name in visible_names
             if name.startswith("-") and not name.startswith("--")
         ]
         for short_name in visible_shorts:
