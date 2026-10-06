@@ -2907,7 +2907,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     // out of the Forager selection even when its exchange minimum is small.
     long_config.twel = 1.0f;
     long_config.allowance_pct = 0.0f;
-    long_config.scale_budget_allowance = false;
+    long_config.scale_hsl_budget = false;
     long_config.base_qty_pct = 1.0f;
     long_side.selection_initialized = false;
     long_side.previous_effective_n_positions = 0;

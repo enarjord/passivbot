@@ -1422,3 +1422,6 @@ Completion requires:
   and checkpoint policy are checked independently. No simulator change was needed
   beyond master's HSL policy and its integration into the extracted parameter encoder.
   Actual Metal execution and broader final simulator acceptance remain open.
+- Automatic review caught a renamed HSL member in a generated selection probe.
+  Correct it to `scale_hsl_budget`; the exact selection-phase regression compiles
+  and passes on CUDA. Production source is unchanged by this review correction.
