@@ -79,10 +79,65 @@ overlapping transfers or routing several GPUs can be implemented behind the serv
 later; they must preserve request identity, bounded admission and per-candidate behavior.
 Do not add a second simulator or replay trading decisions in Python for those changes.
 
+## Recovery distribution resolution
+
+Requested recovery distributions retain every simulation step and use the GPU
+strict time-to-exceed reducer, including plateaus and unrecovered terminal tails.
+Sampling is compiled out when none of these metrics is requested. Full samples
+stay on the GPU; only seven summary columns pass to host metric processing.
+
+Dispatch-local reduction scratch replaces the global mutable buffer cache. A replay
+keeps only its current sample-buffer shape. History budgeting reserves 16 bytes per
+sample per candidate for samples, a possible contiguous-view copy, an index stack
+and a duration histogram, plus 56 bytes for the summary and scaled output. Native
+and retained service paths share the outer batch limit so internal replay splitting
+does not concatenate oversized sample histories before reduction. This is a history
+budget, not a complete device/host memory bound.
+
+`test_gpu_recovery_resolution.py` covers strict plateaus, decreasing series, sparse
+samples, terminal padding, one/five-minute intervals, independent CUDA-stream scratch,
+and actual native dispatch under a two-candidate history budget. Twelve short native
+replays compare all six distribution metrics with real CPU backtests across both
+strategies, long/short/both sides and one/two coins. Native-only budget cases forbid
+CPU simulation and preserve output identity across dispatches.
+
+The public thirty-day synthetic fixture illustrates the resolution repair (all values
+in days). Before/after inputs and Rust sources are identical; non-recovery metrics
+are unchanged. These are observations with undefined acceptance policies, not passes.
+
+| Strategy | Metric | CPU | Hourly GPU | Per-step GPU |
+| --- | --- | ---: | ---: | ---: |
+| EMA Anchor | Mean | 0.006653244 | 0.053182870 | 0.006702424 |
+| EMA Anchor | p95 | 0.044444444 | 0.083333336 | 0.044444446 |
+| EMA Anchor | Mean worst 1% | 0.077516757 | 0.142857149 | 0.077959850 |
+| Trailing Martingale | Mean | 0.000852400 | 0.041608796 | 0.000853817 |
+| Trailing Martingale | p95 | 0.001388889 | 0.041666668 | 0.001388889 |
+| Trailing Martingale | Mean worst 1% | 0.001509732 | 0.041666668 | 0.001525844 |
+
+Reproduce the current observations with this recipe, then change `--fixture` to
+`trailing_martingale`. HSL is enabled but this fixture records no HSL transitions.
+
+```sh
+passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 4 \
+  --bars 43200 --seed 43 --hsl coin --gpu-engine native --metrics \
+  adg_strategy_eq adg_strategy_eq_w backtest_completion_ratio \
+  drawdown_worst_mean_1pct_strategy_eq drawdown_worst_strategy_eq \
+  entry_interval_hours_p95 fills_gap_p95_hours fills_per_day \
+  hard_stop_duration_minutes_mean hard_stop_post_restart_retrigger_pct \
+  hard_stop_time_in_red_pct strategy_eq_recovery_days_mean \
+  strategy_eq_recovery_days_mean_worst_1pct strategy_eq_recovery_days_p95 \
+  volume_pct_per_day_avg_w
+```
+
+The comparison remains `comparison_incomplete`: eleven metric policies are undefined,
+and existing strict ADG/fill discrepancies remain visible. Remaining mean/tail recovery
+differences and partial-day weighting still require materiality assessment. No policy
+was widened and this slice does not establish general simulator parity.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account
-   path. In particular assess requested histogram tails, hourly recovery, partial-day
+   path. In particular assess requested histogram tails, recovery trajectories, partial-day
    weighting and HSL observation timing using meaningful samples and canonical limit
    decisions. Keep strict measurements visible; justify bounded accepted differences
    by optimization/risk materiality rather than widening gates to hide failures.

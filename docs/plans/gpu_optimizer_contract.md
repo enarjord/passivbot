@@ -239,6 +239,8 @@ Completion requires:
 - [ ] Audit approximation inventory against representative correctness cases.
 - [ ] Resolve material differences and record accepted numerical discrepancies.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
+- [x] Replace hourly recovery distribution sampling with per-step GPU observations,
+  budget their replay/reduction storage, and isolate mutable reduction scratch.
 - [x] Restore safe disabled-HSL single-side EMA ablation and verify all returned outputs.
 
 ### Optimizer cutover
@@ -1291,3 +1293,34 @@ Completion requires:
   the broader memory and final simulator acceptance boxes; changing their scope to obtain
   completion would weaken the contract. This slice still requires current-head automatic
   review and CI before its own development integration.
+
+### 2026-10-06 — Per-step recovery distributions and shared dispatch bounds
+
+- The lifecycle acceptance slice (PR #1907) merged into development after completed
+  clear exact-head automatic review, author sign-off and successful required CI.
+  Broader metric, resource, tuning and legacy-retirement acceptance remains open.
+- CPU recovery distributions measure strict time-to-exceed for every strategy-equity
+  sample, including unresolved plateaus and terminal tails. Hourly GPU sampling can
+  lose short recoveries independently of float32 simulation error. Requested GPU
+  distributions now retain every simulation step and use the existing GPU stack/
+  histogram reducer; no CPU simulation or full-history transfer enters optimization.
+- Remove globally cached mutable reduction buffers. Scratch is dispatch-local on the
+  input tensor's device, and replay retains only the current sample-buffer shape.
+  Include samples, optional contiguous-view copying and reduction storage in history
+  budgeting. Native and retained service batches share the same outer dispatch bound,
+  avoiding concatenation of oversized histories after internal kernel splitting.
+- These changes preserve strict comparisons and disabled-feature compilation.
+  Sampling-resolution repair does not establish float32 trajectory parity or close
+  the broader approximation inventory. Validation and long-fixture observations are
+  recorded in the [acceptance evidence map](gpu_optimizer_acceptance.md).
+- Validation: 229 CUDA replay/lifecycle/CLI checks, eleven focused recovery/truncation
+  kernel checks and 445 service/tuning/parity/search checks pass; one Apple-only check
+  skips on CUDA. Six documentation checks pass. All tested source/test bytes and the
+  loaded Rust source stamp are verified; Rust source is unchanged.
+- Repeated thirty-day public fixtures preserve input identity and all non-recovery
+  metrics. Mean recovery falls from hourly GPU values 0.053182870/0.041608796 days to
+  0.006702424/0.000853817 for EMA/TM, versus CPU 0.006653244/0.000852400. Both p95
+  observations agree closely. Smaller mean/tail differences remain unassessed;
+  eleven undefined policies keep the full reports `comparison_incomplete`.
+- This completed slice still requires exact-head automatic review, author review and
+  all required CI before development integration; broader goal gates remain open.

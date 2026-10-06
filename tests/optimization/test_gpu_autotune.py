@@ -122,6 +122,47 @@ def test_fixed_batches_do_not_read_clock():
     ]
 
 
+@pytest.mark.parametrize("topology", ["single", "fused", "directional"])
+def test_outer_batches_honor_replay_and_reduction_history_budget(topology):
+    runner = SimpleNamespace(
+        _history_bytes_per_candidate=lambda: 120, hsl_scratch_budget_bytes=360,
+    )
+    item = SimpleNamespace(dispatch_batch_size=8)
+    if topology == "single":
+        item.runner = runner
+    elif topology == "fused":
+        item.fused_runner = runner
+        # Inactive directional scratch must not constrain the active fused view.
+        item.runners = {"unused": SimpleNamespace(
+            _history_bytes_per_candidate=lambda: 120, hsl_scratch_budget_bytes=120,
+        )}
+    else:
+        item.runners = {"long": runner, "short": SimpleNamespace(
+            _history_bytes_per_candidate=lambda: 0, hsl_scratch_budget_bytes=0,
+        )}
+    from optimization.gpu.native import CudaBacktestService
+
+    assert CudaBacktestService._dispatch_ceiling(item) == 3
+    chunks = list(tune.proxy_batches(item, list(range(8)), 8))
+    assert chunks == [(0, [0, 1, 2]), (3, [3, 4, 5]), (6, [6, 7])]
+
+
+def test_outer_history_bound_preserves_empty_and_oversized_candidate_paths():
+    runner = SimpleNamespace(
+        _history_bytes_per_candidate=lambda: 0, hsl_scratch_budget_bytes=0,
+    )
+    item = SimpleNamespace(runner=runner)
+    assert tune.history_dispatch_ceiling(item, 8) == 8
+    runner._history_bytes_per_candidate = lambda: 120
+    # The producer still diagnoses an individual unfit request; never skip it.
+    assert list(tune.proxy_batches(item, [0, 1], 8)) == [(0, [0]), (1, [1])]
+    def failed():
+        raise MemoryError("history metadata failure")
+    runner._history_bytes_per_candidate = failed
+    with pytest.raises(MemoryError, match="history metadata failure"):
+        list(tune.proxy_batches(item, [0], 8))
+
+
 def test_cache_reuse_refresh_and_classes(tmp_path):
     first = tuner(tmp_path)
     controller = first.controller(512, 1024, None)

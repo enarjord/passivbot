@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Measure requested GPU strategy-equity recovery distributions at every simulation
+  step instead of hourly, preserving short recoveries and terminal timestamps.
+  Account for their history and reduction scratch in service dispatch limits and
+  keep mutable reduction buffers local to each dispatch.
+
 - Use the configured realized-loss allowance for shared-account Trailing Martingale
   GPU backtests, including native single-coin runs. Reserve generated close losses
   across coins and sides, honor finite fill-PnL history, and consume admitted orders
