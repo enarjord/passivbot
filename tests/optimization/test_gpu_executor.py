@@ -440,6 +440,48 @@ def test_completion_does_not_wait_for_all_accepted_requests():
     assert second.result().metrics == {"gain": 2.0}
 
 
+def test_automatic_coalescing_tracks_accepted_arrivals_and_successful_work():
+    replay = GatedReplay()
+    service = GpuBacktestService(batch_size=1, max_pending=2, max_batch_delay=None)
+    service.register_dataset("market", replay)
+    try:
+        first = service.submit(request(1))
+        assert replay.started.wait(3)
+        queued = service.submit(request(2))
+        stream = service._coalescing._streams["market"]
+        prior = (stream.last_arrival, tuple(stream.gaps))
+        with pytest.raises(BacktestQueueFull):
+            service.submit(request(3))
+        with pytest.raises(ValueError, match="already outstanding"):
+            service.submit(request(1))
+        assert (stream.last_arrival, tuple(stream.gaps)) == prior
+        assert queued.cancel()
+        # Keep both accepted replays alive until their original identities return.
+        third = service.submit(request(3))
+        replay.release.set()
+        assert first.result(timeout=3).request_id == "1"
+        assert third.result(timeout=3).request_id == "3"
+        assert stream.seen_counts == {1}
+        assert stream.replay_seconds is not None
+    finally:
+        replay.release.set()
+        service.close(cancel_pending=True)
+
+
+def test_invalid_producer_output_does_not_train_automatic_coalescing():
+    class BrokenReplay(Replay):
+        def evaluate(self, candidates):
+            return [{} for _ in candidates]
+
+    with GpuBacktestService(batch_size=1, max_batch_delay=None) as service:
+        service.register_dataset("market", BrokenReplay())
+        with pytest.raises(RuntimeError, match="non-empty"):
+            service.submit(request(1)).result(timeout=3)
+        stream = service._coalescing._streams["market"]
+        assert not stream.seen_counts
+        assert stream.replay_seconds is None
+
+
 def test_mixed_datasets_preserve_order_within_dataset_and_never_share_replay():
     first, second = Replay(), Replay()
     with GpuBacktestService(batch_size=8, max_batch_delay=1) as service:
@@ -481,7 +523,8 @@ def test_capacity_covers_running_work_and_cancellation_releases_queued_payloads(
     assert [row["value"] for batch in replay.calls for row in batch] == [1, 3]
 
 
-def test_interleaved_requests_group_by_oldest_dataset_without_starving_other_work():
+@pytest.mark.parametrize("delay", [0, None])
+def test_interleaved_requests_group_by_oldest_dataset_without_starving_other_work(delay):
     calls = []
 
     class OrderedReplay(Replay):
@@ -493,7 +536,7 @@ def test_interleaved_requests_group_by_oldest_dataset_without_starving_other_wor
             calls.append((self.name, [item["value"] for item in candidates]))
             return super().evaluate(candidates)
 
-    service = GpuBacktestService(batch_size=2, max_batch_delay=0)
+    service = GpuBacktestService(batch_size=2, max_batch_delay=delay)
     for name in ("a", "b"):
         service.register_dataset(name, OrderedReplay(name))
     try:
@@ -524,8 +567,11 @@ def test_full_mixed_queue_dispatches_partial_batch_without_waiting_for_more_admi
     assert [[row["value"] for row in batch] for batch in first.calls] == [[1, 3]]
 
 
-def test_cancelling_accumulating_dataset_reselects_other_ready_work(monkeypatch):
-    service = GpuBacktestService(batch_size=2, max_batch_delay=30)
+@pytest.mark.parametrize("automatic", [False, True])
+def test_cancelling_accumulating_dataset_reselects_other_ready_work(monkeypatch, automatic):
+    service = GpuBacktestService(batch_size=2, max_batch_delay=None if automatic else 30)
+    if automatic:
+        monkeypatch.setattr(service._coalescing, "deadline", lambda _dataset, started: started + 30)
     service.register_dataset("a", Replay())
     service.register_dataset("b", Replay())
     waiting = Event()
@@ -668,9 +714,12 @@ def test_explicit_infinite_metric_sentinels_are_not_fabricated():
     assert result.metrics["gain"] == float("inf")
 
 
-def test_cancel_close_claims_waiting_batch_before_notifying_worker(monkeypatch):
+@pytest.mark.parametrize("automatic", [False, True])
+def test_cancel_close_claims_waiting_batch_before_notifying_worker(monkeypatch, automatic):
     replay = Replay()
-    service = GpuBacktestService(batch_size=8, max_batch_delay=30)
+    service = GpuBacktestService(batch_size=8, max_batch_delay=None if automatic else 30)
+    if automatic:
+        monkeypatch.setattr(service._coalescing, "deadline", lambda _dataset, started: started + 30)
     service.register_dataset("market", replay)
     accumulating = Event()
     original_wait = service._condition.wait
@@ -694,6 +743,27 @@ def test_cancel_close_claims_waiting_batch_before_notifying_worker(monkeypatch):
     service.close(cancel_pending=True)
     assert future.cancelled()
     assert not replay.calls
+
+
+def test_automatic_close_drains_accepted_work_without_waiting_for_deadline(monkeypatch):
+    replay = Replay()
+    service = GpuBacktestService(batch_size=8, max_batch_delay=None)
+    service.register_dataset("market", replay)
+    monkeypatch.setattr(service._coalescing, "deadline", lambda _dataset, started: started + 30)
+    accumulating = Event()
+    original_wait = service._condition.wait
+
+    def waiting(timeout=None):
+        if timeout is not None:
+            accumulating.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(service._condition, "wait", waiting)
+    future = service.submit(request(1))
+    assert accumulating.wait(3)
+    service.close()
+    assert future.result().metrics == {"gain": 1.0}
+    assert len(replay.calls) == 1
 
 
 def test_retained_cancelled_futures_do_not_retain_parameter_snapshots():

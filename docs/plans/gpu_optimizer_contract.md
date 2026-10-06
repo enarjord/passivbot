@@ -1080,3 +1080,30 @@ Completion requires:
   suites, screening, anchors, interruption and resume while forbidding CPU
   simulations and worker pools in native optimization. Six documentation tests
   pass; documentation checks report zero errors and two existing size warnings.
+
+### 2026-10-06 — Adaptive service coalescing
+
+- CPU preparation reuse merged into development in [PR #1900](https://github.com/enarjord/passivbot/pull/1900)
+  after completed clear current-head automatic review, exact-target author sign-off,
+  successful Python 3.12/3.14 and Rust CI, and a fresh all-surface review/identity
+  gate immediately before SHA-pinned merge. Master remains unchanged.
+- Requests arrive in CPU preparation bursts. A median over individual submission
+  gaps can see only nearly adjacent submissions and miss the slower gaps between
+  bursts; a bounded prototype with that estimator did not improve dispatch sizes.
+  Use burst-aware arrival evidence rather than a larger universal fixed delay.
+- Add service-owned adaptive accumulation, separate from width and search policy.
+  Learn only within-active-work arrival gaps and successful warm replay durations;
+  retain cold-shape rejection, per-dataset isolation, idle-tail and absolute bounds.
+  Preserve numeric delay overrides and tuning-off behavior. No new CPU/device
+  coupling, simulation, metric, scoring or checkpoint state belongs in this policy.
+- Compare two small seeded searches and a larger cohort against fixed accumulation.
+  Completed candidate configs and metrics match exactly and every result is durable;
+  the small cases benefit, while the larger case shows no clear timing improvement.
+  These bounded measurements do not prove universal throughput gains or evolutionary
+  quality equivalence. Retain the broader acceptance checklist and parity debts.
+- Validation: 178 affected service/native/benchmark tests pass with the verified
+  Rust extension on CUDA, including suites, screening, anchors, seeds and clean
+  interrupted resume with CPU simulations forbidden. Source-only lifecycle and
+  coalescing checks plus six documentation tests pass (82 total); documentation
+  checks report zero errors and the two existing size warnings. Fixed/automatic
+  search comparisons preserve all execution config sections and returned metrics.

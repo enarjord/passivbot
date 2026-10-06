@@ -198,11 +198,26 @@ suite fan-in; ready aliases remain retained until their next CPU consumption cal
 The native integration uses `optimize.gpu.batch_size`, `tuning_mode`,
 `max_dispatch_candidate_bars` and `checkpoint_interval_seconds`. An omitted/null or `auto`
 batch setting enables service-owned batch tuning in `auto`/`refresh` mode. A positive
-explicit setting disables batch tuning; `tuning_mode: "off"` uses a fixed ceiling of 64
+explicit setting disables width tuning; `tuning_mode: "off"` uses a fixed ceiling of 64
 when no width is supplied. These are dispatch ceilings, also bounded by prepared work
 and history-scratch limits. CPU candidate admission is bounded by its population window,
 independently of GPU widths; the service bounds its own queued-plus-running requests.
 Legacy exact-worker, drift-probe, validation and screened-seed controls do not apply.
+
+Request accumulation adapts independently of width in `auto`/`refresh` mode. The
+service retains the last 32 within-active-work arrival gaps for each dataset, including
+gaps between CPU preparation bursts. A doubled 90th-percentile gap supplies the idle
+tail; successful warm replay duration supplies the total allowance, capped at 0.5
+seconds. The first replay of each actual batch count is excluded from warm evidence.
+Until warm timing and three gaps exist, the fixed 5 ms accumulation policy remains.
+This is a bounded heuristic, not a guarantee of optimal scheduling for every workload.
+
+The CUDA facade's default `max_batch_delay=None` selects that policy. A numeric service
+delay, including zero, retains fixed waiting; tuning-off mode defaults to 5 ms. An
+explicit width can therefore remain fixed while accumulation adapts. Already buffered
+work may dispatch immediately when its stream has stalled. Full queues, completed widths,
+closing and cancellation retain their existing dispatch/drain behavior. This advisory
+state is service-local; it changes neither submitted simulations nor saved search state.
 
 The first request for an unprepared dataset claims one candidate, prepares and discovers
 its physical dispatch limit on the GPU owner, and returns that completion. Subsequent

@@ -93,3 +93,17 @@ def test_cuda_facade_tuning_is_lazy_and_explicit_width_disables_it(setting, mode
 def test_cuda_facade_rejects_invalid_tuning_mode():
     with pytest.raises(ValueError, match="tuning mode"):
         CudaBacktestService(tuning_mode="invalid")
+
+
+@pytest.mark.parametrize("mode,delay,automatic", [
+    ("auto", None, True), ("refresh", None, True), ("off", None, False),
+    ("auto", 0, False), ("auto", 0.02, False), ("off", 0.02, False),
+])
+def test_cuda_coalescing_is_independent_of_explicit_width_and_honors_delay(mode, delay, automatic):
+    with CudaBacktestService(batch_size=4, tuning_mode=mode, max_batch_delay=delay) as service:
+        assert service._batch_tuner is None
+        assert (service._executor._coalescing is not None) is automatic
+        assert service._executor._thread is None
+        assert service._executor.max_batch_delay == (
+            None if automatic else 0.005 if delay is None else delay
+        )
