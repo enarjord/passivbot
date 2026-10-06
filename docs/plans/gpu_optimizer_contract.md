@@ -971,3 +971,32 @@ Completion requires:
   checks pass with two existing size warnings. Rust and numerical tolerance policy are unchanged.
 - The parity-fixture correction merged into development after completed exact-head automatic
   review with no findings, author semantic sign-off and successful required CI.
+
+### 2026-10-06 — Share finite unstuck history with EMA replay
+
+- Canonical loss-expiry fixtures expose a semantic omission: EMA shared-account GPU
+  replay always uses the all-history realized-PnL peak, ignoring a finite configured
+  lookback. With an eight-bar window, exact CPU long/short/dual-side runs produce
+  20/23/24 fills while the baseline GPU produces 4/4/8. The all-history controls
+  agree. This materially suppresses later unstuck closes, not decimal noise.
+- Bind the existing account-owned rolling window in directional and fused EMA
+  replays. Record fills in account order, refresh expiry before generating unstuck
+  orders and fail closed on history overflow. Keep HSL and the separate conservative
+  realized-loss gates on their existing independent contracts.
+- Move duplicate TM history allocation/admission into the common runner. Both
+  strategies specialize from effective side/coin consumer flags, including a zero
+  prepared allowance which may be varied by requests. Disabled consumers and
+  all-history policy omit rolling scratch. Keep per-candidate storage bounded by
+  one coalesced event per candle and account for combined history admission.
+- Extend exact CPU regression coverage to both strategies, one/two coins and all
+  active-side topologies. Exercise native EMA service reuse with CPU simulation
+  forbidden, plus replay ordering, batch limits, effective overrides and overflow.
+  This slice does not establish complete controller parity or widen tolerances.
+- All 71 focused unstuck cases pass, including finite history with compact/general
+  disabled-HSL equivalence. The final combined run passes 573 tests with 13
+  Metal-only skips, including enabled HSL, capacity specialization, service tuning
+  and offline native optimizer CLI screening, interruption and resume. All 330 Rust
+  tests pass (one ignored), default-feature compilation succeeds and the rebuilt
+  extension is source-fingerprint verified. Documentation checks have no errors.
+- Coupled-span CPU lowering merged into development only after completed exact-head
+  automatic review with no findings, exact-target author review and all required CI.

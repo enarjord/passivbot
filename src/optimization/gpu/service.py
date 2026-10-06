@@ -3262,18 +3262,17 @@ class MpsMulticoinProxy:
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
         }
-        if self.strategy_kind == "trailing_martingale":
-            # The payload includes effective per-coin flags after overrides.
-            # Numeric unstuck genes may vary, so retain history whenever an
-            # enabled side/coin can consume it, even if its base allowance is zero.
-            unstuck_enabled = any(
-                bool(item[side]["unstuck_enabled"])
-                for item in projected
-                for side in self.sides
-            )
-            common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
-                _fill_pnl_lookback_bars(backtest_params) if unstuck_enabled else 0
-            )
+        # Preserve history for every effective consumer, even if a tunable
+        # allowance is zero in the prepared seed. Both strategies use the
+        # shared account's bounded rolling window.
+        unstuck_enabled = any(
+            bool(item[side]["unstuck_enabled"])
+            for item in projected
+            for side in self.sides
+        )
+        common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
+            _fill_pnl_lookback_bars(backtest_params) if unstuck_enabled else 0
+        )
         common_runner_kwargs.update(
             pnl_lookback_bars=_hsl_lookback_bars(
                 backtest_params, hsl_enabled=bool(hsl_enabled_sides)

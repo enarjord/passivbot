@@ -13,18 +13,26 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def make_proxy(sides, lookback=8 / 1440):
+def make_proxy(sides, lookback=8 / 1440, strategy="trailing_martingale", coins=2,
+               hsl_mode="coin"):
     from optimization.gpu.service import MpsMulticoinProxy
 
-    config, _, markets, _, timestamps = _fixture(sides[0], 2, "initial")
+    config, _, markets, _, timestamps = _fixture(sides[0], coins, "initial")
+    config["live"]["strategy_kind"] = strategy
     config["live"]["hedge_mode"] = True
+    if hsl_mode != "coin":
+        from config.hsl import generated_template
+        config = generated_template(config, hsl_mode)
+        config["live"]["hsl_signal_mode"] = hsl_mode
+        if hsl_mode == "unified":
+            config["bot"]["hsl"]["enabled"] = False
     count = 50
     config["live"]["pnls_max_lookback_days"] = lookback
     for side in sides:
         bot = config["bot"][side]
         bot["risk"].update(
-            n_positions=2,
-            total_wallet_exposure_limit=2.0,
+            n_positions=coins,
+            total_wallet_exposure_limit=float(coins),
         )
         # The fixture template already carries the canonical cooldown leaf;
         # a legacy risk leaf cannot override it. Prevent reentry after closes.
@@ -36,10 +44,16 @@ def make_proxy(sides, lookback=8 / 1440):
             loss_allowance_pct=0.001,
             threshold=0.3,
         )
-        bot["strategy"]["trailing_martingale"]["entry"].update(
-            initial_qty_pct=0.5, threshold_base_pct=10.0
-        )
-    candles = np.full((count, 2, 4), 100.4)
+        if strategy == "trailing_martingale":
+            bot["strategy"][strategy]["entry"].update(
+                initial_qty_pct=0.5, threshold_base_pct=10.0
+            )
+        else:
+            bot["strategy"][strategy].update(
+                base_qty_pct=0.5, ema_span_0=1000.0, ema_span_1=1000.0,
+                offset=0.0, offset_psize_weight=0.0, entry_double_down_factor=0.0,
+            )
+    candles = np.full((count, coins, 4), 100.4)
     candles[:, :, 3] = 1.0
     candles[3, :, 0] = 102.0
     candles[3, :, 1] = 99.0
@@ -48,7 +62,7 @@ def make_proxy(sides, lookback=8 / 1440):
     candles[4:, :, 1] -= 1.0
     timestamps = timestamps[0] + np.arange(count, dtype=np.int64) * 60_000
     btc = np.full(count, 50_000.0)
-    for coin in ("BTC", "ETH"):
+    for coin in ("BTC", "ETH")[:coins]:
         markets[coin].update(
             last_valid_index=count - 1,
             price_step=0.01,
@@ -71,13 +85,15 @@ def make_proxy(sides, lookback=8 / 1440):
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize(
     "policy", ["disabled", "enabled", "coin_enabled", "coins_disabled"]
 )
-def test_unstuck_history_requires_an_effective_consumer(sides, policy):
+def test_unstuck_history_requires_an_effective_consumer(sides, policy, strategy):
     from optimization.gpu.service import MpsMulticoinProxy
 
     config, candles, markets, btc, timestamps = _fixture(sides[0], 2, "initial")
+    config["live"]["strategy_kind"] = strategy
     config["live"]["pnls_max_lookback_days"] = 30.0
     for side in sides:
         config["bot"][side]["risk"].update(
@@ -137,15 +153,17 @@ def test_unstuck_history_requires_an_effective_consumer(sides, policy):
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("lookback", [8 / 1440, "all"])
-def test_unstuck_expiring_loss_budget_matches_exact_rust(sides, lookback):
+@pytest.mark.parametrize("coins", [1, 2])
+def test_unstuck_expiring_loss_budget_matches_exact_rust(sides, lookback, strategy, coins):
     from backtest import run_backtest
 
-    proxy, inputs = make_proxy(sides, lookback)
+    proxy, inputs = make_proxy(sides, lookback, strategy, coins)
     runner, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
     assert output["fill_count"].item() == len(fills)
-    assert sum(str(fill[13]).startswith("entry_") for fill in fills) == 2 * len(sides)
+    assert sum(str(fill[13]).startswith("entry_") for fill in fills) == coins * len(sides)
     assert any("close_unstuck" in fill[13] for fill in fills)
     # Expired losses replenish the configured allowance; all-history exhausts it.
     assert (len(fills) > 10) == (lookback != "all")
@@ -157,15 +175,50 @@ def test_unstuck_expiring_loss_budget_matches_exact_rust(sides, lookback):
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
-def test_unstuck_history_replay_reuse_and_bounded_batches(sides):
-    proxy, _ = make_proxy(sides)
+@pytest.mark.parametrize("coins", [1, 2])
+def test_native_ema_unstuck_reuses_finite_history_without_cpu_execution(monkeypatch, sides, coins):
+    if not torch.cuda.is_available():
+        pytest.skip("native CUDA service required")
+    import backtest
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from tools.gpu_parity import _native_dataset
+
+    proxy, inputs = make_proxy(sides, strategy="ema_anchor", coins=coins)
+    candidates = [{}, {f"{sides[0]}_unstuck_loss_allowance_pct": 0.002}, {}]
+    expected = proxy.evaluate_results(candidates)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("native GPU replay must not execute a CPU backtest")
+
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
+    candles, markets, config, exchange, btc, timestamps = inputs
+    with _native_dataset((config, candles, markets, btc, timestamps), exchange,
+                         {"adg_strategy_eq"}) as dataset:
+        with CudaBacktestService(batch_size=2, tuning_mode="off") as service:
+            service.register_dataset("finite-unstuck", dataset)
+            pending = [service.submit(BacktestRequest(str(i), "finite-unstuck", values))
+                       for i, values in enumerate(candidates)]
+            actual = [future.result() for future in pending]
+            # A subsequent request must start with a fresh rolling account window.
+            repeated = service.submit(BacktestRequest("repeat", "finite-unstuck", {})).result()
+    assert [result.metrics for result in actual] == [result.metrics for result in expected]
+    assert repeated.metrics == expected[0].metrics
+
+
+@pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_unstuck_history_replay_reuse_and_bounded_batches(sides, strategy):
+    proxy, _ = make_proxy(sides, strategy=strategy)
     candidates = [
         {},
         {f"{sides[0]}_unstuck_loss_allowance_pct": 0.002},
         {f"{sides[0]}_unstuck_loss_allowance_pct": 0.003},
     ]
     runner, expected = raw(proxy, candidates)
-    if len(sides) == 1:
+    if len(sides) == 1 and strategy == "trailing_martingale":
         runner.max_dispatch_candidate_bars = 24
     ends = np.array([runner.n, runner.n, runner.n], dtype=np.int32)
     _, chunked = raw(proxy, candidates, end_steps=ends)
@@ -189,13 +242,27 @@ def test_unstuck_history_replay_reuse_and_bounded_batches(sides):
         raw(proxy, [{}])
 
 
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("mode", ["pside", "unified"])
+def test_ema_finite_unstuck_survives_disabled_hsl_specialization(side, mode):
+    proxy, _ = make_proxy((side,), strategy="ema_anchor", hsl_mode=mode)
+    runner, compact = raw(proxy, [{}])
+    assert runner.dispatch_hsl_disabled
+    assert runner.unstuck_pnl_capacity == 9
+    runner.hsl_disabled_specialization = False
+    _, general = raw(proxy, [{}])
+    assert not runner.dispatch_hsl_disabled
+    compare(compact, general)
+
+
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
-def test_unstuck_history_overflow_fails_closed(sides):
-    proxy, _ = make_proxy(sides)
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_unstuck_history_overflow_fails_closed(sides, strategy):
+    proxy, _ = make_proxy(sides, strategy=strategy)
     runner = proxy.fused_runner or proxy.runners[sides[0]]
     # Deliberately violate the capacity guarantee to test the error path.
     runner.unstuck_pnl_capacity = 1
-    if len(sides) == 1:
+    if len(sides) == 1 and strategy == "trailing_martingale":
         runner.max_dispatch_candidate_bars = 4
     with pytest.raises(RuntimeError, match="auto-unstuck PnL history overflow"):
         raw(proxy, [{}])

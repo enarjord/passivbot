@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Honor finite realized-PnL lookback for EMA Anchor GPU auto-unstuck, including
+  native single-coin and shared long/short replays. Reuse bounded history scratch
+  with Trailing Martingale and omit it when no enabled consumer needs it.
+
 - Allow native GPU optimization to vary coupled unstuck EMA spans with fixed coin
   patches. Preserve strategy coin pins and prepare optimizer-free backtest views
   on the CPU before registering them with the GPU service. Compare coupled suite
