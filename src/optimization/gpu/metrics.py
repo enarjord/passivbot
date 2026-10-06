@@ -11,6 +11,8 @@ import math
 
 import torch
 
+from optimization.gpu.model import GAP_BINS
+
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
     ENTRY_INTERVAL_METRICS,
@@ -258,7 +260,7 @@ _FILL_ACTIVITY_METRICS = {
 }
 
 
-_GAP_HIST_BINS = 128
+_GAP_HIST_BINS = GAP_BINS
 _GAP_HIST_LOG_MAX = math.log(4_000_001.0)
 _FILL_GAP_HISTOGRAM_METRICS = {
     "fills_gap_mean_hours",
@@ -349,17 +351,24 @@ def _directional_pnl_metrics(out: dict) -> dict:
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
 # this minimizing proxy optimistic.
 _GAP_HIST_EDGE_MARGIN = 1.220703125e-4
-_GAP_HIST_UPPER_STEPS = tuple(
-    max(
-        0,
-        math.ceil(
-            (math.exp((index + 1) * _GAP_HIST_LOG_MAX / 127.0) - 1.0)
-            * (1.0 + _GAP_HIST_EDGE_MARGIN)
+
+
+def _histogram_upper_steps(bins):
+    return tuple(
+        max(
+            0,
+            math.ceil(
+                (math.exp((index + 1) * _GAP_HIST_LOG_MAX / (bins - 1)) - 1.0)
+                * (1.0 + _GAP_HIST_EDGE_MARGIN)
+            ) - 1,
         )
-        - 1,
-    )
-    for index in range(_GAP_HIST_BINS - 1)
-) + (float("inf"),)
+        for index in range(bins - 1)
+    ) + (float("inf"),)
+
+
+_GAP_HIST_UPPER_STEPS = _histogram_upper_steps(_GAP_HIST_BINS)
+# Initial-entry intervals retain their independent 128-bin shader/output ABI.
+_ENTRY_INTERVAL_HIST_UPPER_STEPS = _histogram_upper_steps(128)
 
 
 def _daily_series_masks(day_min_eq):
@@ -937,7 +946,7 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
 
     interval_hours = max(float(run.interval_ms), 1.0) / 3_600_000.0
     upper_steps = torch.tensor(
-        _GAP_HIST_UPPER_STEPS,
+        _ENTRY_INTERVAL_HIST_UPPER_STEPS,
         dtype=torch.float64,
         device=total_steps.device,
     ).unsqueeze(0)

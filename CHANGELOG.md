@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Refine GPU fill-gap histograms from 128 to 512 bins so neighbouring short gaps
+  remain distinguishable in percentile objectives. Keep fixed per-candidate storage,
+  restored same-candle zeros and streamed time-weighted gaps; preserve the separate
+  initial-entry interval format.
+
 - Extend offline GPU cohort measurements with requested metrics, explicit comparison
   policies and repeatable canonical diagnostic limits. Measure opt-in reductions;
   keep undefined tolerances unassessed and request limit metrics from both simulators.

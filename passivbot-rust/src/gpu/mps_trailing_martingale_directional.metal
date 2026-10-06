@@ -38,7 +38,7 @@ constant int SCALAR_COLS = 68;
 #else
 constant int SCALAR_COLS = 66;
 #endif
-constant int GAP_BINS = 128;
+constant int GAP_BINS = 512;
 constant int SIDE_PARAMS = 57;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
@@ -2013,7 +2013,7 @@ inline void passivbot_single_coin_impl(
     const int pnl_lookback_bars = max(sizes[5], 0);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
         && max_realized_loss_pct < 1.0f;
-    const float log_bin_scale = 127.0f / log(4000001.0f);
+    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     const int po = int(b) * P;
     const int seed_k = recent_history_window
@@ -4058,7 +4058,7 @@ inline void passivbot_single_coin_impl(
             if (last_fill_k >= 0.0f) {
                 float gap = kf - last_fill_k;
                 int bin = clamp(
-                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, 127
+                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, GAP_BINS - 1
                 );
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
                 const float gap_hours = gap * interval_ms / 3600000.0f;

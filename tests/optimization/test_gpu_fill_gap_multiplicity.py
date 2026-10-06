@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from test_gpu_service_acceptance_cuda import cuda_runtime
+from optimization.gpu.model import GAP_BINS
 
 
 @pytest.mark.parametrize("sides", ["long", "short", "both"])
@@ -50,14 +51,34 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
 
     def capture(output, run):
         # Existing compact counts suffice: no per-fill or per-bar history added.
-        assert output["gap_hist"].shape[1] == 128
+        assert output["gap_hist"].shape[1] == GAP_BINS
         counts = output["gap_hist"].clone()
         result = original(output, run)
         cuda_runtime.testing.assert_close(output["gap_hist"], counts, rtol=0, atol=0)
         observed.extend((output["fill_count"] - counts.sum(1) - 1).tolist())
         return result
     monkeypatch.setattr(metrics, "_fill_gap_metrics", capture)
-    names = ("fills_gap_p95_hours", "fills_gap_time_weighted_mean_hours")
+    interval_counts = []
+    original_intervals = metrics._entry_interval_metrics
+
+    def capture_intervals(output, run, strategy_kind):
+        # Fill-gap refinement must not change the optional initial-entry ABI.
+        if strategy_kind == "trailing_martingale":
+            assert output["entry_interval_hist"].shape[1] == 128
+            counts = output["entry_interval_hist"].clone()
+            result = original_intervals(output, run, strategy_kind)
+            cuda_runtime.testing.assert_close(
+                output["entry_interval_hist"], counts, rtol=0, atol=0,
+            )
+            interval_counts.extend(output["entry_interval_count"].tolist())
+            return result
+        return original_intervals(output, run, strategy_kind)
+
+    monkeypatch.setattr(metrics, "_entry_interval_metrics", capture_intervals)
+    names = (
+        "fills_gap_p95_hours", "fills_gap_time_weighted_mean_hours",
+        "entry_interval_hours_p95",
+    )
     with _native_dataset(inputs, "binance", names) as dataset:
         with CudaBacktestService(batch_size=2, tuning_mode="off", max_batch_delay=0) as service:
             service.register_dataset("gaps", dataset)
@@ -70,3 +91,26 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
             assert all(np.isfinite(value) for value in first.metrics.values())
     assert observed and min(observed) >= 0
     assert max(observed) > 0, "fixture must exercise multiple fills in a candle"
+
+    if strategy == "trailing_martingale":
+        assert interval_counts and max(interval_counts) > 0
+    else:
+        assert first.metrics["entry_interval_hours_p95"] == 0.0
+
+
+@pytest.mark.parametrize("seed", [7, 43])
+def test_native_ema_weekly_cohort_preserves_short_gap_distinctions(cuda_runtime, seed):
+    from tools import gpu_cohort_benchmark as benchmark
+
+    parser = benchmark.build_parser()
+    args = parser.parse_args([
+        "--widths", "16", "--warm-runs", "1", "--metrics", "fills_gap_p95_hours",
+    ])
+    benchmark.validate_args(parser, args)
+    case = benchmark._measure(cuda_runtime, args, "ema_anchor", seed)
+    # Case-specific bound: the previous bins incurred two/three-minute errors.
+    # The remaining six-second discrepancy is not a universal parity tolerance.
+    errors = [row["metrics"]["fills_gap_p95_hours"]["absolute_error"]
+              for row in case["cpu_gpu_comparisons"]]
+    assert max(errors) * 60 <= 0.1 + 1e-9
+    assert all(row["matches_direct_gpu_exactly"] for row in case["native"])

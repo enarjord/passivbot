@@ -713,15 +713,17 @@ span as Rust. Fused dual-side kernels retain the shared intraday-liquidation cut
 Initial-entry allocation uses the candidate's effective position count and the same
 first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, p95, and
 time-weighted-mean metrics are also supported. Metal coalesces multiple fills in the same candle and
-records positive inter-candle gaps
-in a 128-bin logarithmic histogram; the proxy decodes each occupied bin with a float32-safe upper
-edge and adds the exact leading and trailing gaps. This deliberately overestimates the minimizing
-fill-gap summaries when exact Rust has same-candle zero gaps or a value inside a histogram bin.
+records positive inter-candle gaps in a 512-bin logarithmic histogram. The decoder restores
+same-candle zero-gap multiplicity from compact fill counts, uses float32-safe upper edges for
+positive gaps, and adds exact leading/trailing gaps. Bins can overestimate positive-gap percentiles
+for the same fill population; CPU/GPU fill trajectories may also differ. The streamed squared-gap
+moment keeps the time-weighted mean independent of bin resolution. The histogram is fixed storage
+per candidate; full fill histories are not exported.
 Trailing Martingale also supports `entry_interval_hours_{mean,median,p95,p99,max}` for single-coin
 and multi-coin, long-only, short-only, and fused long+short runs. Metal records gaps between
 normal initial entries independently for each coin and position side. The proxy mean and maximum
 come from direct Metal accumulators with integer-safe event counts; median, p95, and p99 use
-conservative upper edges from a bounded logarithmic histogram. EMA Anchor emits no
+conservative upper edges from a separate 128-bin logarithmic histogram. EMA Anchor emits no
 `EntryInitialNormal` order types,
 so these metrics retain exact Rust's canonical zero values without allocating the optional output
 surface. Runs that do not request an entry-interval metric keep their existing kernel ABI and

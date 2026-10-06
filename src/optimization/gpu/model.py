@@ -9,7 +9,7 @@ import numpy as np
 from config.validate import validate_limit_order_fill_buffer_pct
 from optimization.gpu.runtime import gpu_device
 
-GAP_BINS = 128
+GAP_BINS = 512
 GAP_MAX_MINUTES = 4_000_000.0
 MPS_MULTICOIN_MAX_COINS = 64
 # Bound both temporal launch duration and per-candidate replay-state allocation.
