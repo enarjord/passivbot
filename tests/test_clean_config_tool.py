@@ -221,6 +221,42 @@ def test_full_cleanup_normalizes_optimizer_policy_without_resolving_inputs():
     assert cleanup_config(result) == result
 
 
+@pytest.mark.parametrize("mode", ["full", "backtest", "optimize"])
+@pytest.mark.parametrize("value", [[], ["BTC"], "binance", 17, True])
+def test_invalid_backtest_coin_sources_fail_before_batch_publication(
+    tmp_path, mode, value
+):
+    source = tmp_path / "src"
+    valid = write_config(source / "a.json")
+    cfg = get_template_config()
+    cfg["backtest"]["coin_sources"] = value
+    malformed = write_config(source / "z.json", cfg)
+    original_valid, original_malformed = valid.read_bytes(), malformed.read_bytes()
+    destination = tmp_path / "out"
+    for args in [[str(source), str(destination)], [str(source), "--in-place"]]:
+        with pytest.raises(SystemExit) as error:
+            main([*args, "--mode", mode])
+        assert error.value.code == 2
+        assert valid.read_bytes() == original_valid
+        assert malformed.read_bytes() == original_malformed
+        assert not destination.exists()
+
+
+@pytest.mark.parametrize("mode", ["full", "backtest", "optimize"])
+def test_backtest_coin_sources_follow_shared_routing_validation(mode):
+    cfg = get_template_config()
+    cfg["backtest"]["coin_sources"] = {" BTC ": "binance", "ETH": "bybit"}
+    result = cleanup_config(cfg, mode=mode)
+    assert result["backtest"]["coin_sources"] == {"BTC": "binance", "ETH": "bybit"}
+    cfg["backtest"]["coin_sources"] = {"BTC": "binance", " BTC ": "bybit"}
+    with pytest.raises(ValueError, match="conflicting exchanges"):
+        cleanup_config(cfg, mode=mode)
+    cfg["backtest"]["coin_sources"] = None
+    assert cleanup_config(cfg, mode=mode)["backtest"]["coin_sources"] == {}
+    cfg["backtest"]["coin_sources"] = []
+    assert "backtest" not in cleanup_config(cfg, mode="live")
+
+
 @pytest.mark.parametrize(
     "section", ["backtest", "optimize", "logging", "monitor", "coin_overrides"]
 )

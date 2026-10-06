@@ -46,7 +46,10 @@ def cleanup_config(
     never apply optimizer fixed runtime overrides to the authored bot values.
     """
     from config.load import prepare_config
-    from config.hydrate import normalize_optimizer_settings
+    from config.hydrate import (
+        normalize_backtest_coin_sources,
+        normalize_optimizer_settings,
+    )
     from config.project import project_config
     from config_utils import sanitize_prepared_config_for_dump, strip_config_metadata
 
@@ -77,6 +80,10 @@ def cleanup_config(
         verbose=False,
         log_config_transforms=False,
     )
+    if mode != "live":
+        prepared["backtest"]["coin_sources"] = normalize_backtest_coin_sources(
+            prepared["backtest"]["coin_sources"]
+        )
     if mode in ("full", "optimize"):
         raw_optimize = payload.get("optimize", {})
         normalize_optimizer_settings(

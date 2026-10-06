@@ -173,7 +173,7 @@ def sync_with_template(
     )
 
 
-def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
+def normalize_backtest_coin_sources(raw: Any) -> Dict[str, str]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
@@ -236,7 +236,7 @@ def apply_non_live_adjustments(
             if coin not in result["live"]["ignored_coins"][pside]
         ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
-    result["backtest"]["coin_sources"] = _normalize_coin_sources(
+    result["backtest"]["coin_sources"] = normalize_backtest_coin_sources(
         result["backtest"].get("coin_sources", {})
     )
     if result["backtest"].get("filter_by_min_effective_cost") is None:
