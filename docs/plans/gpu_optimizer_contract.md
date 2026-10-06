@@ -940,3 +940,7 @@ Completion requires:
   finite lookback and 10 with all history; GPU matches the corrected experiment.
   This is a test-input correction, not a trading or numerical-policy change. The original
   high-churn 71/72 observation is retained as evidence and is not proof of general parity.
+- The combined HSL/reporting/unstuck/native CUDA suite passes 244 tests with 13
+  Metal-only skips, including native optimizer CLI screening, interruption and resume.
+  The reporting-only change merged into development after completed exact-head automatic
+  review with no findings, exact-target author review and successful required CI.
