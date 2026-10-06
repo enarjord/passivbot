@@ -142,6 +142,34 @@ def _cohort(args, strategy, seed):
     return inputs, configs, parameters
 
 
+def _observe_batches(policy, batches):
+    """Preserve cumulative eligible evidence even after consumed windows reset."""
+    original_observe = policy.observe
+    evidence = dict(samples=0, seconds=0.0, completed_windows=[])
+
+    def observe(dataset_id, count, seconds, **kwargs):
+        batches.append(dict(count=count, seconds=seconds))
+        controller = policy.controllers.get(dataset_id)
+        eligible = (controller is not None and count == controller.width
+                    and controller.width in controller.seen
+                    and math.isfinite(seconds) and seconds > 0)
+        if eligible:
+            evidence["samples"] += 1
+            evidence["seconds"] += seconds
+            width = controller.width
+            rates = [*controller.samples, count / seconds][-controller.samples.maxlen:]
+            window_seconds = controller.seconds + seconds
+        original_observe(dataset_id, count, seconds, **kwargs)
+        if eligible and not controller.samples:
+            evidence["completed_windows"].append(dict(
+                width=width, samples=len(rates), seconds=window_seconds,
+                median_candidates_per_second=statistics.median(rates),
+                resulting_width=controller.width))
+
+    policy.observe = observe
+    return evidence
+
+
 def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
     import numpy as np
     from optimization.gpu.executor import BacktestRequest
@@ -156,11 +184,7 @@ def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
         service.register_dataset("cohort", dataset)
         # Tool-only observation of the existing controller; retain its decisions
         # and the executor's successful-work timings without running extra work.
-        original_observe = service._batch_policy.observe
-        def observe(dataset_id, count, seconds, **kwargs):
-            batches.append(dict(count=count, seconds=seconds))
-            original_observe(dataset_id, count, seconds, **kwargs)
-        service._batch_policy.observe = observe
+        evidence = _observe_batches(service._batch_policy, batches)
         for iteration in range(warm_runs + 1):
             started = time.perf_counter()
             pending = {}
@@ -184,8 +208,12 @@ def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
                                 caller_observed_latency_p50_seconds=float(np.percentile(latencies, 50)),
                                 caller_observed_latency_p95_seconds=float(np.percentile(latencies, 95))))
         controller = service._batch_policy.controllers.get("cohort")
-        tuning = (dict(final_width=controller.width, evidence_samples=len(controller.samples),
-                       evidence_seconds=controller.seconds, seen_widths=sorted(controller.seen))
+        tuning = (dict(final_width=controller.width, evidence_samples=evidence["samples"],
+                       evidence_seconds=evidence["seconds"],
+                       completed_windows=evidence["completed_windows"],
+                       pending_window_samples=len(controller.samples),
+                       pending_window_seconds=controller.seconds,
+                       seen_widths=sorted(controller.seen))
                   if controller is not None else None)
         peak_allocated = torch.cuda.max_memory_allocated()
         peak_reserved = torch.cuda.max_memory_reserved()

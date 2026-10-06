@@ -32,6 +32,9 @@ for every width and repeated cohort. Requests are consumed individually through
 their futures and checked against the submitted identity. Successful batch sizes
 and controller evidence distinguish configured width from actual demand; a final
 automatic width alone is not evidence that tuning improved performance.
+The tuning report preserves cumulative eligible samples/seconds and completed
+windows, including rejected trials; pending-window fields describe only the
+unconsumed remainder. Cold shapes and underfilled batches remain ineligible.
 
 Interpret timings by their scope:
 

@@ -1022,8 +1022,8 @@ Completion requires:
   compiler measurement. Expose observed batch sizes and controller evidence, not
   just configured widths. Label Torch memory separately from total device VRAM.
 - Run the public default seed-7 recipe and seed 43 with widths 16/automatic and a
-  fresh CuPy compiler-cache directory. Both source fingerprints match the reviewed
-  Python tree and verified Rust extension. Direct/native results match exactly in
+  fresh CuPy compiler-cache directory. Both reports identify the measured Python
+  tree and verified Rust extension. Direct/native results match exactly in
   every measured cohort; automatic width 64 sees demand no greater than 16 and
   accumulates no eligible tuning evidence. Do not report this as a tuning success.
 - All four CPU/GPU Pareto member sets agree and GPU maximum-ADG selections have
@@ -1035,3 +1035,10 @@ Completion requires:
 - Validation: 180 benchmark, comparator, native-service parity and CLI checks pass
   on CUDA with the current source-verified Rust extension. The slice changes only
   development tooling and documentation, not simulation kernels or optimization.
+- Automatic review identified consumed tuning windows disappearing from the final
+  controller snapshot. Preserve cumulative eligible samples/seconds and completed
+  windows alongside the pending remainder, without changing execution decisions.
+  Add a regression for completed windows, rejected trials and incomplete evidence;
+  require changed-head validation and automatic re-review before integration.
+  Changed-head validation passes all 181 affected CUDA parity/benchmark/CLI cases;
+  source-only benchmark regressions pass 18 with two device cases deselected.

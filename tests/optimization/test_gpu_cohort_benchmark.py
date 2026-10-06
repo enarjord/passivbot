@@ -111,6 +111,40 @@ def test_failed_execution_is_structured_and_report_file_matches_stdout(monkeypat
     assert json.loads(text)["status"] == "execution_failed"
 
 
+def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():
+    from optimization.gpu.autotune import WINDOW
+    from optimization.gpu.execution_tuning import ExecutionBatchTuner
+
+    policy = ExecutionBatchTuner(initial=2)
+    policy.constrain("cohort", 2)
+    assert policy.width("cohort", 2) == 2
+    batches = []
+    evidence = benchmark._observe_batches(policy, batches)
+    # Cold first use and underfilled work are successful but ineligible evidence.
+    policy.observe("cohort", 1, 2.0, backlog=0, closing=False)
+    policy.observe("cohort", 2, 2.0, backlog=4, closing=False)
+    for _ in range(WINDOW):
+        policy.observe("cohort", 2, 2.0, backlog=4, closing=False)
+    controller = policy.controllers["cohort"]
+    assert controller.width == 1
+    assert len(controller.samples) == 0 and controller.seconds == 0
+    assert evidence["samples"] == WINDOW
+    assert evidence["seconds"] == WINDOW * 2.0
+    assert evidence["completed_windows"] == [dict(
+        width=2, samples=WINDOW, seconds=WINDOW * 2.0,
+        median_candidates_per_second=1.0, resulting_width=1)]
+    # The smaller trial loses throughput and rolls back; its window is retained too.
+    for _ in range(WINDOW + 1):
+        policy.observe("cohort", 1, 2.0, backlog=4, closing=False)
+    assert controller.width == 2
+    assert evidence["samples"] == WINDOW * 2
+    assert evidence["completed_windows"][-1]["resulting_width"] == 2
+    policy.observe("cohort", 2, 2.0, backlog=4, closing=False)
+    assert evidence["samples"] == WINDOW * 2 + 1
+    assert len(controller.samples) == 1 and controller.seconds == 2.0
+    assert len(batches) == WINDOW * 2 + 4
+
+
 def test_cli_dispatches_benchmark_help_without_full_dependency_gate(monkeypatch):
     import sys
     from passivbot_cli import main as cli
