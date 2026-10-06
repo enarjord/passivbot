@@ -123,10 +123,20 @@ class GpuBacktestService:
             entry = _Pending(snapshot, future)
             self._outstanding[snapshot.request_id] = entry
             self._queue.append(entry)
-            future.add_done_callback(lambda _: self._finished(entry))
+            future.add_done_callback(
+                lambda completed, request_id=snapshot.request_id: self._finished(request_id, completed)
+            )
             if self._thread is None:
-                self._thread = Thread(target=self._run, name="gpu-backtests", daemon=False)
-                self._thread.start()
+                try:
+                    worker = Thread(target=self._run, name="gpu-backtests", daemon=False)
+                    worker.start()
+                except BaseException:
+                    self._queue.remove(entry)
+                    del self._outstanding[snapshot.request_id]
+                    future.cancel()
+                    future.set_running_or_notify_cancel()
+                    raise
+                self._thread = worker
             self._condition.notify_all()
         return future
 
@@ -136,11 +146,13 @@ class GpuBacktestService:
         if self._closing:
             raise RuntimeError("GPU backtest service is closed")
 
-    def _finished(self, entry: _Pending) -> None:
+    def _finished(self, request_id: str, future: Future) -> None:
         with self._condition:
-            if self._outstanding.get(entry.request.request_id) is entry:
-                del self._outstanding[entry.request.request_id]
-            if entry.future.cancelled():
+            entry = self._outstanding.get(request_id)
+            if entry is None or entry.future is not future:
+                return
+            del self._outstanding[request_id]
+            if future.cancelled():
                 # Remove cancelled payloads immediately, even during a long dispatch.
                 try:
                     self._queue.remove(entry)
@@ -149,7 +161,14 @@ class GpuBacktestService:
                 else:
                     # Executor notification is still required for wait/as_completed,
                     # even when cancelled work never reaches the replay thread.
-                    entry.future.set_running_or_notify_cancel()
+                    future.set_running_or_notify_cancel()
+            self._condition.notify_all()
+
+    def _release(self, entry: _Pending) -> None:
+        # Complete admission bookkeeping before future completion wakes consumers.
+        with self._condition:
+            if self._outstanding.get(entry.request.request_id) is entry:
+                del self._outstanding[entry.request.request_id]
             self._condition.notify_all()
 
     def _next_batch(self) -> list[_Pending]:
@@ -218,7 +237,9 @@ class GpuBacktestService:
                 # Validate the whole producer batch before releasing any success.
                 results = self._results(batch, rows)
                 for entry, result in zip(batch, results):
+                    self._release(entry)
                     entry.future.set_result(result)
+                del entry
                 batch = []
         except BaseException as error:
             with self._condition:
@@ -229,9 +250,11 @@ class GpuBacktestService:
                 self._condition.notify_all()
             for entry in batch:
                 if not entry.future.done():
+                    self._release(entry)
                     entry.future.set_exception(error)
             for entry in abandoned:
                 if entry.future.set_running_or_notify_cancel():
+                    self._release(entry)
                     entry.future.set_exception(error)
 
     def close(self, *, cancel_pending: bool = False) -> None:
@@ -240,9 +263,16 @@ class GpuBacktestService:
         with self._condition:
             self._closing = True
             queued = list(self._queue) if cancel_pending else []
+            # Claim cancellation before waking an accumulating worker. Its queue
+            # cannot become a running dispatch after close requested cancellation.
+            if cancel_pending:
+                self._queue.clear()
             self._condition.notify_all()
+        # User callbacks run outside the service lock. These detached entries
+        # cannot be claimed by the worker, and still need executor notification.
         for entry in queued:
             entry.future.cancel()
+            entry.future.set_running_or_notify_cancel()
         if self._thread is not None:
             self._thread.join()
         self._replays.clear()

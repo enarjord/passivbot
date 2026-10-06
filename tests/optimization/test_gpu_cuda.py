@@ -2,6 +2,7 @@
 
 import sys
 import inspect
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -188,10 +189,35 @@ def test_mps_compilation_does_not_apply_cuda_coin_specialization(monkeypatch):
     assert sources == [source]
 
 
-def test_disabled_hsl_specialization_requires_explicit_shader_guard():
+@pytest.fixture
+def source_kernel():
+    """Source-only checks run without Torch and cannot poison later device tests."""
+    from optimization import gpu
+
+    missing = object()
+    name = "optimization.gpu.mps_kernel"
+    old_torch = sys.modules.get("torch", missing)
+    old_kernel = sys.modules.pop(name, missing)
+    old_attribute = getattr(gpu, "mps_kernel", missing)
+    sys.modules["torch"] = SimpleNamespace()
+    try:
+        yield importlib.import_module(name)
+    finally:
+        for module_name, previous in (("torch", old_torch), (name, old_kernel)):
+            if previous is missing:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous
+        if old_attribute is missing:
+            delattr(gpu, "mps_kernel")
+        else:
+            gpu.mps_kernel = old_attribute
+
+
+def test_disabled_hsl_specialization_requires_explicit_shader_guard(source_kernel):
     """Only guarded multicoin sources may opt into the compact HSL state."""
-    pytest.importorskip("torch")
-    from optimization.gpu.mps_kernel import _with_hsl_disabled, _with_hsl_features
+    _with_hsl_disabled = source_kernel._with_hsl_disabled
+    _with_hsl_features = source_kernel._with_hsl_features
 
     guarded = (
         "#ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED\n"
@@ -214,10 +240,9 @@ def test_disabled_hsl_specialization_requires_explicit_shader_guard():
         _with_hsl_disabled("kernel void unguarded() {}", True)
 
 
-def test_disabled_hsl_specialization_excludes_fused_layout():
+def test_disabled_hsl_specialization_excludes_fused_layout(source_kernel):
     """The compact one-side HSL arrays must never back the fused kernel."""
-    pytest.importorskip("torch")
-    from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinFusedRunner
+    MpsEmaAnchorMulticoinFusedRunner = source_kernel.MpsEmaAnchorMulticoinFusedRunner
 
     assert MpsEmaAnchorMulticoinFusedRunner.hsl_disabled_specialization is False
 

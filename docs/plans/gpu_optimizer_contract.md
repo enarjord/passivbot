@@ -263,3 +263,8 @@ Completion requires:
   findings. These remain acceptance work, not silently approved numerical exceptions.
 - No optimizer behavior or CPU validation policy changes in this slice. Existing CPU/GPU
   backends remain selectable while authoritative simulation/parity tooling is developed.
+- First PR review found lifecycle ordering issues. Detached queued cancellation before
+  waking the owner thread, released admission before publishing success, removed request
+  snapshots from retained future callbacks and rolled back failed thread startup. Added
+  four deterministic regressions. Source-only specialization checks again run without
+  Torch through an isolated module import that restores both module/package references.

@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 from threading import Event, Thread
+import gc
+import weakref
 
 import pytest
 
@@ -254,3 +256,108 @@ def test_explicit_infinite_metric_sentinels_are_not_fabricated():
         service.register_dataset("market", Replay())
         result = service.submit(request(float("inf"))).result(timeout=3)
     assert result.metrics["gain"] == float("inf")
+
+
+def test_cancel_close_claims_waiting_batch_before_notifying_worker(monkeypatch):
+    replay = Replay()
+    service = GpuBacktestService(batch_size=8, max_batch_delay=30)
+    service.register_dataset("market", replay)
+    accumulating = Event()
+    original_wait = service._condition.wait
+
+    def waiting(timeout=None):
+        if timeout is not None:
+            accumulating.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(service._condition, "wait", waiting)
+    future = service.submit(request(1))
+    assert accumulating.wait(3)
+    original_notify = service._condition.notify_all
+
+    def notified():
+        if service._closing:
+            assert not service._queue
+        original_notify()
+
+    monkeypatch.setattr(service._condition, "notify_all", notified)
+    service.close(cancel_pending=True)
+    assert future.cancelled()
+    assert not replay.calls
+
+
+def test_retained_cancelled_futures_do_not_retain_parameter_snapshots():
+    snapshots = []
+
+    class Payload:
+        def __deepcopy__(self, memo):
+            clone = Payload()
+            snapshots.append(weakref.ref(clone))
+            return clone
+
+    replay = GatedReplay()
+    service = GpuBacktestService(batch_size=1, max_pending=2)
+    service.register_dataset("market", replay)
+    try:
+        service.submit(request(0))
+        assert replay.started.wait(3)
+        retained = []
+        for i in range(1, 20):
+            future = service.submit(request(i, payload=Payload()))
+            assert future.cancel()
+            retained.append(future)
+        gc.collect()
+        assert all(reference() is None for reference in snapshots)
+        assert len(list(as_completed(retained, timeout=1))) == len(retained)
+    finally:
+        replay.release.set()
+        service.close()
+
+
+def test_completed_future_releases_capacity_before_notifying_consumers(monkeypatch):
+    from optimization.gpu import executor
+
+    publishing, release = Event(), Event()
+    real_future = executor.Future
+
+    class PausedFuture(real_future):
+        def _invoke_callbacks(self):
+            publishing.set()
+            if not release.wait(3):
+                raise TimeoutError("test completion callbacks not released")
+            super()._invoke_callbacks()
+
+    monkeypatch.setattr(executor, "Future", PausedFuture)
+    service = GpuBacktestService(batch_size=1, max_pending=1)
+    service.register_dataset("market", Replay())
+    try:
+        first = service.submit(request(1))
+        assert publishing.wait(3)
+        assert first.result(timeout=1).metrics == {"gain": 1.0}
+        # Publication happened, but no cleanup callback has run yet.
+        replacement = service.submit(request(1))
+    finally:
+        release.set()
+        service.close()
+    assert replacement.result().request_id == "1"
+
+
+def test_failed_thread_start_rolls_back_admission_and_can_retry(monkeypatch):
+    from optimization.gpu import executor
+
+    error = RuntimeError("cannot start new thread")
+    real_thread = executor.Thread
+
+    class BrokenThread(real_thread):
+        def start(self):
+            raise error
+
+    service = GpuBacktestService(batch_size=1, max_pending=1)
+    service.register_dataset("market", Replay())
+    monkeypatch.setattr(executor, "Thread", BrokenThread)
+    with pytest.raises(RuntimeError) as raised:
+        service.submit(request(1))
+    assert raised.value is error
+    monkeypatch.setattr(executor, "Thread", real_thread)
+    assert service.submit(request(1)).result(timeout=3).request_id == "1"
+    service.close()
