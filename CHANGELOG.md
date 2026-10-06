@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Adapt native CUDA request accumulation to CPU submission bursts and successful
+  warm replay cost, with bounded idle and total waiting. Honor explicit service
+  delays and tuning-off mode; keep search and simulation semantics unchanged.
+
 - Reduce optimizer CPU preparation overhead by reusing strategy path metadata
   within each bounds/execution projection and constructing fallback templates only
   when needed. Preserve current-config path resolution and validation.

@@ -20,7 +20,7 @@ class CudaBacktestService:
     scenarios reuse packing. Future residency/device routing belongs behind this API.
     """
 
-    def __init__(self, *, batch_size=64, max_pending=1024, max_batch_delay=0.005,
+    def __init__(self, *, batch_size=64, max_pending=1024, max_batch_delay=None,
                  max_dispatch_candidate_bars=500_000_000, interrupt_check=None,
                  tuning_mode="auto"):
         from optimization.gpu.autotune import is_auto
@@ -45,7 +45,9 @@ class CudaBacktestService:
         self._subset_cache = {}
         self._residency = None
         self._executor = GpuBacktestService(
-            batch_size=requested_width, max_pending=max_pending, max_batch_delay=max_batch_delay,
+            batch_size=requested_width, max_pending=max_pending,
+            max_batch_delay=(0.005 if max_batch_delay is None and tuning_mode == "off"
+                             else max_batch_delay),
             worker_context=self._worker_scope,
             batch_policy=self._batch_policy,
         )

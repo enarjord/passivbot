@@ -25,6 +25,8 @@ from threading import Condition, Thread, current_thread
 import time
 from typing import ContextManager, Protocol
 
+from optimization.gpu.coalescing import BatchCoalescer
+
 
 class BatchReplay(Protocol):
     def evaluate(self, candidates: list[dict]) -> list[ReplayResult | Mapping]: ...
@@ -78,10 +80,14 @@ class GpuBacktestService:
     may additionally use its own interrupt callback; threads are never force-killed.
     Factory cleanup failures are reported by ``close``. If execution also failed, its
     original exception remains authoritative and secondary cleanup failure is logged.
+
+    ``max_batch_delay=None`` adapts accumulation from successful warm replay cost
+    and observed submission bursts, with bounded absolute and idle-tail deadlines.
+    A numeric delay keeps the fixed accumulation policy.
     """
 
     def __init__(
-        self, *, batch_size: int = 64, max_pending: int = 1024, max_batch_delay: float = 0.005,
+        self, *, batch_size: int = 64, max_pending: int = 1024, max_batch_delay: float | None = 0.005,
         worker_context: Callable[[], ContextManager] | None = None,
         batch_policy=None,
     ):
@@ -89,7 +95,7 @@ class GpuBacktestService:
             raise ValueError("batch_size must be a positive integer")
         if isinstance(max_pending, bool) or not isinstance(max_pending, int) or max_pending < 1:
             raise ValueError("max_pending must be a positive integer")
-        if not math.isfinite(max_batch_delay) or max_batch_delay < 0:
+        if max_batch_delay is not None and (not math.isfinite(max_batch_delay) or max_batch_delay < 0):
             raise ValueError("max_batch_delay must be finite and non-negative")
         if worker_context is not None and not callable(worker_context):
             raise TypeError("worker_context must be a resource-context factory")
@@ -99,7 +105,8 @@ class GpuBacktestService:
             raise TypeError("batch_policy must implement width and observe")
         self.batch_size = min(batch_size, max_pending)
         self.max_pending = max_pending
-        self.max_batch_delay = float(max_batch_delay)
+        self.max_batch_delay = None if max_batch_delay is None else float(max_batch_delay)
+        self._coalescing = BatchCoalescer() if max_batch_delay is None else None
         self._condition = Condition()
         self._replays: dict[str, BatchReplay] = {}
         self._factories: dict[str, Callable[[], ContextManager[BatchReplay]]] = {}
@@ -167,6 +174,10 @@ class GpuBacktestService:
                 raise ValueError(f"request already outstanding: {snapshot.request_id}")
             if len(self._outstanding) >= self.max_pending:
                 raise BacktestQueueFull("GPU backtest request capacity exhausted")
+            if self._coalescing is not None:
+                active = any(item.request.dataset_id == snapshot.dataset_id
+                             for item in self._outstanding.values())
+                self._coalescing.arrived(snapshot.dataset_id, time.monotonic(), active=active)
             future: Future[BacktestResult] = Future()
             entry = _Pending(snapshot, future)
             self._outstanding[snapshot.request_id] = entry
@@ -231,14 +242,18 @@ class GpuBacktestService:
                          else self._batch_policy.width(dataset_id, self.batch_size))
                 if isinstance(width, bool) or not isinstance(width, int) or not 1 <= width <= self.batch_size:
                     raise ValueError("GPU batch policy width must respect the dispatch ceiling")
-                deadline = time.monotonic() + self.max_batch_delay
+                started = time.monotonic()
+                deadline = (None if self._coalescing is not None
+                            else started + self.max_batch_delay)
                 # The oldest request chooses the dataset, so locality grouping can
                 # never starve another dataset behind newly arriving requests.
                 while not self._closing:
                     compatible = sum(item.request.dataset_id == dataset_id for item in self._queue)
                     if not compatible or compatible >= width or len(self._queue) >= self.max_pending:
                         break
-                    remaining = deadline - time.monotonic()
+                    until = (self._coalescing.deadline(dataset_id, started)
+                             if self._coalescing is not None else deadline)
+                    remaining = until - time.monotonic()
                     if remaining <= 0:
                         break
                     self._condition.wait(remaining)
@@ -304,18 +319,22 @@ class GpuBacktestService:
                         raise TypeError("dataset factory must yield a replay implementing evaluate(candidates)")
                     self._replays[dataset_id] = replay
                 replay = self._replays[dataset_id]
-                started = time.perf_counter() if self._batch_policy is not None else 0.0
+                timed = self._batch_policy is not None or self._coalescing is not None
+                started = time.perf_counter() if timed else 0.0
                 try:
                     rows = replay.evaluate([dict(item.request.parameters) for item in batch])
                 finally:
                     del replay
                 # Validate the whole producer batch before releasing any success.
                 results = self._results(batch, rows)
-                if self._batch_policy is not None:
+                if timed:
                     seconds = time.perf_counter() - started
                     with self._condition:
+                        if self._coalescing is not None:
+                            self._coalescing.observe(dataset_id, len(batch), seconds)
                         backlog = sum(item.request.dataset_id == dataset_id for item in self._queue)
                         closing = self._closing
+                if self._batch_policy is not None:
                     self._batch_policy.observe(
                         dataset_id, len(batch), seconds, backlog=backlog, closing=closing,
                     )
