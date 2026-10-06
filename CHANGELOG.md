@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add `passivbot tool clean-config` for full canonical cleanup, lean live/backtest/optimizer
+  exports and formatting-only JSON. Support explicit source/destination paths, opt-in atomic
+  in-place replacement, bounded directory scans, dry-run/check modes and overwrite protection.
+
 - Add optimizer `-ltwel` and `-stwel` aliases for wallet exposure bounds, accepting fixed
   values or ranges. GPU setup now uses the bounds-clamped seed, allowing bounds to enable
   or disable a side relative to the input config while keeping side topology fixed throughout
