@@ -99,6 +99,14 @@ views before registration, sharing the same borrowed source histories. Equivalen
 contracts share a view; exact-last scenario policies can remove ineffective choices.
 Candidate-dependent continuous coin patches still require transport integration.
 
+`optimization.gpu.coin_parameters.build_coin_override_parameters` is the shared
+CPU-only coin encoder for both strategies and the single/multicoin replay adapters.
+It consumes canonical resolved payloads, selects explicit pins, and preserves exact
+patches for identity separately from float32 transport. It does not load device or
+search libraries or simulate a backtest. Consolidating encoding does not yet make
+coin patches request-owned: eligibility, RMS demand, ablation and truncated replay
+must all support changing pins before continuous coin transport can be enabled.
+
 Coupled unstuck EMA spans reuse the existing scalar transport. CPU finalization
 materializes candidate/scenario dependencies; execution identity excludes only redundant
 derived coin span copies and retains strategy coin pins and coupling-policy identity.

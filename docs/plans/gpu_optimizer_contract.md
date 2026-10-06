@@ -1107,3 +1107,28 @@ Completion requires:
   coalescing checks plus six documentation tests pass (82 total); documentation
   checks report zero errors and the two existing size warnings. Fixed/automatic
   search comparisons preserve all execution config sections and returned metrics.
+
+### 2026-10-06 — Shared CPU coin-parameter encoding
+
+- Adaptive coalescing merged into development in [PR #1901](https://github.com/enarjord/passivbot/pull/1901)
+  after completed clear current-head automatic review, exact-target author sign-off,
+  successful Python 3.12/3.14 and Rust checks, and a fresh all-surface review/identity
+  gate immediately before the SHA-pinned merge. Master remains unchanged.
+- Continuous coin patches affect more than kernel indexing: eligibility checks,
+  effective RMS demand, feature ablation and truncated replays currently consume
+  prepared pins. Keep incompatible changes explicit until that complete transport
+  boundary is supported; finite anchor views and coupled scalar inheritance remain.
+- Consolidate EMA/TM coin encoding in one CPU-only module shared by single/multicoin
+  adapters. Reuse canonical payload values and override precedence, preserving NaN
+  inheritance, eligibility/forced-active sentinels, coupled spans, TM gate/retracement
+  encoding and exact patches separately from float32 values. Remove duplicated shared
+  risk, cooldown, unstuck and HSL packing from the replay service.
+- This is a smaller preparation foundation, not general continuous coin transport
+  or a change to simulation, precision, kernels, scheduling, scoring or resume.
+- Validation: 409 affected service, coupling, native CUDA/session/dataset and parity
+  checks pass with the source-verified Rust extension. Native integration continues
+  to forbid CPU simulations/pools. A bounded differential check preserves full
+  matrices and exact contracts against the former encoders for both strategies,
+  all HSL modes and coupled/uncoupled spans without input mutation. The CPU-only
+  import/execution boundary and six documentation checks pass; AI documentation
+  reports no errors and the two existing size warnings.

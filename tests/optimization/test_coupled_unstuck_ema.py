@@ -254,7 +254,7 @@ def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
 def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pinned(
     kind, side
 ):
-    from optimization.gpu import model, service
+    from optimization.gpu import model
 
     prefix = "EMA_ANCHOR" if kind == "ema_anchor" else "TRAILING_MARTINGALE"
     strategy_keys = (
@@ -304,12 +304,10 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
             }
         ],
     )
-    build = (
-        service._build_multicoin_ema_coin_overrides
-        if kind == "ema_anchor"
-        else service._build_multicoin_tm_coin_overrides
-    )
-    matrix, _ = build(
+    from optimization.gpu.coin_parameters import build_coin_override_parameters
+
+    matrix, _ = build_coin_override_parameters(
+        strategy_kind=kind,
         config=config,
         mss={"BTC": {}},
         exchange="bybit",
