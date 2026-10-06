@@ -1385,3 +1385,43 @@ Completion requires:
   Automatic width again receives no eligible samples in sixteen-candidate cohorts.
   Sampled host/driver memory exceeds Torch-only figures; larger suite and optional-
   history costs remain explicit acceptance work in the evidence map.
+
+### 2026-10-06 — Refresh development from master after bounded allowance/HSL changes
+
+- Integrate master `492246b8c55bfe8cc4a45a407e66a270a7d20608`, including
+  PR #1905's always-bounded excess allowance and opt-in per-side coin-HSL budget
+  scaling, plus PR #1904's configuration cleanup/export tool. Keep all redesign
+  work on development; this integration does not publish it to master.
+- Keep CPU-owned canonical candidate parameter preparation and the development
+  kernels' current-balance minimum-effective-cost behavior. Apply the new HSL
+  parameter in the extracted parameter module rather than restoring old service
+  preparation or conservative screening helpers removed by the redesign.
+- Carry budget scaling through shared single/multicoin and directional replay;
+  preserve disabled-feature compilation, streamed metrics and dispatch-local scratch.
+  Add both-strategy/side parameter regressions and native GPU-only CLI, suite,
+  interruption and resume regressions with scaled budgets and authored coin patches.
+- Retained GPU checkpoints use master's updated signature. Native saved fitness
+  already requires matching Python and Rust implementation identities, so old-source
+  checkpoints cannot authorize fitness reuse after this simulator change. Existing
+  benchmark/parity results remain evidence for their recorded implementation only;
+  broader acceptance of the integrated simulator remains open.
+- PR #1910 integrated into development after clear final-head automatic review,
+  resolved feedback, author sign-off and all required CI; include it in this refresh.
+- Development integration requires completed current-head automatic review,
+  addressed findings, author sign-off and successful required CI.
+
+- Validation passes 330 Rust tests (one existing ignored), default-feature compile
+  checks and a rebuilt source-verified extension. Broad configuration, HSL and
+  orchestration coverage passes 1,781 checks. Final-source metric, implementation-
+  identity, checkpoint and native coverage passes 508 unchanged cases; corrected
+  parameter/scaled-HSL coverage passes eleven cases, including all four new lifecycle
+  cases. Forty-seven focused CUDA allowance, minimum-cost, disabled-feature and
+  streamed-metric kernel checks pass. Six documentation checks pass.
+- The new lifecycle fixtures use canonical per-coin WEL placement and decode the
+  existing overlay result stream before checking fixed policy. Full Pareto exports
+  and checkpoint policy are checked independently. No simulator change was needed
+  beyond master's HSL policy and its integration into the extracted parameter encoder.
+  Actual Metal execution and broader final simulator acceptance remain open.
+- Automatic review caught a renamed HSL member in a generated selection probe.
+  Correct it to `scale_hsl_budget`; the exact selection-phase regression compiles
+  and passes on CUDA. Production source is unchanged by this review correction.

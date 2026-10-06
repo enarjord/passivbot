@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub enabled: bool,
+    #[serde(default)]
+    pub scale_budget_with_excess_allowance: bool,
     pub red_threshold: f64,
     pub ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
@@ -31,6 +33,7 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             enabled: false,
+            scale_budget_with_excess_allowance: false,
             red_threshold: 0.25,
             ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
@@ -101,6 +104,9 @@ impl Config {
                 .collect()
         };
         for policy in &policies {
+            if self.mode != "coin" && policy.scale_budget_with_excess_allowance {
+                return Err("HSL excess allowance budget scaling requires coin mode".into());
+            }
             if !policy.red_threshold.is_finite()
                 || !(0.0 < policy.red_threshold && policy.red_threshold <= 1.0)
                 || !policy.ema_span_minutes.is_finite()
@@ -138,6 +144,7 @@ impl Config {
 /// Borrow-free numeric view of the already validated immutable policy.
 #[derive(Clone, Copy)]
 pub(super) struct SignalSettings {
+    pub scale_budget_with_excess_allowance: bool,
     pub span: f64,
     pub threshold: f64,
     pub cooldown_ms: i64,
@@ -162,6 +169,46 @@ impl Scope {
 }
 
 impl Backtest<'_> {
+    pub(super) fn hsl_exposure_budget(
+        &self,
+        side: Option<usize>,
+        coin: Option<usize>,
+    ) -> Option<evaluator::ExposureBudget> {
+        let (side, coin) = (side?, coin?);
+        let params = if side == LONG {
+            &self.bot_params_original[coin].long
+        } else {
+            &self.bot_params_original[coin].short
+        };
+        Some(evaluator::ExposureBudget {
+            wallet_exposure_limit: params.wallet_exposure_limit,
+            total_wallet_exposure_limit: params.total_wallet_exposure_limit,
+            we_excess_allowance_pct: params.risk_we_excess_allowance_pct,
+        })
+    }
+    pub(super) fn hsl_balance_budget(
+        &self,
+        side: Option<usize>,
+        coin: Option<usize>,
+        slots: u64,
+        scale: bool,
+    ) -> Result<f64, String> {
+        let mode = if coin.is_some() {
+            Mode::Coin
+        } else if side.is_some() {
+            Mode::Pside
+        } else {
+            Mode::Unified
+        };
+        evaluator::budget(
+            self.balance.usd_total_balance,
+            &mode,
+            slots,
+            scale,
+            self.hsl_exposure_budget(side, coin).as_ref(),
+        )
+    }
+
     /// Current post-fill account value, before ordinary collateral revaluation.
     pub(super) fn hsl_fill_is_terminal(&self, k: usize) -> bool {
         let balance = if self.balance.use_btc_collateral {
@@ -239,6 +286,7 @@ impl Backtest<'_> {
             return Err("invalid HSL cooldown".into());
         }
         let settings = SignalSettings {
+            scale_budget_with_excess_allowance: policy.scale_budget_with_excess_allowance,
             span: policy.ema_span_minutes,
             threshold: policy.red_threshold,
             cooldown_ms: cooldown.round() as i64,
@@ -271,14 +319,23 @@ impl Backtest<'_> {
         let observed = self.hsl_inputs_at_clipped(k, mode, side_name, symbol, boundary, cutoff)?;
         let timestamp = observed.snapshot.now;
         let slots = side.map_or(1, |s| observed.slots[s]) as u64;
-        let budget = if coin.is_some() {
-            observed.snapshot.balance / slots.max(1) as f64
+        let exposure_budget = self.hsl_exposure_budget(side, coin);
+        let budget = if coin.is_some() && slots == 0 {
+            0.0
         } else {
-            observed.snapshot.balance
+            evaluator::budget(
+                observed.snapshot.balance,
+                &observed.snapshot.mode,
+                slots,
+                settings.scale_budget_with_excess_allowance,
+                exposure_budget.as_ref(),
+            )?
         };
         let mut result = evaluator::evaluate_for_simulator(evaluator::Input {
             snapshot: observed.snapshot,
             slots,
+            scale_budget_with_excess_allowance: settings.scale_budget_with_excess_allowance,
+            exposure_budget,
             span: settings.span,
             threshold: settings.threshold,
             cooldown_ms: settings.cooldown_ms,

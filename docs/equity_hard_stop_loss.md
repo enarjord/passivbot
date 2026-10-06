@@ -19,7 +19,26 @@ Unified protection includes exposure on either side even if ordinary entries on 
 side are disabled. It does not inherit policy from the long or short blocks. Coin mode
 never substitutes a divisor for an inactive zero-slot side. Live coin budgets use configured
 slots; a backtest's explicitly enabled tradability-aware slot policy remains applicable.
-TWEL does not multiply the HSL budget.
+TWEL does not multiply the HSL budget directly.
+
+`bot.<side>.hsl.scale_budget_with_excess_allowance` defaults to `false`. In coin
+mode, setting it to `true` changes the budget to:
+
+```text
+base_wel = authored wallet_exposure_limit, or side TWEL / applicable slots if automatic
+allowance = min(max(0, we_excess_allowance_pct), max(0, side TWEL / base_wel - 1))
+budget = raw balance / applicable slots * (1 + allowance)
+```
+
+A nonpositive base WEL grants no headroom. Use each coin's WEL and excess percentage,
+including coin overrides. The switch is global per side and cannot be overridden per
+coin. `true` is rejected in `pside` and `unified` modes. It scales both current and
+terminal episode signals, so it can change panic points and cooldown eligibility.
+It uses configured headroom, regardless of how much of that headroom the position
+actually uses. A single automatic slot receives no additional budget because its
+base WEL already equals TWEL. Existing configurations keep their HSL budget through
+the default `false`.
+
 
 For each scope, add realized cashflows and unrealized PnL in currency before computing
 drawdown. Within the configured lookback and current reset episode:

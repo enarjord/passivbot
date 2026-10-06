@@ -12,21 +12,14 @@ from optimization.gpu.model import (
 )
 
 
-def _single_coin_exposure_params(risk: dict, *, side: str) -> dict[str, float]:
-    allowance_mode = (
-        str(risk.get("we_excess_allowance_mode", "bounded")).strip().lower()
-    )
-    if allowance_mode not in {"bounded", "legacy_raw"}:
-        raise ValueError(
-            "MPS proxy requires "
-            f"bot.{side}.risk.we_excess_allowance_mode to be bounded or "
-            f"legacy_raw, got {allowance_mode!r}"
-        )
+def _single_coin_exposure_params(
+    risk: dict, *, side: str, scale_hsl_budget: bool = False
+) -> dict[str, float]:
     return {
         "we_excess_allowance_pct": float(
             risk.get("we_excess_allowance_pct", 0.0) or 0.0
         ),
-        "we_excess_allowance_legacy_raw": float(allowance_mode == "legacy_raw"),
+        "hsl_scale_budget_with_excess_allowance": float(scale_hsl_budget),
         "twel_entry_gate_enabled": float(
             bool(risk.get("total_exposure_entry_gate_enabled", True))
         ),
@@ -129,7 +122,10 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
             "n_positions": float(bot["n_positions"]),
         })
         risk = config["bot"][side]["risk"]
-        strategy.update(_single_coin_exposure_params(risk, side=side))
+        strategy.update(_single_coin_exposure_params(
+            risk, side=side,
+            scale_hsl_budget=config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"],
+        ))
         if kind == "trailing_martingale":
             strategy.update(_position_exposure_enforcer_params(risk, side=side))
         strategy.update(_total_exposure_enforcer_params(risk, side=side))

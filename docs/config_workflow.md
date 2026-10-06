@@ -36,6 +36,12 @@ passivbot live configs/private/my_config.json
 
 ## Best Practices
 
+Use `passivbot tool clean-config input.json output.json` to produce a full schema-aligned config,
+or add `--mode live` for a lean live export. Formatting only is available with `--mode format`.
+Inputs stay untouched by default; replacement requires `--in-place`. See
+[Config cleanup and formatting](tools.md#config-cleanup-and-formatting) for bulk depth, HJSON,
+dry-run/check modes and migration boundaries.
+
 - Keep one normal JSON or HJSON config per strategy/account instead of relying on many CLI overrides.
 - Use CLI overrides for temporary experiments, not as your main configuration workflow.
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.

@@ -1939,7 +1939,7 @@ def test_backtest_help_all_describes_high_value_overrides():
     assert "--bot.long.hsl.orange_tier_mode" not in help_text
     assert "Allowed values: limit or market" in help_text
     assert "Allowed values: reduce_overweight or reduce_portfolio" in help_text
-    assert "Allowed values: bounded or legacy_raw" in help_text
+    assert "Scale coin HSL balance budget" in help_text
     assert "Override bot.long.hsl.orange_tier_mode." not in help_text
     assert "Override bot.short.risk.we_excess_allowance_mode." not in help_text
     assert "Override backtest.dynamic_wel_by_tradability." not in help_text

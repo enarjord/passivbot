@@ -21,7 +21,6 @@ from trailing_diagnostics import (
 )
 from risk_limits import (
     effective_we_excess_allowance_pct,
-    normalize_we_excess_allowance_mode,
 )
 from utils import utc_ms
 
@@ -1413,15 +1412,11 @@ def _monitor_wallet_exposure_limit_with_allowance(
 ) -> float:
     wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
     allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-    allowance_mode = normalize_we_excess_allowance_mode(
-        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
-    )
     twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
     effective_allowance_pct = effective_we_excess_allowance_pct(
         wallet_exposure_limit=wel,
         risk_we_excess_allowance_pct=allowance_pct,
         total_wallet_exposure_limit=twel,
-        risk_we_excess_allowance_mode=allowance_mode,
     )
     return wel * (1.0 + effective_allowance_pct)
 
@@ -1651,9 +1646,6 @@ def _build_monitor_trailing_entry_payload(
     inputs["total_wallet_exposure_limit"] = float(
         self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
     )
-    inputs["risk_we_excess_allowance_mode"] = (
-        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
-    )
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
         return None
@@ -1768,9 +1760,6 @@ def _build_monitor_trailing_close_payload(
     inputs["total_wallet_exposure_limit"] = float(
         self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
     )
-    inputs["risk_we_excess_allowance_mode"] = (
-        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
-    )
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
         return None
@@ -1841,10 +1830,6 @@ def _build_monitor_trailing_grid_v7_payload(
         "risk_we_excess_allowance_pct": float(
             self.bp(pside, "risk_we_excess_allowance_pct", symbol)
         ),
-        "risk_we_excess_allowance_mode": self.bp(
-            pside, "risk_we_excess_allowance_mode", symbol
-        )
-        or None,
         "risk_wel_enforcer_threshold": float(
             self.bp(pside, "risk_wel_enforcer_threshold", symbol)
         ),
@@ -1989,15 +1974,11 @@ def _build_monitor_position_side_payload(
         )
     wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
     allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-    allowance_mode = normalize_we_excess_allowance_mode(
-        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
-    )
     twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
     effective_allowance_pct = effective_we_excess_allowance_pct(
         wallet_exposure_limit=wel,
         risk_we_excess_allowance_pct=allowance_pct,
         total_wallet_exposure_limit=twel,
-        risk_we_excess_allowance_mode=allowance_mode,
     )
     effective_wel = wel * (1.0 + effective_allowance_pct)
 

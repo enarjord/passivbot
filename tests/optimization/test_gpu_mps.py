@@ -234,11 +234,11 @@ def test_legacy_single_coin_rows_gain_explicit_unstuck_spans(
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize(
-    ("base_wel", "allowance_pct", "legacy_raw", "expected_allowed_wel"),
+    ("base_wel", "allowance_pct", "scale_budget", "expected_allowed_wel"),
     [
         (0.4, 0.25, False, 0.5),
         (0.4, 2.0, False, 0.9),
-        (0.4, 2.0, True, 1.2),
+        (0.4, 2.0, True, 0.9),
         (-1.0, 0.25, False, 0.9),
     ],
 )
@@ -246,7 +246,7 @@ def test_mps_single_coin_wallet_exposure_override_keeps_twel_separate(
     strategy_kind,
     base_wel,
     allowance_pct,
-    legacy_raw,
+    scale_budget,
     expected_allowed_wel,
 ):
     import passivbot_rust
@@ -265,7 +265,7 @@ def test_mps_single_coin_wallet_exposure_override_keeps_twel_separate(
             "total_wallet_exposure_limit": 0.9,
             "wallet_exposure_limit": base_wel,
             "we_excess_allowance_pct": allowance_pct,
-            "we_excess_allowance_legacy_raw": float(legacy_raw),
+            "hsl_scale_budget_with_excess_allowance": float(scale_budget),
         }
     )
     params = torch.tensor(
@@ -2907,7 +2907,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     // out of the Forager selection even when its exchange minimum is small.
     long_config.twel = 1.0f;
     long_config.allowance_pct = 0.0f;
-    long_config.legacy_raw_allowance = false;
+    long_config.scale_hsl_budget = false;
     long_config.base_qty_pct = 1.0f;
     long_side.selection_initialized = false;
     long_side.previous_effective_n_positions = 0;
@@ -3100,11 +3100,11 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
 
 
 def _single_coin_exposure_fields(
-    *, allowance_pct=0.0, legacy_raw=False, entry_gate=True, threshold=1.0
+    *, allowance_pct=0.0, scale_budget=False, entry_gate=True, threshold=1.0
 ):
     return [
         allowance_pct,
-        float(legacy_raw),
+        float(scale_budget),
         float(entry_gate),
         threshold,
     ]
@@ -3542,7 +3542,7 @@ def test_mps_single_coin_five_minute_shader_smoke(strategy_kind):
                 "entry_cooldown_minutes": 2.0,
                 "total_wallet_exposure_limit": 1.0,
                 "we_excess_allowance_pct": 0.0,
-                "we_excess_allowance_legacy_raw": 0.0,
+                "hsl_scale_budget_with_excess_allowance": 0.0,
                 "twel_entry_gate_enabled": 1.0,
                 "twel_enforcer_threshold": 1.0,
                 "twel_enforcer_enabled": 0.0,
@@ -3646,7 +3646,7 @@ def test_mps_single_coin_invalid_tail_matches_forced_delist_boundary(
                 "entry_cooldown_minutes": 100.0,
                 "total_wallet_exposure_limit": 1.0,
                 "we_excess_allowance_pct": 0.0,
-                "we_excess_allowance_legacy_raw": 0.0,
+                "hsl_scale_budget_with_excess_allowance": 0.0,
                 "twel_entry_gate_enabled": 1.0,
                 "twel_enforcer_threshold": 1.0,
                 "twel_enforcer_enabled": 0.0,
@@ -3768,7 +3768,7 @@ def test_mps_single_coin_forced_delist_closes_both_hedged_sides(strategy_kind):
                 "entry_cooldown_minutes": 100.0,
                 "total_wallet_exposure_limit": 1.0,
                 "we_excess_allowance_pct": 0.0,
-                "we_excess_allowance_legacy_raw": 0.0,
+                "hsl_scale_budget_with_excess_allowance": 0.0,
                 "twel_entry_gate_enabled": 1.0,
                 "twel_enforcer_threshold": 1.0,
                 "twel_enforcer_enabled": 0.0,
@@ -4557,7 +4557,7 @@ def test_mps_single_coin_hsl_can_restart_during_invalid_tail(strategy_kind, side
                 "entry_cooldown_minutes": 0.0,
                 "total_wallet_exposure_limit": 1.0,
                 "we_excess_allowance_pct": 0.0,
-                "we_excess_allowance_legacy_raw": 0.0,
+                "hsl_scale_budget_with_excess_allowance": 0.0,
                 "twel_entry_gate_enabled": 1.0,
                 "twel_enforcer_threshold": 1.0,
                 "twel_enforcer_enabled": 0.0,
@@ -4742,7 +4742,7 @@ def _multicoin_exposure_fixture(
             "forager_score_weights_volatility": 0.0,
             "n_positions": 2.0,
             "we_excess_allowance_pct": 0.0,
-            "we_excess_allowance_legacy_raw": 0.0,
+            "hsl_scale_budget_with_excess_allowance": 0.0,
             "twel_entry_gate_enabled": 1.0,
             "twel_enforcer_threshold": 1.0,
             "twel_enforcer_enabled": 0.0,
@@ -4807,7 +4807,7 @@ def _multicoin_exposure_fixture(
             "forager_score_weights_volatility": 0.0,
             "n_positions": 2.0,
             "we_excess_allowance_pct": 0.0,
-            "we_excess_allowance_legacy_raw": 0.0,
+            "hsl_scale_budget_with_excess_allowance": 0.0,
             "twel_entry_gate_enabled": 1.0,
             "twel_enforcer_threshold": 1.0,
             "wel_enforcer_enabled": 0.0,
@@ -7879,7 +7879,7 @@ def test_mps_ema_market_close_loss_gate_projects_execution_cost(
             "entry_cooldown_minutes": 100.0,
             "total_wallet_exposure_limit": 1.0,
             "we_excess_allowance_pct": 0.0,
-            "we_excess_allowance_legacy_raw": 0.0,
+            "hsl_scale_budget_with_excess_allowance": 0.0,
             "twel_entry_gate_enabled": 1.0,
             "twel_enforcer_threshold": 1.0,
             "twel_enforcer_enabled": 0.0,
@@ -10292,7 +10292,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "forager_score_weights_volatility": 0.0,
         "n_positions": 2.0,
         "we_excess_allowance_pct": 0.0,
-        "we_excess_allowance_legacy_raw": 0.0,
+        "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 1.0,
         "twel_enforcer_threshold": 1.0,
         "wel_enforcer_enabled": 0.0,
@@ -10842,7 +10842,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "forager_score_weights_volatility": 0.0,
         "n_positions": 2.0,
         "we_excess_allowance_pct": 0.0,
-        "we_excess_allowance_legacy_raw": 0.0,
+        "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 1.0,
         "twel_enforcer_threshold": 1.0,
         "wel_enforcer_enabled": 0.0,
@@ -10950,7 +10950,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_legacy_raw_allowance_with_gate_disabled_expands_volume(
+def test_mps_multicoin_bounded_allowance_with_gate_disabled_expands_volume(
     strategy_kind, side
 ):
     runner, baseline = _multicoin_exposure_fixture(strategy_kind, side)
@@ -10961,7 +10961,7 @@ def test_mps_multicoin_legacy_raw_allowance_with_gate_disabled_expands_volume(
         else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     )
     expanded[keys.index("we_excess_allowance_pct")] = 0.5
-    expanded[keys.index("we_excess_allowance_legacy_raw")] = 1.0
+    expanded[keys.index("hsl_scale_budget_with_excess_allowance")] = 1.0
     expanded[keys.index("twel_entry_gate_enabled")] = 0.0
 
     output = runner.run(np.asarray([baseline, expanded], dtype=np.float64))
@@ -11361,7 +11361,7 @@ def _tm_single_row(
     gate_initial=1.0,
     gate_reentry=1.0,
     allowance_pct=0.0,
-    legacy_raw=False,
+    scale_budget=False,
     entry_gate=True,
     threshold=1.0,
     wel_enforcer_enabled=False,
@@ -11382,7 +11382,7 @@ def _tm_single_row(
         )
         + _single_coin_exposure_fields(
             allowance_pct=allowance_pct,
-            legacy_raw=legacy_raw,
+            scale_budget=scale_budget,
             entry_gate=entry_gate,
             threshold=threshold,
         )
@@ -13803,7 +13803,7 @@ def test_mps_position_unchanged_includes_open_tail(strategy_kind, side):
                 "entry_cooldown_minutes": 0.0,
                 "total_wallet_exposure_limit": 1.0,
                 "we_excess_allowance_pct": 0.0,
-                "we_excess_allowance_legacy_raw": 0.0,
+                "hsl_scale_budget_with_excess_allowance": 0.0,
                 "twel_entry_gate_enabled": 1.0,
                 "twel_enforcer_threshold": 1.0,
                 "twel_enforcer_enabled": 0.0,
@@ -13897,7 +13897,7 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
                 "entry_cooldown_minutes": 0.0,
                 "total_wallet_exposure_limit": 1.0,
                 "we_excess_allowance_pct": 0.0,
-                "we_excess_allowance_legacy_raw": 0.0,
+                "hsl_scale_budget_with_excess_allowance": 0.0,
                 "twel_entry_gate_enabled": 1.0,
                 "twel_enforcer_threshold": 1.0,
                 "twel_enforcer_enabled": 0.0,
@@ -14675,10 +14675,10 @@ def test_mps_single_coin_exposure_headroom_and_entry_gate(strategy_kind, side):
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
 
-    def row(*, legacy_raw, entry_gate):
+    def row(*, scale_budget, entry_gate):
         exposure = _single_coin_exposure_fields(
             allowance_pct=0.5,
-            legacy_raw=legacy_raw,
+            scale_budget=scale_budget,
             entry_gate=entry_gate,
             threshold=0.5,
         )
@@ -14725,9 +14725,9 @@ def test_mps_single_coin_exposure_headroom_and_entry_gate(strategy_kind, side):
         short_enabled=side == "short",
     )
     rows = [
-        row(legacy_raw=False, entry_gate=False),
-        row(legacy_raw=True, entry_gate=False),
-        row(legacy_raw=True, entry_gate=True),
+        row(scale_budget=False, entry_gate=False),
+        row(scale_budget=True, entry_gate=False),
+        row(scale_budget=True, entry_gate=True),
     ]
     output = runner.run(
         np.asarray([values + values for values in rows], dtype=np.float64)
@@ -14736,7 +14736,7 @@ def test_mps_single_coin_exposure_headroom_and_entry_gate(strategy_kind, side):
     sizes = (output["psize"] if side == "long" else output["short_psize"]).cpu().numpy()
 
     assert sizes[0] > 0.0
-    assert sizes[1] > sizes[0] * 1.4
+    assert sizes[1] == pytest.approx(sizes[0])
     assert sizes[2] < sizes[0] * 0.6
 
 
@@ -14912,7 +14912,7 @@ def test_mps_ema_single_coin_total_exposure_repair(side, market_orders_allowed):
         "entry_cooldown_minutes": 100.0,
         "total_wallet_exposure_limit": 1.0,
         "we_excess_allowance_pct": 0.0,
-        "we_excess_allowance_legacy_raw": 0.0,
+        "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 0.0,
         "twel_enforcer_threshold": 0.5,
         "twel_enforcer_enabled": 0.0,
@@ -14998,7 +14998,7 @@ def test_mps_ema_realized_loss_gate_blocks_lossy_total_exposure_repair(
         "entry_cooldown_minutes": 100.0,
         "total_wallet_exposure_limit": 1.0,
         "we_excess_allowance_pct": 0.0,
-        "we_excess_allowance_legacy_raw": 0.0,
+        "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 0.0,
         "twel_enforcer_threshold": 0.5,
         "twel_enforcer_enabled": 1.0,
@@ -15062,7 +15062,7 @@ def test_mps_ema_realized_loss_gate_shares_budget_between_sides():
         "entry_cooldown_minutes": 100.0,
         "total_wallet_exposure_limit": 1.0,
         "we_excess_allowance_pct": 0.0,
-        "we_excess_allowance_legacy_raw": 0.0,
+        "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 0.0,
         "twel_enforcer_threshold": 0.5,
         "twel_enforcer_enabled": 1.0,
@@ -15121,7 +15121,7 @@ def test_mps_ema_realized_loss_gate_reserves_unfilled_batch_loss():
         "entry_cooldown_minutes": 100.0,
         "total_wallet_exposure_limit": 1.0,
         "we_excess_allowance_pct": 0.0,
-        "we_excess_allowance_legacy_raw": 0.0,
+        "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 0.0,
         "twel_enforcer_threshold": 0.5,
         "twel_enforcer_enabled": 1.0,
@@ -15193,7 +15193,7 @@ def test_mps_ema_zero_loss_budget_blocks_loss_below_balance_ulp():
         "entry_cooldown_minutes": 100.0,
         "total_wallet_exposure_limit": 1.0,
         "we_excess_allowance_pct": 0.0,
-        "we_excess_allowance_legacy_raw": 0.0,
+        "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 0.0,
         "twel_enforcer_threshold": 1.0,
         "twel_enforcer_enabled": 0.0,
@@ -20438,3 +20438,47 @@ kernel void passivbot_rolling_pnl_probe(
         -30.0,
         1.0,
     ]
+
+
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_multicoin_excess_allowance_changes_coin_hsl_signal(strategy_kind, side):
+    closes = np.tile(np.asarray([100.0, 120.0]), (64, 1))
+    closes[20:, 0] *= 0.7 if side == "long" else 1.3
+    columns = (
+        EMA_ANCHOR_COIN_OVERRIDE_COLS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
+    )
+    overrides = np.full((2, columns), np.nan)
+    wel_column, allowance_column = (
+        (11, 12) if strategy_kind == "ema_anchor" else (24, 25)
+    )
+    overrides[:, wel_column] = 0.2
+    overrides[:, allowance_column] = 1.0
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind, side, overrides, closes=closes, collect_coin_fill_counts=True
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.2,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_signal_mode": 2.0,
+        "we_excess_allowance_pct": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+    scaled = list(row)
+    scaled[keys.index("hsl_scale_budget_with_excess_allowance")] = 1.0
+    out = runner.run(np.asarray([row, scaled], dtype=np.float64))
+    synchronize()
+    assert out[f"hsl_triggers_{side}"][0].item() > 0
+    assert out[f"hsl_triggers_{side}"][1].item() == 0
+    assert (out["coin_fill_counts"] >= 1).all().item()

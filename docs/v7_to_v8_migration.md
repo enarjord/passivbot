@@ -92,10 +92,10 @@ moves are listed separately and normally need less attention.
 
 ### WEL excess allowance
 
-V8 defaults to bounded WEL excess allowance. If the v7 raw allowance could put one symbol above the
-side TWEL, the report explains the clamp and the `legacy_raw` alternative. Do not select
-`legacy_raw` merely to make one backtest look more like v7; it intentionally permits the old
-unclamped exposure and must be reviewed as a risk-policy decision.
+V8 always bounds WEL excess allowance by side TWEL. If the v7 raw allowance could
+put one symbol above side TWEL, the report explains the clamp. Review this reduced
+headroom and re-backtest. A configuration explicitly requesting the retired raw
+policy stops loading with instructions; it is never silently converted to bounded sizing.
 
 ## Compare v7 and v8 artifacts
 
@@ -150,6 +150,6 @@ Before live use, confirm all of the following:
 4. V7 and v8 backtests use comparable datasets.
 5. Drawdown, high-exposure duration, maximum holding time, and fill-type changes are acceptable;
    do not review only ADG or final balance.
-6. Any `legacy_raw` or entry-gate choice reflects the intended risk contract rather than a search
-   for historical identity.
+6. Bounded excess headroom and the entry-gate choice reflect the intended risk contract
+   rather than a search for historical identity.
 7. The normal new-deployment review is complete before starting a live bot.

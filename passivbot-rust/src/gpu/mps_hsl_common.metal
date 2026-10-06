@@ -40,6 +40,7 @@ struct HslState {
     int restart_policy;
     int signal_mode;
     float slot_count;
+    float budget_multiplier;
     float drawdown_ema;
     float sampled_drawdown_raw;
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
@@ -388,7 +389,8 @@ inline void observe_hsl(
     int prior = h.hsl.action;
     h.hsl_valid = hsl_observe(h.hsl, h.hsl_tree,
         h.hsl_times, h.hsl_realized, minute, h.hsl_lookback,
-        balance / (h.signal_mode == HSL_SIGNAL_COIN ? h.slot_count : 1.0f),
+        balance / (h.signal_mode == HSL_SIGNAL_COIN ? h.slot_count : 1.0f)
+            * (h.signal_mode == HSL_SIGNAL_COIN ? h.budget_multiplier : 1.0f),
         realized, upnl, exposed, terminal, h.red_threshold,
         h.cooldown_minutes, h.restart_policy == 2);
     if (!h.hsl_valid) return;
@@ -448,6 +450,7 @@ inline HslState load_hsl(
     h.restart_policy = int(round(params[ho + 4]));
     h.signal_mode = int(round(params[ho + 5]));
     h.slot_count = fmax(round(params[ho + 6]), 1.0f);
+    h.budget_multiplier = 1.0f;
     h.drawdown_ema = 0.0f;
     h.sampled_drawdown_raw = 0.0f;
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED

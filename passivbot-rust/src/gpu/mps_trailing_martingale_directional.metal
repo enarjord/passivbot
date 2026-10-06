@@ -488,11 +488,10 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.gate_initial = p[o + 25] > 0.5f;
     s.gate_reentry = p[o + 26] > 0.5f;
     float allowance_pct = fmax(p[o + 27], 0.0f);
-    bool legacy_raw_allowance = p[o + 28] > 0.5f;
     float base_wel = p[o + 47];
     if (!(isfinite(base_wel) && base_wel >= 0.0f)) base_wel = s.twel;
     float effective_allowance_pct = allowance_pct;
-    if (!legacy_raw_allowance) {
+    {
         float max_effective = base_wel > 0.0f
             ? fmax(s.twel / base_wel - 1.0f, 0.0f) : 0.0f;
         effective_allowance_pct = fmin(allowance_pct, max_effective);
@@ -2029,6 +2028,12 @@ inline void passivbot_single_coin_impl(
     short_side.market_order_near_touch_threshold = market_order_near_touch_threshold;
     HslState long_hsl = load_hsl(params, po, 40);
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 40);
+    if (params[po + 28] > 0.5f && long_side.base_wel > 0.0f) {
+        long_hsl.budget_multiplier = long_side.allowed_wel / long_side.base_wel;
+    }
+    if (params[po + SIDE_PARAMS + 28] > 0.5f && short_side.base_wel > 0.0f) {
+        short_hsl.budget_multiplier = short_side.allowed_wel / short_side.base_wel;
+    }
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     HslStrategyEquityStats long_hsl_strategy_eq = init_hsl_strategy_equity_stats();
     HslStrategyEquityStats short_hsl_strategy_eq = init_hsl_strategy_equity_stats();
