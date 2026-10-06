@@ -110,7 +110,37 @@ See [Config Workflow](config_workflow.md) for the recommended way to copy and cu
 
 ## Backtest Results
 
-Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Suite runs collect everything under `backtests/suite_runs/<timestamp>/<scenario_label>/` and add a top-level `suite_summary.json`.
+Standalone runs write metrics and plots to `backtests/{exchange}/<session>/`. Suite runs
+collect results under `backtests/suite_runs/<session>/` with a top-level `suite_summary.json`.
+Session names use this date-sortable UTC format (the suite component appears only for suites):
+
+```text
+<timestamp>_<coins>_<source>_<days>days_[suite-<N>sc_]setup-<12 hex>_run-<8 hex>
+2026-10-06T14_50_56Z_XMR_combined_1737days_suite-12sc_setup-a71c093be642_run-99449e93
+```
+
+Single coins always appear by name. Sets of up to six coins are sorted and joined when their
+label fits in 80 characters; larger sets use `<N>_coins`. A suite's coin label covers all
+actually evaluated scenarios, and its day count is their overall date envelope, including gaps.
+Unsafe or long coin/scenario labels are converted to bounded filesystem components with a
+hash suffix; original identifiers remain in configuration and metadata.
+
+`setup-` fingerprints canonical effective execution inputs, resolved dates, loaded market data,
+market settings and verified evaluator implementation. `run-` distinguishes individual executions;
+full identifiers and setup inputs are saved in `session.json`. Equivalent fingerprints indicate
+equivalent recorded setup inputs, not a guarantee of identical results across environments.
+Directory creation is exclusive and retries a run-ID collision.
+
+A scenario producing one result writes directly to `<session>/<scenario>/config.json`,
+`analysis.json`, `dataset.json` and the other usual artifacts. A scenario producing multiple
+independent results uses `<session>/<scenario>/<exchange>/config.json`. There is no inner
+timestamp directory. `suite_summary.json` has `layout_version: 2`, actual scenario `started_at`,
+`completed_at` and elapsed seconds, and an `artifacts` map of exact paths relative to the suite
+root. Use that map to discover results instead of reconstructing filenames.
+
+This layout changes newly generated paths. Existing results are not renamed; there is no
+legacy writer option. Scenario `output_path` is now relative to the suite root. Embedding callers
+may supply an explicit empty `suite_output_root`; nonempty roots are rejected to prevent mixing runs.
 
 Each run also writes `dataset.json`, which points to the exact HLCV cache files used for that
 run. In notebooks or ad-hoc Python analysis you can load the full artifact bundle like this:
@@ -235,7 +265,7 @@ want multi-scenario evaluation.
 
 Each scenario may override:
 
-- `label`: directory name inside `backtests/suite_runs/<timestamp>/`
+- `label`: directory name inside `backtests/suite_runs/<session>/`
 - `coins`/`ignored_coins`
 - `start_date`/`end_date`
 - `exchanges`: restricts which exchanges' data the scenario can see
@@ -254,7 +284,7 @@ single-exchange datasets use the union of scenarios restricted to that exchange.
 are written to:
 
 ```
-backtests/suite_runs/<timestamp>/<scenario_label>/
+backtests/suite_runs/<session>/<scenario_label>/
 ```
 
 Every suite also receives a `suite_summary.json` containing per-scenario metrics and the aggregated statistics defined in `backtest.reducer`.
@@ -267,8 +297,8 @@ comparisons, date range scenarios, and parameter sensitivity testing.
 
 The data strategy is determined implicitly by the number of exchanges configured:
 
-- **Single exchange** (1 exchange in `backtest.exchanges`): Data is fetched from that exchange only. Scenario labels include the exchange suffix (e.g., `base/binance`).
-- **Combined exchanges** (>1 exchanges): Data is combined from all listed exchanges, selecting the best feed per coin based on coverage and quality. Scenario labels do not include an exchange suffix.
+- **Single exchange** (1 exchange in `backtest.exchanges`): Data is sourced from that exchange only. A single-result scenario writes directly into its scenario directory.
+- **Combined exchanges** (>1 exchanges): Data is combined from all listed exchanges, selecting the best feed per coin based on coverage and quality. Exchange-restricted scenarios can produce independent exchange results; the summary artifact map records their exact locations.
 
 Per-scenario `exchanges` overrides can narrow down which exchanges a scenario sees and can also require extra exchanges that are not listed in the top-level base config. Passivbot expands the prepared dataset set to include every scenario-required exchange before running the suite.
 

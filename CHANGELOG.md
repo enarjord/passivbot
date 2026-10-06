@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name optimizer, backtest, suite and iterative sessions with UTC dates, readable coin
+  labels, deterministic setup fingerprints and unique run IDs. Record generated optimizer
+  seeds for comparison and resume, and freeze selected starting configs before execution.
+  Suite scenarios now write artifacts directly under their scenario directory, keeping
+  exchange subdirectories only for multiple results. Suite summaries expose layout version,
+  relative artifact paths and actual scenario timing. This changes generated output paths;
+  existing results are preserved and optimizer resume retains its original directory.
+
 - Add `passivbot tool clean-config` for full canonical cleanup, lean live/backtest/optimizer
   exports and formatting-only JSON. Support explicit source/destination paths, opt-in atomic
   in-place replacement, bounded directory scans, dry-run/check modes and overwrite protection.

@@ -300,7 +300,16 @@ def test_session_initialize_infers_combined_mode_from_exchange_count(monkeypatch
     config_path.write_text("{}", encoding="utf-8")
 
     async def fake_load_config(self):
-        return {"backtest": {"exchanges": ["binance", "bybit"], "base_dir": "backtests"}}
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        config["backtest"].update(
+            exchanges=["binance", "bybit"],
+            base_dir=str(tmp_path),
+            start_date="2026-01-01",
+            end_date="2026-01-02",
+        )
+        return config
 
     async def fake_prepare_datasets(self, config):
         assert config["backtest"]["exchanges"] == ["binance", "bybit"]
@@ -310,7 +319,9 @@ def test_session_initialize_infers_combined_mode_from_exchange_count(monkeypatch
     monkeypatch.setattr(ib.IterativeBacktestSession, "_prepare_datasets", fake_prepare_datasets)
     monkeypatch.setattr(ib, "make_backtest_signature", lambda config: "sig")
     monkeypatch.setattr(ib, "make_get_filepath", lambda path: path)
-    monkeypatch.setattr(ib.time, "strftime", lambda fmt: "iterative_20260404_000000")
+    monkeypatch.setattr(
+        ib, "evaluation_implementation_identity", lambda: {"test": True}
+    )
 
     session = ib.IterativeBacktestSession(config_path, None, False)
     asyncio.run(session.initialize())
