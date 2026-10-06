@@ -11,7 +11,8 @@ import pytest
 @pytest.mark.parametrize("suite", [False, True])
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("automatic", [False, True])
-async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic):
+async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
+                                                                    screening=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -30,6 +31,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
                                       dict(metric="drawdown_worst_strategy_eq", goal="min")]
     config["optimize"]["limits"] = [dict(metric="backtest_completion_ratio", penalize_if="less_than", value=0.99)]
     config["optimize"]["gpu"].update(batch_size=None if automatic else 2, checkpoint_interval_seconds=0)
+    if screening:
+        config["optimize"]["gpu"]["screening"] = dict(scenarios=["base"], min_survivors=1, survival_fraction=0.5)
     config["optimize"]["bounds"] = {}
     for side in ("long", "short"):
         for key in ("n_positions", "total_wallet_exposure_limit"):
@@ -82,10 +85,22 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     def record_and_interrupt(self, row):
         nonlocal emitted
         record(self, row)
-        if interrupted and not emitted:
+        # With screening, interrupt after the initial full generation so the
+        # on-disk checkpoint exercises a partially completed screening stage.
+        if interrupted and not emitted and not screening:
             emitted = True
             signal.raise_signal(signal.SIGINT)
     monkeypatch.setattr(optimize.ResultRecorder, "record", record_and_interrupt)
+    if screening and interrupted:
+        from optimization.backends.gpu_native_backend import _Search
+        checkpoint = _Search.checkpoint
+        def checkpoint_and_interrupt(self, **kwargs):
+            nonlocal emitted
+            checkpoint(self, **kwargs)
+            if self.state["phase"] == "screening" and self.state["screened"] and not emitted:
+                emitted = True
+                signal.raise_signal(signal.SIGINT)
+        monkeypatch.setattr(_Search, "checkpoint", checkpoint_and_interrupt)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(optimize.sys, "argv", ["passivbot optimize", str(config_path), "--offline", "y",
                                                 "--start", str(seeds_path)])
@@ -100,11 +115,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             return list(msgpack.Unpacker(source, raw=False, strict_map_key=False))
     assert 0 < len(records()) <= 8
     if not interrupted:
-        assert len(records()) == 8
+        assert len(records()) == (6 if screening else 8)
     with (directory / "checkpoint.pkl").open("rb") as source:
         state = pickle.load(source)
     assert state["completed"] == len(records())
-    assert state["phase"] == ("seeds" if interrupted else "idle")
+    assert state["phase"] == (("screening" if screening else "seeds") if interrupted else "idle")
     assert state[CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
     assert list(directory.rglob("*.json"))  # Pareto members were written promptly.
     monkeypatch.setattr(optimize.sys, "argv", ["passivbot optimize", str(config_path), "--offline", "y",
@@ -112,4 +127,18 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     with pytest.raises(SystemExit) as resumed:
         await optimize.main()
     assert resumed.value.code == 0
-    assert len(records()) == 12
+    assert len(records()) == (8 if screening else 12)
+    if screening:
+        with (directory / "checkpoint.pkl").open("rb") as source:
+            final = pickle.load(source)
+        assert final["screened"] == 8 and len(final["algorithm"].pop) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_native_screening_cli_cuda_preserves_full_records_and_stage_resume(monkeypatch, tmp_path,
+                                                                                interrupted, automatic):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, True, interrupted, automatic, screening=True,
+    )

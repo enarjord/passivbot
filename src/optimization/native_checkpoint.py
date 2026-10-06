@@ -3,12 +3,13 @@
 import os
 import pickle
 import logging
+import math
 from copy import deepcopy
 
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 
 
 def checkpoint_config(config, contract):
@@ -33,15 +34,28 @@ def validate_checkpoint(state, config):
     mismatches = _resume_config_mismatches(snapshot, config)
     if mismatches:
         raise ValueError("GPU native checkpoint critical run configuration changed:\n" + "\n".join(mismatches))
-    if state.get("phase") not in {"seeds", "generation", "idle"}:
+    if state.get("phase") not in {"seeds", "screening", "generation", "idle"}:
         raise ValueError("GPU native checkpoint has an invalid search phase")
     if state.get("algorithm") is None:
         raise ValueError("GPU native checkpoint is missing its search algorithm")
     if state.get("phase") != "idle" and state.get("population") is None:
         raise ValueError("GPU native checkpoint is missing pending candidates")
-    for key in ("sequence", "completed"):
+    for key in ("sequence", "completed", "screened"):
         if isinstance(state.get(key), bool) or not isinstance(state.get(key), int) or state[key] < 0:
             raise ValueError(f"GPU native checkpoint has an invalid {key}")
+    if state["phase"] == "screening":
+        for individual in state["population"]:
+            payload = getattr(individual, "screening_payload", None)
+            if payload is None:
+                continue
+            fitness = payload.get("fitness") if isinstance(payload, dict) else None
+            penalty = payload.get("constraint_violation") if isinstance(payload, dict) else None
+            problem = state["algorithm"].problem
+            if (not isinstance(fitness, list) or len(fitness) != problem.n_obj
+                    or any(not isinstance(value, (int, float)) or math.isnan(value) for value in fitness)
+                    or not isinstance(penalty, (int, float)) or not math.isfinite(penalty) or penalty < 0
+                    or {"F", "G", "H"} <= individual.evaluated):
+                raise ValueError("GPU native checkpoint has invalid partial screening evidence")
     return state
 
 
