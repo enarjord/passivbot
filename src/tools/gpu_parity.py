@@ -165,6 +165,11 @@ def prepared_inputs(args):
         config = prepare_config(
             config, raw_snapshot=deepcopy(config), verbose=False, target="canonical", runtime=None
         )
+    exchanges = config["backtest"]["exchanges"]
+    expected_exchange = "combined" if len(exchanges) > 1 else exchanges[0]
+    if args.exchange != expected_exchange:
+        raise ValueError("prepared exchange must match effective config.backtest.exchanges "
+                         f"(expected {expected_exchange!r}, got {args.exchange!r})")
     with np.load(args.dataset, allow_pickle=False) as bundle:
         hlcvs, timestamps, btc, coins = (bundle[name] for name in ("hlcvs", "timestamps", "btc", "coins"))
     if coins.ndim != 1 or coins.dtype.kind not in {"U", "S"}:
@@ -172,7 +177,14 @@ def prepared_inputs(args):
     ordered = [item.decode() if isinstance(item, bytes) else str(item) for item in coins]
     if len(set(ordered)) != len(ordered):
         raise ValueError("dataset coin identities must be unique")
-    declared = source.get("backtest", {}).get("coins", {}).get(args.exchange)
+    # prep_backtest_args sorts coin identities while candle columns remain in
+    # their input order. Accept only its canonical layout at this tool boundary.
+    if ordered != sorted(ordered):
+        raise ValueError("dataset requires sorted coin order to match backtest payload construction")
+    declared_coins = source.get("backtest", {}).get("coins", {})
+    if declared_coins and args.exchange not in declared_coins:
+        raise ValueError("prepared exchange must match config.backtest.coins")
+    declared = declared_coins.get(args.exchange)
     if declared is not None and declared != ordered:
         raise ValueError("dataset coin order must exactly match config.backtest.coins")
     config["backtest"]["coins"] = {args.exchange: ordered}
@@ -181,6 +193,16 @@ def prepared_inputs(args):
     if timestamps.shape != (len(hlcvs),) or btc.shape != timestamps.shape:
         raise ValueError("dataset timestamps/BTC prices must align with candle rows")
     markets = json.loads(Path(args.markets).read_text())
+    allowed_sources = set(exchanges)
+    forced_sources = config["backtest"].get("coin_sources", {})
+    if args.exchange == "combined":
+        allowed_sources.update(forced_sources.values())
+    for coin in ordered:
+        market_exchange = markets[coin].get("exchange")
+        if market_exchange not in allowed_sources:
+            raise ValueError(f"prepared market exchange for {coin} must match config data sources")
+        if args.exchange == "combined" and coin in forced_sources and market_exchange != forced_sources[coin]:
+            raise ValueError(f"prepared market exchange for {coin} must match config.backtest.coin_sources")
     return config, hlcvs, markets, btc, timestamps
 
 
