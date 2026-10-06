@@ -37,6 +37,7 @@ def test_prepared_dataset_snapshots_metadata_and_selection_without_attaching(mon
     assert json.loads(dataset.config_json)["backtest"]["coins"]["binance"] == ["A", "B"]
     assert json.loads(dataset.markets_json)["A"]["price_step"] == 0.01
     assert dataset.time_range == (2, 8)
+    assert dataset.timestamp_range == (2, 8)
     assert dataset.coin_indices == (2, 0)
     assert dataset.candle_coins == ("B", "C", "A")
     assert dataset.metrics == ("fills_per_day",)
@@ -51,6 +52,8 @@ def test_prepared_dataset_snapshots_metadata_and_selection_without_attaching(mon
     {"candle_coins": ["B", "C"]}, {"candle_coins": ["B", "C", "B"]}, {"candle_coins": "BCA"},
     {"metrics": []}, {"metrics": "fills_per_day"}, {"exchange": ""},
     {"timestamps": SharedArraySpec("ts", (9,), "<i8")},
+    {"timestamp_range": (0, 5)}, {"timestamp_range": (0, 11)},
+    {"timestamp_range": (False, 6)}, {"timestamp_range": (0,)},
     {"hlcvs": SharedArraySpec("candles", (10, 3, 3), "<f8")},
     {"btc": SharedArraySpec("btc", (10,), "O")},
     {"markets": {"A": {}}},
@@ -114,6 +117,24 @@ def test_cuda_facade_registration_and_unused_close_do_not_import_device(monkeypa
     monkeypatch.setattr(builtins, "__import__", guarded)
     with CudaBacktestService() as service:
         service.register_dataset("unused", PreparedGpuDataset(**inputs()))
+
+
+def test_timestamp_window_has_independent_source_range_without_copying_candles():
+    manager = SharedArrayManager()
+    try:
+        candles = np.arange(10 * 3 * 4, dtype=np.float64).reshape(10, 3, 4)
+        timestamps = np.arange(2, 8, dtype=np.int64) * 60_000
+        specs = [manager.create_from(array)[0] for array in
+                 (candles, np.arange(10, dtype=np.float64), timestamps)]
+        dataset = PreparedGpuDataset(**(inputs() | dict(zip(("hlcvs", "btc", "timestamps"), specs))
+                                         | {"timestamp_range": (0, 6)}))
+        with dataset.attach() as arrays:
+            np.testing.assert_array_equal(arrays[0], candles[2:8])
+            np.testing.assert_array_equal(arrays[1], np.arange(2, 8, dtype=np.float64))
+            np.testing.assert_array_equal(arrays[2], timestamps)
+            assert all(not array.flags.owndata and not array.flags.writeable for array in arrays)
+    finally:
+        manager.cleanup()
 
 
 def test_cuda_facade_rejects_other_device_before_attachment(monkeypatch):

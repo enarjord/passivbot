@@ -38,13 +38,14 @@ class PreparedGpuDataset:
     exchange: str
     metrics: tuple[str, ...]
     time_range: tuple[int, int]
+    timestamp_range: tuple[int, int]
     coin_indices: tuple[int, ...]
     candle_coins: tuple[str, ...]
     config_json: str = field(repr=False)
     markets_json: str = field(repr=False)
 
     def __init__(self, *, config, markets, hlcvs, btc, timestamps, candle_coins, exchange, metrics,
-                 time_range=None, coin_indices=None):
+                 time_range=None, coin_indices=None, timestamp_range=None):
         specs = []
         for name, spec in (("hlcvs", hlcvs), ("btc", btc), ("timestamps", timestamps)):
             if not isinstance(spec, SharedArraySpec) or not spec.name:
@@ -59,7 +60,8 @@ class PreparedGpuDataset:
         hlcvs, btc, timestamps = specs
         if len(hlcvs.shape) != 3 or hlcvs.shape[2] != 4:
             raise ValueError("hlcvs must have shape (bars, coins, 4)")
-        if btc.shape != (hlcvs.shape[0],) or timestamps.shape != btc.shape:
+        if (btc.shape != (hlcvs.shape[0],) or len(timestamps.shape) != 1
+                or (timestamp_range is None and timestamps.shape != btc.shape)):
             raise ValueError("BTC prices and timestamps must match candle rows")
         if isinstance(candle_coins, str):
             raise ValueError("candle coins must be a collection of column identities")
@@ -79,6 +81,12 @@ class PreparedGpuDataset:
         if (len(span) != 2 or any(isinstance(n, bool) or not isinstance(n, int) for n in span)
                 or not 0 <= span[0] < span[1] <= hlcvs.shape[0] or span[1] - span[0] < 3):
             raise ValueError("time range must identify at least three available candle rows")
+        timestamp_span = span if timestamp_range is None else tuple(timestamp_range)
+        if (len(timestamp_span) != 2
+                or any(isinstance(n, bool) or not isinstance(n, int) for n in timestamp_span)
+                or not 0 <= timestamp_span[0] < timestamp_span[1] <= timestamps.shape[0]
+                or timestamp_span[1] - timestamp_span[0] != span[1] - span[0]):
+            raise ValueError("timestamp range must match the selected candle rows")
         coins = config["backtest"]["coins"][exchange]
         if len(coins) != len(indices) or not coins or coins != sorted(set(coins)):
             raise ValueError("config coins must be unique, sorted and match selected candle columns")
@@ -92,7 +100,8 @@ class PreparedGpuDataset:
         if not metrics or any(not isinstance(name, str) or not name for name in metrics):
             raise ValueError("requested metrics must be nonempty strings")
         values = dict(hlcvs=hlcvs, btc=btc, timestamps=timestamps, exchange=exchange,
-                      metrics=metrics, time_range=span, coin_indices=indices, candle_coins=candle_coins,
+                      metrics=metrics, time_range=span, timestamp_range=timestamp_span,
+                      coin_indices=indices, candle_coins=candle_coins,
                       config_json=json.dumps(config, allow_nan=False),
                       markets_json=json.dumps(markets, allow_nan=False))
         for name, value in values.items():
@@ -103,8 +112,9 @@ class PreparedGpuDataset:
         """Borrow read-only views; close every attachment on failure and shutdown."""
         with ExitStack() as resources:
             arrays = []
-            for spec in (self.hlcvs, self.btc, self.timestamps):
+            for spec, span in ((self.hlcvs, self.time_range), (self.btc, self.time_range),
+                               (self.timestamps, self.timestamp_range)):
                 array = resources.enter_context(_borrow_array(spec))
                 array.flags.writeable = False
-                arrays.append(array[slice(*self.time_range)])
+                arrays.append(array[slice(*span)])
             yield arrays
