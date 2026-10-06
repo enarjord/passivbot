@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Prepare finite side-enable and fine-tune anchor variants for native GPU optimization
+  over shared market data. Restore checkpoint-owned anchors on resume without the
+  original seed files; retain explicit errors for unprepared continuous coin patches.
+
 - Add `gpu-parity --gpu-engine native` to compare CPU backtests with the actual
   native CUDA service, including its shared-account single-coin replay. Label
   engine/replay identity and keep unavailable native preparation timings and

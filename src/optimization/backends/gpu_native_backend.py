@@ -8,6 +8,7 @@ The problem has no CPU evaluation path, including seed bootstrap and resumption.
 import logging
 import math
 import time
+from copy import deepcopy
 
 import numpy as np
 from pymoo.core.population import Population
@@ -29,6 +30,7 @@ from optimization.native_datasets import NativeDatasetRegistry
 from optimization.native_pipeline import ResultCadence
 from optimization.native_session import NativeEvaluationSession
 from optimization.scenario_screening import screening_survivor_indices, screening_survivor_count
+from optimization.fine_tune_anchors import get_anchor_plan
 
 
 class NativeSearchProblem(Problem):
@@ -227,6 +229,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                      screened=0, population=Population.new("X", np.asarray(starts)) if starts else None)
         state[CONTRACT_KEY] = build_evaluation_contract(config)
         state["resume_config"] = checkpoint_config(config, state[CONTRACT_KEY])
+        state["anchor_plan"] = deepcopy(get_anchor_plan(config))
 
     with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
                                overrides_list=overrides_list) as registry:

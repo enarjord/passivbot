@@ -5697,7 +5697,8 @@ def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Pat
     assert "gpu_seed_bootstrap" not in results[1]["metrics"]
 
 
-def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path):
+@pytest.mark.parametrize("backend", ["gpu", "gpu_native"])
+def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path, backend):
     checkpoint_path = tmp_path / "checkpoint.pkl"
     anchor_plan = {
         "anchors": [{"seed_bot": {}, "fixed_values": [], "source": "checkpoint"}],
@@ -5710,7 +5711,7 @@ def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path):
         pickle.dump({"anchor_plan": anchor_plan}, file)
     config = {
         "live": {"strategy_kind": "trailing_martingale"},
-        "optimize": {"backend": "gpu"},
+        "optimize": {"backend": backend},
     }
 
     assert optimize._restore_gpu_resume_anchor_plan(config, str(checkpoint_path))

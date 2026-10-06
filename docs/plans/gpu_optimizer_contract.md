@@ -241,6 +241,8 @@ Completion requires:
 - [x] Add canonical CPU request preparation and bounded polling/duplicate collection helpers.
 - [x] Add experimental GPU-only ask/tell CLI, seed evaluation and partial-cohort checkpoint resume.
 - [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
+  - [x] Prepare finite anchor/side-enable execution views over shared histories and restore
+    checkpoint-owned anchors before native resume shape construction.
   - [x] Reuse validated scenario evidence across screening/full stages without reusing partial
     scores or skipping required full-suite collection; keep caches bounded and run-local.
   - [x] Add CPU-owned native survivor selection, full seed/bootstrap evaluation and checkpointed
@@ -838,3 +840,30 @@ Completion requires:
   reaches 0.4911% and fill error 0.1967%; passive short/dual-side TM ADG/fill relative errors
   stay below 0.055%/0.035% in these fixtures. HSL/unstuck toggles do not prove controller
   transitions were exercised. No failures were concealed by fallback or wider tolerances.
+
+### 2026-10-06 — Finite prepared execution views and native anchor resumption
+
+- Native parity tooling merged into development only after completed exact-head automatic
+  review with no reported findings and successful Python 3.12/3.14 and Rust checks.
+- Prepare canonical representatives of finite anchor choices and side-enable boundary choices
+  on the CPU. Apply optimizer policies and exact-last scenario overrides before deduplicating
+  execution contracts. Register metadata views sharing immutable candle/BTC/timestamp references;
+  numeric genes remain compact request parameters. The GPU service retains its existing lazy
+  replay construction and one-active-dataset/one-owner-scratch residency policy.
+- Select compatible views per scenario/exchange without adding evolutionary logic to the service.
+  Full-candidate identity includes the selected views and all unscreened effective parameters.
+  Mirror/fixed scenario policies eliminate ineffective variants. Unprepared continuous static
+  inputs still fail before submission; both-sides-disabled replay remains unsupported.
+- Save the fine-tune anchor plan in native checkpoints and restore it before building the
+  optimizer shape. Original seed files are no longer required for resume. Existing evaluation
+  identity rejects changed fixed anchor values. Older experimental anchored checkpoints without
+  a stored plan cannot automatically restore anchors; use saved configs for a fresh run.
+- All 1,149 affected native/legacy optimizer, preparation, executor and residency tests pass,
+  including 32 finite-view and actual CUDA CLI cases. These exercise both strategies, initially
+  enabled/disabled sides, shared packing with one replay scratch owner, exact-last suite policy,
+  screening and interruption/resume after deleting seed files. CPU simulations and pools are
+  forbidden in native search tests. Canonical request preparation already removes anchor plans
+  from effective simulation configs; workers receive resolved backtest inputs, not anchor recipes.
+- This implements finite supported variants rather than accepting arbitrary continuous coin
+  patches. General compact coin-patch transport, representative performance/parity acceptance,
+  adaptive residency budgets and legacy retirement remain open; do not weaken the acceptance gate.

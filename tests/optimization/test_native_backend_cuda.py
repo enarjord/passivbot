@@ -12,7 +12,7 @@ import pytest
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
-                                                                    screening=False):
+                                                                    screening=False, anchors=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -39,6 +39,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             value = config["bot"][side]["risk"][key]
             config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
         config["optimize"]["bounds"][f"{side}_entry_initial_qty_pct"] = [0.01, 0.05]
+    if anchors:
+        config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0, 1]
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},
         {"label": "window", "coins": ["COIN00", "COIN02"]}] if suite else [])
     config_path = tmp_path / "input.json"
@@ -48,6 +50,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     for index, value in enumerate((0.012, 0.03)):
         seed_config = deepcopy(config)
         seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = value
+        if anchors:
+            seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if index == 0 else 1
         (seeds_path / f"{index}.json").write_text(json.dumps(seed_config))
     def forbidden(*_args, **_kwargs):
         pytest.fail("native optimizer CLI must never call a CPU simulation or create a CPU worker pool")
@@ -102,8 +106,10 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
                 signal.raise_signal(signal.SIGINT)
         monkeypatch.setattr(_Search, "checkpoint", checkpoint_and_interrupt)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(optimize.sys, "argv", ["passivbot optimize", str(config_path), "--offline", "y",
-                                                "--start", str(seeds_path)])
+    command = ["passivbot optimize", str(config_path), "--offline", "y", "--start", str(seeds_path)]
+    if anchors:
+        command += ["--fine-tune-params", "long.strategy.entry.initial_qty_pct"]
+    monkeypatch.setattr(optimize.sys, "argv", command)
     with pytest.raises(SystemExit) as first:
         await optimize.main()
     assert first.value.code == (130 if interrupted else 0)
@@ -122,6 +128,12 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     assert state["phase"] == (("screening" if screening else "seeds") if interrupted else "idle")
     assert state[CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
     assert list(directory.rglob("*.json"))  # Pareto members were written promptly.
+    if anchors:
+        assert len(state["anchor_plan"]["anchors"]) == 2
+        assert state["algorithm"].problem.n_var == 2
+        for path in seeds_path.iterdir():
+            path.unlink()
+        seeds_path.rmdir()  # Resume must use checkpoint-owned anchors.
     monkeypatch.setattr(optimize.sys, "argv", ["passivbot optimize", str(config_path), "--offline", "y",
                                                 "--resume", str(directory), "-i", "12"])
     with pytest.raises(SystemExit) as resumed:
@@ -132,6 +144,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         with (directory / "checkpoint.pkl").open("rb") as source:
             final = pickle.load(source)
         assert final["screened"] == 8 and len(final["algorithm"].pop) == 4
+    if anchors:
+        with (directory / "checkpoint.pkl").open("rb") as source:
+            final = pickle.load(source)
+        assert final["algorithm"].problem.n_var == 2
+        assert final["anchor_plan"] == state["anchor_plan"]
 
 
 @pytest.mark.asyncio
@@ -141,4 +158,15 @@ async def test_native_screening_cli_cuda_preserves_full_records_and_stage_resume
                                                                                 interrupted, automatic):
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, True, interrupted, automatic, screening=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suite,screening", [(False, False), (True, True)])
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_native_anchor_cli_cuda_restores_side_variants_without_seed_files(monkeypatch, tmp_path,
+                                                                             suite, screening, interrupted, automatic):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, interrupted, automatic, screening=screening, anchors=True,
     )
