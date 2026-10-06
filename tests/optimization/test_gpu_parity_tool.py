@@ -143,3 +143,30 @@ def test_real_cuda_parity_cli(require_real_passivbot_rust_module, capsys):
         assert report["metrics"][name]["status"] == "match", report
     assert report["feasibility"]["passed"]
     assert report["rust_source_fingerprint"]
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "short", "both"])
+def test_real_cuda_multicoin_filter_preserves_funded_cpu_and_gpu_runs(
+    require_real_passivbot_rust_module, strategy, sides
+):
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    options = args("--fixture", strategy, "--sides", sides)
+    inputs = gpu_parity.fixture_inputs(options)
+    baseline = gpu_parity.run_comparison(
+        inputs, "binance", ["fills_per_day"], gpu_parity.DEFAULT_TOLERANCES
+    )
+    inputs[0]["backtest"]["filter_by_min_effective_cost"] = True
+    filtered = gpu_parity.run_comparison(
+        inputs, "binance", ["fills_per_day"], gpu_parity.DEFAULT_TOLERANCES
+    )
+    # Both engines independently consider these markets affordable. Filtering
+    # must not introduce the old all-zero screen; other known simulator gaps
+    # remain visible rather than widening the tool's CPU/GPU tolerance here.
+    for engine in ("cpu", "gpu"):
+        assert baseline["metrics"]["fills_per_day"][engine] > 0
+        assert filtered["metrics"]["fills_per_day"][engine] == pytest.approx(
+            baseline["metrics"]["fills_per_day"][engine], rel=1e-7
+        )

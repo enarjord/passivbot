@@ -6295,7 +6295,7 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_min_cost_rejection_blocks_concurrent_flat_coins(
+def test_mps_multicoin_min_cost_admits_funded_concurrent_flat_coins(
     strategy_kind, side
 ):
     markets = [
@@ -6326,18 +6326,17 @@ def test_mps_multicoin_min_cost_rejection_blocks_concurrent_flat_coins(
     assert unfiltered_output["coin_fill_counts"].cpu().tolist()[0][1] > 0.0
     assert filtered.settings.cpu()[-1].item() == 1.0
     filtered_counts = filtered_output["coin_fill_counts"].cpu().tolist()[0]
-    assert filtered_counts[0] == 0.0
-    assert filtered_counts[1] == 0.0
+    assert filtered_counts == unfiltered_output["coin_fill_counts"].cpu().tolist()[0]
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_min_cost_rejection_never_reuses_flat_cash_floor(
+def test_mps_multicoin_min_cost_rejected_coin_does_not_block_later_funded_coin(
     strategy_kind, side
 ):
     markets = [
-        ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0) for min_cost in (60.0, 5.0)
+        ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0) for min_cost in (1500.0, 5.0)
     ]
     filtered, row = _multicoin_exposure_fixture(
         strategy_kind,
@@ -6352,16 +6351,15 @@ def test_mps_multicoin_min_cost_rejection_never_reuses_flat_cash_floor(
     output = filtered.run(np.asarray([row], dtype=np.float64))
     synchronize()
 
-    # Coin zero is screened while the proxy is flat. Exact Rust may admit that
-    # false negative using its higher current cash balance, so Metal must not
-    # reuse the liquidation floor when coin one becomes tradable later.
-    assert output["coin_fill_counts"].cpu().tolist()[0] == [0.0, 0.0]
+    counts = output["coin_fill_counts"].cpu().tolist()[0]
+    assert counts[0] == 0.0
+    assert counts[1] > 0.0
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_min_cost_floor_expires_after_first_selection(
+def test_mps_multicoin_min_cost_keeps_funded_slots_eligible_after_selection(
     strategy_kind, side
 ):
     count = 10
@@ -6403,13 +6401,15 @@ def test_mps_multicoin_min_cost_floor_expires_after_first_selection(
     synchronize()
 
     assert unfiltered_output["coin_fill_counts"].cpu().tolist()[0][1] > 0.0
-    assert filtered_output["coin_fill_counts"].cpu().tolist()[0] == [0.0, 0.0]
+    assert filtered_output["coin_fill_counts"].cpu().tolist()[0] == (
+        unfiltered_output["coin_fill_counts"].cpu().tolist()[0]
+    )
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("hedge_mode", [False, True])
-def test_mps_fused_min_cost_rejection_never_reuses_flat_cash_floor(
+def test_mps_fused_min_cost_admits_funded_coins_with_both_account_modes(
     strategy_kind, hedge_mode
 ):
     markets = [
@@ -6439,7 +6439,7 @@ def test_mps_fused_min_cost_rejection_never_reuses_flat_cash_floor(
     output = runner.run(np.asarray([row + row], dtype=np.float64))
     synchronize()
 
-    assert output["fill_count"].item() == 0.0
+    assert output["fill_count"].item() > 0.0
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -6459,7 +6459,7 @@ def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
         overrides[0, qty_column] = 0.1
         passing_overrides = overrides.copy()
         passing_overrides[0, qty_column] = 1.0
-        min_cost = 5.0
+        min_cost = 60.0
     else:
         wel_column = (
             11
@@ -6475,7 +6475,7 @@ def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
         overrides[1, allowance_column] = 1.0
         passing_overrides = overrides.copy()
         passing_overrides[0, allowance_column] = 1.0
-        min_cost = 7.0
+        min_cost = 150.0
     markets = [ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0) for _ in range(2)]
     runner, row = _multicoin_exposure_fixture(
         strategy_kind,
@@ -6502,13 +6502,14 @@ def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
 
     counts = output["coin_fill_counts"].cpu().tolist()[0]
     passing_counts = passing_output["coin_fill_counts"].cpu().tolist()[0]
-    assert counts == [0.0, 0.0]
+    assert counts[0] == 0.0
+    assert counts[1] > 0.0
     assert passing_counts[0] > 0.0
     assert passing_counts[1] > 0.0
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-def test_mps_tm_multicoin_min_cost_blocks_new_flat_slot_while_portfolio_is_open():
+def test_mps_tm_multicoin_min_cost_admits_funded_slot_while_portfolio_is_open():
     strategy_kind = "trailing_martingale"
     highs = np.tile(np.asarray([100.0, 120.0]), (10, 1))
     lows = highs * 0.99
@@ -6546,7 +6547,7 @@ def test_mps_tm_multicoin_min_cost_blocks_new_flat_slot_while_portfolio_is_open(
     assert unfiltered_counts[0] > 0.0
     assert unfiltered_counts[1] > 0.0
     assert filtered_counts[0] > 0.0
-    assert filtered_counts[1] == 0.0
+    assert filtered_counts[1] > 0.0
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -6570,7 +6571,7 @@ def test_mps_fused_one_way_min_cost_rejection_blocks_side_arbitration(strategy_k
     )
     long_row = list(row)
     short_row = list(row)
-    long_row[keys.index(qty_key)] = 0.01
+    long_row[keys.index(qty_key)] = 0.001
     short_row[keys.index(qty_key)] = 1.0
     runner_cls = (
         MpsEmaAnchorMulticoinFusedRunner
@@ -6589,7 +6590,7 @@ def test_mps_fused_one_way_min_cost_rejection_blocks_side_arbitration(strategy_k
     synchronize()
 
     assert output["fill_count_long"].item() == 0.0
-    assert output["fill_count"].item() == 0.0
+    assert output["fill_count"].item() > 0.0
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")

@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Use current simulated cash and candle-price exchange minima for GPU multicoin
+  minimum-effective-cost filtering. Remove permanent screening-only flat-slot rejection,
+  while preserving per-coin overrides and held-position management. Single-coin screening
+  and CPU validation remain unchanged.
+
 - Add `passivbot tool gpu-parity` for offline CPU/GPU backtest comparisons with
   explicit per-metric tolerances, canonical limit-feasibility checks, reproducible
   synthetic fixtures and prepared dataset inputs. GPU optimizer behavior is unchanged.
