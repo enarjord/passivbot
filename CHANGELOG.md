@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add `gpu-parity --gpu-engine native` to compare CPU backtests with the actual
+  native CUDA service, including its shared-account single-coin replay. Label
+  engine/replay identity and keep unavailable native preparation timings and
+  worker diagnostics explicit. Default legacy comparison remains available.
+
 - Support scenario screening in native GPU optimization using the existing
   screening settings. Fully evaluate seeds and initial parents, then promote a
   feasibility/Pareto-diverse subset of offspring to full-suite GPU evaluation.

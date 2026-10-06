@@ -226,8 +226,9 @@ def test_main_rejects_prepared_identity_errors_before_simulation(monkeypatch, ca
     ("bybit", "bybit", False), ("binanceusdm", "binance", False),
     ("binanceusdm", "binanceusdm", False), ("binanceusdm", "binanceusdm", True),
 ])
+@pytest.mark.parametrize("gpu_engine", ["legacy", "native"])
 def test_real_cuda_prepared_nondefault_exchange_matches_fixture(
-    require_real_passivbot_rust_module, tmp_path, exchange, requested, wrapped
+    require_real_passivbot_rust_module, tmp_path, exchange, requested, wrapped, gpu_engine
 ):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
@@ -239,9 +240,12 @@ def test_real_cuda_prepared_nondefault_exchange_matches_fixture(
     fixture = gpu_parity.fixture_inputs(args(
         "--fixture", "trailing_martingale", "--bars", "128", "--exchange", exchange,
     ))
-    baseline = gpu_parity.run_comparison(fixture, exchange, gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES)
+    baseline = gpu_parity.run_comparison(fixture, exchange, gpu_parity.DEFAULT_METRICS,
+                                        gpu_parity.DEFAULT_TOLERANCES, gpu_engine=gpu_engine)
     canonical = next(iter(prepared[0]["backtest"]["coins"]))
-    actual = gpu_parity.run_comparison(prepared, canonical, gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES)
+    actual = gpu_parity.run_comparison(prepared, canonical, gpu_parity.DEFAULT_METRICS,
+                                      gpu_parity.DEFAULT_TOLERANCES, gpu_engine=gpu_engine)
+    assert actual["gpu_engine"] == baseline["gpu_engine"] == gpu_engine
     for name in gpu_parity.DEFAULT_METRICS:
         assert actual["metrics"][name] == baseline["metrics"][name]
     assert actual["feasibility"] == baseline["feasibility"]
