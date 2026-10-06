@@ -1,0 +1,221 @@
+"""CPU ask/tell search over authoritative asynchronous GPU backtests.
+
+Search cohorts preserve the existing evolutionary semantics. Within a cohort,
+requests are replenished and full candidate records are persisted independently.
+The problem has no CPU evaluation path, including seed bootstrap and resumption.
+"""
+
+import logging
+import math
+import time
+
+import numpy as np
+from pymoo.core.population import Population
+from pymoo.core.problem import Problem
+from pymoo.core.callback import Callback
+from pymoo.termination import get_termination
+
+from optimization.backend_shared import load_starting_individuals
+from optimization.backends.pymoo_backend import (
+    _build_algorithm, _build_random_sampling, _prepare_resumed_algorithm,
+    _reduce_starting_population, _resolve_pymoo_population_plan,
+)
+from optimization.callback import build_pymoo_record_entry
+from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
+from optimization.interrupts import no_interrupt_requested
+from optimization.native_checkpoint import CHECKPOINT_VERSION, checkpoint_config, load_checkpoint, save_checkpoint
+from optimization.native_datasets import NativeDatasetRegistry
+from optimization.native_session import NativeEvaluationSession
+
+
+class NativeSearchProblem(Problem):
+    def __init__(self, base):
+        super().__init__(n_var=len(base.bounds), n_obj=len(base.scoring_specs),
+                         n_ieq_constr=int(bool(base.limit_checks)),
+                         xl=np.asarray([bound.low for bound in base.bounds]),
+                         xu=np.asarray([bound.high for bound in base.bounds]))
+
+    def _evaluate(self, *_args, **_kwargs):
+        raise RuntimeError("GPU native search must use GPU completions through ask/tell")
+
+
+class _Search:
+    def __init__(self, *, state, session, registry, recorder, template,
+                 build_config_fn, overrides_fn, overrides_list, checkpoint_path,
+                 checkpoint_interval, interrupt_check):
+        self.state, self.session, self.registry = state, session, registry
+        self.recorder, self.template = recorder, template
+        self.build_config_fn, self.overrides_fn = build_config_fn, overrides_fn
+        self.overrides_list = overrides_list
+        self.checkpoint_path, self.interval = checkpoint_path, checkpoint_interval
+        self.interrupt_check = interrupt_check
+        self._last_checkpoint = 0.0
+        self._pending = {}
+
+    def checkpoint(self, *, force=False):
+        now = time.monotonic()
+        if force or now - self._last_checkpoint >= self.interval:
+            save_checkpoint(self.checkpoint_path, self.state)
+            self._last_checkpoint = now
+
+    def consume(self, completions):
+        population = self.state["population"]
+        for completion in completions:
+            index = self._pending.pop(completion.candidate_id)
+            payload = completion.require_full()
+            objectives = np.asarray(payload["fitness"], dtype=np.float64)
+            problem = self.state["algorithm"].problem
+            if objectives.shape != (problem.n_obj,) or np.isnan(objectives).any():
+                raise RuntimeError("GPU candidate objective shape or values are invalid")
+            penalty = float(payload["constraint_violation"])
+            if not math.isfinite(penalty) or penalty < 0:
+                raise RuntimeError("GPU candidate constraint violation is invalid")
+            self.recorder.record(build_pymoo_record_entry(
+                vector=payload["evaluation_vector"], metrics=payload["metrics"],
+                template=self.template, build_config_fn=self.build_config_fn,
+                overrides_fn=self.overrides_fn, overrides_list=self.overrides_list,
+            ))
+            individual = population[index]
+            individual.X = np.asarray(payload["evaluation_vector"], dtype=np.float64)
+            individual.F = objectives
+            if problem.n_ieq_constr:
+                individual.G = np.asarray([penalty if penalty > 0 else -1.0])
+            individual.evaluated.update(("F", "G", "H"))
+            self.state["completed"] += 1
+            self.state["algorithm"].evaluator.n_eval += 1
+            self.checkpoint()
+
+    def evaluate_population(self):
+        population = self.state["population"]
+        waiting = iter(index for index, individual in enumerate(population)
+                       if not {"F", "G", "H"} <= individual.evaluated)
+        exhausted = False
+        self.checkpoint(force=True)
+        while self._pending or not exhausted:
+            self.interrupt_check()
+            while not exhausted and len(self._pending) < self.session.max_candidates:
+                try:
+                    index = next(waiting)
+                except StopIteration:
+                    exhausted = True
+                    break
+                candidate_id = f"candidate:{self.state['sequence']}"
+                self.state["sequence"] += 1
+                plan = self.registry.planner.prepare(candidate_id, population[index].X)
+                self.session.admit(plan)
+                self._pending[candidate_id] = index
+            self.consume(self.session.poll(timeout=0.05))
+
+    def drain_after_stop(self):
+        # Service has already stopped/drained. Persist full successes which
+        # precede a cancelled/failed request; leave partial candidates unevaluated.
+        while True:
+            completions = self.session.poll()
+            self.consume(completions)
+            if not completions and not self.session.pending_request_count:
+                return
+
+
+def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
+                starting_configs_path, get_starting_configs, configs_to_individuals,
+                build_config_fn, overrides_fn, iter_starting_configs=None,
+                configs_to_individuals_streaming=None, optimization_shape=None,
+                checkpoint_path=None, resume=False, interrupt_check=no_interrupt_requested,
+                standalone_candle_coins=None, **_cpu_only_arguments):
+    from optimization.gpu.native import CudaBacktestService
+
+    base = getattr(evaluator_for_pool, "base", evaluator_for_pool)
+    problem = NativeSearchProblem(base)
+    population_plan = _resolve_pymoo_population_plan(config, n_obj=problem.n_obj)
+    population_size = population_plan["actual_population_size"]
+    ngen = max(1, int(config["optimize"]["iters"] / population_size))
+    termination = get_termination("n_gen", ngen)
+    seed = config["optimize"].get("seed")
+    gpu = config["optimize"].get("gpu", {})
+    batch_size = 64 if gpu.get("batch_size") is None else gpu["batch_size"]
+    dispatch_budget = (500_000_000 if gpu.get("max_dispatch_candidate_bars") is None
+                       else gpu["max_dispatch_candidate_bars"])
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("GPU native batch size must be a positive integer")
+    checkpoint_interval = float(gpu.get("checkpoint_interval_seconds", 5.0))
+    if not math.isfinite(checkpoint_interval) or checkpoint_interval < 0:
+        raise ValueError("GPU checkpoint interval must be finite and nonnegative")
+    if resume:
+        state = load_checkpoint(checkpoint_path, config)
+        _prepare_resumed_algorithm(state["algorithm"], problem=problem,
+                                   termination=termination, seed=seed, callback=Callback())
+    else:
+        starts = load_starting_individuals(
+            starting_configs_path=starting_configs_path, population_size=population_size,
+            get_starting_configs=get_starting_configs, configs_to_individuals=configs_to_individuals,
+            iter_starting_configs=iter_starting_configs,
+            configs_to_individuals_streaming=configs_to_individuals_streaming,
+            optimization_shape=optimization_shape, bounds=base.bounds, sig_digits=base.sig_digits,
+        )
+        algorithm = _build_algorithm(config=config, sampling=_build_random_sampling(base.bounds, population_size),
+                                     bounds=base.bounds, sig_digits=base.sig_digits, population_plan=population_plan)
+        algorithm.setup(problem, termination=termination, seed=seed, verbose=False)
+        state = dict(backend="gpu_native", version=CHECKPOINT_VERSION, algorithm=algorithm,
+                     phase="seeds" if starts else "idle", sequence=0, completed=0,
+                     population=Population.new("X", np.asarray(starts)) if starts else None)
+        state[CONTRACT_KEY] = build_evaluation_contract(config)
+        state["resume_config"] = checkpoint_config(config, state[CONTRACT_KEY])
+
+    with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
+                               overrides_list=overrides_list) as registry:
+        service = CudaBacktestService(batch_size=batch_size, max_pending=max(2, batch_size * 4),
+                                     max_dispatch_candidate_bars=dispatch_budget,
+                                     interrupt_check=interrupt_check)
+        session = NativeEvaluationSession(service, registry.scorer, max_candidates=max(2, batch_size * 4))
+        search = _Search(state=state, session=session, registry=registry, recorder=recorder,
+                         template=base.config, build_config_fn=build_config_fn, overrides_fn=overrides_fn,
+                         overrides_list=overrides_list, checkpoint_path=checkpoint_path,
+                         checkpoint_interval=checkpoint_interval, interrupt_check=interrupt_check)
+        try:
+            registry.register(service)
+            if state["phase"] == "seeds":
+                search.evaluate_population()
+                seeds = state["population"]
+                state["algorithm"].initialization.sampling = _reduce_starting_population(
+                    problem=problem, algorithm=state["algorithm"],
+                    starting_individuals=seeds.get("X").tolist(),
+                    payloads=[dict(F=individual.F, G=individual.G) for individual in seeds],
+                    population_size=population_size, bounds=base.bounds, rng_seed=seed,
+                )
+                state.update(phase="idle", population=None)
+                search.checkpoint(force=True)
+            logging.info("Starting GPU native optimization...")
+            # n_iter is the next generation after tell. A freshly configured
+            # resume termination has no progress yet; also check that next index
+            # so a completed checkpoint does not run an extra generation.
+            while state["phase"] == "generation" or (
+                (state["algorithm"].n_iter or 1) <= ngen and state["algorithm"].has_next()
+            ):
+                interrupt_check()
+                if state["phase"] == "idle":
+                    population = state["algorithm"].ask()
+                    if population is None and state["algorithm"].termination.force_termination:
+                        break
+                    if population is None or not len(population):
+                        raise RuntimeError("GPU native evolutionary algorithm returned no candidates")
+                    state.update(phase="generation", population=population)
+                search.evaluate_population()
+                state["algorithm"].tell(infills=state["population"])
+                state.update(phase="idle", population=None)
+                search.checkpoint(force=True)
+            service.close()
+            search.checkpoint(force=True)
+        except BaseException:
+            session.stop_admission()
+            try:
+                service.close(cancel_pending=True)
+                search.drain_after_stop()
+            except BaseException:
+                logging.exception("GPU native drain failed after an earlier failure")
+            try:
+                search.checkpoint(force=True)
+            except BaseException:
+                logging.exception("GPU native checkpoint failed after an earlier failure")
+            raise
+    logging.info("GPU native optimization complete.")
+    return {"pool": None, "pool_terminated": False}

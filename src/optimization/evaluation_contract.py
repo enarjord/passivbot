@@ -120,7 +120,7 @@ def build_evaluation_contract(config: dict) -> dict:
             "key_paths": [list(path) for path in plan.get("key_paths", [])],
             "anchors": anchors,
         }
-    return {
+    contract = {
         "version": CONTRACT_VERSION,
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),
@@ -134,6 +134,16 @@ def build_evaluation_contract(config: dict) -> dict:
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }
+    if config.get("optimize", {}).get("backend") == "gpu_native":
+        # Authoritative GPU fitness must never inherit CPU/proxy-validation
+        # compatibility. Source and dependency identities above include the
+        # replay shader, CUDA lowering and host metric implementation.
+        contract["execution"] = {
+            "engine": "cuda_native",
+            "version": 1,
+            "precision": "f32_replay_integer_tick_boundaries_f64_host",
+        }
+    return contract
 
 
 def recorded_evaluation_contract(template: dict) -> dict:

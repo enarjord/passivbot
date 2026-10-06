@@ -1057,6 +1057,11 @@ def _gpu_checkpoint_allows_empty_results(
 ) -> bool:
     """Permit the durable pre-result checkpoint of a GPU seed bootstrap."""
 
+    if config.get("optimize", {}).get("backend") == "gpu_native":
+        from optimization.native_checkpoint import load_checkpoint
+
+        checkpoint = load_checkpoint(checkpoint_path, config)
+        return checkpoint["completed"] == 0
     if config.get("optimize", {}).get("backend") != "gpu" or checkpoint_path is None:
         return False
     try:
@@ -3906,7 +3911,7 @@ async def main():
     )
     data_config = build_optimizer_data_config(config)
     allow_internal_nan_gaps = (
-        str(config.get("optimize", {}).get("backend", "")).strip().lower() == "gpu"
+        str(config.get("optimize", {}).get("backend", "")).strip().lower() in {"gpu", "gpu_native"}
     )
     interrupted = False
     failed = False
@@ -3920,6 +3925,7 @@ async def main():
         btc_usd_specs = {}
         msss = {}
         timestamps_dict = {}
+        candle_coins_dict = {}
         config["backtest"]["coins"] = {}
         reducer_cfg: Dict[str, Any] = {"default": "mean"}
         scenario_contexts: List[ScenarioEvalContext] = []
@@ -4027,6 +4033,7 @@ async def main():
                     array_manager=array_manager,
                     preserve_internal_nan_gaps=allow_internal_nan_gaps,
                 )
+                candle_coins_dict[exchange] = tuple(coins)
                 exchange_preference = defaultdict(list)
                 for coin in coins:
                     exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -4044,7 +4051,7 @@ async def main():
                     for exchange in backtest_exchanges
                 }
                 for exchange, task in tasks.items():
-                    _register_exchange_data(
+                    source_coins, _mss = _register_exchange_data(
                         exchange,
                         await task,
                         config,
@@ -4055,6 +4062,7 @@ async def main():
                         array_manager=array_manager,
                         preserve_internal_nan_gaps=allow_internal_nan_gaps,
                     )
+                    candle_coins_dict[exchange] = tuple(source_coins)
         config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
             config=config,
             hlcvs_specs=hlcvs_specs,
@@ -4115,9 +4123,13 @@ async def main():
         seed_rngs(config.get("optimize", {}).get("seed"), context="optimizer")
 
         # Shared state used by workers for duplicate detection
-        manager = multiprocessing.Manager()
-        seen_hashes = manager.dict()
-        duplicate_counter = manager.dict()
+        if config["optimize"]["backend"] == "gpu_native":
+            seen_hashes = {}
+            duplicate_counter = {}
+        else:
+            manager = multiprocessing.Manager()
+            seen_hashes = manager.dict()
+            duplicate_counter = manager.dict()
         duplicate_counter["total"] = 0
         duplicate_counter["resolved"] = 0
         duplicate_counter["reused"] = 0
@@ -4191,7 +4203,9 @@ async def main():
             build_config_fn=individual_to_config,
             overrides_fn=optimizer_overrides,
         )
-        if backend_name == "gpu":
+        if backend_name == "gpu_native":
+            backend_kwargs["standalone_candle_coins"] = candle_coins_dict
+        if backend_name in {"gpu", "gpu_native"}:
             interrupt_latch = OptimizerInterruptLatch()
             backend_kwargs["interrupt_check"] = interrupt_latch.raise_if_requested
             with interrupt_latch:

@@ -14,6 +14,7 @@ from config_utils import (
 )
 from optimization.backends import get_backend_runner
 from optimization.backends import run_gpu_backend
+from optimization.backends import run_gpu_native_backend
 from optimization.backends.deap_backend import (
     DEFAULT_DEAP_POPULATION_SIZE,
     _clone_evaluated_individual,
@@ -101,6 +102,20 @@ def test_optimizer_backend_cli_alias_updates_config():
 
 def test_gpu_backend_registry_entry_is_lazy():
     assert get_backend_runner("gpu") is run_gpu_backend
+
+
+def test_native_backend_config_and_registry_remain_lazy(monkeypatch):
+    import builtins
+    original = builtins.__import__
+    def guarded(name, *args, **kwargs):
+        if name in {"torch", "cupy", "optimization.backends.gpu_native_backend"}:
+            pytest.fail("CPU/config paths must not initialize optional native GPU runtime")
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["backend"] = "GPU_NATIVE"
+    assert format_config(current, verbose=False)["optimize"]["backend"] == "gpu_native"
+    assert get_backend_runner("gpu_native") is run_gpu_native_backend
 
 
 def test_optimizer_backend_cli_explicit_deap_matches_default():

@@ -9,9 +9,16 @@ def run_gpu_backend(**kwargs):
     return run_backend(**kwargs)
 
 
+def run_gpu_native_backend(**kwargs):
+    from optimization.backends.gpu_native_backend import run_backend
+
+    return run_backend(**kwargs)
+
+
 BACKEND_RUNNERS = {
     "deap": run_deap_backend,
     "gpu": run_gpu_backend,
+    "gpu_native": run_gpu_native_backend,
     "pymoo": run_pymoo_backend,
 }
 

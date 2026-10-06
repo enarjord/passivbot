@@ -142,6 +142,27 @@ def test_producer_failure_stops_new_admission_and_cancels_other_work():
         session.admit(plan(1))
 
 
+@pytest.mark.parametrize("future_failure", [False, True])
+def test_submission_failure_preserves_prior_completion_and_original_future_error(future_failure):
+    original = ValueError("original producer failure")
+    submission = RuntimeError("service failed during replenishment")
+    class FailedAfterReady(Service):
+        def submit(self, request):
+            count = len(self.requests)
+            if count >= (3 if future_failure else 2):
+                raise submission
+            future = super().submit(request)
+            self.complete(request.request_id, original if count == 2 else None)
+            return future
+    session = NativeEvaluationSession(FailedAfterReady(capacity=4), scorer())
+    session.admit(plan(0))
+    session.admit(plan(1))
+    assert [row.candidate_id for row in session.poll()] == ["0"]
+    with pytest.raises(ValueError if future_failure else RuntimeError) as raised:
+        session.poll()
+    assert raised.value is (original if future_failure else submission)
+
+
 def test_cpu_admission_snapshots_payload_before_waiting_for_device_capacity():
     service = Service()
     session = NativeEvaluationSession(service, scorer())

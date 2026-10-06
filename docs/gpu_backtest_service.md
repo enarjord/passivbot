@@ -5,7 +5,8 @@ development. CPU code registers prepared scenarios, submits identified backtest 
 and receives futures containing compact metrics and actual simulator liquidation status.
 Device buffers, packing, replay handles
 and residency stay inside the service. No CPU backtest or evolutionary algorithm runs
-there. Optimizer integration and practical simulation-parity acceptance remain separate.
+there. An experimental optimizer integration is available below; practical simulation-parity
+acceptance and replacement of the legacy GPU backend remain open.
 
 ## Input ownership
 
@@ -55,8 +56,8 @@ finally:
 An empty parameter mapping evaluates the dataset's base strategy parameters. The
 transitional replay adapter also accepts its materialized scalar parameter mapping;
 unsupported topology changes require a separately prepared dataset. The request and
-dataset IDs are caller-owned identities. Persistent content/evaluation fingerprints,
-precision stamps and resume compatibility are subsequent integration work.
+dataset IDs are caller-owned, run-local identities. The optimizer owns persistent
+content/evaluation fingerprints, precision stamps and resume compatibility separately.
 
 ## CPU completion scoring
 
@@ -131,6 +132,48 @@ drive `NativeEvaluationSession` on the CPU. Close/drain the service before closi
 registry, and keep the original candle/BTC owner alive through both. Registry cleanup
 attempts every owned window and preserves an earlier caller/preparation failure. This
 data bridge does not add optimizer CLI routing, search or saved-fitness compatibility.
+
+## Experimental native optimizer
+
+Select `--optimizer-backend gpu_native` or `optimize.backend: "gpu_native"` on an NVIDIA
+CUDA installation. CPU backends and the existing `gpu` screening/validation backend remain
+available. The native path runs GPU simulations for all fresh candidates, starting configs
+and unfinished resumed candidates; it never creates a CPU simulation pool or uses CPU
+backtests to validate GPU fitness. CPU preparation still uses the canonical runtime compiler.
+
+The CPU orchestrator reuses pymoo NSGA-II/III variation and survival settings from
+`optimize.pymoo`, with `optimize.population_size` and `optimize.iters` retaining their
+generation-based meaning. Within a cohort it replenishes bounded GPU work, scores completions
+and writes full candidate records immediately through the existing results/Pareto stores.
+Evolution advances after the cohort is complete; asynchronous execution does not silently
+change the evolutionary policy. Effective duplicates share pending/cached work.
+
+The initial integration uses `optimize.gpu.batch_size` (64 when omitted),
+`max_dispatch_candidate_bars` and `checkpoint_interval_seconds`. CPU admission and service
+queues are bounded relative to the dispatch width. Legacy exact-worker, drift-probe,
+validation and screened-seed controls do not apply. Broader execution/cadence auto-tuning
+remains development work; this initial width is not claimed to be optimal.
+
+Native checkpoints contain CPU search state and a partially evaluated cohort, without
+service/device handles or shared-memory names. SIGINT stops admission, drains completed
+work and preserves a checkpoint; completed compatible fitness is retained while unfinished
+candidates are rerun on GPU. Checkpoints are replaced atomically at the configured interval
+and at cohort/shutdown boundaries. A crash between a result write and a checkpoint may
+cause some GPU work to be repeated after resume. Perfect replay of scheduling is not required.
+An initial zero-result checkpoint can resume before its first completed seed/candidate.
+
+Saved native fitness has an explicit CUDA execution/precision identity alongside the
+canonical data, policy, source/dependency and verified Rust identities. It cannot reuse CPU
+or old GPU proxy/validation fitness. The current replay uses f32 state, integer tick boundary
+encodings and f64 host preparation/metric work. Changes to that contract require fresh
+evaluation; the existing strict config resume checks also remain in force.
+
+This first integration evaluates full scenario suites. Selective suite screening remains
+available in the planning API and requires search-policy integration before legacy cutover.
+Candidate-dependent coin patches, changing side/kernel topology and fine-tune anchor variants
+require compatible preparation and currently fail explicitly. Representative parity,
+specialized/general kernel equivalence, performance acceptance and adaptive tuning remain
+open; the native backend does not supersede the legacy backend yet.
 
 ## Execution and cleanup
 

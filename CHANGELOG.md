@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add experimental `gpu_native` optimization using authoritative CUDA simulations,
+  CPU-owned ask/tell search, prompt results/Pareto storage and GPU-only seed/resume
+  evaluation. Existing CPU and GPU screening/validation backends remain available.
+
 - Keep GPU multicoin global strategy defaults separate from coin-specific overrides,
   preventing the first coin's patch from changing unpatched coins' simulations.
 
