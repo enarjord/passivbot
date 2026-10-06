@@ -698,6 +698,33 @@ def test_cuda_prepared_service_preserves_actual_liquidation_per_candidate(cuda, 
         manager.cleanup()
 
 
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_cuda_first_coin_patch_does_not_replace_global_defaults(cuda, strategy):
+    from optimization.gpu.service import MpsMulticoinProxy
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "128",
+    ]))
+    if strategy == "trailing_martingale":
+        parameter = "entry_initial_qty_pct"
+        global_value = config["bot"]["long"]["strategy"][strategy]["entry"]["initial_qty_pct"]
+        patch = {"entry": {"initial_qty_pct": 0.5}}
+    else:
+        parameter = "base_qty_pct"
+        global_value = config["bot"]["long"]["strategy"][strategy][parameter]
+        patch = {parameter: 0.5}
+    config["coin_overrides"] = {"COIN00": {"bot": {"long": {"strategy": {strategy: patch}}}}}
+    replay = MpsMulticoinProxy(config=config, mss=markets, exchange="binance",
+                              hlcvs=candles, btc=btc, timestamps=timestamps,
+                              needed_metrics=DEFAULT_METRICS, batch_size=2)
+    assert replay.base_params["long"][parameter] == global_value
+    values = replay._parameter_matrix([{}], "long")
+    assert values[0, replay.param_keys.index(parameter)] == pytest.approx(global_value)
+    contract = replay.coin_override_contract["exact_overrides_by_side"]["long"]
+    assert contract[0]["bot"]["long"]["strategy"][strategy] == patch
+    assert contract[1:] == [{}, {}]
+
+
 def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backtests(cuda, monkeypatch):
     from concurrent.futures import as_completed
     from optimization.gpu.datasets import PreparedGpuDataset
@@ -783,6 +810,107 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
             assert payload["fitness"] == expected["objectives"]
             assert payload["metrics"]["suite_metrics"] == expected["suite_metrics"]
             assert payload["constraint_violation"] == expected["constraint_violation"]
+    finally:
+        manager.cleanup()
+
+
+def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicates(cuda, monkeypatch):
+    import time
+    import backtest
+    from optimization.gpu.datasets import PreparedGpuDataset
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.service import MpsMulticoinProxy
+    from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
+    from optimization.native_session import NativeEvaluationSession
+    from optimize import Evaluator, SuiteEvaluator, config_to_individual
+    from shared_arrays import SharedArrayManager
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
+    ]))
+    config["optimize"]["bounds"] = {}
+    for side in ("long", "short"):
+        for key in ("n_positions", "total_wallet_exposure_limit"):
+            value = config["bot"][side]["risk"][key]
+            config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
+        config["optimize"]["bounds"][f"{side}_entry_initial_qty_pct"] = [0.01, 0.05]
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.025,
+    }
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    config["optimize"]["scoring"] = [
+        {"metric": "adg_strategy_eq", "goal": "max"},
+        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+    ]
+    config["optimize"]["limits"] = []
+    scenario_configs = {label: deepcopy(config) for label in ("base", "stress")}
+    for label, value in scenario_configs.items():
+        value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.025
+        value["bot"]["short"] = deepcopy(value["bot"]["long"])
+        if label == "stress":
+            value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.03
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("CPU orchestration must never run a CPU simulation")
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    reference = {label: MpsMulticoinProxy(
+        config=value, mss=markets, exchange="binance", hlcvs=candles, btc=btc,
+        timestamps=timestamps, needed_metrics=DEFAULT_METRICS, batch_size=1,
+    ).evaluate_results([{}])[0] for label, value in scenario_configs.items()}
+    manager = SharedArrayManager()
+    try:
+        specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
+        base = Evaluator({"binance": specs[0]}, {"binance": specs[1]}, {"binance": markets}, config)
+        contexts = [SimpleNamespace(
+            label=label, exchanges=["binance"], config=deepcopy(config), msss={"binance": markets},
+            overrides={"bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.03}
+            if label == "stress" else {},
+        ) for label in scenario_configs]
+        suite = SuiteEvaluator(base, contexts, {"default": "mean"})
+        monkeypatch.setattr(base, "evaluate", forbidden)
+        monkeypatch.setattr(suite, "evaluate", forbidden)
+        bindings = [ScenarioBinding(label, label, PreparedGpuDataset(
+            config=value, markets=markets, exchange="binance", hlcvs=specs[0], btc=specs[1],
+            timestamps=specs[2], candle_coins=config["backtest"]["coins"]["binance"], metrics=DEFAULT_METRICS,
+        )) for label, value in scenario_configs.items()]
+        planner = NativeCandidatePlanner(suite, bindings)
+        vector = config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)
+        vectors = [[qty if key.endswith("entry_initial_qty_pct") else original
+                    for (key, _path), original in zip(base.key_paths, vector, strict=True)]
+                   for qty in (0.01, 0.05, 0.03)]
+        plans = [planner.prepare(str(index), values) for index, values in enumerate(vectors)]
+        assert len({plan.effective_key for plan in plans}) == 1
+        submitted = []
+        with CudaBacktestService(batch_size=2, max_pending=2) as service:
+            for binding in bindings:
+                service.register_dataset(binding.dataset_id, binding.dataset)
+            original_submit = service.submit
+            def submit(request):
+                future = original_submit(request)
+                submitted.append((request, future))
+                return future
+            monkeypatch.setattr(service, "submit", submit)
+            session = NativeEvaluationSession(service, planner.scorer, max_candidates=2)
+            for plan in plans[:2]:
+                session.admit(plan)
+            final = {}
+            deadline = time.monotonic() + 60
+            while len(final) < 2 and time.monotonic() < deadline:
+                final.update((row.candidate_id, row.require_full()) for row in session.poll(timeout=0.05))
+            assert set(final) == {"0", "1"}
+            session.admit(plans[2])
+            final["2"] = session.poll()[0].require_full()
+            assert session.active_candidate_ids == ()
+            assert session.pending_request_count == 0
+            assert len(submitted) == 2
+        for request, future in submitted:
+            row = future.result()
+            assert row.metrics == pytest.approx(reference[request.dataset_id].metrics, rel=1e-7, abs=1e-9)
+            assert row.liquidated == reference[request.dataset_id].liquidated
+        assert final["0"]["fitness"] == final["1"]["fitness"] == final["2"]["fitness"]
+        assert [final[str(i)]["evaluation_vector"] for i in range(3)] == [list(plan.vector) for plan in plans]
     finally:
         manager.cleanup()
 

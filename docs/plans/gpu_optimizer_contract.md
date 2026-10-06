@@ -226,6 +226,7 @@ Completion requires:
 
 - [ ] Integrate GPU result scoring/limits through existing CPU-owned canonical helpers.
 - [x] Add incremental candidate/suite result collection using canonical CPU scoring helpers.
+- [x] Add canonical CPU request preparation and bounded polling/duplicate collection helpers.
 - [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
 - [ ] Flush results/Pareto promptly; validate interruption and compatible resume.
@@ -536,3 +537,43 @@ Completion requires:
 - Enforced the requested merge discipline on the prepared-dataset slice: fix the auto
   review's finding, add regressions, answer its original thread, await clear current-head
   re-review, perform author semantic review, and wait for all required CI before dev merge.
+
+### 2026-10-06 — Canonical CPU planning and bounded collection
+
+- Added CPU-only preparation of effective request parameters using canonical bounds,
+  optimizer/fixed policies, mirroring and exact-last scenario overrides. Keep static
+  topology/coin patches in prepared datasets; reject incompatible changes before GPU
+  admission. Run-local duplicate identity includes unscreened effective scenarios.
+- Added bounded candidate admission, pending-duplicate fan-out and snapshot caching over
+  the exclusively borrowed service. Future callbacks only enqueue notifications; CPU
+  polling scores completed candidates and replenishes device work. Screenings, full
+  evaluations and different screening subsets cannot share cached completion payloads.
+  Stop admission/cancel waiting work while preserving fully completed candidates.
+- Group interleaved requests by compatible dataset inside the service. The oldest queued
+  request chooses the next dataset and other datasets retain their relative queue order.
+  Full admission dispatches available work without waiting for an impossible larger batch.
+  Cancellation can reselect ready work instead of retaining an empty accumulation target.
+- Reproduced a material default-binding bug for both strategies: the first coin's patched
+  strategy supplied global defaults to unpatched coins. Separate global preparation from
+  static coin overrides and retain shared parameter encoding instead of a second packer.
+- Validation: 95 combined preparation/session/scoring/executor/CUDA cases pass, followed
+  by ten session cases including distinct screening-subset isolation. Wider CUDA coverage
+  passes 96 with the previously reproduced disabled-HSL specialization case explicitly
+  excluded. Its acceptance debt remains open. All 375 construction/adaptive-timing/HSL
+  service cases and 87 parity comparator/tool cases pass after updating the construction
+  fixture's metadata-only preparation boundary. Documentation checks have zero errors and
+  two existing size warnings. Another 88 prepared-data/residency cases and a bounded
+  benchmark CLI smoke (three coins, eight candidates, 128 bars, width four, one warm run)
+  pass. No Rust or kernel source changes are included. These runs validate behavior,
+  not a representative throughput or optimizer-quality improvement.
+- Optimizer CLI/data-registry integration, candidate-dependent coin patches/anchor variants,
+  adaptive cadence, persistence and content/precision resume identities remain open. This
+  slice provides CPU orchestration components and is not a native optimizer cutover.
+- The result-scoring slice passed a clear current-head auto review and all required Python
+  and Rust CI before merging into development. The same gate applies to this next slice.
+- During subsequent data-registry integration, a regression exposed that dynamic numeric
+  exposure/position values could change a prepared kernel's side enablement. Include the
+  effective enabled sides in the dataset-owned contract and reject both activation and
+  deactivation before submission. The combined CPU/CUDA suite passes 98 cases after this
+  correction. The prior head's clear auto review cannot approve this changed head; request
+  current-head re-review and wait for its required CI before integration.

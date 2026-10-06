@@ -13,6 +13,11 @@ from optimization.gpu.replay_progress import replay_scope
 import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
+from optimization.gpu.parameters import (
+    _single_coin_exposure_params, _position_exposure_enforcer_params,
+    _total_exposure_enforcer_params, _unstuck_params, _hsl_params,
+    prepare_candidate_parameters,
+)
 from config.validate import validate_limit_order_fill_buffer_pct
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
@@ -1087,94 +1092,6 @@ def _candidate_position_slot_outputs(
             np.asarray(values, dtype=np.float64)
         )
     return outputs
-
-
-def _single_coin_exposure_params(risk: dict, *, side: str) -> dict[str, float]:
-    allowance_mode = (
-        str(risk.get("we_excess_allowance_mode", "bounded")).strip().lower()
-    )
-    if allowance_mode not in {"bounded", "legacy_raw"}:
-        raise ValueError(
-            "MPS proxy requires "
-            f"bot.{side}.risk.we_excess_allowance_mode to be bounded or "
-            f"legacy_raw, got {allowance_mode!r}"
-        )
-    return {
-        "we_excess_allowance_pct": float(
-            risk.get("we_excess_allowance_pct", 0.0) or 0.0
-        ),
-        "we_excess_allowance_legacy_raw": float(allowance_mode == "legacy_raw"),
-        "twel_entry_gate_enabled": float(
-            bool(risk.get("total_exposure_entry_gate_enabled", True))
-        ),
-        "twel_enforcer_threshold": float(
-            risk.get("total_exposure_enforcer_threshold", 1.0) or 0.0
-        ),
-    }
-
-
-def _position_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, float]:
-    enabled = bool(
-        risk.get(
-            "position_exposure_enforcer_enabled",
-            risk.get("risk_wel_enforcer_enabled", False),
-        )
-    )
-    threshold = float(
-        risk.get(
-            "position_exposure_enforcer_threshold",
-            risk.get("risk_wel_enforcer_threshold", 0.0),
-        )
-        or 0.0
-    )
-    if enabled and (not np.isfinite(threshold) or threshold <= 0.0):
-        raise ValueError(
-            "MPS proxy requires a finite positive "
-            f"bot.{side}.risk.position_exposure_enforcer_threshold when the "
-            "position exposure enforcer is enabled"
-        )
-    return {
-        "wel_enforcer_enabled": float(enabled),
-        "wel_enforcer_threshold": threshold,
-    }
-
-
-def _total_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, float]:
-    policy = (
-        str(risk.get("total_exposure_enforcer_policy", "reduce_overweight"))
-        .strip()
-        .lower()
-    )
-    if policy not in {"reduce_overweight", "reduce_portfolio"}:
-        raise ValueError(
-            "MPS proxy requires "
-            f"bot.{side}.risk.total_exposure_enforcer_policy to be "
-            f"reduce_overweight or reduce_portfolio, got {policy!r}"
-        )
-    return {
-        "twel_enforcer_enabled": float(
-            bool(risk.get("total_exposure_enforcer_enabled", False))
-        ),
-        "twel_enforcer_reduce_portfolio": float(policy == "reduce_portfolio"),
-    }
-
-
-def _unstuck_params(bot: dict) -> dict[str, float]:
-    return {
-        "unstuck_enabled": float(bool(bot["unstuck_enabled"])),
-        "unstuck_ema_gating_enabled": float(bool(bot["unstuck_ema_gating_enabled"])),
-        "unstuck_close_pct": float(bot["unstuck_close_pct"]),
-        "unstuck_ema_dist": float(bot["unstuck_ema_dist"]),
-        "unstuck_loss_allowance_pct": float(bot["unstuck_loss_allowance_pct"]),
-        "unstuck_threshold": float(bot["unstuck_threshold"]),
-        **{key: float(bot[key]) for key in UNSTUCK_EMA_PARAM_KEYS},
-    }
-
-
-def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
-    from optimization.gpu.hsl import pack_params
-
-    return pack_params(bot, signal_mode)
 
 
 def _require_supported_multicoin_valid_tails(
@@ -3119,74 +3036,13 @@ class MpsMulticoinProxy:
             for side in ("long", "short")
         }
         self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
-        self.base_params = {}
+        base_parameters = prepare_candidate_parameters(config, mss, exchange)
+        self.base_params = {
+            side: {key: base_parameters[f"{side}_{key}"] for key in self.param_keys}
+            for side in self.sides
+        }
         for side in self.sides:
             first_bot = projected[0][side]
-            first_strategy = dict(payload.strategy_params_list[0][side])
-            if self.strategy_kind == "trailing_martingale":
-                first_strategy = flatten_trailing_martingale_params(
-                    first_strategy, first_bot
-                )
-            weights = first_bot.get("forager_score_weights", {}) or {}
-            first_strategy.update(
-                {
-                    "entry_cooldown_minutes": float(
-                        first_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0
-                    ),
-                    "total_wallet_exposure_limit": float(
-                        first_bot["total_wallet_exposure_limit"]
-                    ),
-                    "forager_volume_ema_span_1m": float(
-                        first_bot.get("filter_volume_ema_span_1m", 0.0) or 0.0
-                    ),
-                    "forager_volatility_ema_span_1m": float(
-                        first_bot.get("filter_volatility_ema_span_1m", 0.0) or 0.0
-                    ),
-                    "forager_volume_drop_pct": float(
-                        first_bot.get("filter_volume_drop_pct", 0.0) or 0.0
-                    ),
-                    "forager_score_weights_volume": float(weights.get("volume", 0.0)),
-                    "forager_score_weights_ema_readiness": float(
-                        weights.get("ema_readiness", 0.0)
-                    ),
-                    "forager_score_weights_volatility": float(
-                        weights.get("volatility", 0.0)
-                    ),
-                    "n_positions": float(first_bot["n_positions"]),
-                }
-            )
-            first_strategy.update(
-                _single_coin_exposure_params(
-                    config["bot"][side].get("risk", {}), side=side
-                )
-            )
-            if self.strategy_kind == "trailing_martingale":
-                first_strategy.update(
-                    _position_exposure_enforcer_params(
-                        config["bot"][side].get("risk", {}), side=side
-                    )
-                )
-            if self.strategy_kind in {"ema_anchor", "trailing_martingale"}:
-                first_strategy.update(
-                    _total_exposure_enforcer_params(
-                        config["bot"][side].get("risk", {}), side=side
-                    )
-                )
-            base_bot = flatten_shared_bot_side(config["bot"][side])
-            first_strategy.update(_unstuck_params(base_bot))
-            hsl_bot = project_bot(payload, 0, side, config, base=True)
-            first_strategy.update(_hsl_params(hsl_bot, signal_mode=signal_mode))
-            first_strategy.update(adaptive_params(base_bot))
-            missing = [
-                key for key in self.param_keys if key not in first_strategy
-            ]
-            if missing:
-                raise ValueError(
-                    f"MPS multicoin {self.strategy_kind} {side} payload is "
-                    f"missing parameters: {missing}"
-                )
-            self.base_params[side] = first_strategy
-
             for coin in range(1, coin_count):
                 bot = payload.bot_params_list[coin][side]
                 if any(

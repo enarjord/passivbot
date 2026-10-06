@@ -1625,6 +1625,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     )
     _complete_hsl_payload(payload)
     backtest.build_backtest_payload = lambda *args, **kwargs: payload
+    backtest.prep_backtest_args = lambda *args, **kwargs: (
+        payload.bot_params_list, payload.strategy_params_list,
+        payload.exchange_params, payload.backtest_params,
+    )
     built_data_kwargs = {}
 
     def fake_build_mps_multicoin_data(*args, **kwargs):

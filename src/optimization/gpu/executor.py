@@ -1,7 +1,7 @@
 """Bounded asynchronous execution, independent of optimizer/search policy.
 
 A registered replay owns its prepared dataset and implements ``evaluate(candidates)``.
-The device service serializes access to that mutable replay, combining adjacent compatible
+The device service serializes access to that mutable replay, grouping compatible queued
 requests into short microbatches. Callers consume individual futures; they do not observe
 dispatch boundaries. No GPU runtime or evolutionary dependency is imported here.
 Prepared-input factories can create and release replay resources on the owning worker;
@@ -222,9 +222,11 @@ class GpuBacktestService:
                     self._condition.wait()
                 dataset_id = self._queue[0].request.dataset_id
                 deadline = time.monotonic() + self.max_batch_delay
-                # FIFO grouping bounds starvation; another dataset ends this batch.
-                while len(self._queue) < self.batch_size and not self._closing:
-                    if any(item.request.dataset_id != dataset_id for item in self._queue):
+                # The oldest request chooses the dataset, so locality grouping can
+                # never starve another dataset behind newly arriving requests.
+                while not self._closing:
+                    compatible = sum(item.request.dataset_id == dataset_id for item in self._queue)
+                    if not compatible or compatible >= self.batch_size or len(self._queue) >= self.max_pending:
                         break
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -233,14 +235,14 @@ class GpuBacktestService:
                     if not self._queue:
                         break
                 batch = []
-                while (
-                    self._queue
-                    and len(batch) < self.batch_size
-                    and self._queue[0].request.dataset_id == dataset_id
-                ):
+                remaining_queue = deque()
+                while self._queue:
                     entry = self._queue.popleft()
-                    if entry.future.set_running_or_notify_cancel():
+                    if entry.request.dataset_id != dataset_id or len(batch) >= self.batch_size:
+                        remaining_queue.append(entry)
+                    elif entry.future.set_running_or_notify_cancel():
                         batch.append(entry)
+                self._queue = remaining_queue
                 if batch:
                     return batch
 

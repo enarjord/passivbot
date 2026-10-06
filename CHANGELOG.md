@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Keep GPU multicoin global strategy defaults separate from coin-specific overrides,
+  preventing the first coin's patch from changing unpatched coins' simulations.
+
 - Expand GPU multicoin Trailing Martingale recursive entry and close ladders for
   passive execution as well as market execution. Keep market promotion separate from
   ladder generation, preserving cooldown, exposure-gate and shared-account behavior.
