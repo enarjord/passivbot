@@ -267,7 +267,7 @@ def test_disabled_hsl_source_removes_hsl_portfolio_scans():
 
 
 @pytest.mark.parametrize("case", ["ema-multicoin-overhead", "tm-multicoin-overhead"])
-@pytest.mark.parametrize("coins", [2, 3, 5, 9, 17, 33, 64])
+@pytest.mark.parametrize("coins", [1, 2, 3, 5, 9, 17, 33, 64])
 def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
     torch, _library_cls = cuda
     from tools.gpu_proxy_benchmark import _build_case
@@ -305,6 +305,50 @@ def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
     assert specialized.keys() == baseline.keys()
     for key in baseline:
         np.testing.assert_array_equal(specialized[key], baseline[key], err_msg=key)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "short", "both"])
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_cuda_shared_account_one_coin_reuses_isolated_candidate_state(
+    cuda, monkeypatch, strategy, sides, market_orders_allowed
+):
+    """One coin uses the same account kernel, including fused directional state."""
+    from optimization.gpu.executor import BacktestRequest, GpuBacktestService
+    from optimization.gpu.service import MpsMulticoinProxy
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+    import backtest
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("shared-account replay must not call a CPU backtest")
+
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", sides, "--coins", "1", "--bars", "512",
+    ]))
+    config["backtest"]["market_orders_allowed"] = market_orders_allowed
+    replay = MpsMulticoinProxy(
+        config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+        exchange="binance", batch_size=2, needed_metrics=set(DEFAULT_METRICS),
+    )
+    if strategy == "trailing_martingale":
+        runners = [replay.fused_runner] if replay.fused_runner is not None else replay.runners.values()
+        for runner in runners:
+            runner.max_dispatch_candidate_bars = 2 * 31
+    candidates = [{}, {f"{side}_total_wallet_exposure_limit": 0.5 for side in replay.sides}, {}]
+    expected = [replay.evaluate([candidate])[0] for candidate in candidates]
+    assert expected[0]["fills_per_day"] > 0
+    with GpuBacktestService(batch_size=2, max_pending=3) as service:
+        service.register_dataset("one-coin", replay)
+        for repeat in range(2):
+            futures = [service.submit(BacktestRequest(f"{repeat}:{i}", "one-coin", candidate))
+                       for i, candidate in enumerate(candidates)]
+            actual = [future.result(timeout=60).metrics for future in futures]
+            for baseline, row in zip(expected, actual):
+                assert baseline.keys() == row.keys()
+                for name in baseline:
+                    np.testing.assert_array_equal(row[name], baseline[name], err_msg=name)
 
 
 @pytest.mark.parametrize(
@@ -442,6 +486,165 @@ def test_cuda_factory_owns_replay_lifetime_and_matches_direct_metrics(cuda, monk
     for row in metrics:
         for name, value in expected.items():
             np.testing.assert_allclose(row[name], value, rtol=1e-6, atol=1e-7, err_msg=name)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("coins", [1, 3])
+def test_cuda_prepared_service_reuses_packing_and_bounds_resident_scenarios(cuda, monkeypatch, strategy, coins):
+    from optimization.gpu.datasets import PreparedGpuDataset
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu import service as replay_module
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+    from shared_arrays import SharedArrayManager
+    import backtest
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("prepared service must not call a CPU backtest")
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", "both", "--coins", str(coins), "--bars", "512",
+    ]))
+    manager = SharedArrayManager()
+    instances, prepared, subset_builds = [], [], []
+    original_class = replay_module.MpsMulticoinProxy
+    original_builder = replay_module.build_mps_multicoin_data
+    from optimization.gpu.residency import CudaSuiteResidency
+    original_subset = CudaSuiteResidency.prepare_coin_subset
+
+    def construct(**kwargs):
+        instance = original_class(**kwargs)
+        instances.append(weakref.ref(instance))
+        return instance
+    def pack(*args, **kwargs):
+        prepared.append((get_ident(), kwargs.get("spill_dir")))
+        return original_builder(*args, **kwargs)
+    def subset(self, values, indices):
+        subset_builds.append(tuple(indices))
+        return original_subset(self, values, indices)
+    monkeypatch.setattr(replay_module, "MpsMulticoinProxy", construct)
+    monkeypatch.setattr(replay_module, "build_mps_multicoin_data", pack)
+    monkeypatch.setattr(CudaSuiteResidency, "prepare_coin_subset", subset)
+    try:
+        specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
+        common = dict(hlcvs=specs[0], btc=specs[1], timestamps=specs[2], exchange="binance",
+                      candle_coins=config["backtest"]["coins"]["binance"],
+                      markets=markets, metrics=DEFAULT_METRICS)
+        base = PreparedGpuDataset(config=config, **common)
+        changed_config = deepcopy(config)
+        changed_config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.5
+        changed = PreparedGpuDataset(config=changed_config, **common)
+        indices = (0,) if coins == 1 else (0, 2)
+        subset_config = deepcopy(config)
+        subset_config["backtest"]["coins"]["binance"] = [
+            config["backtest"]["coins"]["binance"][index] for index in indices
+        ]
+        sliced = PreparedGpuDataset(config=subset_config, coin_indices=indices, **common)
+        with CudaBacktestService(batch_size=2, max_pending=4) as service:
+            for name, dataset in (("base", base), ("changed", changed), ("subset", sliced), ("subset-copy", sliced)):
+                service.register_dataset(name, dataset)
+            assert instances == prepared == subset_builds == []
+            rows = {}
+            for i, name in enumerate(("base", "changed", "subset", "subset-copy", "base", "changed", "subset")):
+                row = service.submit(BacktestRequest(str(i), name, {})).result(timeout=60)
+                if name in rows:
+                    assert row.metrics == rows[name]
+                rows[name] = row.metrics
+                alive = [ref() for ref in instances if ref() is not None]
+                owners = [instance for instance in alive if instance.fused_runner is not None or instance.runners]
+                assert len(owners) == 1
+                assert owners[0]._cuda_residency is service._residency
+                assert len(service._residency._entries) == (2 if coins > 1 and "subset" in rows else 1)
+                del alive, owners
+            assert rows["subset-copy"] == rows["subset"]
+            owner_thread = service._executor._thread.ident
+        gc.collect()
+        assert all(reference() is None for reference in instances)
+        assert all(thread == owner_thread and isinstance(path, Path) and not path.exists()
+                   for thread, path in prepared)
+        assert len(prepared) == (1 if coins == 1 else 2)
+        assert subset_builds == ([] if coins == 1 else [(0, 2)])
+        assert not service._prepared_cache and not service._subset_cache
+        assert service._residency is None
+        for name, candidate_config, values in (
+            ("base", config, candles), ("changed", changed_config, candles),
+            ("subset", subset_config, candles[:, indices, :]),
+        ):
+            expected = original_class(
+                config=candidate_config, hlcvs=values, mss=markets, btc=btc, timestamps=timestamps,
+                exchange="binance", batch_size=2, needed_metrics=DEFAULT_METRICS,
+            ).evaluate([{}])[0]
+            assert rows[name].keys() == expected.keys()
+            for metric in expected:
+                np.testing.assert_array_equal(rows[name][metric], expected[metric], err_msg=metric)
+    finally:
+        manager.cleanup()
+
+
+@pytest.mark.parametrize("failure", ["attachment", "interrupt"])
+def test_cuda_prepared_service_cleans_up_after_setup_or_interrupt(cuda, monkeypatch, failure):
+    from optimization.gpu.datasets import PreparedGpuDataset
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.residency import CudaSuiteResidency
+    import optimization.gpu.datasets as datasets
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+    from shared_arrays import SharedArrayManager, SharedArraySpec
+    import backtest
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("failed GPU requests must not fall back to CPU backtests")
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", "trailing_martingale", "--coins", "3", "--bars", "128",
+    ]))
+    config["backtest"]["coins"]["binance"] = ["COIN00", "COIN02"]
+    closed, directories = [], []
+    original_attach = datasets.attach_shared_array
+    original_directory = CudaSuiteResidency._spill_directory
+    def tracked_attach(spec):
+        attachment = original_attach(spec)
+        original_close = attachment.close
+        def close():
+            closed.append(spec.name)
+            original_close()
+        attachment.close = close
+        return attachment
+    def tracked_directory(residency):
+        path = original_directory(residency)
+        directories.append(path)
+        return path
+    monkeypatch.setattr(datasets, "attach_shared_array", tracked_attach)
+    monkeypatch.setattr(CudaSuiteResidency, "_spill_directory", tracked_directory)
+    def interrupt():
+        raise KeyboardInterrupt("GPU optimization interrupted")
+    manager = SharedArrayManager()
+    try:
+        specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
+        if failure == "attachment":
+            specs[1] = SharedArraySpec("missing-" + specs[1].name, specs[1].shape, specs[1].dtype)
+        dataset = PreparedGpuDataset(
+            config=config, markets=markets, hlcvs=specs[0], btc=specs[1], timestamps=specs[2],
+            candle_coins=["COIN00", "COIN01", "COIN02"], coin_indices=(0, 2),
+            exchange="binance", metrics=DEFAULT_METRICS,
+        )
+        with CudaBacktestService(interrupt_check=interrupt if failure == "interrupt" else None) as service:
+            service.register_dataset("scenario", dataset)
+            expected = KeyboardInterrupt if failure == "interrupt" else FileNotFoundError
+            with pytest.raises(expected):
+                service.submit(BacktestRequest("candidate", "scenario", {})).result(timeout=60)
+            with pytest.raises(RuntimeError, match="service failed"):
+                service.submit(BacktestRequest("next", "scenario", {}))
+        expected_closed = [spec.name for spec in reversed(specs)] if failure == "interrupt" else [specs[0].name]
+        assert closed == expected_closed
+        assert bool(directories) == (failure == "interrupt")
+        assert all(not path.exists() for path in directories)
+        assert service._residency is None
+        assert not service._prepared_cache and not service._subset_cache
+    finally:
+        manager.cleanup()
 
 
 @pytest.mark.parametrize("pending_queries", [0, 2])

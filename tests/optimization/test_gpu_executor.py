@@ -45,6 +45,69 @@ def request(index, dataset="market", **params):
     return BacktestRequest(str(index), dataset, {"value": index, **params})
 
 
+def test_worker_context_surrounds_all_dataset_resources_on_owner():
+    from contextlib import contextmanager
+    from threading import get_ident
+    events = []
+
+    @contextmanager
+    def context(label):
+        events.append(("enter", label, get_ident()))
+        try:
+            yield Replay()
+        finally:
+            events.append(("exit", label, get_ident()))
+
+    with GpuBacktestService(batch_size=1, worker_context=lambda: context("worker")) as service:
+        service.register_dataset_factory("a", lambda: context("a"))
+        service.register_dataset_factory("b", lambda: context("b"))
+        assert events == []
+        for i, name in enumerate(("a", "b", "a")):
+            assert service.submit(request(i, name)).result(timeout=3).metrics == {"gain": i}
+    owner = service._thread.ident
+    assert events == [("enter", name, owner) for name in ("worker", "a", "b")] + [
+        ("exit", name, owner) for name in ("b", "a", "worker")
+    ]
+
+
+def test_unused_worker_context_stays_lazy_and_invalid_factory_is_rejected():
+    def forbidden():
+        pytest.fail("unused service must not enter a device context")
+    with GpuBacktestService(worker_context=forbidden):
+        pass
+    with pytest.raises(TypeError, match="worker_context"):
+        GpuBacktestService(worker_context=object())
+
+
+@pytest.mark.parametrize("stage", ["setup", "cleanup"])
+def test_worker_context_failures_poison_admission_and_surface_cleanup(stage):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def context():
+        if stage == "setup":
+            raise RuntimeError("context setup")
+        yield
+        if stage == "cleanup":
+            raise RuntimeError("context cleanup")
+
+    service = GpuBacktestService(batch_size=1, worker_context=context)
+    service.register_dataset("market", Replay())
+    future = service.submit(request(1))
+    if stage == "setup":
+        with pytest.raises(RuntimeError, match="context setup"):
+            future.result(timeout=3)
+        with pytest.raises(RuntimeError, match="service failed"):
+            service.submit(request(2))
+        service.close()
+    else:
+        assert future.result(timeout=3).metrics == {"gain": 1}
+        with pytest.raises(RuntimeError, match="context cleanup"):
+            service.close()
+        with pytest.raises(RuntimeError, match="service failed"):
+            service.submit(request(2))
+
+
 def test_factory_constructs_reuses_and_releases_resources_on_worker():
     events = []
     main_thread = get_ident()

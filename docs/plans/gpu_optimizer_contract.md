@@ -91,6 +91,12 @@ Prepared-input immutability is the factory adapter's responsibility; the final d
 registry and residency policy are still separate work. Preconstructed replay registration
 remains a temporary compatibility path.
 
+The [prepared CUDA facade](../gpu_backtest_service.md) snapshots CPU metadata and borrows
+shared arrays with explicit source-column identities. It owns lazy worker-side attachment,
+packing and a one-active-dataset/scratch residency policy. Caller-owned shared segments
+remain immutable/live until shutdown. Full evaluation identity, adaptive residency and
+optimizer integration remain subsequent work.
+
 ## Scheduling, tuning and specialization
 
 Use completed-work evidence to tune batch width/delay, concurrency, replay-slot capacity,
@@ -206,6 +212,7 @@ Completion requires:
 - [x] Reuse existing replay engines behind a temporary adapter without changing their semantics.
 - [x] Verify identity, output cardinality, backpressure, exceptions, cancellation and shutdown.
 - [ ] Register immutable data, reuse packing/compilation, isolate mutable replay state.
+- [x] Add prepared shared-array metadata with explicit column binding and worker-owned residency.
 - [ ] Demonstrate incremental completions and bounded memory on CUDA.
 
 ### Authoritative simulation and tooling
@@ -440,3 +447,65 @@ Completion requires:
 - Rebased onto the integrated worker-ownership and recursive-ladder changes and checked
   the merged result: 87 CUDA comparator/tool cases pass; source-only checks pass 66 with
   21 native/device skips. Documentation checks retain zero errors and two size warnings.
+
+### 2026-10-05 — One-coin shared-account replay experiment
+
+- Permit one coin in the existing multicoin packer and replay constructor. This enables
+  the same directional/fused account implementation to accept 1..64 coins without
+  changing the legacy optimizer's choice of replay engine.
+- CUDA coverage: 17 cases pass, including one-coin specialized/full-capacity raw-output
+  equality, all three side modes and both market policies, repeated asynchronous
+  microbatches, a partial batch, candidate exposure changes and forced temporal chunks.
+  CPU backtest entry points are forbidden during replay tests. Packing preserves valid
+  listing/delisting windows and input arrays and rejects zero/65-coin requests.
+- The six public one-coin parity fixtures run through the shared engine. EMA metrics
+  match the earlier single engine; TM differences remain small under case-specific
+  assessment and still fail the tool's strict policies where appropriate.
+- An exploratory warm comparison uses 256 repeated candidates, 4,096 bars, widths
+  32/128 and three repeats for both strategies in long/dual modes. The shared engine
+  delivers approximately 35–67% of the single engine's throughput in these short
+  fixtures. Fixed measurement order and repeated identical candidates limit this
+  experiment; it is not an optimizer-quality or general performance benchmark.
+- Keep one-coin shared replay as an internal capability rather than switching every
+  request now. Restore effective kernel ablation and measure representative workloads
+  before choosing the native backend's default; simplification should not silently
+  impose this observed throughput loss. No extra conservative screening or CPU replay
+  is added to the service.
+
+### 2026-10-05 — Prepared datasets and bounded CUDA ownership
+
+- Added CPU-side metadata snapshots and borrowed shared-array descriptors. Source-column
+  identities are explicit and selected indices must match canonical scenario coins;
+  scenario time/validity metadata stays CPU-owned. Registration neither copies full
+  histories nor initializes device dependencies. Owners keep arrays immutable/live until
+  service shutdown; worker views are read-only.
+- Added a CUDA-only facade over the bounded asynchronous executor. A lazy worker resource
+  context surrounds dataset attachments and replay lifetimes. Reuse existing packing,
+  compile caches and disk-backed scenario subsets; keep one active invariant dataset and
+  one owner's replay scratch on device. Compatible config variants reuse the immutable
+  packed data. No evolution/scoring or CPU backtest enters this facade.
+- Keep the uniform 1..64-coin replay as this internal adapter's foundation; legacy routing
+  is unchanged. Its measured one-coin slowdown still requires ablation and representative
+  performance work before choosing optimizer defaults.
+- Validation: 121 offline lifecycle/dataset/residency/preparation cases pass. Six CUDA
+  facade cases cover both strategies, one/three coins, scenario/subset reuse, direct GPU
+  metric equality, setup failure and interruption with CPU backtests forbidden. Shared
+  attachments and temporary files close after success/failure. A wider selected run passes
+  185 cases and reproduces the existing disabled-HSL specialization failure; its runner
+  and test are unchanged by this slice. Full kernel-ablation acceptance remains open.
+- A bounded synthetic benchmark CLI smoke succeeds with three coins, eight candidates,
+  four-request dispatches, 128 bars and one warm run. The baseline's unchanged HSL
+  specialization test independently reproduces the failure on its original test source.
+- This is a preparation/residency foundation, not optimizer cutover, complete evaluation
+  fingerprints, host/disk admission budgets, multi-device routing or adaptive scheduling.
+
+### 2026-10-06 — Prepared attachment failure preservation
+
+- Current-head auto review identified that raw attachment-close callbacks could replace
+  an original setup/execution exception. Added three failing regressions before changing
+  ownership to resource contexts. Close every acquired attachment, propagate the original
+  failure and log later cleanup failures. With no earlier error, propagate the first
+  cleanup failure rather than replacing it with another close error.
+- Validation: 124 offline lifecycle/dataset/residency/preparation cases pass. The combined
+  prepared-dataset/facade CUDA run passes 32 cases, including real setup failure and
+  interruption. No simulation semantics or result policy changes in this correction.
