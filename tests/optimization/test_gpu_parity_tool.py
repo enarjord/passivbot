@@ -47,6 +47,10 @@ def test_prepared_snapshot_roundtrip_and_coin_order_guard(tmp_path):
     prepared = gpu_parity.prepared_inputs(options)
     np.testing.assert_array_equal(prepared[1], candles)
     assert prepared[0]["backtest"]["coins"] == config["backtest"]["coins"]
+    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.total_wallet_exposure_limit": 0.25}
+    config_file.write_text(json.dumps(config))
+    prepared = gpu_parity.prepared_inputs(options)
+    assert prepared[0]["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.25
     np.savez(dataset, hlcvs=candles, timestamps=timestamps, btc=btc, coins=np.array(["COIN01", "COIN00"]))
     with pytest.raises(ValueError, match="coin order"):
         gpu_parity.prepared_inputs(options)
@@ -78,6 +82,40 @@ def test_cli_help_does_not_need_optional_gpu_runtime(capsys):
 def test_cli_registry_exposes_offline_parity_tool():
     from passivbot_cli.main import TOOL_COMMANDS
     assert TOOL_COMMANDS["gpu-parity"].module == "tools.gpu_parity"
+
+
+def test_main_uses_prepared_reducer_and_preserves_stdout_when_save_fails(monkeypatch, capsys, tmp_path):
+    from types import SimpleNamespace
+    import sys
+    from optimization.gpu.parity import compare_limits
+    monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
+        validate_gpu_metric_names=lambda names: names,
+    ))
+    original = gpu_parity.fixture_inputs
+
+    def inputs(options):
+        prepared = original(options)
+        prepared[0]["backtest"]["reducer"]["fills_per_day"] = "std"
+        prepared[0]["optimize"]["limits"] = [
+            {"metric": "fills_per_day", "penalize_if": "greater_than", "value": 0}
+        ]
+        return prepared
+
+    def comparison(_inputs, _exchange, _metrics, _policies, checks, **_kwargs):
+        assert checks[0]["metric_key"] == "fills_per_day_std"
+        feasibility = compare_limits({"fills_per_day": 100}, {"fills_per_day": 100}, checks)
+        assert feasibility["cpu_feasible"] is True
+        return {"passed": feasibility["passed"], "feasibility": feasibility}
+
+    monkeypatch.setattr(gpu_parity, "fixture_inputs", inputs)
+    monkeypatch.setattr(gpu_parity, "run_comparison", comparison)
+    command = ["--fixture", "trailing_martingale", "--bars", "128"]
+    assert gpu_parity.main(command) == 0
+    assert json.loads(capsys.readouterr().out)["passed"]
+    assert gpu_parity.main([*command, "--report", str(tmp_path / "missing" / "report.json")]) == 2
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["passed"]
+    assert "report_save_failed" in captured.err
 
 
 def test_real_cuda_parity_cli(require_real_passivbot_rust_module, capsys):

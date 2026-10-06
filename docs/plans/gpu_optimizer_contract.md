@@ -291,3 +291,7 @@ Completion requires:
   a confirmed simulator defect. Controller toggles alone are not transition coverage.
 - Scalar comparison is implemented; suite/ranking comparisons and broader stress cases
   remain required acceptance work. No optimizer cutover or implicit CPU fallback added.
+- Parity-tool review identified omitted reducer defaults, unapplied prepared fixed
+  runtime overrides and loss of stdout results on an optional save failure. Added
+  canonical reducer/override handling and preserved results before attempting the save,
+  with regressions. Unmaterialized optimizer enable-overrides are explicitly rejected.

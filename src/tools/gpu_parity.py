@@ -134,6 +134,7 @@ def fixture_inputs(args):
 def prepared_inputs(args):
     import numpy as np
     from config import load_input_config, prepare_config
+    from optimization.warmup import _apply_config_overrides
 
     if not args.dataset or not args.markets:
         raise ValueError("--config requires --dataset and --markets")
@@ -143,6 +144,15 @@ def prepared_inputs(args):
     source.setdefault("optimize", {})["bounds"] = {}
     snapshot.setdefault("optimize", {})["bounds"] = {}
     config = prepare_config(source, base_config_path=base, raw_snapshot=snapshot, verbose=False)
+    if config["optimize"]["enable_overrides"]:
+        raise ValueError("prepared comparisons require materialized optimize.enable_overrides")
+    fixed = config["optimize"]["fixed_runtime_overrides"]
+    if fixed:
+        _apply_config_overrides(config, fixed)
+        config["optimize"]["bounds"] = {}
+        config = prepare_config(
+            config, raw_snapshot=deepcopy(config), verbose=False, target="canonical", runtime=None
+        )
     with np.load(args.dataset, allow_pickle=False) as bundle:
         hlcvs, timestamps, btc, coins = (bundle[name] for name in ("hlcvs", "timestamps", "btc", "coins"))
     if coins.ndim != 1 or coins.dtype.kind not in {"U", "S"}:
@@ -315,7 +325,10 @@ def main(argv=None):
         weights = default_scoring_weights()
         weights.update({spec.metric: -1.0 if spec.goal == "max" else 1.0
                         for spec in extract_objective_specs(config)})
-        checks = expand_limit_checks(config["optimize"]["limits"], weights, penalty_weight=1.0)
+        checks = expand_limit_checks(
+            config["optimize"]["limits"], weights, penalty_weight=1.0,
+            reducer_cfg=config["backtest"]["reducer"],
+        )
         metrics = list(dict.fromkeys([*metrics, *(check["metric"] for check in checks)]))
         stage = "metric_contract"
         validate_gpu_metric_names(metrics)
@@ -332,9 +345,13 @@ def main(argv=None):
                   "error": {"type": type(error).__name__, "message": str(error)}}
         code = 2
     rendered = json.dumps(report, allow_nan=False, indent=None if args.compact else 2, sort_keys=True)
-    if args.report:
-        Path(args.report).write_text(rendered + "\n")
     print(rendered)
+    if args.report:
+        try:
+            Path(args.report).write_text(rendered + "\n")
+        except OSError as error:
+            print(f"report_save_failed: {error}", file=sys.stderr)
+            return 2
     return code
 
 

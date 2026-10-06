@@ -46,6 +46,9 @@ is the normal prepared market-settings mapping, including quantity/price steps,
 minima, fees, valid indices, warmup and `__meta__.requested_start_ts`.
 
 Preserve effective candidate/scenario settings and dataset preparation metadata.
+Fixed runtime overrides are materialized through the optimizer's canonical helper
+before either simulation. Optimizer `enable_overrides` must already be materialized
+and cleared in prepared inputs; unresolved policies are rejected.
 The tool compares one prepared scenario; suite-scoped limits are reported as requiring
 a suite rather than treated as satisfied. Keep private inputs and reports out of commits
 and PRs. Reports omit config contents and full histories; optional diagnostics still
@@ -89,6 +92,9 @@ indentation and `--report PATH` also saves the report. Exit codes:
 | 0 | All requested metrics and assessed limits match |
 | 1 | A mismatch or incomplete comparison |
 | 2 | Unsupported contract, invalid inputs or execution failure |
+
+An optional report-save failure also returns 2 and writes a diagnostic to stderr;
+the completed comparison is preserved on stdout.
 
 Reports include an input/config digest, Python and Rust source fingerprints, per-metric
 values/errors/policies, feasibility checks and separate CPU, GPU preparation and cold
