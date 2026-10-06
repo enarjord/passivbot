@@ -213,6 +213,7 @@ Completion requires:
 - [x] Verify identity, output cardinality, backpressure, exceptions, cancellation and shutdown.
 - [ ] Register immutable data, reuse packing/compilation, isolate mutable replay state.
 - [x] Add prepared shared-array metadata with explicit column binding and worker-owned residency.
+- [x] Bind canonical standalone/lazy suite preparation to the service without copying candle histories.
 - [ ] Demonstrate incremental completions and bounded memory on CUDA.
 
 ### Authoritative simulation and tooling
@@ -577,3 +578,24 @@ Completion requires:
   deactivation before submission. The combined CPU/CUDA suite passes 98 cases after this
   correction. The prior head's clear auto review cannot approve this changed head; request
   current-head re-review and wait for its required CI before integration.
+
+### 2026-10-06 — Bind canonical prepared scenarios to native execution
+
+- Retain actual source-column identities in canonical suite contexts. Lazy contexts keep
+  the full master order, while already-sliced contexts retain their selected source order;
+  CPU evaluator behavior is unchanged and context serialization remains compact.
+- Added a CPU dataset registry over canonical standalone/suite preparation. Borrow existing
+  candle/BTC shared segments and own only timestamp windows, reused by content. Independent
+  timestamp source ranges prevent a second time slice when canonical contexts already
+  contain a selected window. Validate row alignment, column identities, required metrics
+  and effective seed policies before device registration; missing inputs fail explicitly.
+- Real CUDA coverage starts from canonical suite preparation with deliberately shuffled
+  source columns, a smaller coin subset and a later date window. Native service/session
+  metrics match independent fresh GPU references built in canonical coin/time order. CPU
+  backtest and evaluator simulation entry points are forbidden throughout execution.
+- Validation: 83 combined prepared-data, canonical context, registry, planning/session and
+  selected CUDA facade cases pass. Cleanup coverage closes every owned window, preserves
+  original caller/preparation failures and leaves borrowed histories usable. Documentation
+  checks have zero errors and two existing size warnings. No Rust/kernel or CLI routing
+  changes are included; search integration, persistence/precision resume identities,
+  adaptive tuning and the existing simulation-ablation acceptance debt remain open.

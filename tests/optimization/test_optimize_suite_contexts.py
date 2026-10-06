@@ -296,6 +296,11 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     assert captured["approved"] == ["DOGE", "HYPE"]
     assert captured["exchanges"] == ["binance"]
     assert [ctx.label for ctx in contexts] == ["explicit", "default"]
+    assert [ctx.candle_coins for ctx in contexts] == [
+        {"combined": ("DOGE", "HYPE")}, {"combined": ("DOGE", "HYPE")},
+    ]
+    assert contexts[0].coin_slice_indices["combined"] == [0]
+    assert contexts[1].coin_slice_indices["combined"] == [1]
 
 
 @pytest.mark.asyncio

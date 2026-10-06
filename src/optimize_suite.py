@@ -67,6 +67,8 @@ class ScenarioEvalContext:
     master_btc_specs: Optional[Dict[str, Any]] = None
     time_slice: Optional[Dict[str, tuple]] = None  # per-exchange (start_idx, end_idx)
     coin_slice_indices: Optional[Dict[str, List[int]]] = None  # per-exchange coin indices
+    # Actual source-column identities, including full masters on lazy paths.
+    candle_coins: Optional[Dict[str, tuple[str, ...]]] = None
 
 
 @simulation_data_scope
@@ -394,6 +396,7 @@ async def prepare_suite_contexts(
                         master_btc_specs={dataset.exchange: dataset.btc_spec},
                         time_slice={dataset.exchange: (start_idx, end_idx)},
                         coin_slice_indices={dataset.exchange: coin_indices},
+                        candle_coins={dataset.exchange: tuple(dataset.coins)},
                     )
                 )
             else:
@@ -437,6 +440,7 @@ async def prepare_suite_contexts(
                         master_btc_specs=None,
                         time_slice=None,
                         coin_slice_indices=None,
+                        candle_coins={dataset.exchange: tuple(selected_coins)},
                     )
                 )
 
@@ -521,6 +525,8 @@ async def prepare_suite_contexts(
         master_btc_specs = {}
         coin_slice_indices = {}
         time_slice = {}
+        candle_coins = {ex: tuple(scenario_config["backtest"]["coins"][ex])
+                        for ex in exchanges_for_scenario}
         for exchange_key, dataset in datasets.items():
             if exchange_key == "combined":
                 continue
@@ -538,6 +544,7 @@ async def prepare_suite_contexts(
             master_hlcvs_specs[exchange_key] = dataset.hlcvs_spec
             master_btc_specs[exchange_key] = dataset.btc_spec
             coin_slice_indices[exchange_key] = coin_indices
+            candle_coins[exchange_key] = tuple(dataset.coins)
 
         contexts.append(
             ScenarioEvalContext(
@@ -557,6 +564,7 @@ async def prepare_suite_contexts(
                 master_btc_specs=master_btc_specs or None,
                 time_slice=time_slice or None,
                 coin_slice_indices=coin_slice_indices or None,
+                candle_coins=candle_coins,
             )
         )
 

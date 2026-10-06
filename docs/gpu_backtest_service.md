@@ -19,6 +19,9 @@ mutable alias safe to change during a run.
 Supply `candle_coins` in the actual source-column order. Optional `coin_indices` select
 those columns, and their identities/order must exactly match the scenario's sorted
 `config.backtest.coins[exchange]`. Optional `time_range` selects a half-open row interval.
+BTC rows remain aligned with the source candles. An already selected timestamp window
+can use an independent `timestamp_range`; its selected row count must match the candle
+interval. Without that explicit range, timestamps retain the original full-source layout.
 The CPU must prepare config dates and market validity/warmup metadata for that effective
 scenario; the service does not infer missing inputs or substitute market settings.
 Requested metrics specify backtest work, not scoring directions or constraint penalties.
@@ -106,6 +109,28 @@ and flush the caller's stores. Partially completed candidates remain unfinished 
 be rerun on GPU. Producer failures stop admission and preserve the original exception.
 These helpers do not integrate the service into the optimizer CLI, persist results or
 define content/precision identities for compatible resume. Their caches are run-local.
+
+## Canonical prepared-data binding
+
+`optimization.native_datasets.NativeDatasetRegistry` connects an existing canonical CPU
+evaluator to the service and candidate planner. Standalone callers supply actual source
+identities in `standalone_candle_coins`. Suite preparation retains `ScenarioEvalContext.candle_coins`
+from the actual master/source dataset, including columns outside a selected scenario.
+The registry binds those identities with the canonical time/coin indices and scenario
+market metadata; missing source identities fail rather than being inferred from a subset.
+
+Existing candle/BTC shared segments are borrowed. Only compact timestamp windows are
+allocated here, with equal windows reused by content. Lazy master slices and already
+sliced scenario inputs use the same service interface; registration never creates a
+scenario-sized candle copy. Required metric names come from CPU scoring/limits, independently
+of device handles, and effective seed policies are prepared through the canonical helpers.
+
+The registry owns only its added timestamp segments. Nest the service inside its lifetime:
+register through `registry.register(service)`, prepare plans with `registry.planner`, then
+drive `NativeEvaluationSession` on the CPU. Close/drain the service before closing the
+registry, and keep the original candle/BTC owner alive through both. Registry cleanup
+attempts every owned window and preserves an earlier caller/preparation failure. This
+data bridge does not add optimizer CLI routing, search or saved-fitness compatibility.
 
 ## Execution and cleanup
 
