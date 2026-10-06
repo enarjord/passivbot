@@ -10764,12 +10764,13 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "coin_override_or" in source
     assert "merge_reducer" not in source
     assert "finalized_reducer_qty" in source
-    assert "realized_loss_proxy_allows_close" in source
+    assert "apply_tm_multicoin_close_admission" in source
+    assert "realized_loss_proxy_allows_close" not in source
     assert "recursive_grid_close_would_expand" in source
     assert "close_recursive_mode" in source
     assert "close_gen_market_price" in source
-    assert "selected.market = should_use_ordinary_market_execution" in source
-    assert "const bool loss_gate_enabled = run_settings[5] < 1.0f" in source
+    assert "group.market = should_use_ordinary_market_execution" in source
+    assert "const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED" in source
 
     count = 512
     coin_count = 3
@@ -16670,14 +16671,17 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
     side.close_grid_gen_psize[0] = 0.4f;
     side.close_grid_max_rungs[0] = 1;
     CloseGroup probe_group;
-    int probe_group_count = recursive_grid_close_groups_after_reducer(
+    TmCloseGridContext probe_context = {
         false, 0.4f, 40.0f, 1000.0f, 0.016f,
         390, 400, 400, 0.0f, 0,
         config.close_qty_pct, config.close_threshold_base,
         config.close_threshold_we, config.close_threshold_v1h,
         config.close_threshold_v1m, 0.0f, 0.0f,
-        0.1f, 0.1f, 0.1f, 40.0f, 1.0f, 0, 0.0f, 1, 0,
-        100.0f, true, 0.001f, 0.4f, probe_group
+        0.1f, 0.1f, 0.1f, 40.0f, 1.0f, 0, 0.0f, 1,
+        100.0f, true, 0.001f, 0.4f
+    };
+    int probe_group_count = recursive_grid_close_groups_after_reducer(
+        probe_context, 0, probe_group
     );
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
     TrailingMartingaleMulticoinFillState fills =
@@ -17299,7 +17303,7 @@ def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(
         max_realized_loss_pct=1.0, **runner_kwargs
     )
     gated_runner, _ = _multicoin_exposure_fixture(
-        max_realized_loss_pct=0.1, **runner_kwargs
+        max_realized_loss_pct=0.0, **runner_kwargs
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -17326,8 +17330,9 @@ def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("market_orders_allowed", [False, True])
-def test_mps_tm_multicoin_loss_gate_blocks_fee_only_ordinary_close(
-    side, market_orders_allowed
+@pytest.mark.parametrize("max_loss_pct", [0.0, 0.1])
+def test_mps_tm_multicoin_fee_only_close_uses_loss_allowance(
+    side, market_orders_allowed, max_loss_pct
 ):
     markets = [
         ProxyMarket(
@@ -17355,7 +17360,7 @@ def test_mps_tm_multicoin_loss_gate_blocks_fee_only_ordinary_close(
         max_realized_loss_pct=1.0, **runner_kwargs
     )
     gated_runner, _ = _multicoin_exposure_fixture(
-        max_realized_loss_pct=0.1, **runner_kwargs
+        max_realized_loss_pct=max_loss_pct, **runner_kwargs
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -17374,8 +17379,12 @@ def test_mps_tm_multicoin_loss_gate_blocks_fee_only_ordinary_close(
 
     size_key = "psize" if side == "long" else "short_psize"
     assert ungated[size_key].item() == pytest.approx(0.0)
-    assert gated[size_key].item() > 0.0
-    assert gated["balance"].item() >= ungated["balance"].item()
+    if max_loss_pct == 0.0:
+        assert gated[size_key].item() > 0.0
+        assert gated["balance"].item() >= ungated["balance"].item()
+    else:
+        assert gated[size_key].item() == pytest.approx(0.0)
+        assert gated["balance"].item() == pytest.approx(ungated["balance"].item(), abs=0.002)
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -17400,7 +17409,7 @@ def test_mps_tm_multicoin_loss_gate_preserves_profitable_close_after_repair(side
         "coin_overrides": overrides,
         "count": count,
         "closes": (100.0, 100.0),
-        "max_realized_loss_pct": 0.1,
+        "max_realized_loss_pct": 0.0,
     }
     blocked_runner, candidate = _multicoin_exposure_fixture(
         highs=blocked_highs, lows=blocked_lows, **common
@@ -17455,7 +17464,7 @@ def test_mps_tm_multicoin_loss_gate_scans_past_blocked_recursive_rung(side):
         closes=(100.0, 100.0),
         highs=highs,
         lows=lows,
-        max_realized_loss_pct=0.1,
+        max_realized_loss_pct=0.0,
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -17507,7 +17516,7 @@ def test_mps_tm_multicoin_loss_gate_does_not_reallocate_blocked_twel(side):
         highs=highs,
         lows=lows,
         markets=markets,
-        max_realized_loss_pct=0.1,
+        max_realized_loss_pct=0.0,
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(

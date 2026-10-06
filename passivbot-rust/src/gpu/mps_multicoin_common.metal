@@ -131,7 +131,7 @@ inline bool realized_loss_gate_allows(
         || -net_pnl <= remaining_loss_budget;
 }
 
-// Finite fill-PnL window shared by auto-unstuck and EMA loss admission,
+// Finite fill-PnL window shared by auto-unstuck and realized-loss admission,
 // independent of HSL. The existing scratch/compile ABI retains its unstuck name.
 struct RollingPnlWindow {
     int event_head;
@@ -349,7 +349,7 @@ inline void record_joint_portfolio_fill(
 }
 
 // Consumers use the configured fill-PnL window, or the all-history fallback.
-// HSL and TM's conservative loss gate retain their independent contracts.
+// HSL retains its independent reporting and panic scopes.
 inline float effective_realized_pnl_drawdown(thread const JointPortfolioAccount& account) {
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     return account.unstuck_pnl_drawdown;
