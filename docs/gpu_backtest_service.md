@@ -148,11 +148,31 @@ and writes full candidate records immediately through the existing results/Paret
 Evolution advances after the cohort is complete; asynchronous execution does not silently
 change the evolutionary policy. Effective duplicates share pending/cached work.
 
-The initial integration uses `optimize.gpu.batch_size` (64 when omitted),
-`max_dispatch_candidate_bars` and `checkpoint_interval_seconds`. CPU admission and service
-queues are bounded relative to the dispatch width. Legacy exact-worker, drift-probe,
-validation and screened-seed controls do not apply. Broader execution/cadence auto-tuning
-remains development work; this initial width is not claimed to be optimal.
+The native integration uses `optimize.gpu.batch_size`, `tuning_mode`,
+`max_dispatch_candidate_bars` and `checkpoint_interval_seconds`. An omitted/null or `auto`
+batch setting enables service-owned batch tuning in `auto`/`refresh` mode. A positive
+explicit setting disables batch tuning; `tuning_mode: "off"` uses a fixed ceiling of 64
+when no width is supplied. These are dispatch ceilings, also bounded by prepared work
+and history-scratch limits. CPU candidate admission is bounded by its population window,
+independently of GPU widths; the service bounds its own queued-plus-running requests.
+Legacy exact-worker, drift-probe, validation and screened-seed controls do not apply.
+
+The first request for an unprepared dataset claims one candidate, prepares and discovers
+its physical dispatch limit on the GPU owner, and returns that completion. Subsequent
+batches use that limit. This prevents several serial scratch/work splits from delaying
+the return of an oversized outer batch. Preparation retains no inactive runner references;
+switching datasets can release their tensors and mutable scratch.
+
+Automatic widths start at the smaller of 64 and the prepared ceiling. Separate per-dataset
+controllers measure successful replay, reductions and host results; failed work, partial
+tails and each width's first cold use do not contribute to throughput trials. The existing
+24-sample/30-second evidence window, median smoothing, growth threshold, smaller-plateau
+preference, cooldown and rollback apply. Growth also requires observed request demand and
+device memory headroom. Tuning submits no extra simulations and never changes precision
+or search policy. Measurements are run-local; `auto` and `refresh` currently both start
+fresh. Persistent advisory calibration, demand-limited classes, dispatch duration/delay,
+residency budgets and CPU result/evolution cadence remain development work. This policy
+does not claim a globally optimal width or a representative optimizer speedup.
 
 Native checkpoints contain CPU search state and a partially evaluated cohort, without
 service/device handles or shared-memory names. SIGINT stops admission, drains completed
@@ -200,6 +220,11 @@ by replay execution to stop at its safe boundaries. Device, preparation and inte
 failures fail admitted work and stop new admission; no CPU fallback supplies results.
 Cleanup closes attachments and removes run-local packing/subset files, preserving an
 original failure if cleanup also fails.
+
+The transport's optional service-owned batch policy runs on its execution owner. It selects
+widths within the fixed dispatch ceiling and observes only completely validated producer
+results. Width changes occur between dispatches; FIFO dataset choice, cancellation,
+backpressure and fail-stop producer semantics remain independent of tuning.
 
 The shared-account engine now permits 1..64 selected coins. This facade uses that
 implementation internally; legacy optimizer routing is unchanged. Short synthetic

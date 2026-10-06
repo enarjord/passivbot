@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Tune native GPU optimizer batch widths from successful production work when the
+  batch setting is automatic. Keep tuning inside the service and honor prepared
+  work/scratch limits so oversized serial replays do not delay returned completions.
+
 - Restore compact disabled-HSL GPU kernels for single-side multicoin EMA Anchor
   with side/unified HSL modes. Preserve full coin-mode state for forced-delisting
   loss diagnostics, even when HSL is disabled.

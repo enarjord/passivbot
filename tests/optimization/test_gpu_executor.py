@@ -46,6 +46,80 @@ def request(index, dataset="market", **params):
     return BacktestRequest(str(index), dataset, {"value": index, **params})
 
 
+def test_service_changes_batch_width_only_between_successful_dispatches():
+    class Policy:
+        def __init__(self):
+            self.widths = {"a": 2, "b": 1}
+            self.completed = []
+        def width(self, dataset, ceiling):
+            return self.widths[dataset]
+        def observe(self, dataset, count, seconds, *, backlog, closing):
+            assert seconds > 0
+            self.completed.append((dataset, count, backlog))
+            self.widths[dataset] = 4 if len(self.completed) == 1 else 1
+
+    policy, replay = Policy(), GatedReplay()
+    service = GpuBacktestService(batch_size=4, max_pending=16, max_batch_delay=0.05,
+                                 batch_policy=policy)
+    service.register_dataset("a", replay)
+    service.register_dataset("b", replay)
+    try:
+        futures = [service.submit(request(i, "a")) for i in range(2)]
+        assert replay.started.wait(3)
+        futures.extend(service.submit(request(i, dataset)) for i, dataset in enumerate(
+            ("a", "b", "a", "b", "a", "a", "b", "a"), start=2
+        ))
+        replay.release.set()
+        assert [future.result(timeout=3).metrics for future in futures] == [
+            {"gain": i} for i in range(10)
+        ]
+    finally:
+        replay.release.set()
+        service.close()
+    assert policy.completed[:2] == [("a", 2, 5), ("a", 4, 1)]
+    assert [len(batch) for batch in replay.calls] == [2, 4, 1, 1, 1, 1]
+    assert sorted(item["value"] for batch in replay.calls for item in batch) == list(range(10))
+
+
+@pytest.mark.parametrize("width", [0, 5, True])
+def test_invalid_policy_width_fails_before_constructing_or_running_replay(width):
+    class Policy:
+        def width(self, *_args):
+            return width
+        def observe(self, *_args, **_kwargs):
+            pytest.fail("invalid policy must never evaluate")
+    replay = Replay()
+    with GpuBacktestService(batch_size=4, batch_policy=Policy()) as service:
+        service.register_dataset("market", replay)
+        future = service.submit(request(0))
+        with pytest.raises(ValueError, match="dispatch ceiling"):
+            future.result(timeout=3)
+    assert not replay.calls
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_failed_producer_work_never_supplies_tuning_evidence(malformed):
+    failure = RuntimeError("producer failed")
+    class Policy:
+        def width(self, *_args):
+            return 1
+        def observe(self, *_args, **_kwargs):
+            pytest.fail("failed work must never tune")
+    class FailingReplay:
+        def evaluate(self, _candidates):
+            if malformed:
+                return [{"gain": float("nan")}]
+            raise failure
+    with GpuBacktestService(batch_policy=Policy()) as service:
+        service.register_dataset("market", FailingReplay())
+        future = service.submit(request(0))
+        if malformed:
+            with pytest.raises(RuntimeError, match="NaN metric"):
+                future.result(timeout=3)
+        else:
+            assert future.exception(timeout=3) is failure
+
+
 def test_worker_context_surrounds_all_dataset_resources_on_owner():
     from contextlib import contextmanager
     from threading import get_ident

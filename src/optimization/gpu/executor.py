@@ -83,6 +83,7 @@ class GpuBacktestService:
     def __init__(
         self, *, batch_size: int = 64, max_pending: int = 1024, max_batch_delay: float = 0.005,
         worker_context: Callable[[], ContextManager] | None = None,
+        batch_policy=None,
     ):
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
             raise ValueError("batch_size must be a positive integer")
@@ -92,6 +93,10 @@ class GpuBacktestService:
             raise ValueError("max_batch_delay must be finite and non-negative")
         if worker_context is not None and not callable(worker_context):
             raise TypeError("worker_context must be a resource-context factory")
+        if batch_policy is not None and any(
+            not callable(getattr(batch_policy, name, None)) for name in ("width", "observe")
+        ):
+            raise TypeError("batch_policy must implement width and observe")
         self.batch_size = min(batch_size, max_pending)
         self.max_pending = max_pending
         self.max_batch_delay = float(max_batch_delay)
@@ -105,6 +110,7 @@ class GpuBacktestService:
         self._cleanup_failure: BaseException | None = None
         self._thread: Thread | None = None
         self._worker_context = worker_context
+        self._batch_policy = batch_policy
 
     def register_dataset(self, dataset_id: str, replay: BatchReplay) -> None:
         """Take exclusive replay ownership until close; never replace a handle.
@@ -221,12 +227,16 @@ class GpuBacktestService:
                         return []
                     self._condition.wait()
                 dataset_id = self._queue[0].request.dataset_id
+                width = (self.batch_size if self._batch_policy is None
+                         else self._batch_policy.width(dataset_id, self.batch_size))
+                if isinstance(width, bool) or not isinstance(width, int) or not 1 <= width <= self.batch_size:
+                    raise ValueError("GPU batch policy width must respect the dispatch ceiling")
                 deadline = time.monotonic() + self.max_batch_delay
                 # The oldest request chooses the dataset, so locality grouping can
                 # never starve another dataset behind newly arriving requests.
                 while not self._closing:
                     compatible = sum(item.request.dataset_id == dataset_id for item in self._queue)
-                    if not compatible or compatible >= self.batch_size or len(self._queue) >= self.max_pending:
+                    if not compatible or compatible >= width or len(self._queue) >= self.max_pending:
                         break
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -238,7 +248,7 @@ class GpuBacktestService:
                 remaining_queue = deque()
                 while self._queue:
                     entry = self._queue.popleft()
-                    if entry.request.dataset_id != dataset_id or len(batch) >= self.batch_size:
+                    if entry.request.dataset_id != dataset_id or len(batch) >= width:
                         remaining_queue.append(entry)
                     elif entry.future.set_running_or_notify_cancel():
                         batch.append(entry)
@@ -294,12 +304,21 @@ class GpuBacktestService:
                         raise TypeError("dataset factory must yield a replay implementing evaluate(candidates)")
                     self._replays[dataset_id] = replay
                 replay = self._replays[dataset_id]
+                started = time.perf_counter() if self._batch_policy is not None else 0.0
                 try:
                     rows = replay.evaluate([dict(item.request.parameters) for item in batch])
                 finally:
                     del replay
                 # Validate the whole producer batch before releasing any success.
                 results = self._results(batch, rows)
+                if self._batch_policy is not None:
+                    seconds = time.perf_counter() - started
+                    with self._condition:
+                        backlog = sum(item.request.dataset_id == dataset_id for item in self._queue)
+                        closing = self._closing
+                    self._batch_policy.observe(
+                        dataset_id, len(batch), seconds, backlog=backlog, closing=closing,
+                    )
                 for entry, result in zip(batch, results):
                     self._release(entry)
                     entry.future.set_result(result)
