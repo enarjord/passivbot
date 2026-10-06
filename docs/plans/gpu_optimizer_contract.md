@@ -1374,6 +1374,11 @@ Completion requires:
   including ten new real-device cases, and five documentation checks. The tested
   source and unchanged loaded Rust extension are verified. This slice still requires
   completed automatic/author review and required CI before development integration.
+- PR #1910 automatic review identified a restricted hardware-test payload missing
+  the newly required fill count. Updated that caller, audited all direct reducer
+  callers and passed both reported long/short cases plus twelve existing streamed-
+  gap strategy/topology/interval cases on CUDA. The corrected head requires fresh
+  automatic/author review and CI; the earlier review does not authorize its merge.
 - Refreshed public seven-day cohorts retain input/candidate identities and prior
   strict comparisons/rankings. Warm direct/native throughput is comparable; all
   native outputs match direct replay and tested diagnostic limits have no flips.
