@@ -99,6 +99,18 @@ views before registration, sharing the same borrowed source histories. Equivalen
 contracts share a view; exact-last scenario policies can remove ineffective choices.
 Candidate-dependent continuous coin patches still require transport integration.
 
+Coupled unstuck EMA spans reuse the existing scalar transport. CPU finalization
+materializes candidate/scenario dependencies; execution identity excludes only redundant
+derived coin span copies and retains strategy coin pins and coupling-policy identity.
+Before registration, the CPU registry projects each view to backtest sections, removes
+optimizer/bookkeeping metadata, and lowers inherited coin spans to ordinary parameter
+inheritance. Pinned strategy spans retain their explicit unstuck counterparts. The worker
+receives an ordinary backtest view and explicit candidate values; it does not interpret
+optimizer coupling policy. These metadata views share the original immutable arrays.
+Saved coupled suites retain explicit scenario spans for ordinary backtest replay.
+Resume compares incoming scenario recipes after resolving dependencies against each
+saved candidate, while retaining checks for other scenario changes and altered stored spans.
+
 `optimization.native_session.NativeEvaluationSession` exclusively borrows the backtest
 service. The caller admits plans and polls independently completed candidates, then
 performs selection and prompt persistence. Candidate admission and completed-payload

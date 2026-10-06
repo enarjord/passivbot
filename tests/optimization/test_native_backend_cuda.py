@@ -12,7 +12,7 @@ import pytest
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
-                                                                    screening=False, anchors=False):
+                                                                    screening=False, anchors=False, coupled=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -41,6 +41,17 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         config["optimize"]["bounds"][f"{side}_entry_initial_qty_pct"] = [0.01, 0.05]
     if anchors:
         config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0, 1]
+    if coupled:
+        config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
+        config["optimize"]["bounds"]["long_ema_span_0"] = [2.0, 20.0]
+        for side in ("long", "short"):
+            config["bot"][side]["unstuck"].update(enabled=True, ema_gating_enabled=True)
+        config["coin_overrides"] = {
+            "COIN01": {"bot": {"long": {"unstuck": {"close_pct": 0.05}}}},
+            "COIN02": {"bot": {"long": {"strategy": {"trailing_martingale": {
+                "entry": {"ema_span_0": 7.5},
+            }}}}},
+        }
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},
         {"label": "window", "coins": ["COIN00", "COIN02"]}] if suite else [])
     config_path = tmp_path / "input.json"
@@ -52,6 +63,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = value
         if anchors:
             seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if index == 0 else 1
+        if coupled:
+            seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] = 2 if index == 0 else 20
         (seeds_path / f"{index}.json").write_text(json.dumps(seed_config))
     def forbidden(*_args, **_kwargs):
         pytest.fail("native optimizer CLI must never call a CPU simulation or create a CPU worker pool")
@@ -169,4 +182,14 @@ async def test_native_anchor_cli_cuda_restores_side_variants_without_seed_files(
                                                                              suite, screening, interrupted, automatic):
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, suite, interrupted, automatic, screening=screening, anchors=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suite,screening", [(False, False), (True, True)])
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_native_coupled_cli_cuda_searches_spans_with_coin_pins_and_resumes(monkeypatch, tmp_path,
+                                                                            suite, screening, interrupted):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, interrupted, True, screening=screening, coupled=True,
     )

@@ -152,6 +152,65 @@ def test_coupling_contract_ignores_derived_coin_values_but_tracks_mode_and_sourc
 
 
 @pytest.mark.parametrize("kind", ["ema_anchor", "trailing_martingale"])
+def test_coupled_suite_resume_compares_saved_candidate_dependencies(kind):
+    from optimize import _resume_config_mismatches
+    from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
+
+    config = config_for(kind)
+    strategy = {"ema_span_0": 71.5}
+    if kind == "trailing_martingale":
+        strategy = {"entry": strategy}
+    config["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"strategy": {kind: strategy}}}},
+        "ETH": {"bot": {"long": {"unstuck": {"close_pct": 0.05}}}},
+    }
+    config["backtest"].update(suite_enabled=True, scenarios=[
+        {"label": "base", "coins": ["BTC", "ETH"], "start_date": "2024-01-01"},
+        {"label": "alternate", "overrides": {
+            f"bot.long.strategy.{kind}.ema_span_1": 301.25,
+            "coin_overrides.ETH.bot.long.unstuck.close_pct": 0.075,
+        }},
+    ])
+    saved = deepcopy(config)
+    spans = saved["bot"]["long"]["strategy"][kind]
+    if kind == "trailing_martingale":
+        spans = spans["entry"]
+    spans["ema_span_0"] = 20.0
+    entry = clean_config(_finalize_optimizer_vector_config(saved))
+    entry["suite_metrics"] = {"scenario_labels": ["base", "alternate"]}
+    entry[CONTRACT_KEY] = build_evaluation_contract(config)
+    before = deepcopy(config)
+    assert entry["backtest"]["scenarios"] != config["backtest"]["scenarios"]
+    assert _resume_config_mismatches(entry, config) == []
+    assert config == before
+
+    changes = [
+        (0, "coins", ["BTC"]),
+        (0, "start_date", "2024-01-02"),
+        (1, "overrides", {f"bot.long.strategy.{kind}.ema_span_1": 401.25}),
+        (1, "overrides", {f"coin_overrides.BTC.bot.long.strategy.{kind}.ema_span_0": 80.5}),
+        (1, "overrides", {"coin_overrides.ETH.bot.long.unstuck.close_pct": 0.08}),
+    ]
+    for index, key, value in changes:
+        changed = deepcopy(config)
+        if key == "overrides":
+            changed["backtest"]["scenarios"][index][key].update(value)
+        else:
+            changed["backtest"]["scenarios"][index][key] = value
+        assert any("backtest.scenarios" in item
+                   for item in _resume_config_mismatches(entry, changed))
+
+    corrupted = deepcopy(entry)
+    corrupted["backtest"]["scenarios"][0]["overrides"]["bot.long.unstuck.ema_span_0"] = 99.0
+    assert any("backtest.scenarios" in item
+               for item in _resume_config_mismatches(corrupted, config))
+    changed = deepcopy(config)
+    changed["optimize"]["enable_overrides"] = []
+    assert any("enable_overrides" in item
+               for item in _resume_config_mismatches(entry, changed))
+
+
+@pytest.mark.parametrize("kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("single", [True, False])
 def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
     kind, single

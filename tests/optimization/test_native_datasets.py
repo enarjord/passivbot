@@ -1,5 +1,6 @@
 from copy import deepcopy
 from types import SimpleNamespace
+import json
 
 import numpy as np
 import pytest
@@ -66,7 +67,18 @@ def test_standalone_registry_borrows_histories_and_owns_only_reusable_timestamps
                     np.testing.assert_array_equal(actual, expected)
             registered = []
             registry.register(SimpleNamespace(register_dataset=lambda *args: registered.append(args)))
-            assert registered == [("native:0", dataset)]
+            assert len(registered) == 1 and registered[0][0] == "native:0"
+            worker_dataset = registered[0][1]
+            assert worker_dataset.hlcvs == dataset.hlcvs
+            assert worker_dataset.btc == dataset.btc
+            assert worker_dataset.timestamps == dataset.timestamps
+            assert worker_dataset.coin_indices == dataset.coin_indices
+            assert worker_dataset.metrics == dataset.metrics
+            worker_config = json.loads(worker_dataset.config_json)
+            assert "optimize" not in worker_config
+            original_config = json.loads(dataset.config_json)
+            for section in ("bot", "live", "backtest", "coin_overrides"):
+                assert worker_config.get(section) == original_config.get(section)
         assert len(allocated) == 1
         with pytest.raises(FileNotFoundError):
             attach_shared_array(allocated[0])
