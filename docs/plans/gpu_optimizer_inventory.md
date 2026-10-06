@@ -46,8 +46,8 @@ the replacement must not claim to have computed those additional metrics.
 | --- | --- | --- |
 | Float32 paths versus CPU float64 | GPU parameter packing, shader state and CUDA lowering | Measure material effects; permit justified numerical differences |
 | Conservative single-coin minimum-effective-cost filtering | Directional Rust shader filters; documented liquidation-floor and all-history-minimum bound | Multicoin now uses simulated cash/current-price minima; replace the remaining single-coin restrictions |
-| Realized-loss allowance | EMA shared-account uses finite/all fill history; TM and retained legacy single-coin keep conservative all-history/zero-loss envelopes | Compare expiry and shared reservations; remaining TM/legacy differences are not decimal noise |
-| Rolling fill-PnL history | EMA/TM shared-account auto-unstuck and EMA loss admission; `test_gpu_unstuck_lookback.py`, `test_gpu_realized_loss_lookback.py` | Share bounded scratch, preserve expiry/intrabar peaks, retain loss-only history; HSL and TM general loss gate remain separate |
+| Realized-loss allowance | EMA/TM shared-account admission uses effective finite/all fill history and shared generation-time reservations; retained legacy directional single-coin engines remain separate | Shared-account envelopes have been replaced; preserve finalized quantities, expiry and unfilled reservations. Do not attribute legacy-only exclusions to native single-coin requests, which use the shared-account engine. |
+| Rolling fill-PnL history | EMA/TM shared-account auto-unstuck and loss admission; `test_gpu_unstuck_lookback.py`, `test_gpu_realized_loss_lookback.py`, `test_gpu_tm_loss_admission.py` | Both consumers share bounded scratch and preserve expiry/intrabar peaks, including loss-only history. HSL history remains separate. |
 | Bounded logarithmic histogram tails | Fill-gap and drawdown reducers in `metrics.py` | Quantify bin error and optimizer feasibility/ranking effects before accepting |
 | Hourly recovery sampling | Recovery distribution buffers and metric reducer | Evaluate sample-resolution error independently of simulation correctness |
 | Weighted partial UTC-day exclusion | Weighted volume/daily reducers | Compare exact time boundaries and sample sufficiency |
@@ -74,6 +74,10 @@ equivalence, not CPU parity or authority of a particular reducer.
 Existing tests are useful starting evidence, not a claim that all feature combinations
 or long histories are covered. Extend the corpus when the standalone parity tool exposes
 material gaps. Distinguish baseline failures from asynchronous-service regressions.
+
+The [acceptance evidence map](gpu_optimizer_acceptance.md) separates verified service,
+CPU search/storage and real-device CLI cases from the remaining simulator/metric and
+resource gates. The lifecycle foundation does not itself certify metric authority.
 
 ## Baseline findings to resolve before cutover
 
