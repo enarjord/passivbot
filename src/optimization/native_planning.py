@@ -17,6 +17,7 @@ from config_utils import clean_config
 from optimization.bounds import enforce_bounds
 from optimization.gpu.datasets import PreparedGpuDataset
 from optimization.gpu.executor import BacktestRequest
+from optimization.gpu.model import gpu_side_enabled
 from optimization.gpu.parameters import prepare_candidate_parameters
 from optimization.native_results import CandidateEvaluation, CanonicalResultScorer, ResultSlot
 
@@ -39,6 +40,9 @@ def _static_contract(config):
     """
     cleaned = clean_config(config)
     result = {key: cleaned[key] for key in ("bot", "live", "backtest", "coin_overrides") if key in cleaned}
+    # Numeric exposure/position values are dynamic, but their side enablement
+    # chooses the registered replay's directional/fused kernel topology.
+    result["enabled_sides"] = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))
     result["backtest"]["coins"] = config["backtest"]["coins"]
     # The standalone simulation consumes the materialized scenario, not the
     # optimizer's saved suite recipe or its candidate-dependent derived patches.

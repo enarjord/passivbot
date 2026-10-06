@@ -1,4 +1,6 @@
 from copy import deepcopy
+from dataclasses import replace
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -114,3 +116,27 @@ def test_invalid_candidate_or_incompatible_dataset_is_rejected_before_submission
         planner.base.config["optimize"]["fixed_runtime_overrides"] = {"backtest.starting_balance": 2000}
     with pytest.raises(ValueError):
         planner.prepare("invalid", vector, scenarios=scenarios)
+
+
+@pytest.mark.parametrize("change", ["disable", "enable"])
+def test_candidate_side_topology_changes_require_compatible_prepared_dataset(change):
+    planner, vector = inputs(suite=True)
+    if change == "disable":
+        planner.base.config["optimize"]["fixed_runtime_overrides"] = {
+            "bot.short.risk.total_wallet_exposure_limit": 0,
+        }
+    else:
+        bindings = []
+        for binding in planner.bindings:
+            dataset = binding.dataset
+            config = json.loads(dataset.config_json)
+            config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0
+            bindings.append(replace(binding, dataset=PreparedGpuDataset(
+                config=config, markets=json.loads(dataset.markets_json), exchange=dataset.exchange,
+                hlcvs=dataset.hlcvs, btc=dataset.btc, timestamps=dataset.timestamps,
+                candle_coins=dataset.candle_coins, coin_indices=dataset.coin_indices,
+                time_range=dataset.time_range, metrics=dataset.metrics,
+            )))
+        planner = NativeCandidatePlanner(planner.scorer.evaluator, bindings)
+    with pytest.raises(ValueError, match="dataset-owned execution inputs"):
+        planner.prepare("different-side-topology", vector)

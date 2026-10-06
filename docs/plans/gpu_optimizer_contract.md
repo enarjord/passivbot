@@ -571,3 +571,9 @@ Completion requires:
   slice provides CPU orchestration components and is not a native optimizer cutover.
 - The result-scoring slice passed a clear current-head auto review and all required Python
   and Rust CI before merging into development. The same gate applies to this next slice.
+- During subsequent data-registry integration, a regression exposed that dynamic numeric
+  exposure/position values could change a prepared kernel's side enablement. Include the
+  effective enabled sides in the dataset-owned contract and reject both activation and
+  deactivation before submission. The combined CPU/CUDA suite passes 98 cases after this
+  correction. The prior head's clear auto review cannot approve this changed head; request
+  current-head re-review and wait for its required CI before integration.

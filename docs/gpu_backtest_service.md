@@ -89,7 +89,7 @@ for every unpatched coin. Mirrored or fixed shadow genes deduplicate by effectiv
 and expected result slots. A screening plan's duplicate identity includes unscreened
 scenarios: identical screenings alone do not prove identical complete candidates. Values
 outside the dynamic scalar transport remain dataset-owned; changes to feature flags,
-execution modes or materialized coin patches require compatible prepared datasets and are
+execution modes, side enablement or materialized coin patches require compatible prepared datasets and are
 rejected before submission. Candidate-dependent coin patches and finite anchor variants
 still require integration work; they are not silently ignored.
 
