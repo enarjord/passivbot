@@ -50,9 +50,11 @@ def test_candidate_parameters_pack_global_scaled_hsl_budget_policy(strategy, sid
     before = prepare_candidate_parameters(config, markets, "binance")
     config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = True
     config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.44
-    config["coin_overrides"] = {"COIN00": {"bot": {side: {"risk": {
-        "wallet_exposure_limit": 0.2, "we_excess_allowance_pct": 0.1,
-    }}}}}
+    config["coin_overrides"] = {"COIN00": {"bot": {side: {
+        "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_pct": 0.1},
+    }}}}
+    from config.overrides import parse_overrides
+    config = parse_overrides(config, verbose=False)
     after = prepare_candidate_parameters(config, markets, "binance")
     other = "short" if side == "long" else "long"
     assert before[f"{side}_hsl_scale_budget_with_excess_allowance"] == 0

@@ -60,9 +60,9 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             )
             config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.44
         config["coin_overrides"] = {
-            "COIN00": {"bot": {"long": {"risk": {
-                "wallet_exposure_limit": 0.2, "we_excess_allowance_pct": 0.1,
-            }}}},
+            "COIN00": {"bot": {"long": {
+                "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_pct": 0.1},
+            }}},
         }
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},
         {"label": "window", "coins": ["COIN00", "COIN02"]}] if suite else [])
@@ -179,10 +179,20 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     assert resumed.value.code == 0
     assert len(records()) == (8 if screening else 12)
     if scaled_hsl:
+        expanded = {}
         for row in records():
-            assert all(row["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+            expanded = optimize.deep_updated(expanded, row)
+            assert all(expanded[CONTRACT_KEY]["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+                       for side in ("long", "short"))
+            assert all(expanded["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
                        for side in ("long", "short"))
         assert state[CONTRACT_KEY]["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"]
+        members = list((directory / "pareto").glob("*.json"))
+        assert members
+        for member in members:
+            exported = json.loads(member.read_text())
+            assert all(exported["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+                       for side in ("long", "short"))
     if screening:
         with (directory / "checkpoint.pkl").open("rb") as source:
             final = pickle.load(source)

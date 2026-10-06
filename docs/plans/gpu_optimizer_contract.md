@@ -1409,3 +1409,16 @@ Completion requires:
   resolved feedback, author sign-off and all required CI; include it in this refresh.
 - Development integration requires completed current-head automatic review,
   addressed findings, author sign-off and successful required CI.
+
+- Validation passes 330 Rust tests (one existing ignored), default-feature compile
+  checks and a rebuilt source-verified extension. Broad configuration, HSL and
+  orchestration coverage passes 1,781 checks. Final-source metric, implementation-
+  identity, checkpoint and native coverage passes 508 unchanged cases; corrected
+  parameter/scaled-HSL coverage passes eleven cases, including all four new lifecycle
+  cases. Forty-seven focused CUDA allowance, minimum-cost, disabled-feature and
+  streamed-metric kernel checks pass. Six documentation checks pass.
+- The new lifecycle fixtures use canonical per-coin WEL placement and decode the
+  existing overlay result stream before checking fixed policy. Full Pareto exports
+  and checkpoint policy are checked independently. No simulator change was needed
+  beyond master's HSL policy and its integration into the extracted parameter encoder.
+  Actual Metal execution and broader final simulator acceptance remain open.
