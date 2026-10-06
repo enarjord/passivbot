@@ -699,8 +699,8 @@ Completion requires:
 
 ### 2026-10-06 — CPU preparation/result pipeline
 
-- The service-tuning slice has completed clear exact-head auto review; its required CI
-  remains a merge gate. Keep this subsequent CPU change isolated from the reviewed head.
+- The service-tuning slice passed clear exact-head auto review and every required CI job
+  before merging into development. This subsequent CPU slice remains separately reviewable.
 - Inspection and a synthetic CUDA optimization comparison show that filling a 256-candidate
   admission window before polling delays the first GPU submission by roughly 2.7 seconds.
   Submit after the first prepared candidate, then alternate CPU preparation and result
