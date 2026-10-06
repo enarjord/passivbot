@@ -4380,7 +4380,7 @@ inline void passivbot_single_coin_impl(
                 hsl_tier_samples_total += 1.0f;
 
 
-                hsl_tier_samples_red += long_hsl.tier == 3 ? 1.0f : 0.0f;
+                hsl_tier_samples_red += hsl_report_tier(long_hsl) == 3 ? 1.0f : 0.0f;
             }
 #endif
 #elif defined(PASSIVBOT_TRAILING_SHORT_ONLY)
@@ -4418,7 +4418,7 @@ inline void passivbot_single_coin_impl(
                 hsl_tier_samples_total += 1.0f;
 
 
-                hsl_tier_samples_red += short_hsl.tier == 3 ? 1.0f : 0.0f;
+                hsl_tier_samples_red += hsl_report_tier(short_hsl) == 3 ? 1.0f : 0.0f;
             }
 #endif
 #else
@@ -4493,7 +4493,7 @@ inline void passivbot_single_coin_impl(
             }
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
             if (hsl_update_valid && (long_hsl.enabled || short_hsl.enabled)) {
-                int hsl_tier = max(long_hsl.tier, short_hsl.tier);
+                int hsl_tier = max(hsl_report_tier(long_hsl), hsl_report_tier(short_hsl));
                 hsl_tier_samples_total += 1.0f;
 
 

@@ -428,6 +428,12 @@ inline void observe_hsl(
 #endif
 }
 
+// Reporting marks the controller RED while panic or a terminal cooldown blocks
+// ordinary trading. Keep this separate from the current panic signal's tier.
+inline int hsl_report_tier(thread const HslState& h) {
+    return h.enabled && (h.red_active_now || h.halted) ? 3 : 0;
+}
+
 inline HslState load_hsl(
     constant float* params,
     int po,

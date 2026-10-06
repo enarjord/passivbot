@@ -2856,7 +2856,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 }
 #endif
                 sampled_tier = max(
-                    sampled_tier, long_side.coin_hsl[c].tier
+                    sampled_tier, hsl_report_tier(long_side.coin_hsl[c])
                 );
             }
             if (short_active) {
@@ -2882,7 +2882,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 }
 #endif
                 sampled_tier = max(
-                    sampled_tier, short_side.coin_hsl[c].tier
+                    sampled_tier, hsl_report_tier(short_side.coin_hsl[c])
                 );
             }
         }
@@ -2958,7 +2958,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
     }
 #endif
     sample_enabled = long_side.hsl.enabled || short_side.hsl.enabled;
-    sampled_tier = joint_pside_hsl_global_tier(
+    sampled_tier = joint_hsl_report_tier(
         long_side.hsl, short_side.hsl
     );
     return true;
@@ -6311,7 +6311,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         );
                     }
 #endif
-                    sampled_hsl_tier = max(sampled_hsl_tier, coin_hsl[c].tier);
+                    sampled_hsl_tier = max(sampled_hsl_tier, hsl_report_tier(coin_hsl[c]));
                 }
             } else {
                 update_hsl(
@@ -6320,7 +6320,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     has_open_position, has_blocking_orders,
                     float(k), interval_ms
                 );
-                sampled_hsl_tier = hsl.tier;
+                sampled_hsl_tier = hsl_report_tier(hsl);
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
                 sampled_hsl_drawdown_ema = fabs(hsl.drawdown_ema);
 #endif

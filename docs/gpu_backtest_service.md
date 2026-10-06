@@ -283,3 +283,9 @@ and per-candle HSL scans but retains aggregate forced-delisting loss diagnostics
 mode retains full state even when HSL is disabled: its separate panic segments affect
 reported drawdown reductions. Fused portfolios and Trailing Martingale retain their
 existing layouts. Execution scheduling does not decide this semantic specialization.
+
+GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
+Reporting state is separate from the panic tier used by the simulation; counting
+cooldown does not extend panic orders. The GPU reduction still uses sampled bars,
+whereas CPU reporting integrates elapsed scope-state time. Controller-active parity
+checks remain required to assess observation timing and numerical discrepancies.

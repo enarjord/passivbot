@@ -2093,7 +2093,7 @@ inline void passivbot_single_coin_impl(
                 liq_day = di;
             }
             if (hsl_update_valid && (long_hsl.enabled || short_hsl.enabled)) {
-                int hsl_tier = max(long_hsl.tier, short_hsl.tier);
+                int hsl_tier = max(hsl_report_tier(long_hsl), hsl_report_tier(short_hsl));
                 hsl_tier_samples_total += 1.0f;
 
 
