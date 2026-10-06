@@ -319,6 +319,14 @@ mode retains full state even when HSL is disabled: its separate panic segments a
 reported drawdown reductions. Fused portfolios and Trailing Martingale retain their
 existing layouts. Execution scheduling does not decide this semantic specialization.
 
+Shared-account EMA realized-loss admission and auto-unstuck use one bounded fill-PnL
+window selected by `live.pnls_max_lookback_days`. The history is prepared when either
+consumer is enabled and compiled out when neither needs it or the scope is all history.
+Loss-only requests retain the window even with auto-unstuck and HSL disabled. Shared
+long/short cash and generation-time loss reservations remain unchanged. HSL histories
+and Trailing Martingale's conservative realized-loss policy are separate. Native
+single-coin requests use this shared-account engine as well.
+
 GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
 Reporting state is separate from the panic tier used by the simulation; counting
 cooldown does not extend panic orders. The GPU reduction still uses sampled bars,

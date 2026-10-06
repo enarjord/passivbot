@@ -46,8 +46,8 @@ the replacement must not claim to have computed those additional metrics.
 | --- | --- | --- |
 | Float32 paths versus CPU float64 | GPU parameter packing, shader state and CUDA lowering | Measure material effects; permit justified numerical differences |
 | Conservative single-coin minimum-effective-cost filtering | Directional Rust shader filters; documented liquidation-floor and all-history-minimum bound | Multicoin now uses simulated cash/current-price minima; replace the remaining single-coin restrictions |
-| Conservative realized-loss allowance | Shader loss gates and topology-specific histories; documented all-history/zero-loss envelopes | Compare rolling-window expiry and shared reservations; do not treat this as decimal noise |
-| Rolling unstuck history | EMA/TM shared-account finite-history paths and `test_gpu_unstuck_lookback.py` | Expiry, shared drawdown and bounded scratch covered; retained legacy single-coin and general realized-loss gates remain separate |
+| Realized-loss allowance | EMA shared-account uses finite/all fill history; TM and retained legacy single-coin keep conservative all-history/zero-loss envelopes | Compare expiry and shared reservations; remaining TM/legacy differences are not decimal noise |
+| Rolling fill-PnL history | EMA/TM shared-account auto-unstuck and EMA loss admission; `test_gpu_unstuck_lookback.py`, `test_gpu_realized_loss_lookback.py` | Share bounded scratch, preserve expiry/intrabar peaks, retain loss-only history; HSL and TM general loss gate remain separate |
 | Bounded logarithmic histogram tails | Fill-gap and drawdown reducers in `metrics.py` | Quantify bin error and optimizer feasibility/ranking effects before accepting |
 | Hourly recovery sampling | Recovery distribution buffers and metric reducer | Evaluate sample-resolution error independently of simulation correctness |
 | Weighted partial UTC-day exclusion | Weighted volume/daily reducers | Compare exact time boundaries and sample sufficiency |

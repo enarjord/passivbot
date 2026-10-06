@@ -3256,7 +3256,7 @@ inline int select_tm_multicoin_unstuck_coin(
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
         / fmax(float(effective_n_positions), 1.0f);
-    const float balance_peak = account.balance + unstuck_pnl_drawdown(account);
+    const float balance_peak = account.balance + effective_realized_pnl_drawdown(account);
     if (!(balance_peak > 0.0f)) return -1;
 
     int selected_coin = -1;
@@ -3772,7 +3772,7 @@ inline void generate_tm_multicoin_side_orders(
         unstuck_close_tick[c] = 0;
         close_is_unstuck_reducer[c] = false;
     }
-    float balance_peak = balance + unstuck_pnl_drawdown(account);
+    float balance_peak = balance + effective_realized_pnl_drawdown(account);
     int unstuck_coin = -1;
     float best_unstuck_diff = INFINITY;
     float selected_unstuck_qty = 0.0f;

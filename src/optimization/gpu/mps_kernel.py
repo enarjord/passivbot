@@ -1231,7 +1231,7 @@ def _require_available_held_valuation(scalars):
     # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
     # Metal writes -2 and returns immediately if a held coin has no price.
     if bool((scalars[:, 9] == -3.0).any()):
-        raise RuntimeError("GPU auto-unstuck PnL history overflow")
+        raise RuntimeError("GPU fill-PnL history overflow")
     invalid_hsl = scalars[:, 9] == -4.0
     if bool(invalid_hsl.any()):
         indices = invalid_hsl.nonzero().flatten()
