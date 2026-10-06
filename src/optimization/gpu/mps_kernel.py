@@ -1046,6 +1046,15 @@ def _trailing_martingale_short_no_hsl_shader_library(
     return compile_shader(source)
 
 
+def _with_unstuck_pnl_window(source, lookback_bars, capacity):
+    if lookback_bars:
+        source = (
+            f"#define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS {lookback_bars}\n"
+            f"#define PASSIVBOT_UNSTUCK_PNL_CAPACITY {capacity}\n" + source
+        )
+    return source
+
+
 @lru_cache(maxsize=32)
 def _ema_anchor_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
@@ -1060,6 +1069,8 @@ def _ema_anchor_multicoin_shader_library(
     hsl_capacity: int = 0,
     hsl_lookback: int = 0,
     mps_coin_capacity: int | None = None,
+    unstuck_pnl_lookback_bars: int = 0,
+    unstuck_pnl_capacity: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1081,6 +1092,7 @@ def _ema_anchor_multicoin_shader_library(
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity
         )
+    source = _with_unstuck_pnl_window(source, unstuck_pnl_lookback_bars, unstuck_pnl_capacity)
     if mps_coin_capacity is not None:
         return compile_shader(
             source,
@@ -1132,11 +1144,7 @@ def _trailing_martingale_multicoin_shader_library(
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity
         )
-    if unstuck_pnl_lookback_bars:
-        source = (
-            f"#define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS {unstuck_pnl_lookback_bars}\n"
-            f"#define PASSIVBOT_UNSTUCK_PNL_CAPACITY {unstuck_pnl_capacity}\n" + source
-        )
+    source = _with_unstuck_pnl_window(source, unstuck_pnl_lookback_bars, unstuck_pnl_capacity)
     if mps_coin_capacity is not None:
         return compile_shader(
             source,
@@ -2102,6 +2110,7 @@ class MpsEmaAnchorMulticoinRunner:
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
+        unstuck_pnl_lookback_bars: int = 0,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -2153,6 +2162,18 @@ class MpsEmaAnchorMulticoinRunner:
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
         self.n_days = int(data["n_days"])
+        if unstuck_pnl_lookback_bars < 0:
+            raise ValueError("unstuck_pnl_lookback_bars must be nonnegative")
+        self.unstuck_pnl_lookback_bars = int(unstuck_pnl_lookback_bars)
+        # At most one event per candle, including both lookback endpoints.
+        # Coalescing preserves every intrabar peak; no fill-count cap is needed.
+        self.unstuck_pnl_capacity = (
+            min(self.n, self.unstuck_pnl_lookback_bars + 1)
+            if self.unstuck_pnl_lookback_bars
+            else 0
+        )
+        self._unstuck_pnl_buffers = {}
+
         self.pnl_lookback_bars = int(pnl_lookback_bars)
         self.hsl_capacity = 0
         self._hsl_scratch_buffers = {}
@@ -2442,6 +2463,8 @@ class MpsEmaAnchorMulticoinRunner:
             kernel_args += (recovery_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
+        if self.unstuck_pnl_capacity:
+            kernel_args += self._unstuck_history_buffers(batch_size)
         library.passivbot_ema_anchor_multicoin(
             *kernel_args,
             threads=(batch_size, 1, 1),
@@ -2484,13 +2507,41 @@ class MpsEmaAnchorMulticoinRunner:
             )
         elif self.cuda_coin_capacity is not None:
             args += (self.cuda_coin_capacity,)
+        if self.unstuck_pnl_capacity:
+            args = args[:8] + (
+                self.cuda_coin_capacity,
+                self.hsl_capacity,
+                self.pnl_lookback_bars,
+                self.mps_coin_capacity,
+                self.unstuck_pnl_lookback_bars,
+                self.unstuck_pnl_capacity,
+            )
         return _ema_anchor_multicoin_shader_library, args
 
-    def _history_bytes_per_candidate(self):
+    def _hsl_history_bytes_per_candidate(self):
         if not self.hsl_capacity:
             return 0
         _, nodes = _hsl_layout(self.hsl_capacity)
         return self.hsl_scopes * (nodes * 32 + self.hsl_capacity * 8)
+
+    def _history_bytes_per_candidate(self):
+        return self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
+
+    def _unstuck_history_buffers(self, batch_size):
+        if (
+            batch_size * self._history_bytes_per_candidate()
+            > self.hsl_scratch_budget_bytes
+        ):
+            raise ValueError("GPU history batch exceeds its scratch budget")
+        if batch_size not in self._unstuck_pnl_buffers:
+            shape = (batch_size, self.unstuck_pnl_capacity, 2)
+            self._unstuck_pnl_buffers = {
+                batch_size: (
+                    torch.empty(shape, dtype=torch.float32, device=gpu_device()),
+                    torch.empty(shape, dtype=torch.int32, device=gpu_device()),
+                )
+            }
+        return self._unstuck_pnl_buffers[batch_size]
 
     def _hsl_buffers(self, batch_size):
         _, nodes = _hsl_layout(self.hsl_capacity)
@@ -2778,6 +2829,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
+        unstuck_pnl_lookback_bars: int = 0,
     ):
         super().__init__(
             run,
@@ -2802,6 +2854,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
+            unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -2929,6 +2982,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (recovery_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
+        if self.unstuck_pnl_capacity:
+            kernel_args += self._unstuck_history_buffers(batch_size)
         library.passivbot_ema_anchor_multicoin_fused(
             *kernel_args,
             threads=(batch_size, 1, 1),
@@ -3054,18 +3109,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
+            unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
         )
-        if unstuck_pnl_lookback_bars < 0:
-            raise ValueError("unstuck_pnl_lookback_bars must be nonnegative")
-        self.unstuck_pnl_lookback_bars = int(unstuck_pnl_lookback_bars)
-        # At most one event per candle, including both lookback endpoints.
-        # Coalescing preserves every intrabar peak; no fill-count cap is needed.
-        self.unstuck_pnl_capacity = (
-            min(self.n, self.unstuck_pnl_lookback_bars + 1)
-            if self.unstuck_pnl_lookback_bars
-            else 0
-        )
-        self._unstuck_pnl_buffers = {}
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         expected = len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)
@@ -3123,25 +3168,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
                 self.unstuck_pnl_capacity,
             )
         return _trailing_martingale_multicoin_shader_library, args
-
-    def _history_bytes_per_candidate(self):
-        return super()._history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
-
-    def _unstuck_history_buffers(self, batch_size):
-        if (
-            batch_size * self._history_bytes_per_candidate()
-            > self.hsl_scratch_budget_bytes
-        ):
-            raise ValueError("GPU history batch exceeds its scratch budget")
-        if batch_size not in self._unstuck_pnl_buffers:
-            shape = (batch_size, self.unstuck_pnl_capacity, 2)
-            self._unstuck_pnl_buffers = {
-                batch_size: (
-                    torch.empty(shape, dtype=torch.float32, device=gpu_device()),
-                    torch.empty(shape, dtype=torch.int32, device=gpu_device()),
-                )
-            }
-        return self._unstuck_pnl_buffers[batch_size]
 
     def _dispatch(
         self,

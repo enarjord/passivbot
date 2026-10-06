@@ -633,9 +633,9 @@ mod tests {
             assert!(body.contains("thread float& balance = account.balance"));
             assert!(body
                 .contains("thread float& realized_pnl_cumsum_last = account.realized_pnl_total"));
-            assert!(
-                body.contains("thread float& realized_pnl_cumsum_max = account.realized_pnl_peak")
-            );
+            // Unstuck consumes the account's configured history projection,
+            // rather than requiring an alias of the all-history peak.
+            assert!(body.contains("unstuck_pnl_drawdown(account)"));
             assert_eq!(
                 body.matches("record_realized_net(").count(),
                 expected_account_record_sites

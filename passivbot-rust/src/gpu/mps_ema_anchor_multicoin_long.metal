@@ -1288,8 +1288,7 @@ inline int select_ema_multicoin_unstuck_coin(
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
         / fmax(float(effective_n_positions), 1.0f);
-    const float balance_peak = account.balance
-        + (account.realized_pnl_peak - account.realized_pnl_total);
+    const float balance_peak = account.balance + unstuck_pnl_drawdown(account);
     if (!(balance_peak > 0.0f)) return -1;
 
     int selected_coin = -1;
@@ -1460,8 +1459,6 @@ inline void generate_ema_multicoin_side_orders(
     thread bool* selected = side.selected;
     thread bool* entry_candidate = side.entry_candidate;
     thread float& balance = account.balance;
-    thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
-    thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
 
     const float effective_wel = twel / fmax(float(effective_n_positions), 1.0f);
     float current_twe = 0.0f;
@@ -1597,8 +1594,7 @@ inline void generate_ema_multicoin_side_orders(
         side.close_is_protective_reducer[c] = false;
         close_is_unstuck_reducer[c] = false;
     }
-    float balance_peak = balance
-        + (realized_pnl_cumsum_max - realized_pnl_cumsum_last);
+    float balance_peak = balance + unstuck_pnl_drawdown(account);
     int unstuck_coin = -1;
     float best_unstuck_diff = INFINITY;
     float selected_unstuck_qty = 0.0f;
@@ -3008,6 +3004,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    device float2* unstuck_pnl_values,
+    device int2* unstuck_pnl_indices,
+#endif
     uint b,
     bool short_side
 ) {
@@ -3075,6 +3075,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     }
 
     JointPortfolioAccount account = init_joint_portfolio_account(starting_balance);
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
+#endif
     thread float& balance = account.balance;
     thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
@@ -3142,6 +3145,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
         hsl_trees, hsl_rows, int(b) * (C + 1), C, true, true);
 #endif
     for (int k = 1; k < stop_k; ++k) {
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+        account.unstuck_pnl_k = k;
+#endif
         if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
             scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
@@ -3228,6 +3234,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
             ? 0 : hsl_mode(hsl, has_hsl_position);
 #endif
 
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+        if (!refresh_unstuck_pnl_window(account)) {
+            scalars[int(b) * SCALAR_COLS + 9] = -3.0f;
+            return;
+        }
+#endif
         if (can_generate) {
             update_ema_multicoin_side_selection(
                 side, config, bars, coin_settings, coin_overrides,
@@ -3869,6 +3881,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    device float2* unstuck_pnl_values,
+    device int2* unstuck_pnl_indices,
+#endif
     uint b
 ) {
     const int B = sizes[0];
@@ -3958,6 +3974,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     JointPortfolioAccount account = init_joint_portfolio_account(
         starting_balance
     );
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
+#endif
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
     bool alive = true;
     bool equity_started = false;
@@ -4013,6 +4032,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         hsl_trees, hsl_rows, int(b) * 2 * (C + 1) + C + 1, C, true,
         !hsl_unified || !hsl_long_owner);
     for (int k = 1; k < stop_k; ++k) {
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+        account.unstuck_pnl_k = k;
+#endif
         if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings, k, C)
             || held_positions_have_missing_prices(short_side.psize, bars, coin_settings, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
@@ -4171,6 +4193,12 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_one_way_order_blocked_mask
             );
         }
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+        if (!refresh_unstuck_pnl_window(account)) {
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -3.0f;
+            return;
+        }
+#endif
         float long_unstuck_diff = INFINITY;
         float short_unstuck_diff = INFINITY;
         const int long_unstuck_candidate = long_can_generate
@@ -4682,6 +4710,10 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    device float2* unstuck_pnl_values,
+    device int2* unstuck_pnl_indices,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_fused_impl(
@@ -4699,6 +4731,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
         recovery_samples,
 #endif
         hsl_trees, hsl_rows,
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+        unstuck_pnl_values, unstuck_pnl_indices,
+#endif
         b
     );
 }
@@ -4729,6 +4764,10 @@ kernel void passivbot_ema_anchor_multicoin(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    device float2* unstuck_pnl_values,
+    device int2* unstuck_pnl_indices,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     const bool short_side = run_settings[3] > 0.5f;
@@ -4747,6 +4786,9 @@ kernel void passivbot_ema_anchor_multicoin(
         recovery_samples,
 #endif
         hsl_trees, hsl_rows,
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+        unstuck_pnl_values, unstuck_pnl_indices,
+#endif
         b, short_side
     );
 }
@@ -4777,6 +4819,10 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    device float2* unstuck_pnl_values,
+    device int2* unstuck_pnl_indices,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_impl(
@@ -4794,6 +4840,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
         recovery_samples,
 #endif
         hsl_trees, hsl_rows,
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+        unstuck_pnl_values, unstuck_pnl_indices,
+#endif
         b, false
     );
 }

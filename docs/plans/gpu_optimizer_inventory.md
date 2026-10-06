@@ -27,7 +27,7 @@ gates in [the development contract](gpu_optimizer_contract.md).
 | EMA Anchor / Trailing Martingale | Single coin; directional multicoin; shared-account fused long/short multicoin | Keep effective config semantics across these paths |
 | Hedge / one-way | Supported by the existing shared-account paths | Test shared cash, side arbitration and exposure, not sums of independent directional runs |
 | HSL | Coin, pside and unified controllers subject to topology checks; bounded history | Preserve controller semantics and disabled-feature specialization |
-| Unstuck | All listed topologies; static overrides; rolling TM multicoin history | Audit history semantics in every other topology |
+| Unstuck | All listed topologies; static overrides; bounded rolling EMA/TM shared-account history | Native single-coin uses shared-account replay; retained legacy single-coin history remains separate |
 | Recursive TM entries/closes | Supported, with market-order and exposure interactions | Cover ladder expansion, duplicate groups, minima and shared loss reservations |
 | Scenarios / overrides | Supported paths validated before preparation; compatible grouping | Preserve canonical scenario reduction and distinguish screening from complete results |
 | Other strategies / BTC collateral | `trailing_grid_v7` and positive collateral cap rejected | Keep explicit exclusions unless deliberately implemented |
@@ -47,7 +47,7 @@ the replacement must not claim to have computed those additional metrics.
 | Float32 paths versus CPU float64 | GPU parameter packing, shader state and CUDA lowering | Measure material effects; permit justified numerical differences |
 | Conservative single-coin minimum-effective-cost filtering | Directional Rust shader filters; documented liquidation-floor and all-history-minimum bound | Multicoin now uses simulated cash/current-price minima; replace the remaining single-coin restrictions |
 | Conservative realized-loss allowance | Shader loss gates and topology-specific histories; documented all-history/zero-loss envelopes | Compare rolling-window expiry and shared reservations; do not treat this as decimal noise |
-| Rolling unstuck history only in some topologies | TM multicoin finite-history path and `test_gpu_unstuck_lookback.py` | Inventory consumers before reusing history storage elsewhere |
+| Rolling unstuck history | EMA/TM shared-account finite-history paths and `test_gpu_unstuck_lookback.py` | Expiry, shared drawdown and bounded scratch covered; retained legacy single-coin and general realized-loss gates remain separate |
 | Bounded logarithmic histogram tails | Fill-gap and drawdown reducers in `metrics.py` | Quantify bin error and optimizer feasibility/ranking effects before accepting |
 | Hourly recovery sampling | Recovery distribution buffers and metric reducer | Evaluate sample-resolution error independently of simulation correctness |
 | Weighted partial UTC-day exclusion | Weighted volume/daily reducers | Compare exact time boundaries and sample sufficiency |
@@ -65,7 +65,8 @@ equivalence, not CPU parity or authority of a particular reducer.
 - `test_gpu_entry_sizing_parity.py`: raw-touch sizing, executable-price minima and
   forager readiness compared with real CPU fills.
 - `test_gpu_unstuck_lookback.py`: finite-history expiry, shared accounting, reuse,
-  scratch overflow and interruption.
+  scratch overflow and interruption; both strategies and native single-coin/shared
+  EMA service replays, without CPU simulation in the service.
 - `test_gpu_hsl_multicoin.py` and related GPU HSL/market/loss tests: controller and
   generation-time execution behavior.
 - `test_gpu_metrics.py`: individual reducer definitions and boundary handling.
