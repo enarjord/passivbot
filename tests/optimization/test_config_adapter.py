@@ -22,6 +22,18 @@ def _get_path(mapping, path):
 class TestConfigAdapter:
     """Test configuration adapter functions."""
 
+    def test_existing_bot_does_not_construct_a_fallback_template(self, monkeypatch):
+        import optimization.config_adapter as adapter
+
+        config = get_template_config()
+        expected = get_optimization_key_paths(config)
+
+        def unexpected_template():
+            raise AssertionError("existing bot config must not request fallback defaults")
+
+        monkeypatch.setattr(adapter, "get_template_config", unexpected_template)
+        assert get_optimization_key_paths(config) == expected
+
     def test_extract_bounds_tuple_list_from_config(self):
         config = {
             "optimize": {
