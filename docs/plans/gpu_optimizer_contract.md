@@ -1132,3 +1132,30 @@ Completion requires:
   all HSL modes and coupled/uncoupled spans without input mutation. The CPU-only
   import/execution boundary and six documentation checks pass; AI documentation
   reports no errors and the two existing size warnings.
+
+### 2026-10-06 — EMA realized-loss admission shares finite fill history
+
+- Shared coin encoding merged into development in [PR #1902](https://github.com/enarjord/passivbot/pull/1902)
+  after completed clear exact-head auto review, exact-target author sign-off and
+  successful Python 3.12/3.14 and Rust CI. A fresh all-surface review/identity gate
+  preceded the SHA-pinned merge; master remains unchanged.
+- Reproduced a material admission difference: finite EMA loss caps kept blocking
+  closes on GPU after old losses expired on CPU. Loss-only requests additionally
+  omitted the rolling history when auto-unstuck was disabled. All-history controls
+  retain their prior behavior. These are semantic differences, not float32 noise.
+- Use one account-owned fill-PnL drawdown for EMA loss admission and auto-unstuck.
+  Reuse existing bounded/coalesced scratch and preserve intrabar peaks. Prepare
+  history for either effective consumer; omit it when both are disabled or scope
+  is all history. Retain generation-time shared loss reservations and HSL accounting.
+- Native one-coin and fused long/short requests use the shared-account engine.
+  Retained legacy single-coin EMA and TM general loss gates still have documented
+  conservative policies; do not claim those acceptance gaps are solved here.
+- Validation: 487 affected CUDA checks pass across finite loss history, existing
+  unstuck and loss reservations, native service/optimizer and parity integration.
+  New cases compare real Rust fill counts, positions and cash, forbid CPU replay
+  in native requests, and exercise consumer ablation, compact/general HSL, bounded
+  batching, reuse and fatal overflow. A wider bounded loss-cap sweep agrees on
+  fill counts and positions. Rust tests pass (330, one ignored), default-feature
+  test targets compile, and the rebuilt extension's source stamp is verified.
+  Source-only preparation and documentation checks pass; AI documentation has
+  zero errors and the two existing size warnings. Tolerances are unchanged.

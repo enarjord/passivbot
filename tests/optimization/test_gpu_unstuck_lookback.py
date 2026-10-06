@@ -264,7 +264,7 @@ def test_unstuck_history_overflow_fails_closed(sides, strategy):
     runner.unstuck_pnl_capacity = 1
     if len(sides) == 1 and strategy == "trailing_martingale":
         runner.max_dispatch_candidate_bars = 4
-    with pytest.raises(RuntimeError, match="auto-unstuck PnL history overflow"):
+    with pytest.raises(RuntimeError, match="fill-PnL history overflow"):
         raw(proxy, [{}])
 
 
@@ -296,13 +296,13 @@ kernel void unstuck_window_probe(
     record_joint_portfolio_fill(account, -1.0f, false); // entry fee
     record_joint_portfolio_fill(account, 20.0f, true);
     refresh_unstuck_pnl_window(account);
-    out[0] = unstuck_pnl_drawdown(account);
+    out[0] = effective_realized_pnl_drawdown(account);
     account.unstuck_pnl_k = 11; // candle 2 remains on the inclusive boundary
     refresh_unstuck_pnl_window(account);
-    out[1] = unstuck_pnl_drawdown(account);
+    out[1] = effective_realized_pnl_drawdown(account);
     account.unstuck_pnl_k = 12; // no fills, but old loss/peak must expire
     refresh_unstuck_pnl_window(account);
-    out[2] = unstuck_pnl_drawdown(account);
+    out[2] = effective_realized_pnl_drawdown(account);
     out[3] = account.realized_pnl_peak - account.realized_pnl_total;
     out[4] = account.balance;
 }

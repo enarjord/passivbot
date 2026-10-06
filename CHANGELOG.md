@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Honor finite fill-PnL lookback in shared-account EMA Anchor GPU realized-loss
+  admission, including native single-coin and long/short runs. Reuse the existing
+  bounded history buffer and prepare it even when auto-unstuck is disabled.
+
 - Adapt native CUDA request accumulation to CPU submission bursts and successful
   warm replay cost, with bounded idle and total waiting. Honor explicit service
   delays and tuning-off mode; keep search and simulation semantics unchanged.

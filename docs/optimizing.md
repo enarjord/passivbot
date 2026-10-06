@@ -371,13 +371,16 @@ The supported slice is intentionally narrow:
   fallback. Accepted protective losses spend one shared allowance before ordinary closes are
   checked in canonical long-then-short symbol order; HSL panic closes remain exempt. These are
   generation-time decisions retained with the pending orders rather than reclassified at fill
-  time. The proxy uses a conservative all-history loss envelope, so it may block a close that exact
-  Rust admits after old PnL ages out of `live.pnls_max_lookback_days`. Single-coin and one-sided
-  multi-coin Trailing Martingale permit the one selected auto-unstuck reducer to consume that same
-  conservative budget, while ordinary and exposure-repair closes retain the stricter zero-loss
+  time. Shared-account EMA replay uses the configured `live.pnls_max_lookback_days` fill window,
+  sharing bounded history with auto-unstuck while retaining it when only the loss gate is enabled.
+  Native single-coin requests use this shared-account engine. The retained legacy single-coin EMA
+  engine still uses a conservative all-history envelope. Single-coin and one-sided multi-coin
+  Trailing Martingale permit the one selected auto-unstuck reducer to consume an all-history
+  budget, while ordinary and exposure-repair closes retain the stricter zero-loss
   envelope. Those Trailing Martingale restrictions avoid unsafe cross-side loss-budget reservation
   and per-candle enumeration of its recursive 500-rung close ladder. Exact validation applies the
-  configured rolling allowance and remains authoritative
+  configured rolling allowance; standalone parity tools assess these differences for native
+  optimization, which does not repeat GPU backtests on CPU
 - BTC collateral remains disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the effective wallet-exposure limit, including dynamic

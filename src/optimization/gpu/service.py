@@ -2915,16 +2915,21 @@ class MpsMulticoinProxy:
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
         }
-        # Preserve history for every effective consumer, even if a tunable
-        # allowance is zero in the prepared seed. Both strategies use the
-        # shared account's bounded rolling window.
+        # Auto-unstuck and EMA's realized-loss gate share one bounded fill-PnL
+        # window. Preserve it even if a tunable unstuck allowance is initially
+        # zero. TM's conservative loss gate remains a separate approximation.
         unstuck_enabled = any(
             bool(item[side]["unstuck_enabled"])
             for item in projected
             for side in self.sides
         )
+        ema_loss_gate_enabled = (
+            self.strategy_kind == "ema_anchor"
+            and common_runner_kwargs["max_realized_loss_pct"] < 1.0
+        )
         common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
-            _fill_pnl_lookback_bars(backtest_params) if unstuck_enabled else 0
+            _fill_pnl_lookback_bars(backtest_params)
+            if unstuck_enabled or ema_loss_gate_enabled else 0
         )
         common_runner_kwargs.update(
             pnl_lookback_bars=_hsl_lookback_bars(

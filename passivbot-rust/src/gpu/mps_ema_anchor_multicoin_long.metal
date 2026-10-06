@@ -1288,7 +1288,7 @@ inline int select_ema_multicoin_unstuck_coin(
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
         / fmax(float(effective_n_positions), 1.0f);
-    const float balance_peak = account.balance + unstuck_pnl_drawdown(account);
+    const float balance_peak = account.balance + effective_realized_pnl_drawdown(account);
     if (!(balance_peak > 0.0f)) return -1;
 
     int selected_coin = -1;
@@ -1594,7 +1594,7 @@ inline void generate_ema_multicoin_side_orders(
         side.close_is_protective_reducer[c] = false;
         close_is_unstuck_reducer[c] = false;
     }
-    float balance_peak = balance + unstuck_pnl_drawdown(account);
+    float balance_peak = balance + effective_realized_pnl_drawdown(account);
     int unstuck_coin = -1;
     float best_unstuck_diff = INFINITY;
     float selected_unstuck_qty = 0.0f;
@@ -2257,22 +2257,18 @@ inline float ema_multicoin_remaining_loss_budget(
     float max_realized_loss_pct,
     thread bool& gate_enabled
 ) {
+    float current_realized_loss = effective_realized_pnl_drawdown(account);
     gate_enabled = max_realized_loss_pct < 1.0f
         && isfinite(account.balance) && account.balance > 0.0f
-        && isfinite(account.realized_pnl_total)
-        && isfinite(account.realized_pnl_peak);
+        && isfinite(current_realized_loss);
     if (!gate_enabled) return INFINITY;
-    float balance_peak = account.balance
-        + (account.realized_pnl_peak - account.realized_pnl_total);
+    float balance_peak = account.balance + current_realized_loss;
     if (!(isfinite(balance_peak) && balance_peak > 0.0f)) {
         gate_enabled = false;
         return INFINITY;
     }
     float allowed_loss_budget = float32_floor_nonnegative(
         balance_peak * fmax(max_realized_loss_pct, 0.0f)
-    );
-    float current_realized_loss = fmax(
-        account.realized_pnl_peak - account.realized_pnl_total, 0.0f
     );
     return float32_floor_nonnegative(
         fmax(allowed_loss_budget - current_realized_loss, 0.0f)
