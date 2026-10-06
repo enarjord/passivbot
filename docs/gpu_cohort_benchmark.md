@@ -102,3 +102,42 @@ This is a controlled CuPy-cache comparison; CUDA context initialization and prep
 data caches are not cleared by the tool. Native first-use samples still follow direct
 warmup. Torch peaks are roughly 1.8 MiB in these small fixtures and do not establish
 process RAM, total VRAM or larger-workload bounds.
+
+## Refresh after shared-account semantic repairs
+
+The following recipe repeats both seeds after the loss-history, recovery-resolution
+and weighted-volume changes. It requests the tool's three default metrics, so the
+optional recovery/volume capture buffers are compiled out; it does not measure their
+enabled cost. Inputs, candidate fingerprints, strict metric comparisons and ranking
+results match the earlier cohorts exactly.
+
+```sh
+passivbot tool gpu-cohort-benchmark --seeds 7 43 --widths 16 auto \
+  --warm-runs 3 --adg-floor 0 --drawdown-ceiling 0.01 --report cohort.json
+```
+
+Median warm cohort seconds on the same GPU/runtime:
+
+| Strategy | Seed | CPU serial | Direct GPU | Native width 16 | Automatic |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| EMA Anchor | 7 | 1.097 | 0.634 | 0.644 | 0.647 |
+| EMA Anchor | 43 | 1.101 | 0.634 | 0.635 | 0.650 |
+| Trailing Martingale | 7 | 8.894 | 2.468 | 2.458 | 2.469 |
+| Trailing Martingale | 43 | 9.067 | 2.452 | 2.461 | 2.463 |
+
+These measurements show comparable warm cost; they do not establish a speedup over
+the earlier implementation. All native/direct outputs match exactly. CPU/GPU front
+membership still agrees, GPU-selected CPU ADG regret remains zero and the two
+diagnostic limits have no feasibility flips in the four fixed cohorts. The earlier
+strict comparison failures and EMA seed-43 pair-order disagreements remain.
+
+Automatic execution again has no eligible width samples: sixteen candidates cannot
+fill its initial width of 64. It preserves that width without having measured an
+optimal choice. Larger completed-work and suite measurements are still required.
+
+An external observer sampled the benchmark process tree's RSS every 0.2 seconds and
+global GPU memory via `nvidia-smi` every second. Sampled peak RSS was 1,039 MiB; global
+GPU usage ranged from 344 to 963 MiB. This includes runtime/compiler allocations and
+existing device usage; it is not a per-service VRAM maximum or a bound. Sampling can
+miss transient peaks. The earlier Torch-only figures substantially understate total
+resource use, and representative larger suites remain a separate acceptance gate.

@@ -1312,6 +1312,7 @@ def test_fill_gap_summary_metric_surface_is_supported():
 
 def test_fill_gap_summary_without_fills_uses_whole_active_span():
     out = {
+        "fill_count": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "first_fill_ts": torch.tensor([float("nan")]),
@@ -1331,6 +1332,7 @@ def test_fill_gap_histogram_is_conservative_for_interpolated_percentiles():
     bin_index = int(math.log(gap_minutes + 1.0) * 127.0 / math.log(4_000_001.0))
     gap_hist[0, bin_index] = 1
     out = {
+        "fill_count": torch.tensor([2.0]),
         "gap_hist": gap_hist,
         "gap_sum_squared_hours": torch.tensor([4.0]),
         "first_fill_ts": torch.tensor([3_600_000.0]),
@@ -1377,9 +1379,13 @@ def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
     first_fill_step = first_eq_step + 1
     last_fill_step = first_eq_step + 3
     last_eq_step = first_eq_step + 4
+    histogram = torch.zeros((1, 128), dtype=torch.int32)
+    bin_index = int(math.log(3.0) * 127.0 / math.log(4_000_001.0))
+    histogram[0, bin_index] = 1  # The inter-fill gap is two candles.
     out = {
+        "fill_count": torch.tensor([2.0]),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": histogram,
         "first_fill_ts": torch.tensor(
             [first_fill_step * interval_ms], dtype=torch.float32
         ),
@@ -1392,14 +1398,15 @@ def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
 
     metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=interval_ms))
 
-    assert metrics["fills_gap_mean_hours"].item() == pytest.approx(1.0 / 60.0)
+    assert metrics["fills_gap_mean_hours"].item() == pytest.approx(4.0 / 3.0 / 60.0)
     assert metrics["fills_gap_median_hours"].item() == pytest.approx(1.0 / 60.0)
-    assert metrics["fills_gap_p95_hours"].item() == pytest.approx(1.0 / 60.0)
-    assert metrics["fills_gap_p99_hours"].item() == pytest.approx(1.0 / 60.0)
+    assert metrics["fills_gap_p95_hours"].item() == pytest.approx(1.9 / 60.0)
+    assert metrics["fills_gap_p99_hours"].item() == pytest.approx(1.98 / 60.0)
 
 
 def test_fill_gap_time_weighted_mean_uses_exact_boundary_gaps():
     out = {
+        "fill_count": torch.tensor([1.0]),
         "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "first_fill_ts": torch.tensor([3_600_000.0]),
@@ -1411,6 +1418,55 @@ def test_fill_gap_time_weighted_mean_uses_exact_boundary_gaps():
     metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=60_000))
 
     assert metrics["fills_gap_time_weighted_mean_hours"].item() == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("interval_ms", [60_000, 300_000])
+@pytest.mark.parametrize("fill_steps", [[], [1], [1, 2, 3], [1, 1, 2, 2, 2, 3], [1] * 40])
+def test_fill_gap_percentiles_include_each_fill_and_preserve_source_counts(interval_ms, fill_steps):
+    histogram = torch.zeros((1, 128), dtype=torch.int32)
+    distinct = sorted(set(fill_steps))
+    gaps = np.diff(distinct)
+    for gap in gaps:
+        bin_index = int(math.log(float(gap) + 1) * 127 / math.log(4_000_001))
+        histogram[0, bin_index] += 1
+    hours = interval_ms / 3_600_000
+    out = {
+        "fill_count": torch.tensor([float(len(fill_steps))]),
+        "gap_hist": histogram,
+        "gap_sum_squared_hours": torch.tensor([sum((gaps * hours)**2)]),
+        "first_fill_ts": torch.tensor([distinct[0] * interval_ms if distinct else float("nan")]),
+        "last_fill_ts": torch.tensor([distinct[-1] * interval_ms if distinct else float("nan")]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([4 * interval_ms]),
+    }
+    before = histogram.clone()
+    actual = _fill_gap_metrics(out, SimpleNamespace(interval_ms=interval_ms))
+    # Independently enumerate Rust's boundaries, retaining duplicate fills.
+    per_fill_gaps = np.diff([0, *fill_steps, 4]) * hours
+    for name, percentile in (("median", 50), ("p95", 95), ("p99", 99)):
+        assert actual[f"fills_gap_{name}_hours"].item() == pytest.approx(
+            np.percentile(per_fill_gaps, percentile)
+        )
+    unique_gaps = np.diff([0, *distinct, 4]) * hours
+    assert actual["fills_gap_time_weighted_mean_hours"].item() == pytest.approx(
+        sum(unique_gaps**2) / (4 * hours)
+    )
+    torch.testing.assert_close(histogram, before, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("count", [float("nan"), float("inf"), -1.0, 1.5, 0.0])
+def test_fill_gap_percentiles_reject_invalid_or_insufficient_fill_counts(count):
+    out = {
+        "fill_count": torch.tensor([count]),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_sum_squared_hours": torch.zeros(1),
+        "first_fill_ts": torch.tensor([60_000.0]),
+        "last_fill_ts": torch.tensor([60_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([120_000.0]),
+    }
+    with pytest.raises(RuntimeError, match="fill count"):
+        _fill_gap_metrics(out, SimpleNamespace(interval_ms=60_000))
 
 
 def _entry_interval_output(gaps):
@@ -2452,6 +2508,7 @@ def test_completion_uses_rust_exclusive_requested_end():
 def test_completion_is_zero_when_no_equity_sample_exists():
     day_end = torch.tensor([[0.0]], dtype=torch.float64)
     out = {
+        "fill_count": torch.zeros(1),
         "day_end_eq": day_end,
         "day_min_eq": torch.full_like(day_end, float("inf")),
         "day_max_dd": torch.zeros_like(day_end),
@@ -2563,6 +2620,7 @@ def test_fill_gap_time_weighted_mean_uses_streamed_moment(gap_hours, interval_ms
     histogram = torch.zeros((1, 128), dtype=torch.int32)
     histogram[0, int(math.log(steps + 1) * 127 / math.log(4_000_001))] = 3
     out = {
+        "fill_count": torch.tensor([4.0]),
         "gap_hist": histogram,
         "gap_sum_squared_hours": torch.tensor([3 * gap_hours**2]),
         "first_fill_ts": torch.tensor([0.0]),

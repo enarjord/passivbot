@@ -1355,3 +1355,33 @@ Completion requires:
   execution and broader resource/performance acceptance remain open. This completed
   slice still requires exact-head automatic/author review and required CI before
   development integration.
+
+### 2026-10-06 — Fill-gap population audit and refreshed cohorts
+
+- PR #1909 integrated into development after completed clear automatic review of
+  its final commit, author sign-off and successful Python 3.12/3.14 and Rust CI.
+  Master remains outside the development integration target.
+- A standalone audit found that shared GPU gap histograms counted filled candles
+  while CPU percentiles count every fill, including same-candle zero gaps. Restore
+  those gaps from existing compact fill/histogram counts; preserve immutable output
+  buffers, boundary gaps, time-weighted moments and the positive-gap bin approximation.
+  No simulator changes, history exports or implicit CPU simulations are needed.
+- Six two-day public EMA fixtures reproduce a one-minute p95 population error;
+  restoring zeros agrees with CPU across long/short/both sides and two/four coins.
+  Remaining TM positive-gap bin/trajectory differences stay visible in strict reports.
+  Do not treat this correction as acceptance of all histogram approximations.
+- Validation passes 180 affected metric/parity/native Python and CUDA checks,
+  including ten new real-device cases, and five documentation checks. The tested
+  source and unchanged loaded Rust extension are verified. This slice still requires
+  completed automatic/author review and required CI before development integration.
+- PR #1910 automatic review identified a restricted hardware-test payload missing
+  the newly required fill count. Updated that caller, audited all direct reducer
+  callers and passed both reported long/short cases plus twelve existing streamed-
+  gap strategy/topology/interval cases on CUDA. The corrected head requires fresh
+  automatic/author review and CI; the earlier review does not authorize its merge.
+- Refreshed public seven-day cohorts retain input/candidate identities and prior
+  strict comparisons/rankings. Warm direct/native throughput is comparable; all
+  native outputs match direct replay and tested diagnostic limits have no flips.
+  Automatic width again receives no eligible samples in sixteen-candidate cohorts.
+  Sampled host/driver memory exceeds Torch-only figures; larger suite and optional-
+  history costs remain explicit acceptance work in the evidence map.

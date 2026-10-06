@@ -226,6 +226,47 @@ volume changes from 4.721090554 to 4.542897224 for EMA (CPU 4.539075277), and fr
 from about 4% to 0.084% and 0.031%. These long-volume observations remain unassessed
 under the general policy; they do not close broader simulator/materiality acceptance.
 
+## Fill-gap percentile populations
+
+CPU analysis includes a gap between every fill, so additional fills in one candle
+contribute zero-length gaps. Shared GPU replay streams one positive gap per filled
+candle. Its decoder restores the missing zero-gap multiplicity from the existing
+fill count and histogram count, without retaining or transferring fill histories.
+Boundary gaps and the time-weighted second moment are unchanged. Invalid or
+insufficient fill counts propagate as errors rather than becoming a percentile.
+
+Independent reducer cases enumerate the full timestamp population, including no
+fills, one fill, several filled candles and repeated same-candle fills at one/five-
+minute intervals. They verify unchanged input counts and time-weighted moments.
+Real native EMA comparisons use seed 43, 2,880 bars, long/short/both sides and two/four
+coins; all six p95 values agree with CPU under the strict case policy. Before the
+population correction, GPU p95 exceeds CPU by one minute in each case. The four-coin
+both-side case changes from two minutes to the CPU's one minute.
+
+Additional CUDA service cases exercise both strategies with one/three coins, repeated
+requests and changing batch shapes while CPU simulation APIs are forbidden. The
+logarithmic upper-edge approximation for positive gaps remains. Separate two-day TM
+long fixtures retain p95 differences (about 3% with two coins and 10% with four) in
+the strict comparison; restored zeros do not establish universal percentile parity.
+No general tolerance is widened and this population repair does not close the
+remaining histogram or optimizer-materiality gate.
+
+Reproduce the EMA observation and switch sides/coin count for the other cases:
+
+```python
+from optimization.gpu.parity import MetricTolerance
+from tools.gpu_parity import build_parser, fixture_inputs, run_comparison
+
+inputs = fixture_inputs(build_parser().parse_args([
+    "--fixture", "ema_anchor", "--sides", "both", "--coins", "4",
+    "--bars", "2880", "--seed", "43",
+]))
+name = "fills_gap_p95_hours"
+report = run_comparison(inputs, "binance", (name,),
+                        {name: MetricTolerance(1e-9, 1e-7)}, gpu_engine="native")
+print(report["status"], report["metrics"])
+```
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account
