@@ -101,7 +101,7 @@ def _base_parameter_values() -> dict[str, float]:
         "forager_score_weights_volatility": 0.0,
         "n_positions": 4.0,
         "we_excess_allowance_pct": 0.0,
-        "we_excess_allowance_legacy_raw": 0.0,
+        "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 1.0,
         "twel_enforcer_threshold": 1.0,
         "wel_enforcer_enabled": 0.0,

@@ -10,7 +10,7 @@ instead of extending the current feature branch indefinitely.
 
 - [x] Pause further expansion of PR #1462 while the common override foundation is built.
 - [x] Keep `bot.<pside>.unstuck.loss_allowance_pct` overridable.
-- [x] Remove `bot.<pside>.risk.we_excess_allowance_mode` from the override surface.
+- [x] Restrict the exposure allowance policy selector to the global surface (now retired).
 - [x] Add `bot.<pside>.unstuck.ema_gating_enabled` to the override surface.
 - [x] Add `bot.<pside>.risk.entry_cooldown_minutes` to the override surface.
 - [x] Make the complete `bot.<pside>.hsl.*` group overridable when the global
@@ -97,8 +97,8 @@ instead of extending the current feature branch indefinitely.
 - [x] Branch from the merged PR 1 result.
 - [x] Express the allowlist as a maintainable parameter policy rather than scattered
   conditionals.
-- [x] Remove `bot.<pside>.risk.we_excess_allowance_mode` from allowed overrides with an
-  actionable migration error.
+- [x] Restrict the exposure allowance policy selector to global configuration with an
+  actionable migration error (the selector is now retired).
 - [x] Keep `bot.<pside>.unstuck.loss_allowance_pct` allowed.
 - [x] Add `bot.<pside>.unstuck.ema_gating_enabled`.
 - [x] Add `bot.<pside>.risk.entry_cooldown_minutes`.

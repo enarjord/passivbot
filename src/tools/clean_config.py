@@ -68,6 +68,10 @@ def cleanup_config(
         )
     # Ignore result envelopes and validate only the sections relevant to this
     # export. Missing pipeline sections are hydrated by the shared loader.
+    from config.migrations.excess_allowance import retire_excess_allowance_mode
+
+    payload = deepcopy(payload)
+    retire_excess_allowance_mode(payload)
     target = "canonical" if mode == "full" else mode
     payload = strip_config_metadata(project_config(payload, target, record_step=False))
     for section, value in payload.items():

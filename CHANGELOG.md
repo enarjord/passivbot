@@ -10,6 +10,13 @@ since the latest release tag; these features may already be available when insta
   exports and formatting-only JSON. Support explicit source/destination paths, opt-in atomic
   in-place replacement, bounded directory scans, dry-run/check modes and overwrite protection.
 
+- Make excess allowance always bounded by side TWEL, removing its policy selector.
+  Older explicit bounded selectors are removed with a warning; explicit raw policies
+  stop configuration loading with a field path and revalidation instructions, including
+  overrides and scenarios. Add global per-side `hsl.scale_budget_with_excess_allowance`
+  (default `false`) for coin HSL: optionally scale current and terminal balance budgets
+  by each coin's bounded headroom across live, CPU backtests and GPU optimization.
+
 - Add optimizer `-ltwel` and `-stwel` aliases for wallet exposure bounds, accepting fixed
   values or ranges. GPU setup now uses the bounds-clamped seed, allowing bounds to enable
   or disable a side relative to the input config while keeping side topology fixed throughout

@@ -44,7 +44,7 @@ categorical and boolean policy fields: enums and bools stay fixed from the base/
 only numeric strategy/risk fields are optimizer-bound candidates. Examples of fixed fields include
 `hsl.enabled`, `risk.position_exposure_enforcer_enabled`,
 `risk.total_exposure_enforcer_enabled`, `risk.total_exposure_enforcer_policy`,
-`risk.total_exposure_entry_gate_enabled`, `risk.we_excess_allowance_mode`, and
+`risk.total_exposure_entry_gate_enabled` and
 `unstuck.enabled`.
 
 Default:

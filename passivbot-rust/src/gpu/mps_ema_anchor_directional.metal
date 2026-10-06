@@ -307,12 +307,11 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.adaptive.score_weight = 0.0f; // One coin never requires Forager ranking.
     side.twel = params[po + 11];
     float allowance_pct = fmax(params[po + 12], 0.0f);
-    bool legacy_raw_allowance = params[po + 13] > 0.5f;
     float base_wel = params[po + 30];
     if (!(isfinite(base_wel) && base_wel >= 0.0f)) base_wel = side.twel;
     side.base_wel = base_wel;
     float effective_allowance_pct = allowance_pct;
-    if (!legacy_raw_allowance) {
+    {
         float max_effective = base_wel > 0.0f
             ? fmax(side.twel / base_wel - 1.0f, 0.0f) : 0.0f;
         effective_allowance_pct = fmin(allowance_pct, max_effective);
@@ -1212,6 +1211,12 @@ inline void passivbot_single_coin_impl(
     EmaSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
     HslState long_hsl = load_hsl(params, po, 23);
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 23);
+    if (params[po + 13] > 0.5f && long_side.base_wel > 0.0f) {
+        long_hsl.budget_multiplier = long_side.allowed_wel / long_side.base_wel;
+    }
+    if (params[po + SIDE_PARAMS + 13] > 0.5f && short_side.base_wel > 0.0f) {
+        short_hsl.budget_multiplier = short_side.allowed_wel / short_side.base_wel;
+    }
     HslStrategyEquityStats long_hsl_strategy_eq = init_hsl_strategy_equity_stats();
     HslStrategyEquityStats short_hsl_strategy_eq = init_hsl_strategy_equity_stats();
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED

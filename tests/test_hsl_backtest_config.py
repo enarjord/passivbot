@@ -436,3 +436,44 @@ def test_native_missing_selector_retains_exact_hsl_results():
     np.testing.assert_array_equal(implicit[0], selected[0])
     assert implicit[2] == selected[2]
     assert implicit[4] == selected[4]
+
+
+@pytest.mark.parametrize("slots", [1, 10])
+def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slots):
+    cfg, markets, _ = inputs()
+    cfg["backtest"]["dynamic_wel_by_tradability"] = False
+    cfg["bot"]["long"]["risk"].update(
+        n_positions=slots,
+        total_wallet_exposure_limit=2.5,
+        we_excess_allowance_pct=0.44,
+    )
+    cfg["bot"]["long"]["hsl"].update(red_threshold=0.2, ema_span_minutes=1)
+    cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
+        initial_qty_pct=1,
+        initial_ema_dist=0,
+        ema_span_0=2,
+        ema_span_1=3,
+    )
+    if slots > 1:
+        cfg["coin_overrides"] = {
+            "AAA": {"bot": {"long": {"wallet_exposure_limit": 0.2}}}
+        }
+    ordinary = run(payload(cfg=cfg, mss=markets))
+    cfg["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True
+    scaled = run(payload(cfg=cfg, mss=markets))
+    if slots == 1:
+        np.testing.assert_array_equal(scaled[0], ordinary[0])
+    else:
+        panic_times = lambda result: [
+            fill[1] for fill in result[0] if "panic" in str(fill[13])
+        ]
+        assert panic_times(scaled)[0] > panic_times(ordinary)[0]
+    np.testing.assert_array_equal(run(payload(cfg=cfg, mss=markets))[0], scaled[0])
+
+
+@pytest.mark.parametrize("old_value", ["bounded", "legacy_raw"])
+def test_native_backtest_rejects_retired_producer_field(old_value):
+    args = payload()
+    args[2][0]["long"]["risk_we_excess_allowance_mode"] = old_value
+    with pytest.raises(ValueError, match="retired.*current loader.*re-backtest"):
+        run(args)

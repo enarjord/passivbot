@@ -179,12 +179,14 @@ impl Backtest<'_> {
         let start =
             now - (self.backtest_params.pnls_max_lookback_days * 86_400_000.0).round() as i64;
         let slots = side.map_or(1, |s| self.hard_stop_coin_slot_n_positions(s)) as u64;
-        let budget = self.balance.usd_total_balance
-            / if coin.is_some() {
-                slots.max(1) as f64
-            } else {
-                1.0
-            };
+        let budget = self
+            .hsl_balance_budget(
+                side,
+                coin,
+                slots,
+                settings.scale_budget_with_excess_allowance,
+            )
+            .ok()?;
         let prior = previous.result.decision.as_ref()?;
         if previous.fill_count != self.fills.len()
             || previous.slots != slots
@@ -420,8 +422,14 @@ impl Backtest<'_> {
         if coin.is_some() && slots == 0 {
             return None;
         }
-        let budget =
-            self.balance.usd_total_balance / if coin.is_some() { slots as f64 } else { 1.0 };
+        let budget = self
+            .hsl_balance_budget(
+                side,
+                coin,
+                slots,
+                settings.scale_budget_with_excess_allowance,
+            )
+            .ok()?;
         let (upnl, exposed) = self.hsl_scope_upnl(k, side, coin)?;
         if !budget.is_finite()
             || budget <= 0.0

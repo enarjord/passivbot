@@ -3269,9 +3269,9 @@ def test_gpu_tm_realized_loss_gate_accepts_multicoin():
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("entry_gate", [False, True])
-@pytest.mark.parametrize("allowance_mode", ["bounded", "legacy_raw"])
+@pytest.mark.parametrize("scale_budget", [False, True])
 def test_gpu_foundation_accepts_single_coin_exposure_headroom_policy(
-    strategy_kind, side, entry_gate, allowance_mode
+    strategy_kind, side, entry_gate, scale_budget
 ):
     builder = (
         _directional_tm_config
@@ -3281,7 +3281,7 @@ def test_gpu_foundation_accepts_single_coin_exposure_headroom_policy(
     config = builder(long_enabled=side == "long", short_enabled=side == "short")
     risk = config["bot"][side]["risk"]
     risk["we_excess_allowance_pct"] = 0.25
-    risk["we_excess_allowance_mode"] = allowance_mode
+    config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = scale_budget
     risk["total_exposure_entry_gate_enabled"] = entry_gate
     risk["total_exposure_enforcer_threshold"] = 0.8
 
@@ -3461,9 +3461,9 @@ def test_gpu_dual_multicoin_accepts_ema_total_exposure_repair():
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("entry_gate", [False, True])
-@pytest.mark.parametrize("allowance_mode", ["bounded", "legacy_raw"])
+@pytest.mark.parametrize("scale_budget", [False, True])
 def test_gpu_multicoin_accepts_exposure_headroom_policy(
-    strategy_kind, side, entry_gate, allowance_mode
+    strategy_kind, side, entry_gate, scale_budget
 ):
     builder = (
         _directional_tm_config
@@ -3475,7 +3475,7 @@ def test_gpu_multicoin_accepts_exposure_headroom_policy(
     risk = config["bot"][side]["risk"]
     risk["n_positions"] = 2
     risk["we_excess_allowance_pct"] = 0.25
-    risk["we_excess_allowance_mode"] = allowance_mode
+    config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = scale_budget
     risk["total_exposure_entry_gate_enabled"] = entry_gate
     risk["total_exposure_enforcer_threshold"] = 0.8
     config["backtest"]["dynamic_wel_by_tradability"] = True
@@ -6620,6 +6620,7 @@ def test_gpu_checkpoint_signature_tracks_single_coin_hsl_contract():
         ("backtest", "dynamic_wel_by_tradability", False),
         ("bot.long.risk", "n_positions", 2),
         ("bot.long.hsl", "enabled", False),
+        ("bot.long.hsl", "scale_budget_with_excess_allowance", True),
         ("bot.long.hsl", "restart_after_red_policy", "never"),
         ("bot.long.hsl", "panic_close_order_type", "market"),
     )
