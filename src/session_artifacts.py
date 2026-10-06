@@ -16,6 +16,9 @@ import numpy as np
 
 LAYOUT_VERSION = 2
 SESSION_MANIFEST = "session.json"
+_WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)
+}
 
 
 def utc_timestamp(timestamp_ms=None) -> str:
@@ -50,7 +53,11 @@ def resolve_optimizer_seed(options, resume_directory=None):
 def safe_component(value: str, *, max_length=80) -> str:
     original = str(value)
     label = re.sub(r"[^A-Za-z0-9_-]+", "_", original).strip("_-") or "unnamed"
-    if label != original or len(label) > max_length:
+    if (
+        label != original
+        or len(label) > max_length
+        or label.upper() in _WINDOWS_DEVICES
+    ):
         suffix = hashlib.sha256(original.encode()).hexdigest()[:8]
         label = f"{label[:max_length - 9]}-{suffix}"
     return label
@@ -170,7 +177,11 @@ def date_span(configs) -> tuple[str, dict]:
     windows = [
         {
             "start_date": cfg["backtest"]["start_date"],
-            "end_date": format_end_date(cfg["backtest"]["end_date"]),
+            "end_date": (
+                format_end_date(cfg["backtest"]["end_date"])
+                if cfg["backtest"]["end_date"] in (None, "", "now", "today")
+                else cfg["backtest"]["end_date"]
+            ),
         }
         for cfg in configs
     ]
@@ -210,7 +221,16 @@ def create_session_dir(root, *, coins, source, span, setup, scenarios=0, metadat
 
 def write_json(path, payload):
     Path(path).write_text(
-        json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+        json.dumps(
+            payload,
+            indent=2,
+            allow_nan=False,
+            default=lambda x: (
+                x.item() if isinstance(x, np.generic) else _unsupported(x)
+            ),
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
 

@@ -29,6 +29,29 @@ def test_timestamp_is_utc_and_sorts_across_dates():
     assert artifacts.utc_datetime(1) == "1970-01-01T00:00:00.001Z"
 
 
+@pytest.mark.parametrize(
+    "label", ["CON", "AUX", "NUL", "PRN", "COM1", "LPT9", "con", "aux"]
+)
+def test_reserved_windows_components_are_escaped(label):
+    escaped = artifacts.safe_component(label)
+    assert escaped.casefold() != label.casefold()
+    assert escaped.startswith(label + "-")
+    assert artifacts.safe_component(escaped) == escaped
+
+
+def test_numpy_setup_inputs_are_saved_with_the_same_identity(tmp_path):
+    directory, manifest = artifacts.create_session_dir(
+        tmp_path,
+        coins=["XMR"],
+        source="binance",
+        span="1days",
+        setup={"seed": np.int64(42)},
+    )
+    saved = json.loads((directory / artifacts.SESSION_MANIFEST).read_text())
+    assert saved["setup"] == {"seed": 42}
+    assert saved["setup_sha256"] == artifacts.setup_hash({"seed": 42})
+
+
 def test_optimizer_records_actual_seed_and_restores_it_on_resume(monkeypatch, tmp_path):
     monkeypatch.setattr(artifacts.secrets, "randbits", lambda n: 123)
     options = {"seed": None}
@@ -176,6 +199,18 @@ def test_suite_span_is_date_envelope():
     )
     assert label == "24days"
     assert len(metadata["windows"]) == 2
+
+
+def test_suite_span_preserves_resolved_time_of_day():
+    config = {
+        "backtest": {
+            "start_date": "2026-01-01T12:00:00Z",
+            "end_date": "2026-01-02T12:00:00Z",
+        }
+    }
+    label, metadata = artifacts.date_span([config])
+    assert label == "1days"
+    assert metadata["windows"] == [config["backtest"]]
 
 
 def test_artifact_manifest_uses_relative_paths(tmp_path):

@@ -543,8 +543,12 @@ class IterativeBacktestSession:
         self.backtest_exchanges = list(require_config_value(config, "backtest.exchanges"))
         self.combine_ohlcvs = len(self.backtest_exchanges) > 1
         self.backtest_signature = make_backtest_signature(config)
-        base_dir = require_config_value(config, "backtest.base_dir")
         self.datasets = await self._prepare_datasets(config)
+        self._create_session_output(config)
+        logging.info("Loaded OHLCV data for %s", ", ".join(sorted(self.datasets.keys())))
+
+    def _create_session_output(self, config: Dict[str, Any]) -> None:
+        base_dir = require_config_value(config, "backtest.base_dir")
         data_identity = {
             exchange: materialized_dataset_identity(
                 dataset.coins,
@@ -574,7 +578,6 @@ class IterativeBacktestSession:
             },
             metadata={"kind": "iterative_backtest", "coins": coins, **span_metadata},
         )
-        logging.info("Loaded OHLCV data for %s", ", ".join(sorted(self.datasets.keys())))
 
     # ------------------------------------------------------------------
     async def _load_config(self) -> Dict[str, Any]:
@@ -666,6 +669,10 @@ class IterativeBacktestSession:
     # ------------------------------------------------------------------
     async def reload_datasets(self, config: Dict[str, Any]) -> None:
         logging.info("Dataset-affecting configuration changed; reloading datasets...")
+        self.backtest_exchanges = list(require_config_value(config, "backtest.exchanges"))
+        self.combine_ohlcvs = len(self.backtest_exchanges) > 1
+        self.datasets = await self._prepare_datasets(config)
+        self._create_session_output(config)
         self.history.clear()
         self.best_run_index = None
         self.config_cache.clear()
@@ -674,7 +681,6 @@ class IterativeBacktestSession:
         self.backtest_durations.clear()
         self.scoring_keys = []
         self.scoring_specs = []
-        self.datasets = await self._prepare_datasets(config)
         self.backtest_signature = make_backtest_signature(config)
         logging.info("Datasets reloaded.")
 
@@ -988,7 +994,7 @@ class IterativeBacktestSession:
         if self.session_dir is None:
             raise RuntimeError("session directory not initialised")
         run_dir = self.session_dir / f"run_{run_index:06d}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir()
         payload = {
             "timestamp_ms": run_ts,
             "score_vector": score_vector,

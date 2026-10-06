@@ -239,6 +239,9 @@ Iterative sessions use the [shared session naming format](backtesting.md#backtes
 under `backtests/iterative/`. The setup fingerprint describes the initial configuration,
 scoring and loaded data. Individual iterations use `run_000001/`, `run_000002/`, etc.;
 their execution timestamp remains in `analysis.json` rather than another directory component.
+Changing dataset inputs starts a new session with an updated setup fingerprint; numbering restarts
+there, while all earlier session artifacts remain intact. Iteration directories are created
+exclusively to prevent accidental replacement.
 
 ## Trailing parameter inspector
 
