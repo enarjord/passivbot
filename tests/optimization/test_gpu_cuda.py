@@ -1070,7 +1070,8 @@ def test_cuda_completion_keeps_short_wait_active(monkeypatch):
 
 
 @pytest.mark.parametrize("device", ["cuda", "mps"])
-def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
+@pytest.mark.parametrize("weighted_volume", [False, True])
+def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, weighted_volume):
     pytest.importorskip("torch")
     from optimization.gpu import mps_kernel
 
@@ -1095,6 +1096,7 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
         equity_balance_diff_enabled=False,
         entry_interval_enabled=False,
         recovery_distribution_enabled=False,
+        weighted_volume_enabled=weighted_volume,
         max_dispatch_candidate_bars=None,
         hsl_capacity=0,
         unstuck_pnl_capacity=0,
@@ -1105,11 +1107,14 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
             (args, kwargs)
         )
     )
+    buffers = [object() for _ in range(12)]
     mps_kernel.MpsTrailingMartingaleMulticoinRunner._dispatch(
-        runner, library, *[object() for _ in range(11)], batch_size=65
+        runner, library, *buffers, batch_size=65
     )
     assert len(calls) == 1
-    assert len(calls[0][0]) == 17
+    assert len(calls[0][0]) == 17 + int(weighted_volume)
+    if weighted_volume:
+        assert calls[0][0][-1] is buffers[-1]
     expected = {"threads": (65, 1, 1)}
     if device == "cuda":
         expected["group_size"] = (32, 1, 1)

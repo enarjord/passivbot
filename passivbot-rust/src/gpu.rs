@@ -172,6 +172,10 @@ pub fn mps_strategy_eq_recovery_distribution_source() -> &'static str {
     MPS_STRATEGY_EQ_RECOVERY_DISTRIBUTION_SOURCE
 }
 
+pub fn mps_weighted_volume_source() -> &'static str {
+    include_str!("gpu/mps_weighted_volume.metal")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

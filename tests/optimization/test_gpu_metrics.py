@@ -1085,7 +1085,34 @@ def test_weighted_metrics_include_fill_free_losing_tail():
     assert (_daily_peak_recovery_ms(equities, active) / 3_600_000).item() == 696.0
 
 
-def test_weighted_volume_excludes_ambiguous_intraday_cutoff_day():
+def test_compact_gpu_weighted_volume_preserves_other_weighted_metrics():
+    day_eq = torch.tensor([[100.0, 110.0, 90.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_eq, "day_min_eq": day_eq.clone(),
+        "day_max_dd": torch.zeros_like(day_eq),
+        "day_volume": torch.ones_like(day_eq),
+        "day_has_fill": torch.ones_like(day_eq, dtype=torch.bool),
+        "fill_count": torch.tensor([3.0]), "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1), "gap_sum_squared_hours": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1), "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([2 * 86_400_000.0]),
+        "recovery_max_ms": torch.zeros(1), "last_high_ts": torch.tensor([0.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([2 * 86_400_000.0]),
+        "liq_step": torch.tensor([-1]),
+    }
+    run = SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=86_400_000)
+    data = {"ts0": 0.0, "n": 3}
+    requested = {"volume_pct_per_day_avg_w", "equity_choppiness_w_usd"}
+    before = compute_objectives(out, run, data, needed=requested)
+    out["volume_pct_per_day_avg_w"] = torch.tensor([42.0])
+    after = compute_objectives(out, run, data, needed=requested)
+    assert after["volume_pct_per_day_avg_w"].item() == 42.0
+    assert after["equity_choppiness_w_usd"].item() == before["equity_choppiness_w_usd"].item()
+
+
+def test_legacy_weighted_volume_excludes_ambiguous_intraday_cutoff_day():
     metrics = _weighted_daily_series_metrics(
         torch.tensor([[100.0]], dtype=torch.float64),
         torch.tensor([[0.5]], dtype=torch.float64),
@@ -1102,7 +1129,8 @@ def test_weighted_volume_excludes_ambiguous_intraday_cutoff_day():
 
     # Every trailing cutoff is inside the same UTC day. The daily aggregate
     # contains pre-cutoff volume, so only the unambiguous full-run tenth is
-    # admitted; exact Rust validation owns partial-day volume after a cutoff.
+    # admitted by this legacy helper. Shared-account replay instead provides
+    # the complete compact GPU-reduced weighted-volume metric.
     assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
 
 

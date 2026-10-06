@@ -1426,6 +1426,10 @@ struct TrailingMartingaleMulticoinFillState {
     float position_unchanged_max_min;
     float day_volume;
     float day_fill_count;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    float step_volume;
+    float step_has_fill;
+#endif
 };
 
 inline TrailingMartingaleMulticoinFillState
@@ -1450,7 +1454,23 @@ init_trailing_martingale_multicoin_fill_state() {
     fills.position_unchanged_max_min = 0.0f;
     fills.day_volume = 0.0f;
     fills.day_fill_count = 0.0f;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    fills.step_volume = 0.0f;
+    fills.step_has_fill = 0.0f;
+#endif
     return fills;
+}
+
+inline void record_tm_multicoin_volume(
+    thread TrailingMartingaleMulticoinFillState& fills, float qty, float price, float balance
+) {
+    // Match analysis.rs: fill quantities are not contract-multiplier scaled.
+    const float normalized = fabs(qty) * price / balance;
+    fills.day_volume += normalized;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    fills.step_volume += normalized;
+    fills.step_has_fill = 1.0f;
+#endif
 }
 
 inline void record_tm_multicoin_gross_pnl(
@@ -1639,7 +1659,7 @@ inline void apply_tm_multicoin_entry_position(
     side.psize[coin] = new_size;
     side.pprice[coin] = new_price;
     side.last_increase_k[coin] = float(k);
-    fills.day_volume += fabs(qty) * fill_price * c_mult / balance;
+    record_tm_multicoin_volume(fills, qty, fill_price, balance);
     side.entry_qty[coin] = 0.0f;
     side.entry_market[coin] = false;
     side.filled_coin[coin] = true;
@@ -1762,7 +1782,7 @@ inline bool force_close_tm_multicoin_delisted_position(
         );
     }
     side.psize[coin] = 0.0f;
-    fills.day_volume += close_qty * close_price * c_mult / account.balance;
+    record_tm_multicoin_volume(fills, close_qty, close_price, account.balance);
     finalize_tm_multicoin_close_position(side, fills, coin, k);
     update_tm_multicoin_position_fill_timestamp(side, fills, coin, k);
     return true;
@@ -2266,7 +2286,7 @@ inline bool process_tm_multicoin_side_fills(
                     psize[c] = fmax(
                         round_step(psize[c] - qty, qty_step), 0.0f
                     );
-                    day_volume += qty * fill_price * c_mult / balance;
+                    record_tm_multicoin_volume(fills, qty, fill_price, balance);
                     reducer_executed = true;
                     executed_close = true;
                 }
@@ -2302,7 +2322,7 @@ inline bool process_tm_multicoin_side_fills(
                 psize[c] = fmax(
                     round_step(psize[c] - grid_qty, qty_step), 0.0f
                 );
-                day_volume += grid_qty * group_fill_price * c_mult / balance;
+                record_tm_multicoin_volume(fills, grid_qty, group_fill_price, balance);
                 executed_close = true;
                 if (psize[c] <= 0.0f) break;
             }
@@ -2353,7 +2373,7 @@ inline bool process_tm_multicoin_side_fills(
                 psize[c] = fmax(
                     round_step(psize[c] - qty, qty_step), 0.0f
                 );
-                day_volume += qty * price * c_mult / balance;
+                record_tm_multicoin_volume(fills, qty, price, balance);
                 if (!use_secondary) reducer_executed = true;
                 executed_close = true;
             }
@@ -5125,6 +5145,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -5288,6 +5311,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
 #endif
     for (int k = 1; k < stop_k; ++k) {
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        fills.step_volume = 0.0f;
+        fills.step_has_fill = 0.0f;
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
@@ -5768,6 +5795,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 liquidation_day = day_index;
             }
         }
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples[int(b) * T + k] = float2(
+            fills.step_volume, fills.step_has_fill
+        );
+#endif
         if (!(valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
             return;
@@ -6002,6 +6034,9 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -6028,6 +6063,9 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -6122,6 +6160,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     device float* coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -6340,6 +6381,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
 #endif
     for (int k = begin_k; k < chunk_stop_k; ++k) {
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        fills.step_volume = 0.0f;
+        fills.step_has_fill = 0.0f;
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
@@ -6714,6 +6759,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 liquidation_day = day_index;
             }
         }
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples[int(b) * T + k] = float2(
+            fills.step_volume, fills.step_has_fill
+        );
+#endif
         if (!(valid_hsl_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
             scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
             return;
@@ -6954,6 +7004,9 @@ kernel void passivbot_trailing_martingale_multicoin(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -6985,6 +7038,9 @@ kernel void passivbot_trailing_martingale_multicoin(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -7028,6 +7084,9 @@ kernel void passivbot_trailing_martingale_multicoin_long(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -7058,6 +7117,9 @@ kernel void passivbot_trailing_martingale_multicoin_long(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0

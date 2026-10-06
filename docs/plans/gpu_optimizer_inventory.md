@@ -50,7 +50,7 @@ the replacement must not claim to have computed those additional metrics.
 | Rolling fill-PnL history | EMA/TM shared-account auto-unstuck and loss admission; `test_gpu_unstuck_lookback.py`, `test_gpu_realized_loss_lookback.py`, `test_gpu_tm_loss_admission.py` | Both consumers share bounded scratch and preserve expiry/intrabar peaks, including loss-only history. HSL history remains separate. |
 | Bounded logarithmic histogram tails | Fill-gap and drawdown reducers in `metrics.py` | Quantify bin error and optimizer feasibility/ranking effects before accepting |
 | Recovery distribution sampling | Requested metrics now retain every simulation step and reduce strict time-to-exceed durations on the GPU | Hourly resolution error is removed; assess remaining trajectory/float32 effects separately. Service dispatch budgets include sample and reduction scratch. |
-| Weighted partial UTC-day exclusion | Weighted volume/daily reducers | Compare exact time boundaries and sample sufficiency |
+| Traded-volume normalization and suffixes | Shared EMA/TM replay normalizes actual fill quantities and reduces requested weighted suffixes from GPU per-step contributions | Retained legacy directional single-coin/daily-only helpers still approximate partial days. Assess residual CPU/GPU fill-trajectory differences independently of the volume reducer. |
 | Independent hedged summary reducer | Retained helper `_combine_hedged_multicoin_outputs`; normal dual-side constructors select fused shared-account kernels | Do not accidentally revive this ranking-only fallback during service extraction |
 
 See [current GPU behavior and limitations](../optimizing.md#gpu-backend-experimental)

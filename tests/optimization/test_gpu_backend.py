@@ -870,6 +870,7 @@ def test_apple_mps_chip_probe_does_not_depend_on_shell_path(monkeypatch):
     ("metric", "expected_features"),
     (
         ("entry_interval_hours_p95", {"entry_interval"}),
+        ("volume_pct_per_day_avg_w", {"weighted_volume"}),
         (
             "strategy_eq_recovery_days_p99",
             {"strategy_eq_recovery_distribution"},

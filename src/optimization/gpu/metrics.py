@@ -1147,8 +1147,9 @@ def _weighted_daily_series_metrics(
                 )
                 # Daily volume cannot distinguish fills before and after an
                 # intra-day cutoff. Exclude that ambiguous boundary day rather
-                # than admitting pre-cutoff fills; exact Rust validation owns
-                # the partial-day contribution.
+                # than admitting pre-cutoff fills. This approximation is retained
+                # only for legacy raw daily summaries; shared replay supplies its
+                # compact GPU-reduced weighted-volume metric instead.
                 volume_fill_mask = day_has_fill & subset & complete_day_mask
             fill_days = volume_fill_mask.sum(dim=1)
             value = torch.where(
@@ -2059,19 +2060,29 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         requested_sources,
     )
     weighted_daily_series_metrics = {}
-    if requested & WEIGHTED_DAILY_SERIES_METRICS:
-        weighted_daily_series_metrics = _weighted_daily_series_metrics(
-            day_end_eq,
-            day_volume,
-            day_has_fill,
-            active,
-            out["fill_count"],
-            out["last_fill_ts"],
-            out["first_eq_ts"],
-            out["last_eq_ts"],
-            data["ts0"],
-            run.interval_ms,
-            requested,
+    weighted_daily_requested = requested & WEIGHTED_DAILY_SERIES_METRICS
+    if "volume_pct_per_day_avg_w" in requested and "volume_pct_per_day_avg_w" in out:
+        # Shared replay reduced exact fill suffixes on device. Daily summaries
+        # remain sufficient for the other weighted equity-series families.
+        weighted_daily_requested = weighted_daily_requested - {"volume_pct_per_day_avg_w"}
+        weighted_daily_series_metrics["volume_pct_per_day_avg_w"] = out[
+            "volume_pct_per_day_avg_w"
+        ].to(torch.float64)
+    if weighted_daily_requested:
+        weighted_daily_series_metrics.update(
+            _weighted_daily_series_metrics(
+                day_end_eq,
+                day_volume,
+                day_has_fill,
+                active,
+                out["fill_count"],
+                out["last_fill_ts"],
+                out["first_eq_ts"],
+                out["last_eq_ts"],
+                data["ts0"],
+                run.interval_ms,
+                weighted_daily_requested,
+            )
         )
     shape_metric_names = {
         "equity_choppiness_usd",

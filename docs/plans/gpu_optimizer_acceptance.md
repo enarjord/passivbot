@@ -131,8 +131,100 @@ passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 4 \
 
 The comparison remains `comparison_incomplete`: eleven metric policies are undefined,
 and existing strict ADG/fill discrepancies remain visible. Remaining mean/tail recovery
-differences and partial-day weighting still require materiality assessment. No policy
-was widened and this slice does not establish general simulator parity.
+differences still require materiality assessment. The following volume slice removes
+partial-day omission in shared replay; its trajectory residuals remain separate. No
+general policy was widened and these slices do not establish general simulator parity.
+
+## Traded-volume normalization and suffixes
+
+Canonical CPU volume sums `abs(fill_qty) * fill_price / usd_total_balance` at each
+actual fill, then divides by the number of filled UTC days. An additional `c_mult`
+factor changes this metric's canonical definition. Shared EMA/TM GPU
+accounting now follows that definition without changing sizing, fees or PnL.
+
+Weighted volume averages the full analysis and up to nine trailing suffix analyses.
+Suffix cutoffs use the actual equity sample horizon, including terminal truncation,
+with the CPU's rounding and early stop for empty suffixes. Fills at a cutoff are
+included. A suffix with no fills contributes zero; a filled day remains counted even
+when its normalized contribution is zero. Partial UTC days must include their actual
+post-cutoff fills rather than being dropped or admitting pre-cutoff volume.
+
+When requested, shared replay captures a float2 per step: normalized volume and fill
+presence. A Rust-owned GPU reducer computes the suffix averages after replay and
+returns one float per candidate. Histories stay on device, retain only the current
+batch shape and enter the shared dispatch budget. The budget conservatively reserves
+16 bytes per step (capture plus a possible contiguous copy), plus 28 bytes per candidate
+for bounds, compact output and size metadata. No capture buffer or instructions are
+enabled when weighted volume is unused. The retained legacy directional single-coin
+and raw daily-only helper still have their earlier approximation.
+
+`test_gpu_weighted_volume.py` separates independent reducer-definition tests from real
+CPU/native comparisons. Coverage includes midnight and intraday boundaries, one/five-
+minute steps, actual short horizons, repeated cutoff indices, empty late suffixes,
+zero contributions, malformed bounds, non-unit contract multipliers, both strategies,
+long/short/shared sides, one/two coins, temporal chunks, candidate reordering and
+changing batch shapes. CPU-forbidden native requests check optional capture, bounded
+dispatch and compact outputs. Real CPU/native liquidation fixtures for both strategies
+verify the shortened horizon. Metric-decoder coverage preserves other weighted metrics.
+
+Validation passes 817 affected Python/CUDA checks with the final source, 330 Rust
+tests (one existing ignored test), default-feature Rust compile checks and five
+documentation checks. A broader earlier CUDA/service run passed 556 tests and skipped
+one Apple-only case; its two outdated dispatch fixtures are corrected and all four
+enabled/disabled CUDA/MPS argument-layout cases pass in final validation. The final
+loaded extension and source/test content are verified. Actual Apple Metal execution
+and complete resource/performance acceptance remain outside this NVIDIA-first slice.
+
+One busy two-day short-only TM fixture with two coins, seed 43 and `c_mult=2` has
+20,787 CPU fills versus 20,794 GPU fills. CPU weighted volume is 14.454426350 and GPU
+14.493937492, a 0.273% trajectory gap. Independently reducing the captured GPU history
+gives 14.493941567 (about 0.00003% from the GPU reducer). The fixture regression records
+a case-specific 0.3% bound; this is not a general parity-policy approval. The remaining
+fill-trajectory discrepancy and its optimizer materiality are open.
+
+Reproduce strict standalone measurements with public synthetic inputs:
+
+```python
+from optimization.gpu.parity import MetricTolerance
+from tools.gpu_parity import build_parser, fixture_inputs, run_comparison
+
+metrics = ("volume_pct_per_day_avg", "volume_pct_per_day_avg_w")
+inputs = fixture_inputs(build_parser().parse_args([
+    "--fixture", "trailing_martingale", "--sides", "short", "--coins", "2",
+    "--bars", "2880", "--seed", "43",
+]))
+for coin, market in inputs[2].items():
+    if not coin.startswith("__"):
+        market["c_mult"] = 2.0
+report = run_comparison(inputs, "binance", metrics,
+                        {name: MetricTolerance(1e-7, 1e-4) for name in metrics},
+                        gpu_engine="native")
+print(report["status"], report["metrics"])
+```
+
+This stricter policy deliberately exposes the residual as a mismatch. Comparison
+tools may run CPU references; native optimization still performs no CPU simulation.
+
+The same two-day recipe with `--sides both` reproduces the normalization and suffix
+repairs. Switch the fixture to `ema_anchor` for the other strategy. Measurements use
+identical input identities before and after the change:
+
+| Strategy | Metric | CPU | Previous GPU | GPU fill-suffix reduction |
+| --- | --- | ---: | ---: | ---: |
+| EMA Anchor | Volume average | 4.432764260 | 8.865523338 | 4.432761669 |
+| EMA Anchor | Weighted volume | 2.218288739 | 0.886552334 | 2.218294144 |
+| Trailing Martingale | Volume average | 30.051934663 | 60.120517731 | 30.060258865 |
+| Trailing Martingale | Weighted volume | 14.535288578 | 6.012051773 | 14.539561272 |
+
+EMA passes the strict recipe's policy. TM retains roughly 0.028%/0.029% volume
+trajectory differences and remains a strict mismatch; they are not execution failures.
+
+Repeating the thirty-day, four-coin, shared-side recipe in the recovery section leaves
+input identities, CPU results and the other fourteen GPU metrics unchanged. Weighted
+volume changes from 4.721090554 to 4.542897224 for EMA (CPU 4.539075277), and from
+35.188868156 to 33.814136505 for TM (CPU 33.803678103). Relative discrepancies shrink
+from about 4% to 0.084% and 0.031%. These long-volume observations remain unassessed
+under the general policy; they do not close broader simulator/materiality acceptance.
 
 ## Work still required before legacy retirement
 
