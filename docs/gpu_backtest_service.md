@@ -72,11 +72,40 @@ raises rather than becoming a successful evaluation. Actual simulator liquidatio
 is independent of requested metrics. The legacy metric-only replay API remains available
 but cannot supply authoritative completion status.
 
-Candidate preparation, bounded global admission, effective deduplication, search updates,
-durable storage and resume are the orchestrator's responsibility. This result interface
-does not yet integrate the new service into the optimizer CLI or define persistent
-evaluation fingerprints. Prepare a stable scorer before submitting work and do not mutate
-its evaluator's scoring configuration while results are in flight.
+Search updates, durable storage and resume are the orchestrator's responsibility. Prepare
+a stable scorer before submitting work and do not mutate its evaluator's scoring
+configuration while results are in flight.
+
+## CPU candidate preparation and collection
+
+`optimization.native_planning.NativeCandidatePlanner` binds a canonical CPU evaluator to
+prepared scenario/exchange datasets. It applies the existing bounds, optimizer overrides,
+fixed runtime policies and exact-last scenario overrides before encoding compact request
+parameters. It never calls an evaluator's simulation method. Global candidate values are
+separate from dataset-owned coin patches, so the first coin's patch cannot replace defaults
+for every unpatched coin. Mirrored or fixed shadow genes deduplicate by effective work.
+
+`prepare(candidate_id, vector, scenarios=...)` returns a candidate plan containing requests
+and expected result slots. A screening plan's duplicate identity includes unscreened
+scenarios: identical screenings alone do not prove identical complete candidates. Values
+outside the dynamic scalar transport remain dataset-owned; changes to feature flags,
+execution modes or materialized coin patches require compatible prepared datasets and are
+rejected before submission. Candidate-dependent coin patches and finite anchor variants
+still require integration work; they are not silently ignored.
+
+`optimization.native_session.NativeEvaluationSession` exclusively borrows the backtest
+service. The caller admits plans and polls independently completed candidates, then
+performs selection and prompt persistence. Candidate admission and completed-payload
+caching are bounded; pending effective duplicates share work. Cached screenings cannot
+satisfy a full evaluation or a different scenario subset. Request snapshots prevent caller
+mutation while work is waiting for device admission. Future callbacks only enqueue
+notifications; canonical scoring runs on the CPU poller, outside GPU completion callbacks.
+
+At interruption, stop session admission, close/drain the service, then poll completed work
+and flush the caller's stores. Partially completed candidates remain unfinished and may
+be rerun on GPU. Producer failures stop admission and preserve the original exception.
+These helpers do not integrate the service into the optimizer CLI, persist results or
+define content/precision identities for compatible resume. Their caches are run-local.
 
 ## Execution and cleanup
 
@@ -92,8 +121,11 @@ inputs must fit the existing 45% free-VRAM budget; scratch and other allocations
 still fail and propagate. This is a bounded device-residency foundation, not a complete
 host/disk admission budget or adaptive multi-device scheduler.
 
-Admission bounds queued plus running work. Adjacent compatible requests form bounded
-microbatches; each receives an identified future rather than a generation-wide barrier.
+Admission bounds queued plus running work. The oldest waiting request chooses the next
+dataset; compatible queued requests form a bounded microbatch in their original relative
+order. Other datasets retain their relative queue order, preventing starvation by newly
+arriving work. A full queue dispatches available compatible work without waiting for more
+admission. Each request receives an identified future rather than a generation-wide barrier.
 `close()` drains accepted work and joins the owner. `close(cancel_pending=True)` cancels
 queued work and waits for the running dispatch. An optional interrupt callback is checked
 by replay execution to stop at its safe boundaries. Device, preparation and interrupt

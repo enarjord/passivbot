@@ -366,7 +366,7 @@ def test_completion_does_not_wait_for_all_accepted_requests():
     assert second.result().metrics == {"gain": 2.0}
 
 
-def test_mixed_datasets_preserve_fifo_and_never_share_replay():
+def test_mixed_datasets_preserve_order_within_dataset_and_never_share_replay():
     first, second = Replay(), Replay()
     with GpuBacktestService(batch_size=8, max_batch_delay=1) as service:
         service.register_dataset("first", first)
@@ -405,6 +405,72 @@ def test_capacity_covers_running_work_and_cancellation_releases_queued_payloads(
     assert running.result().request_id == "1"
     assert replacement.result().request_id == "3"
     assert [row["value"] for batch in replay.calls for row in batch] == [1, 3]
+
+
+def test_interleaved_requests_group_by_oldest_dataset_without_starving_other_work():
+    calls = []
+
+    class OrderedReplay(Replay):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+
+        def evaluate(self, candidates):
+            calls.append((self.name, [item["value"] for item in candidates]))
+            return super().evaluate(candidates)
+
+    service = GpuBacktestService(batch_size=2, max_batch_delay=0)
+    for name in ("a", "b"):
+        service.register_dataset(name, OrderedReplay(name))
+    try:
+        with service._condition:
+            futures = [service.submit(request(i, name)) for i, name in
+                       ((1, "a"), (2, "b"), (3, "a"), (4, "b"), (5, "a"), (6, "a"), (7, "b"))]
+        assert [future.result(timeout=3).request_id for future in futures] == list(map(str, range(1, 8)))
+    finally:
+        service.close()
+    assert calls == [("a", [1, 3]), ("b", [2, 4]), ("a", [5, 6]), ("b", [7])]
+
+
+def test_full_mixed_queue_dispatches_partial_batch_without_waiting_for_more_admission():
+    service = GpuBacktestService(batch_size=3, max_pending=3, max_batch_delay=30)
+    first, second = Replay(), Replay()
+    service.register_dataset("a", first)
+    service.register_dataset("b", second)
+    try:
+        with service._condition:
+            futures = [service.submit(request(i, name)) for i, name in ((1, "a"), (2, "b"), (3, "a"))]
+        assert futures[0].result(timeout=3).request_id == "1"
+        assert futures[2].result(timeout=3).request_id == "3"
+        # Closing ends the final dataset's bounded accumulation period.
+        service.close()
+        assert futures[1].result().request_id == "2"
+    finally:
+        service.close()
+    assert [[row["value"] for row in batch] for batch in first.calls] == [[1, 3]]
+
+
+def test_cancelling_accumulating_dataset_reselects_other_ready_work(monkeypatch):
+    service = GpuBacktestService(batch_size=2, max_batch_delay=30)
+    service.register_dataset("a", Replay())
+    service.register_dataset("b", Replay())
+    waiting = Event()
+    original_wait = service._condition.wait
+
+    def wait(timeout=None):
+        if timeout is not None:
+            waiting.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(service._condition, "wait", wait)
+    try:
+        cancelled = service.submit(request(1, "a"))
+        assert waiting.wait(3)
+        futures = [service.submit(request(i, "b")) for i in (2, 3)]
+        assert cancelled.cancel()
+        assert [future.result(timeout=3).request_id for future in futures] == ["2", "3"]
+    finally:
+        service.close(cancel_pending=True)
 
 
 def test_queued_request_snapshots_caller_parameters():
