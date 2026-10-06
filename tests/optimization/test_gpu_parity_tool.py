@@ -18,6 +18,18 @@ def args(*options):
     return gpu_parity.build_parser().parse_args(list(options))
 
 
+@pytest.mark.parametrize("option", [
+    ["--sides", "long"], ["--coins", "2"], ["--bars", "5760"], ["--seed", "7"],
+    ["--hsl", "disabled"], ["--unstuck"], ["--market-orders"],
+    ["--filter-by-min-effective-cost"],
+])
+def test_prepared_inputs_reject_explicit_fixture_options_before_loading(option):
+    options = args("--config", "unused.json", "--dataset", "unused.npz",
+                   "--markets", "unused-markets.json", *option)
+    with pytest.raises(ValueError, match="fixture-only options.*" + option[0]):
+        gpu_parity.prepared_inputs(options)
+
+
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "unified"])
 def test_fixtures_are_canonical_and_keep_ordered_prepared_metadata(strategy, hsl):

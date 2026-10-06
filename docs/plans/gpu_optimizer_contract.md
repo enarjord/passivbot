@@ -295,3 +295,7 @@ Completion requires:
   runtime overrides and loss of stdout results on an optional save failure. Added
   canonical reducer/override handling and preserved results before attempting the save,
   with regressions. Unmaterialized optimizer enable-overrides are explicitly rejected.
+- Reject explicitly supplied fixture-only switches in prepared-input mode, including
+  switches set to fixture defaults. Prepared reports must not imply that an ignored
+  execution setting was exercised; regression checks reject all eight fixture options
+  before loading inputs.

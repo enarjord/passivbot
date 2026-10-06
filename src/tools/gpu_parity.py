@@ -22,6 +22,10 @@ from optimization.gpu.parity import MetricTolerance, compare_limits, compare_met
 
 
 DEFAULT_METRICS = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day")
+FIXTURE_DEFAULTS = {
+    "sides": "long", "coins": 2, "bars": 5760, "seed": 7, "hsl": "disabled",
+    "unstuck": False, "market_orders": False, "filter_by_min_effective_cost": False,
+}
 # Provisional measurement gates for selected definitions, not a release certificate.
 DEFAULT_TOLERANCES = {
     "adg_strategy_eq": MetricTolerance(1e-7, 1e-4),
@@ -39,14 +43,14 @@ def build_parser():
     parser.add_argument("--dataset", help="NPZ: hlcvs, timestamps, btc and ordered coins")
     parser.add_argument("--markets", help="JSON market settings mapping, including __meta__")
     parser.add_argument("--exchange", default="binance")
-    parser.add_argument("--sides", choices=("long", "short", "both"), default="long")
-    parser.add_argument("--coins", type=int, default=2)
-    parser.add_argument("--bars", type=int, default=5760)
-    parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "unified"), default="disabled")
-    parser.add_argument("--unstuck", action="store_true")
-    parser.add_argument("--market-orders", action="store_true")
-    parser.add_argument("--filter-by-min-effective-cost", action="store_true")
+    parser.add_argument("--sides", choices=("long", "short", "both"))
+    parser.add_argument("--coins", type=int)
+    parser.add_argument("--bars", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "unified"))
+    parser.add_argument("--unstuck", action="store_true", default=None)
+    parser.add_argument("--market-orders", action="store_true", default=None)
+    parser.add_argument("--filter-by-min-effective-cost", action="store_true", default=None)
     parser.add_argument("--metrics", nargs="+", default=list(DEFAULT_METRICS))
     parser.add_argument("--tolerances", help="JSON per-metric absolute/relative/sentinel policy")
     parser.add_argument("--report", help="Save a standard-JSON report here")
@@ -62,6 +66,10 @@ def fixture_inputs(args):
     from config.hsl import generated_template
     from tools.gpu_proxy_benchmark import _synthetic_hlcvs
 
+    args = argparse.Namespace(**vars(args))
+    for name, default in FIXTURE_DEFAULTS.items():
+        if getattr(args, name) is None:
+            setattr(args, name, default)
     if not 1 <= args.coins <= 64 or not 61 <= args.bars <= 100_000:
         raise ValueError("fixtures require 1..64 coins and 61..100000 bars")
     coins = [f"COIN{i:02d}" for i in range(args.coins)]
@@ -132,6 +140,10 @@ def fixture_inputs(args):
 
 
 def prepared_inputs(args):
+    specified = ["--" + name.replace("_", "-") for name in FIXTURE_DEFAULTS
+                 if getattr(args, name) is not None]
+    if specified:
+        raise ValueError("fixture-only options cannot be used with --config: " + ", ".join(specified))
     import numpy as np
     from config import load_input_config, prepare_config
     from optimization.warmup import _apply_config_overrides

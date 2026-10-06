@@ -46,6 +46,10 @@ is the normal prepared market-settings mapping, including quantity/price steps,
 minima, fees, valid indices, warmup and `__meta__.requested_start_ts`.
 
 Preserve effective candidate/scenario settings and dataset preparation metadata.
+Fixture switches (`--sides`, `--coins`, `--bars`, `--seed`, `--hsl`, `--unstuck`,
+`--market-orders` and `--filter-by-min-effective-cost`) are rejected with `--config`,
+including explicit default values. Change the prepared config to compare another
+simulation setting; these switches only construct synthetic fixtures.
 Fixed runtime overrides are materialized through the optimizer's canonical helper
 before either simulation. Optimizer `enable_overrides` must already be materialized
 and cleared in prepared inputs; unresolved policies are rejected.
