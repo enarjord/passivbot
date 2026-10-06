@@ -335,3 +335,29 @@ Completion requires:
   equality and outside the ambiguous rounding cell, and truthful mismatch reporting
   when an ambiguous input produces different simulation paths. No global tolerance or
   implicit CPU fallback is introduced.
+
+### 2026-10-05 — Passive recursive multicoin TM ladders
+
+- The baseline generated recursive entry and close suffixes only with market orders
+  enabled. Removed that restriction and passed ordinary market policy explicitly
+  through suffix generation, exposure allocation and fill processing. Recursive state
+  now describes strategy expansion independently of market promotion.
+- Isolated close-only and entry-only experiments did not recover CPU behavior; a
+  close-only change also reused a recursion flag as execution policy. The combined
+  correction separates those responsibilities rather than promoting passive orders.
+- In the 5,760-bar seed-7 short-only fixture, ADG relative disagreement falls from
+  roughly 96.7% to 0.0412%, and fill disagreement from 60.3% to 0.0234%. Dual-side
+  ADG disagreement falls to 0.0549%, with 0.0210% fill disagreement; drawdown passes
+  the provisional absolute policy. Market-enabled outputs are unchanged by the fix.
+- Keep strict tool policies unchanged. Dedicated regression guards recovered ADG/fill
+  trajectories within 0.1% for these two fixtures; this is a fixture-specific guard,
+  not a universal acceptance policy or a claim that all scalar comparisons pass.
+- Extend existing exposure-ordering, partial-boundary, cooldown and fused side-mode
+  regressions to passive execution. Close-group checks distinguish passive maker
+  execution from unintended market promotion using independently different fee outcomes.
+- Validation: 330 Rust tests pass (one ignored), default-feature test compilation and
+  source-verified extension rebuild pass. CUDA passes 35 recursive-entry/market/reducer
+  regressions, eight passive/market close-group cases, 47 comparator/tool tests and 34
+  admission/asynchronous-service/temporal-reuse cases, including 3/28/64-coin layouts.
+  Source-only comparator/tool tests: 38 pass, nine device skips. Documentation checks
+  report no errors and two existing context-size warnings.

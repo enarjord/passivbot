@@ -210,3 +210,25 @@ def test_real_cuda_multicoin_cost_admission_boundary_is_measured(
     else:
         assert (metric["gpu"] > 0) is funded
         assert metric["status"] == "match", report
+
+
+@pytest.mark.parametrize("sides", ["short", "both"])
+def test_real_cuda_passive_recursive_ladders_recover_cpu_metrics(
+    require_real_passivbot_rust_module, sides
+):
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    inputs = gpu_parity.fixture_inputs(args("--fixture", "trailing_martingale", "--sides", sides))
+    report = gpu_parity.run_comparison(
+        inputs, "binance", gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES
+    )
+    # This fixture exposed missing passive entry/close suffixes, losing ~60% of
+    # fills and ~95% of ADG. Keep the stricter diagnostic policy unchanged and
+    # separately guard the recovered trajectory to 0.1%; minor tick/float32
+    # differences still appear in the report and need case-specific assessment.
+    for name in ("adg_strategy_eq", "fills_per_day"):
+        metric = report["metrics"][name]
+        assert metric["cpu"] > 0
+        assert metric["gpu"] == pytest.approx(metric["cpu"], rel=1e-3)
+    assert report["metrics"]["drawdown_worst_strategy_eq"]["status"] == "match"
