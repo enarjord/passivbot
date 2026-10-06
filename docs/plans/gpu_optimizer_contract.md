@@ -925,3 +925,18 @@ Completion requires:
   all 18 disabled-policy permutations and compact/full disabled-HSL output equivalence.
   The six controls exercise both strategies and all HSL scopes and require every raw
   output other than red sample coverage to remain exactly unchanged.
+
+### 2026-10-06 — Restore the intended unstuck parity fixture
+
+- The unstuck lookback fixture inherits an explicit canonical zero entry cooldown,
+  then attempts to set 1,000 minutes through retired `risk.entry_cooldown_minutes`.
+  Canonical precedence keeps zero, allowing repeated partial entries and changing
+  the intended allowance-exhaustion experiment. Do not weaken its parity assertions.
+- Set `entry_cooldown.base_duration_minutes` directly and require the CPU fill trace
+  to contain only the initial entries. The complete 26-case CUDA unstuck suite passes,
+  including exact fill counts and final positions for long, short and shared portfolios,
+  finite/all-history budgets, scratch admission, replay reuse and interrupt reset.
+- In the two-sided fixture, CPU fills change from 72 in both history modes to 21 with
+  finite lookback and 10 with all history; GPU matches the corrected experiment.
+  This is a test-input correction, not a trading or numerical-policy change. The original
+  high-churn 71/72 observation is retained as evidence and is not proof of general parity.
