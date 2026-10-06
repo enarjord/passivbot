@@ -253,3 +253,27 @@ these sampled whole-run values are not per-service bounds and can miss transient
 The compiler cache is already warm, native runs still follow direct warmup, and this
 small fixed-cohort experiment does not close larger-suite resource, cold-native,
 default tuning or repeated-seed search-quality acceptance.
+
+### Fill-gap resolution experiment
+
+Repeat the optional eleven-metric recipe above with 512 fill-gap bins. The earlier
+numbers describe the 128-bin implementation. Before/after candidate and input
+identities match, as do every CPU value and all non-gap GPU values. Finer counts
+reduce EMA seed 7/43 maximum p95 errors from 3/2 minutes to 0/0.1 minute; TM remains
+unchanged. The [acceptance map](plans/gpu_optimizer_acceptance.md#fill-gap-resolution-and-optimizer-materiality)
+records the separate three-objective fronts and remaining limitations.
+
+Three warmed repetitions on the same RTX 3070 Ti Laptop GPU give these median
+sixteen-candidate cohort times, in seconds. Native setup is warmed by direct replay;
+this is neither a cold-native test nor a controlled speedup claim.
+
+| Strategy / seed | Direct, 128 → 512 bins | Native width 16, 128 → 512 | Native auto, 128 → 512 |
+| --- | ---: | ---: | ---: |
+| EMA / 7 | 0.7041 → 0.6974 | 0.6990 → 0.6938 | 0.7094 → 0.7068 |
+| EMA / 43 | 0.7023 → 0.6998 | 0.7133 → 0.6959 | 0.7185 → 0.7126 |
+| TM / 7 | 2.5312 → 2.5351 | 2.5387 → 2.5437 | 2.5466 → 2.5428 |
+| TM / 43 | 2.5146 → 2.5320 | 2.5251 → 2.5179 | 2.5333 → 2.5211 |
+
+The fixed count-buffer increase is 1.5 KiB per candidate. Entry-interval histograms
+retain 128 bins. Batch shape/queue delays and compiler-cache state still affect
+latency; this experiment establishes comparable warm cost for this workload only.

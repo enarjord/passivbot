@@ -27,7 +27,7 @@ constant int FUSED_SCALAR_COLS = 68;
 constant int SCALAR_COLS = 61;
 constant int FUSED_SCALAR_COLS = 66;
 #endif
-constant int GAP_BINS = 128;
+constant int GAP_BINS = 512;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
@@ -3081,7 +3081,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         run_settings[10], 0.0f
     );
     const bool filter_by_min_effective_cost = run_settings[11] > 0.5f;
-    const float log_bin_scale = 127.0f / log(4000001.0f);
+    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     thread float* psize = side.psize;
     thread float* pprice = side.pprice;
@@ -3315,7 +3315,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             if (last_fill_k >= 0.0f) {
                 float gap = float(k) - last_fill_k;
                 int bin = clamp(
-                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, 127
+                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, GAP_BINS - 1
                 );
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
                 const float gap_hours = gap * interval_ms / 3600000.0f;
@@ -4008,7 +4008,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         run_settings[12], 0.0f
     );
     const bool filter_by_min_effective_cost = run_settings[13] > 0.5f;
-    const float log_bin_scale = 127.0f / log(4000001.0f);
+    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
         starting_balance
@@ -4360,7 +4360,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 float gap = float(k) - last_fill_k;
                 int bin = clamp(
                     int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale),
-                    0, 127
+                    0, GAP_BINS - 1
                 );
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
                 const float gap_hours = gap * interval_ms / 3600000.0f;

@@ -294,6 +294,43 @@ not admit float32 replay drift or widen CPU/GPU tolerances. Missing metric keys,
 identity/liquidation changes and larger/non-finite disagreements still fail. This is a
 bounded numerical-reference policy, not a general simulator-parity approval.
 
+## Fill-gap resolution and optimizer materiality
+
+Fill-gap counts now use 512 logarithmic bins rather than 128. The count buffer is
+2 KiB per candidate, an increase of 1.5 KiB; this is not a total allocation bound.
+Classification still uses float32, safe upper edges and a horizon-capped overflow
+bin. Finite logarithmic edges are about 3.02% apart before integer rounding and the
+float32 margin. That spacing is not a universal CPU/GPU error bound. Histories are
+not retained or transferred, and the streamed squared-gap moment is unchanged.
+Initial-entry intervals keep their separate 128-bin format and decoder.
+
+The same public seven-day eleven-metric cohorts reproduce the effect. Candidate
+parameters, input identities, all CPU values and all ten non-gap GPU metrics are
+identical before/after refinement. The original ADG/drawdown ranking and selected
+limit decisions are unchanged. Add minimizing fill-gap p95 as a third objective:
+
+| Strategy / seed | Maximum p95 error, minutes, before → after | Three-objective fronts before → after |
+| --- | ---: | --- |
+| EMA / 7 | 3 → 0 | Six GPU members versus eleven CPU → identical eleven members |
+| EMA / 43 | 2 → 0.1 | Five GPU members versus ten CPU → nine GPU versus ten CPU |
+| TM / 7 | 0 → 0 | Identical fifteen-member fronts remain |
+| TM / 43 | 0 → 0 | Identical twelve-member fronts remain |
+
+The remaining EMA/43 p95 residual is 18.55 CPU versus 18.45 GPU minutes for one
+candidate. The GPU front omits candidate 9 (zero-based) from the CPU front. Existing
+trajectory and core-metric differences remain; this experiment does not certify
+all objective rankings. The standalone tool's built-in ranking still covers only
+ADG/drawdown; these third-objective observations are a separate analysis.
+
+Warm direct/native cohort cost remains comparable, as recorded in the
+[measurement recipe](../gpu_cohort_benchmark.md#fill-gap-resolution-experiment).
+Native replay retains exact direct-GPU results except the already measured six-unit
+float64 weighted-ADG reduction in TM/43. No CPU policy is widened. Automatic widths
+have no eligible tuning samples in these underfilled cohorts. Regression tests cover
+float32 bin boundaries, distinct 29/30/31-minute gaps, the actual EMA cohorts and
+simultaneously requested 512-bin fill gaps/128-bin entry intervals. Native-only cases
+forbid CPU simulations. Actual Metal execution and long-gap materiality remain open.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account

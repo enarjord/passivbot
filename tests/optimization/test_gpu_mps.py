@@ -29,6 +29,7 @@ def compile_shader(source):
 GPU_AVAILABLE = torch.backends.mps.is_available() or torch.cuda.is_available()
 
 from optimization.gpu.model import (
+    GAP_BINS,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
@@ -379,7 +380,7 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
     scalars = torch.arange(72, dtype=torch.float32).reshape(1, 72)
-    gaps = torch.zeros((1, 128), dtype=torch.int32)
+    gaps = torch.zeros((1, GAP_BINS), dtype=torch.int32)
 
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
 
@@ -9757,7 +9758,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
     scalars = torch.zeros((batch_size, 72), dtype=torch.float32, device=gpu_device())
-    gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device=gpu_device())
+    gaps = torch.zeros((batch_size, GAP_BINS), dtype=torch.int32, device=gpu_device())
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device=gpu_device()
     )
@@ -9944,7 +9945,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         metric_rows.append(row)
 
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
-    proxy.hsl_engine = "legacy"
+    proxy.hsl_signal_mode = "coin"
     proxy.batch_size = 3
     proxy._torch = torch
     proxy.profile_enabled = False
@@ -10074,7 +10075,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
     override_scalars = torch.zeros((1, 72), dtype=torch.float32, device=gpu_device())
-    override_gaps = torch.zeros((1, 128), dtype=torch.int32, device=gpu_device())
+    override_gaps = torch.zeros((1, GAP_BINS), dtype=torch.int32, device=gpu_device())
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device=gpu_device()
     )
@@ -10384,7 +10385,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
     scalars = torch.zeros((batch_size, 72), dtype=torch.float32, device=gpu_device())
-    gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device=gpu_device())
+    gaps = torch.zeros((batch_size, GAP_BINS), dtype=torch.int32, device=gpu_device())
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device=gpu_device()
     )
@@ -10570,6 +10571,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         metric_rows.append(row)
 
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_signal_mode = "coin"
 
     proxy.batch_size = 3
     proxy._torch = torch
@@ -10710,7 +10712,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
     override_scalars = torch.zeros((1, 72), dtype=torch.float32, device=gpu_device())
-    override_gaps = torch.zeros((1, 128), dtype=torch.int32, device=gpu_device())
+    override_gaps = torch.zeros((1, GAP_BINS), dtype=torch.int32, device=gpu_device())
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device=gpu_device()
     )

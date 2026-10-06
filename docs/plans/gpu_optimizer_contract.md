@@ -1451,3 +1451,32 @@ Completion requires:
   generally accepted. Documentation and final source checks precede publication.
 - This tool slice requires completed exact-head automatic/author review and successful
   required CI before development integration. Overall legacy-retirement gates stay open.
+
+
+### 2026-10-06 — Fixed-memory fill-gap refinement
+
+- PR #1912 integrated after clear exact-head automatic/author review and all required
+  CI. Latest master remains included through PR #1911; no redesign is sent to master.
+- Coarse fill-gap bins changed meaningful third-objective EMA Pareto membership in
+  the public seven-day cohorts. Refine counts from 128 to 512 bins rather than retain
+  full histories or add an exact sorting path. Count storage grows by 1.5 KiB per
+  candidate; trading state, fill populations and streamed moments are unchanged.
+- Keep initial-entry intervals' separate 128-bin shader/output format and decoder.
+  Update standalone kernel probes to allocate the actual fill-gap surface.
+- Before/after identities and all non-gap CPU/GPU metrics match exactly. EMA p95
+  maximum error falls from 3/2 minutes to 0/0.1 minute; one third-objective front
+  matches CPU and the other retains one missing member. TM observations are unchanged.
+  Warm cohort cost is comparable. Unknown parity policies remain unassessed; no
+  universal histogram or optimizer-quality gate is declared passed.
+- Preserve float32-safe edges, boundary gaps and overflow handling. Regression
+  coverage includes bin boundaries, neighbouring half-hour gaps, real EMA cohorts,
+  simultaneous entry/fill histograms and retained/shared GPU replay surfaces.
+- This slice requires completed current-head automatic/author review and successful
+  required CI before development integration. Larger suites, cold-native/orchestrator
+  measurements, HSL-tail materiality and legacy retirement remain acceptance work.
+- Validation passes 458 distinct affected Python/CUDA cases: 422 reducer/service/
+  cohort cases and 36 retained/shared kernel cases. Rust passes 330 tests (one ignored)
+  and default-feature checks; the rebuilt extension is source-verified. Six documentation
+  cases pass. Two broad HSL fixtures initially failed because manual service objects
+  omitted the unchanged `hsl_signal_mode` contract. Correct their initialization and
+  rerun both successfully without relaxing their trading, controller or metric assertions.
