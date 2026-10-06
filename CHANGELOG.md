@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Match CPU traded-volume definitions in shared-account GPU backtests, including
+  native single-coin runs: normalize actual fill quantities without an additional
+  contract-multiplier factor, and include partial UTC days in weighted suffixes.
+  Reduce opt-in volume histories on the GPU and return only compact metrics.
+
 - Measure requested GPU strategy-equity recovery distributions at every simulation
   step instead of hourly, preserving short recoveries and terminal timestamps.
   Account for their history and reduction scratch in service dispatch limits and

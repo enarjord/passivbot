@@ -76,6 +76,7 @@ from optimization.gpu.model import (
 )
 
 CORE_OUTPUT_KEYS = {
+    "volume_pct_per_day_avg_w",
     "btc_day_end_eq",
     "btc_day_min_eq",
     "btc_day_max_dd",
@@ -234,6 +235,9 @@ def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
         "strategy_eq_recovery_distribution": any(
             bool(getattr(runner, "recovery_distribution_enabled", False))
             for runner in runners
+        ),
+        "weighted_volume": any(
+            bool(getattr(runner, "weighted_volume_enabled", False)) for runner in runners
         ),
         "hsl_ema_tail": any(
             bool(getattr(runner, "hsl_ema_tail_enabled", False)) for runner in runners
@@ -950,6 +954,7 @@ def mps_requested_metric_features(
         "strategy_eq_recovery_distribution": bool(
             metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
         ),
+        "weighted_volume": "volume_pct_per_day_avg_w" in metrics,
         "hsl_ema_tail": bool(metrics & _HSL_EMA_TAIL_METRICS),
         "hsl_raw_drawdown": bool(
             metrics & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
@@ -2905,6 +2910,7 @@ class MpsMulticoinProxy:
             "recovery_distribution_enabled": bool(
                 self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
+            "weighted_volume_enabled": "volume_pct_per_day_avg_w" in self.needed_metrics,
             "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
             "btc_prices": (
                 btc_values

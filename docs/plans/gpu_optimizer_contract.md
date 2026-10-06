@@ -1322,5 +1322,36 @@ Completion requires:
   0.006702424/0.000853817 for EMA/TM, versus CPU 0.006653244/0.000852400. Both p95
   observations agree closely. Smaller mean/tail differences remain unassessed;
   eleven undefined policies keep the full reports `comparison_incomplete`.
-- This completed slice still requires exact-head automatic review, author review and
-  all required CI before development integration; broader goal gates remain open.
+- PR #1908 integrated into development after completed clear exact-head automatic
+  review, author review and all required CI. Broader goal gates remain open.
+
+### 2026-10-06 — Canonical traded-volume contributions and suffix reduction
+
+- Standalone public two-day fixtures reproduce two semantic defects: applying the
+  contract multiplier again scales normalized volume, and dropping partial UTC days
+  loses most weighted suffix contributions in short scenarios. CPU/GPU agreement on
+  synthetic multiplier-one cases alone would not expose the normalization defect.
+- Shared EMA/TM replay now records actual quantity/price/post-fill-balance volume.
+  Only requested weighted volume captures per-step contributions and fill presence;
+  a separate Rust-owned GPU reducer applies actual-horizon suffixes. Return one
+  compact value per candidate, with no CPU replay or full-history host transfer.
+  Preserve disabled compilation, current-shape ownership and shared history budgeting.
+- CPU preparation and metrics processing remain orchestration responsibilities;
+  simulator-specific contributions and reductions remain inside the GPU service.
+  Existing standalone CPU analysis is unchanged. Retained legacy directional single-
+  coin helpers keep their separate approximation until replacement acceptance.
+- Independent history reduction agrees closely with GPU reduction. One busy short
+  TM fixture still has a 0.273% weighted-volume trajectory discrepancy and different
+  fill counts. Record a case-specific regression bound and the strict standalone
+  mismatch rather than widening general parity policies or claiming simulator parity.
+- Repeated thirty-day public fixtures preserve input identity, all CPU metrics and
+  fourteen unrelated GPU metrics. Weighted-volume discrepancies shrink from about
+  4% to 0.084%/0.031% for EMA/TM; their broader materiality remains unassessed.
+- The [acceptance evidence map](gpu_optimizer_acceptance.md) gives the reproducible
+  recipe, resource contract and residual classification. Final-source validation passes
+  817 affected Python/CUDA checks, 330 Rust tests, default-feature compile checks and
+  five documentation checks. Two outdated dispatch fixtures found in a broader run
+  are corrected and their enabled/disabled argument layouts verified. Actual Metal
+  execution and broader resource/performance acceptance remain open. This completed
+  slice still requires exact-head automatic/author review and required CI before
+  development integration.

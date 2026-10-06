@@ -222,6 +222,10 @@ struct EmaMulticoinFillState {
     float position_unchanged_max_min;
     float day_volume;
     float day_fill_count;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    float step_volume;
+    float step_has_fill;
+#endif
 };
 
 inline EmaMulticoinFillState init_ema_multicoin_fill_state() {
@@ -245,7 +249,23 @@ inline EmaMulticoinFillState init_ema_multicoin_fill_state() {
     fills.position_unchanged_max_min = 0.0f;
     fills.day_volume = 0.0f;
     fills.day_fill_count = 0.0f;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    fills.step_volume = 0.0f;
+    fills.step_has_fill = 0.0f;
+#endif
     return fills;
+}
+
+inline void record_ema_multicoin_volume(
+    thread EmaMulticoinFillState& fills, float qty, float price, float balance
+) {
+    // Match analysis.rs: fill quantities are not contract-multiplier scaled.
+    const float normalized = fabs(qty) * price / balance;
+    fills.day_volume += normalized;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    fills.step_volume += normalized;
+    fills.step_has_fill = 1.0f;
+#endif
 }
 
 inline void record_ema_multicoin_gross_pnl(
@@ -2717,7 +2737,7 @@ inline bool process_ema_multicoin_side_fills(
                 }
                 position_open_k[c] = -1.0f;
             }
-            fills.day_volume += fabs(adjusted) * fill_price * c_mult / balance;
+            record_ema_multicoin_volume(fills, adjusted, fill_price, balance);
             if (use_secondary) {
                 secondary_close_qty[c] = 0.0f;
                 secondary_close_market[c] = false;
@@ -2776,7 +2796,7 @@ inline bool process_ema_multicoin_side_fills(
             psize[c] = new_size;
             pprice[c] = new_price;
             last_increase_k[c] = float(k);
-            fills.day_volume += fabs(adjusted) * fill_price * c_mult / balance;
+            record_ema_multicoin_volume(fills, adjusted, fill_price, balance);
             entry_qty[c] = 0.0f;
             entry_market[c] = false;
             any_fill = true;
@@ -2882,7 +2902,7 @@ inline bool force_close_ema_multicoin_delisted_position(
         fills.held_count += 1.0f;
     }
     side.position_open_k[coin] = -1.0f;
-    fills.day_volume += close_qty * close_price * c_mult / account.balance;
+    record_ema_multicoin_volume(fills, close_qty, close_price, account.balance);
     if (side.position_last_fill_k[coin] >= 0.0f) {
         fills.position_unchanged_max_min = fmax(
             fills.position_unchanged_max_min,
@@ -2997,6 +3017,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     device float* coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -3141,6 +3164,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
         hsl_trees, hsl_rows, int(b) * (C + 1), C, true, true);
 #endif
     for (int k = 1; k < stop_k; ++k) {
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        fills.step_volume = 0.0f;
+        fills.step_has_fill = 0.0f;
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
@@ -3512,6 +3539,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 liquidation_day = day_index;
             }
         }
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples[int(b) * T + k] = float2(
+            fills.step_volume, fills.step_has_fill
+        );
+#endif
         if (!(valid_hsl_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
             scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
             return;
@@ -3875,6 +3907,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4028,6 +4063,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         hsl_trees, hsl_rows, int(b) * 2 * (C + 1) + C + 1, C, true,
         !hsl_unified || !hsl_long_owner);
     for (int k = 1; k < stop_k; ++k) {
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        fills.step_volume = 0.0f;
+        fills.step_has_fill = 0.0f;
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
@@ -4477,6 +4516,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 liquidation_day = day_index;
             }
         }
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples[int(b) * T + k] = float2(
+            fills.step_volume, fills.step_has_fill
+        );
+#endif
         if (!(valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
             return;
@@ -4704,6 +4748,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4725,6 +4772,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4758,6 +4808,9 @@ kernel void passivbot_ema_anchor_multicoin(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4780,6 +4833,9 @@ kernel void passivbot_ema_anchor_multicoin(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4813,6 +4869,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4834,6 +4893,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
