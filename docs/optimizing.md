@@ -97,7 +97,7 @@ minimize or maximize the metric.
 
 ### Backend Selection
 
-Passivbot supports three optimizer backends:
+Passivbot supports these optimizer backends:
 
 - `optimize.backend: deap`
   - Uses the existing DEAP evolutionary backend.
@@ -105,8 +105,11 @@ Passivbot supports three optimizer backends:
   - Uses pymoo. This is now the default optimizer backend.
   - The default pymoo algorithm mode is `auto`: Passivbot uses `nsga2` when optimizing `3` or fewer objectives, and `nsga3` when optimizing more than `3`.
 - `optimize.backend: gpu`
-  - Uses an Apple Metal screening proxy and exact Rust validation. This backend is experimental and
+  - Uses an Apple Metal/CUDA screening proxy and exact Rust validation. This backend is experimental and
     deliberately limited to the scope documented below.
+- `optimize.backend: gpu_native`
+  - Uses authoritative CUDA simulations with CPU-owned pymoo ask/tell evolution and result
+    processing. This development backend is described in [the service contract](gpu_backtest_service.md#experimental-native-optimizer).
 
 Example:
 

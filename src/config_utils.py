@@ -1487,7 +1487,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "BACKEND",
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
-        "help": "Optimizer backend to use. Supported values: deap, gpu or pymoo.",
+        "help": "Optimizer backend: deap, pymoo, gpu (screening/CPU validation), or experimental gpu_native (CUDA simulations).",
     },
     "optimize.limits": {
         "visible": ["--limits"],

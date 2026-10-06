@@ -34,6 +34,7 @@ class NativeEvaluationSession:
         self._cache = OrderedDict()
         self._stopped = False
         self._failure = None
+        self._submission_failure = None
 
     @property
     def active_candidate_ids(self):
@@ -88,6 +89,10 @@ class NativeEvaluationSession:
         return CandidateCompletion(plan.candidate_id, plan.stage, payload)
 
     def _pump(self):
+        if self._submission_failure is not None:
+            if not self._futures and not self._ready:
+                raise self._submission_failure
+            return
         while self._queued and not self._stopped:
             candidate_id, request = self._queued[0]
             try:
@@ -95,6 +100,14 @@ class NativeEvaluationSession:
             except BacktestQueueFull:
                 if not self._futures:
                     raise RuntimeError("borrowed backtest service is full without session-owned work")
+                return
+            except Exception as failure:
+                if not self._futures:
+                    raise
+                # A fast worker can fail while we are replenishing the queue.
+                # Consume earlier successes and the original future error before
+                # a subsequent submit's service-failed wrapper can poison fan-in.
+                self._submission_failure = failure
                 return
             self._queued.popleft()
             self._futures[future] = (candidate_id, request)

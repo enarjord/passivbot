@@ -228,6 +228,7 @@ Completion requires:
 - [ ] Integrate GPU result scoring/limits through existing CPU-owned canonical helpers.
 - [x] Add incremental candidate/suite result collection using canonical CPU scoring helpers.
 - [x] Add canonical CPU request preparation and bounded polling/duplicate collection helpers.
+- [x] Add experimental GPU-only ask/tell CLI, seed evaluation and partial-cohort checkpoint resume.
 - [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
 - [ ] Flush results/Pareto promptly; validate interruption and compatible resume.
@@ -599,3 +600,32 @@ Completion requires:
   checks have zero errors and two existing size warnings. No Rust/kernel or CLI routing
   changes are included; search integration, persistence/precision resume identities,
   adaptive tuning and the existing simulation-ablation acceptance debt remain open.
+
+### 2026-10-06 — Experimental GPU-only optimizer CLI
+
+- Add the separate `gpu_native` backend while retaining CPU and old GPU options. Reuse
+  canonical preparation/scoring/limits, pymoo NSGA-II/III operators and existing result/Pareto
+  stores. Preserve generation/cohort search semantics while replenishing bounded service
+  requests and persisting full candidate completions independently. No CPU simulation pool
+  or multiprocessing manager is created on this path. The GPU service remains search-agnostic.
+- Persist CPU-only algorithm state and partially evaluated seeds/cohorts atomically, without
+  device handles or borrowed array names. Completed compatible fitness survives resume;
+  unfinished candidates rerun on GPU. Checkpoints also bind critical run settings before
+  any result exists. Native execution/precision identity distinguishes GPU fitness from CPU
+  and proxy/validation fitness. Retain conservative existing source/data/config checks;
+  scheduling replay and a crash-free exactly-once record stream are not required.
+- A fast worker failure exposed a queue-refill race: a later failed submit could obscure
+  prior successes and the original producer error. Defer that submit failure while consuming
+  admitted futures; deterministic regressions cover both original-future and submit-only
+  failures. Preserve primary exceptions through drain/checkpoint cleanup.
+- Real offline CLI CUDA tests cover standalone and lazy scenario suites, fresh seeds, prompt
+  results/Pareto writes, actual SIGINT during seed work and resume for further generations.
+  CPU backtest/evaluator/raw Rust simulation entries and CPU pool/manager creation are
+  forbidden. Focused search/identity/backend/session/CUDA checks pass 120 cases; broader
+  optimizer/config regressions pass 456 cases. Docs have zero errors and two existing size
+  warnings. Rust/kernel behavior is unchanged; validation uses the verified current extension.
+- This is an initial integration, not replacement acceptance. Full suites run now; selective
+  screening search policy, adaptive width/result cadence, finite static variants and
+  candidate-dependent coin patches remain open, as do representative parity/performance
+  comparisons and the known disabled-HSL specialized/general kernel equivalence debt.
+  Retain the legacy backend until these acceptance items are resolved.
