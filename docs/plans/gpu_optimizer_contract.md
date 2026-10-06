@@ -740,8 +740,8 @@ Completion requires:
 
 ### 2026-10-06 — Reuse screened simulator evidence
 
-- The CPU pipeline slice has completed clear exact-head auto review; required CI remains
-  its merge gate. Keep this subsequent scenario work separate from that reviewed head.
+- The CPU pipeline slice passed clear exact-head auto review and all required CI before
+  merging into development. This scenario-reuse slice remains independently reviewable.
 - Add a bounded, run-local CPU cache of collector-validated simulator rows, keyed by the
   complete effective candidate identity, prepared dataset and exact request parameters.
   Promotion re-identifies and consumes those rows on the CPU poller, submits only missing scenarios, and still requires
