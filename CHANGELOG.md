@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Expand GPU multicoin Trailing Martingale recursive entry and close ladders for
+  passive execution as well as market execution. Keep market promotion separate from
+  ladder generation, preserving cooldown, exposure-gate and shared-account behavior.
+
 - Use current simulated cash and candle-price exchange minima for GPU multicoin
   minimum-effective-cost filtering. Remove permanent screening-only flat-slot rejection,
   while preserving per-coin overrides and held-position management. Single-coin screening

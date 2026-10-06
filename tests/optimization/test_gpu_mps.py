@@ -1881,16 +1881,16 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         short_side.entry_qty[c] = 1.0f;
         long_side.entry_tick[c] = 100;
         short_side.entry_tick[c] = 100;
-        long_side.entry_recursive_market_mode[c] = false;
-        short_side.entry_recursive_market_mode[c] = false;
+        long_side.entry_recursive_mode[c] = false;
+        short_side.entry_recursive_mode[c] = false;
         long_side.close_qty[c] = 0.0f;
         short_side.close_qty[c] = 0.0f;
         long_side.secondary_close_qty[c] = 0.0f;
         short_side.secondary_close_qty[c] = 0.0f;
         long_side.close_reconstruct_after_reducer[c] = false;
         short_side.close_reconstruct_after_reducer[c] = false;
-        long_side.close_recursive_market_mode[c] = false;
-        short_side.close_recursive_market_mode[c] = false;
+        long_side.close_recursive_mode[c] = false;
+        short_side.close_recursive_mode[c] = false;
         long_side.close_is_unstuck_reducer[c] = false;
         short_side.close_is_unstuck_reducer[c] = false;
         long_side.close_is_hsl_panic[c] = false;
@@ -1910,7 +1910,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 1, 1, false, true, true, false,
-        1.0f, 0.0f, 0.0f, false, long_equity
+        1.0f, false, 0.0f, 0.0f, false, long_equity
     );
     bool short_entry = process_tm_multicoin_side_fills(
         short_side, short_config, account, fills,
@@ -1918,7 +1918,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 1, 1, true, true, true, false,
-        1.0f, 0.0f, 0.0f, false, short_equity
+        1.0f, false, 0.0f, 0.0f, false, short_equity
     );
     long_side.close_qty[0] = 1.0f;
     short_side.close_qty[0] = 1.0f;
@@ -1932,7 +1932,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 2, 1, false, true, true, false,
-        1.0f, 0.0f, 0.0f, false, long_equity
+        1.0f, false, 0.0f, 0.0f, false, long_equity
     );
     bool short_close = process_tm_multicoin_side_fills(
         short_side, short_config, account, fills,
@@ -1940,7 +1940,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 2, 1, true, true, true, false,
-        1.0f, 0.0f, 0.0f, false, short_equity
+        1.0f, false, 0.0f, 0.0f, false, short_equity
     );
     output[0] = long_entry && short_entry && long_close && short_close
         ? 1.0f : 0.0f;
@@ -6046,10 +6046,10 @@ kernel void passivbot_tm_multicoin_tail_recursive_gate_probe(
     side.entry_gen_pprice[0] = 100.0f;
     side.entry_gen_initial_price[0] = 100.0f;
     side.entry_gen_touch_tick[0] = short_side ? 0 : 100000000;
-    side.entry_recursive_market_mode[0] = true;
+    side.entry_recursive_mode[0] = true;
     apply_tm_multicoin_recursive_entry_twel_gate(
         side, config, bars, fill_ticks, coin_settings, coin_overrides,
-        k, C, short_side, 0.001f
+        k, C, short_side, true, 0.001f
     );
     output[0] = side.entry_qty[0];
     output[1] = float(side.entry_gate_suffix_keep_count[0]);
@@ -8427,8 +8427,10 @@ def test_mps_tm_fused_coin_overrides_resolve_ema_gates_per_side():
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("cooldown, expands", [(0.0, True), (100.0, False)])
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
 def test_mps_tm_multicoin_recursive_market_entry_passive_suffix(
-    side, cooldown, expands
+    side, cooldown, expands,
+    market_orders_allowed,
 ):
     count = 6
     closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
@@ -8447,7 +8449,7 @@ def test_mps_tm_multicoin_recursive_market_entry_passive_suffix(
         lows=lows,
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
-        market_orders_allowed=True,
+        market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=0.001,
     )
     for key, value in {
@@ -8523,10 +8525,12 @@ def test_mps_tm_multicoin_recursive_market_entry_stops_duplicate_tick_suffix(
     "threshold, expected_counts",
     [(0.06, [0.0, 1.0]), (0.16, [1.0, 2.0])],
 )
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
 def test_mps_tm_multicoin_recursive_entry_gate_orders_cross_coin_ladders(
     side,
     threshold,
     expected_counts,
+    market_orders_allowed,
 ):
     count = 5
     closes = np.tile(np.asarray([100.0, 100.0]), (count, 1))
@@ -8547,7 +8551,7 @@ def test_mps_tm_multicoin_recursive_entry_gate_orders_cross_coin_ladders(
         markets=markets,
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
-        market_orders_allowed=True,
+        market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=0.001,
     )
     for key, value in {
@@ -8573,7 +8577,8 @@ def test_mps_tm_multicoin_recursive_entry_gate_orders_cross_coin_ladders(
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_recursive_entry_gate_keeps_partial_boundary(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_multicoin_recursive_entry_gate_keeps_partial_boundary(side, market_orders_allowed):
     count = 5
     closes = np.tile(np.asarray([100.0, 100.0]), (count, 1))
     highs = closes.copy()
@@ -8591,7 +8596,7 @@ def test_mps_tm_multicoin_recursive_entry_gate_keeps_partial_boundary(side):
         lows=lows,
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
-        market_orders_allowed=True,
+        market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=0.001,
     )
     for key, value in {
@@ -8799,7 +8804,8 @@ def test_mps_tm_multicoin_recursive_next_close_promotes_without_suffix(side):
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_expanded_recursive_close_promotes_each_group(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_multicoin_expanded_recursive_close_promotes_each_group(side, market_orders_allowed):
     count = 6
     base = np.asarray([100.0, 120.0])
     closes = np.tile(base, (count, 1))
@@ -8810,6 +8816,9 @@ def test_mps_tm_multicoin_expanded_recursive_close_promotes_each_group(side):
         highs[4] = base * (1.0 + trigger_distance)
     else:
         lows[4] = base * (1.0 - trigger_distance)
+    if not market_orders_allowed:
+        highs[3] = base * 1.01
+        lows[3] = base * 0.99
     markets = [
         ProxyMarket(
             0.001,
@@ -8831,7 +8840,7 @@ def test_mps_tm_multicoin_expanded_recursive_close_promotes_each_group(side):
         lows=lows,
         markets=markets,
         collect_coin_fill_counts=True,
-        market_orders_allowed=True,
+        market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=0.1,
     )
     for key, value in {
@@ -8862,7 +8871,11 @@ def test_mps_tm_multicoin_expanded_recursive_close_promotes_each_group(side):
     )
     assert all(count > 2.0 for count in output["coin_fill_counts"][0].cpu())
     assert output[size_key].item() == 0.0
-    assert output["balance"].item() < 1_000.0
+    if market_orders_allowed:
+        assert output["balance"].item() < 1_000.0
+    else:
+        # No taker fees or market promotion: filled passive close groups profit.
+        assert output["balance"].item() > 1_000.0
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -9410,8 +9423,10 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("hedge_mode", [True, False])
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
 def test_mps_tm_multicoin_fused_recursive_market_entries_respect_position_mode(
     hedge_mode,
+    market_orders_allowed,
 ):
     count = 6
     closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
@@ -9452,7 +9467,7 @@ def test_mps_tm_multicoin_fused_recursive_market_entries_respect_position_mode(
         short_coin_overrides=overrides,
         collect_coin_fill_counts=True,
         hedge_mode=hedge_mode,
-        market_orders_allowed=True,
+        market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=0.001,
     )
 
@@ -9473,8 +9488,10 @@ def test_mps_tm_multicoin_fused_recursive_market_entries_respect_position_mode(
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("hedge_mode", [True, False])
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
 def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
     hedge_mode,
+    market_orders_allowed,
 ):
     count = 6
     base = np.asarray([100.0, 120.0])
@@ -9483,6 +9500,9 @@ def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
     lows = closes.copy()
     highs[4] = base * 1.06
     lows[4] = base * 0.94
+    if not market_orders_allowed:
+        highs[3] = base * 1.01
+        lows[3] = base * 0.99
     markets = [
         ProxyMarket(
             0.001,
@@ -9528,7 +9548,7 @@ def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
         short_coin_overrides=overrides,
         collect_coin_fill_counts=True,
         hedge_mode=hedge_mode,
-        market_orders_allowed=True,
+        market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=0.1,
     )
 
@@ -9544,7 +9564,11 @@ def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
     assert all(
         count > expected_min_coin_fills for count in output["coin_fill_counts"][0].cpu()
     )
-    assert output["balance"].item() < 1_000.0
+    if market_orders_allowed:
+        assert output["balance"].item() < 1_000.0
+    else:
+        # No taker fees or market promotion: filled passive close groups profit.
+        assert output["balance"].item() > 1_000.0
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -10701,7 +10725,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "finalized_reducer_qty" in source
     assert "realized_loss_proxy_allows_close" in source
     assert "recursive_grid_close_would_expand" in source
-    assert "close_recursive_market_mode" in source
+    assert "close_recursive_mode" in source
     assert "close_gen_market_price" in source
     assert "selected.market = should_use_ordinary_market_execution" in source
     assert "const bool loss_gate_enabled = run_settings[5] < 1.0f" in source
@@ -16598,7 +16622,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
     side.close_market[0] = true;
     side.close_is_exposure_reducer[0] = true;
     side.close_reconstruct_after_reducer[0] = true;
-    side.close_recursive_market_mode[0] = true;
+    side.close_recursive_mode[0] = true;
     side.close_gen_balance[0] = 1000.0f;
     side.close_gen_allowed_wel[0] = 0.016f;
     side.close_gen_market_price[0] = 100.0f;
@@ -16624,7 +16648,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 1, 1, false, true, false, false,
-        1.0f, 0.0f, 0.001f, false, hsl_equity_before_fills
+        1.0f, true, 0.0f, 0.001f, false, hsl_equity_before_fills
     );
     output[0] = side.psize[0];
     output[1] = fills.fill_count;

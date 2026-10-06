@@ -76,6 +76,11 @@ material gaps. Distinguish baseline failures from asynchronous-service regressio
 
 ## Baseline findings to resolve before cutover
 
+- Multicoin TM passive execution originally expanded recursive entry and close
+  suffixes only when market orders were enabled. Separating expansion from execution
+  policy recovers the missing trajectory in the public parity fixtures. Small remaining
+  fill/ADG differences stay visible under the tool's unchanged strict measurement gates;
+  broader controller, reducer and loss-gate combinations still require assessment.
 - The disabled-HSL CUDA regression expects compact state, but the current multicoin
   runner unconditionally sets `dispatch_hsl_disabled=False`. The earlier compact path
   was restricted to the removed legacy HSL engine. Restore useful specialization for

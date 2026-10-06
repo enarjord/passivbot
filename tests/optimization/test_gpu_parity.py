@@ -6,6 +6,14 @@ import pytest
 from optimization.gpu.parity import MetricTolerance, compare_limits, compare_metrics
 
 
+@pytest.mark.parametrize("field", ["absolute", "relative"])
+@pytest.mark.parametrize("value", [False, True])
+def test_numeric_tolerance_fields_reject_json_booleans(field, value):
+    policy = {"absolute": 0, "relative": 0, field: value}
+    with pytest.raises(TypeError, match="not boolean"):
+        MetricTolerance(**policy)
+
+
 def test_metric_specific_tolerances_and_cpu_reference_scale():
     report = compare_metrics(
         {"adg": 0.0, "drawdown": 0.5},

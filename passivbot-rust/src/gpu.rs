@@ -1404,7 +1404,7 @@ mod tests {
             4
         );
         assert!(source.contains("next_recursive_grid_entry("));
-        assert!(source.contains("entry_recursive_market_mode"));
+        assert!(source.contains("entry_recursive_mode"));
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
                 .matches("update_tm_multicoin_position_fill_timestamp(")

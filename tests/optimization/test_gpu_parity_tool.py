@@ -84,6 +84,23 @@ def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys):
     assert report["error"]["message"] == "device launch failed"
 
 
+def test_main_rejects_boolean_policy_before_simulation(monkeypatch, capsys, tmp_path):
+    from types import SimpleNamespace
+    import sys
+    monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
+        validate_gpu_metric_names=lambda names: names,
+    ))
+    def simulation_forbidden(*_args, **_kwargs):
+        pytest.fail("invalid numeric policy must not start a comparison")
+    monkeypatch.setattr(gpu_parity, "run_comparison", simulation_forbidden)
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"fills_per_day": {"absolute": True, "relative": False}}))
+    assert gpu_parity.main(["--fixture", "ema_anchor", "--tolerances", str(policy)]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "input_failed"
+    assert report["error"]["type"] == "TypeError"
+
+
 def test_cli_help_does_not_need_optional_gpu_runtime(capsys):
     with pytest.raises(SystemExit) as completed:
         gpu_parity.main(["--help"])
@@ -210,3 +227,25 @@ def test_real_cuda_multicoin_cost_admission_boundary_is_measured(
     else:
         assert (metric["gpu"] > 0) is funded
         assert metric["status"] == "match", report
+
+
+@pytest.mark.parametrize("sides", ["short", "both"])
+def test_real_cuda_passive_recursive_ladders_recover_cpu_metrics(
+    require_real_passivbot_rust_module, sides
+):
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    inputs = gpu_parity.fixture_inputs(args("--fixture", "trailing_martingale", "--sides", sides))
+    report = gpu_parity.run_comparison(
+        inputs, "binance", gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES
+    )
+    # This fixture exposed missing passive entry/close suffixes, losing ~60% of
+    # fills and ~95% of ADG. Keep the stricter diagnostic policy unchanged and
+    # separately guard the recovered trajectory to 0.1%; minor tick/float32
+    # differences still appear in the report and need case-specific assessment.
+    for name in ("adg_strategy_eq", "fills_per_day"):
+        metric = report["metrics"][name]
+        assert metric["cpu"] > 0
+        assert metric["gpu"] == pytest.approx(metric["cpu"], rel=1e-3)
+    assert report["metrics"]["drawdown_worst_strategy_eq"]["status"] == "match"

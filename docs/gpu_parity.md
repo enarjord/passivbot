@@ -107,25 +107,38 @@ throughput. `--diagnostics` additionally requests CPU fills and reports a bounde
 fill/state summary and raw GPU scalar summaries; it changes the CPU collection path
 and is not a warm performance benchmark.
 
-## Initial measured gaps
+## Measured development parity
 
 The initial 21-case seed-7 matrix covers both strategies, three side modes, one/two
-coins and selected feature toggles at 5,760 bars. Its strict provisional policies expose:
+coins and selected feature toggles at 5,760 bars. These are historical observations
+before the multicoin admission and passive-recursion fixes:
 
 - Matching completion coverage and two passing long-only Trailing Martingale cases.
 - Small EMA Anchor fill differences and ADG relative differences up to about 0.50%
   in these fixtures. They remain observations, not an approved blanket tolerance.
 - Material multicoin short/dual-side Trailing Martingale passive-order differences:
   roughly 60% fewer GPU fills and 95–97% lower ADG. Market-order variants reduce this
-  to much smaller differences, narrowing the next order-path investigation.
+  to much smaller differences, narrowing the order-path investigation.
 - Minimum-effective-cost filtering suppresses all GPU trades in the tested dual-side
   fixtures while CPU trades, consistent with the existing conservative admission rule.
+
+Both large gaps are now corrected in these fixtures. Repeating the 21-case matrix after
+the fixes preserves matching completion and the two passing long-only TM cases. Strict
+policies still expose small residual differences: multicoin passive TM short/dual ADG
+relative errors are approximately 0.0412%/0.0549%, and fill errors 0.0234%/0.0210%.
+EMA differences remain at the earlier scale. These observations do not widen the tool's
+policies or establish a blanket acceptance tolerance.
+
+Minimum-cost boundary coverage checks affordable equality and cases 0.01% below/above
+the threshold for both strategies. Inputs below float32 resolution can still straddle
+the CPU float64 boundary; the tool reports their potentially large path discontinuities
+as mismatches. See [GPU admission precision](optimizing.md#gpu-backend-experimental).
 
 The first fixture revision failed to account for canonical UTC-day end-date normalization;
 the recorded matrix uses matching midnight endpoints. Its earlier completion discrepancy
 was a fixture-preparation finding and is not included as a simulator defect.
 
-These are baseline simulator findings, not execution-service regressions. The matrix
+These are simulator measurements, not execution-service regressions. The matrix
 does not establish general HSL/unstuck transition coverage, long-run rolling-history
 parity, or suite/ranking acceptance. Follow the [inventory](plans/gpu_optimizer_inventory.md)
 and development checklist for those remaining gates.
