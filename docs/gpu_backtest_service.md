@@ -145,8 +145,18 @@ The CPU orchestrator reuses pymoo NSGA-II/III variation and survival settings fr
 `optimize.pymoo`, with `optimize.population_size` and `optimize.iters` retaining their
 generation-based meaning. Within a cohort it replenishes bounded GPU work, scores completions
 and writes full candidate records immediately through the existing results/Pareto stores.
-Evolution advances after the cohort is complete; asynchronous execution does not silently
-change the evolutionary policy. Effective duplicates share pending/cached work.
+Evolution advances after the cohort's complete evaluations finish. Effective duplicates
+share pending/cached work.
+
+`optimize.gpu.screening` uses the existing scenario labels, survival fraction and minimum
+survivor settings. Seeds and initial parents receive full-suite GPU evaluation. Later
+offspring can be screened on a scenario subset; CPU feasibility/Pareto-diversity selection
+promotes survivors to full-suite evaluation. Only complete survivors enter evolutionary
+survival alongside the complete parents. Partial scores never enter fitness, stored results
+or Pareto. Screening must retain explicit objective/limit scenarios. Unknown labels fail
+before the device starts. Selecting every scenario or retaining every offspring bypasses
+the partial stage. Screening reduces full evaluations within the configured generation
+budget; it does not extend `iters` to compensate for rejected offspring.
 
 The CPU session also retains bounded simulator-row evidence by complete effective candidate
 identity, prepared dataset and exact request parameters. Screen-to-full promotion can reuse
@@ -155,8 +165,7 @@ storage. A partial score is never reused as complete fitness. Reused rows receiv
 request identity and are consumed on the CPU poller. Future results must match their actual
 submitted request before entering either collection or this cache. Each candidate-payload and
 simulator-row LRU is independently limited by `cache_size`; eviction or loss only repeats GPU
-work. These snapshots are run-local, without device handles or checkpoint state. Selective
-scenario-screening search policy remains separate development work.
+work. These snapshots are run-local, without device handles or checkpoint state.
 
 GPU submission starts after the first prepared candidate rather than waiting for the
 entire CPU admission window. Preparation and CPU result servicing then alternate within
@@ -205,6 +214,10 @@ candidates are rerun on GPU. Checkpoints are replaced atomically at the configur
 and at cohort/shutdown boundaries. A crash between a result write and a checkpoint may
 cause some GPU work to be repeated after resume. Perfect replay of scheduling is not required.
 An initial zero-result checkpoint can resume before its first completed seed/candidate.
+Version 2 additionally retains compact partial screening evidence separately from fitness
+and distinguishes screening, promoted full evaluation and idle stages. Row-cache loss may
+repeat GPU work, while already checkpointed selection progress is retained. Earlier
+experimental native checkpoints require a fresh run; saved result configs can supply seeds.
 
 Saved native fitness has an explicit CUDA execution/precision identity alongside the
 canonical data, policy, source/dependency and verified Rust identities. It cannot reuse CPU
@@ -212,8 +225,6 @@ or old GPU proxy/validation fitness. The current replay uses f32 state, integer 
 encodings and f64 host preparation/metric work. Changes to that contract require fresh
 evaluation; the existing strict config resume checks also remain in force.
 
-This first integration evaluates full scenario suites. Selective suite screening remains
-available in the planning API and requires search-policy integration before legacy cutover.
 Candidate-dependent coin patches, changing side/kernel topology and fine-tune anchor variants
 require compatible preparation and currently fail explicitly. Representative parity,
 specialized/general kernel equivalence, performance acceptance and adaptive tuning remain

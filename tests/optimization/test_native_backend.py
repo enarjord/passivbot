@@ -68,9 +68,9 @@ class FakeService(GpuBacktestService):
         super().register_dataset(dataset_id, SimpleNamespace(evaluate=evaluate))
 
 
-def execute(base, recorder, checkpoint, *, resume=False, starts=(), interrupt_check=lambda: None):
+def execute(base, recorder, checkpoint, *, resume=False, starts=(), interrupt_check=lambda: None, evaluator=None):
     return run_backend(
-        config=base.config, evaluator_for_pool=base, recorder=recorder, overrides_list=[],
+        config=base.config, evaluator_for_pool=base if evaluator is None else evaluator, recorder=recorder, overrides_list=[],
         starting_configs_path=None, get_starting_configs=lambda _path: list(starts),
         configs_to_individuals=lambda configs, _bounds, _digits: list(configs),
         build_config_fn=optimize.individual_to_config, overrides_fn=optimize.optimizer_overrides,

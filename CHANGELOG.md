@@ -6,6 +6,13 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Support scenario screening in native GPU optimization using the existing
+  screening settings. Fully evaluate seeds and initial parents, then promote a
+  feasibility/Pareto-diverse subset of offspring to full-suite GPU evaluation.
+  Only full-suite results enter evolutionary fitness, result storage and Pareto.
+  Resume partial screening safely; start a fresh run for older experimental
+  native checkpoints, or reuse their saved result configs as seeds.
+
 - Reuse validated native GPU scenario results when a screened candidate advances
   to its full suite. Keep partial scores separate, require every full-suite slot,
   and reject results bound to another submitted request before caching them.

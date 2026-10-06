@@ -37,6 +37,11 @@ from optimization.backend_shared import (
     load_starting_individuals,
 )
 from optimization.bounds import Bound, enforce_bounds
+from optimization.scenario_screening import (
+    normalized_farthest_indices as _normalized_farthest_indices,
+    screening_survivor_indices as _screening_survivor_indices,
+    screening_survivor_count,
+)
 from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_contract import CONTRACT_KEY, recorded_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
@@ -2742,89 +2747,6 @@ class _DriftMonitor:
         return result
 
 
-def _normalized_farthest_indices(values: np.ndarray, count: int) -> list[int]:
-    values = np.asarray(values, dtype=np.float64)
-    if count <= 0 or len(values) == 0:
-        return []
-    if len(values) <= count:
-        return list(range(len(values)))
-    low = np.nanmin(values, axis=0)
-    span = np.nanmax(values, axis=0) - low
-    normalized = (values - low) / np.where(span > 1.0e-12, span, 1.0)
-    chosen = [int(np.argmin(np.nanmean(normalized, axis=1)))]
-    selected = np.zeros(len(values), dtype=bool)
-    selected[chosen[0]] = True
-    distance = np.linalg.norm(normalized - normalized[chosen[0]], axis=1)
-    for _ in range(count - 1):
-        available = np.flatnonzero(~selected)
-        available_distances = np.where(
-            np.isfinite(distance[available]), distance[available], -np.inf
-        )
-        index = int(available[int(np.argmax(available_distances))])
-        chosen.append(index)
-        selected[index] = True
-        distance = np.minimum(
-            distance, np.linalg.norm(normalized - normalized[index], axis=1)
-        )
-    return chosen
-
-
-def _screening_survivor_indices(
-    objectives: np.ndarray,
-    violations: np.ndarray,
-    *,
-    count: int,
-) -> np.ndarray:
-    """Select a deterministic constraint-aware, Pareto-diverse screening subset."""
-
-    from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
-
-    objectives = np.asarray(objectives, dtype=np.float64)
-    violations = np.asarray(violations, dtype=np.float64)
-    if objectives.ndim != 2 or len(objectives) != len(violations):
-        raise ValueError("screening objectives and violations must align")
-    count = min(max(0, int(count)), len(objectives))
-    if count == 0:
-        return np.empty(0, dtype=np.int64)
-
-    feasible = np.flatnonzero(np.isfinite(violations) & (violations <= 0.0))
-    feasible_ids = set(map(int, feasible))
-    infeasible = np.asarray(
-        sorted(
-            (
-                int(index)
-                for index in range(len(objectives))
-                if int(index) not in feasible_ids
-            ),
-            key=lambda index: (
-                (
-                    float(violations[index])
-                    if np.isfinite(violations[index])
-                    else float("inf")
-                ),
-                index,
-            ),
-        ),
-        dtype=np.int64,
-    )
-    selected: list[int] = []
-    if len(feasible):
-        for front_local in NonDominatedSorting().do(objectives[feasible]):
-            front = feasible[np.asarray(front_local, dtype=np.int64)]
-            remaining = count - len(selected)
-            if remaining <= 0:
-                break
-            if len(front) <= remaining:
-                selected.extend(map(int, front))
-                continue
-            diverse = _normalized_farthest_indices(objectives[front], remaining)
-            selected.extend(int(front[index]) for index in diverse)
-            break
-    if len(selected) < count:
-        selected.extend(map(int, infeasible[: count - len(selected)]))
-    return np.asarray(selected, dtype=np.int64)
-
-
 def _evaluate_scenario_screening(
     candidates: list[dict],
     *,
@@ -2844,13 +2766,7 @@ def _evaluate_scenario_screening(
     objectives, violations = proxy_fitness(metric_rows)
     objectives = np.array(objectives, dtype=np.float64, copy=True)
     violations = np.array(violations, dtype=np.float64, copy=True)
-    survivor_count = min(
-        len(candidates),
-        max(
-            int(policy["min_survivors"]),
-            int(math.ceil(len(candidates) * float(policy["survival_fraction"]))),
-        ),
-    )
+    survivor_count = screening_survivor_count(len(candidates), policy)
     survivors = _screening_survivor_indices(
         objectives, violations, count=survivor_count
     )

@@ -1,7 +1,7 @@
 """CPU ask/tell search over authoritative asynchronous GPU backtests.
 
-Search cohorts preserve the existing evolutionary semantics. Within a cohort,
-requests are replenished and full candidate records are persisted independently.
+Search retains cohort ask/tell updates, with optional CPU scenario promotion.
+Requests are replenished and full candidate records are persisted independently.
 The problem has no CPU evaluation path, including seed bootstrap and resumption.
 """
 
@@ -15,6 +15,7 @@ from pymoo.core.problem import Problem
 from pymoo.core.callback import Callback
 from pymoo.termination import get_termination
 
+from config.gpu import resolve_gpu_screening
 from optimization.backend_shared import load_starting_individuals
 from optimization.backends.pymoo_backend import (
     _build_algorithm, _build_random_sampling, _prepare_resumed_algorithm,
@@ -27,6 +28,7 @@ from optimization.native_checkpoint import CHECKPOINT_VERSION, checkpoint_config
 from optimization.native_datasets import NativeDatasetRegistry
 from optimization.native_pipeline import ResultCadence
 from optimization.native_session import NativeEvaluationSession
+from optimization.scenario_screening import screening_survivor_indices, screening_survivor_count
 
 
 class NativeSearchProblem(Problem):
@@ -43,7 +45,7 @@ class NativeSearchProblem(Problem):
 class _Search:
     def __init__(self, *, state, session, registry, recorder, template,
                  build_config_fn, overrides_fn, overrides_list, checkpoint_path,
-                 checkpoint_interval, interrupt_check):
+                 checkpoint_interval, interrupt_check, screening_policy):
         self.state, self.session, self.registry = state, session, registry
         self.recorder, self.template = recorder, template
         self.build_config_fn, self.overrides_fn = build_config_fn, overrides_fn
@@ -53,6 +55,7 @@ class _Search:
         self._last_checkpoint = 0.0
         self._pending = {}
         self._cadence = ResultCadence()
+        self.screening_policy = screening_policy
 
     def checkpoint(self, *, force=False):
         now = time.monotonic()
@@ -64,7 +67,10 @@ class _Search:
         population = self.state["population"]
         for completion in completions:
             index = self._pending.pop(completion.candidate_id)
-            payload = completion.require_full()
+            screening = self.state["phase"] == "screening"
+            if completion.stage != ("screening" if screening else "full"):
+                raise RuntimeError("GPU completion stage does not match its search cohort")
+            payload = completion.payload if screening else completion.require_full()
             objectives = np.asarray(payload["fitness"], dtype=np.float64)
             problem = self.state["algorithm"].problem
             if objectives.shape != (problem.n_obj,) or np.isnan(objectives).any():
@@ -72,13 +78,20 @@ class _Search:
             penalty = float(payload["constraint_violation"])
             if not math.isfinite(penalty) or penalty < 0:
                 raise RuntimeError("GPU candidate constraint violation is invalid")
+            individual = population[index]
+            individual.X = np.asarray(payload["evaluation_vector"], dtype=np.float64)
+            if screening:
+                # Durable CPU selection evidence, never evaluated F/G/H or a
+                # complete result record. No device/cache handles are retained.
+                individual.screening_payload = dict(fitness=objectives.tolist(), constraint_violation=penalty)
+                self.state["screened"] += 1
+                self.checkpoint()
+                continue
             self.recorder.record(build_pymoo_record_entry(
                 vector=payload["evaluation_vector"], metrics=payload["metrics"],
                 template=self.template, build_config_fn=self.build_config_fn,
                 overrides_fn=self.overrides_fn, overrides_list=self.overrides_list,
             ))
-            individual = population[index]
-            individual.X = np.asarray(payload["evaluation_vector"], dtype=np.float64)
             individual.F = objectives
             if problem.n_ieq_constr:
                 individual.G = np.asarray([penalty if penalty > 0 else -1.0])
@@ -89,8 +102,10 @@ class _Search:
 
     def evaluate_population(self):
         population = self.state["population"]
+        screening = self.state["phase"] == "screening"
         waiting = iter(index for index, individual in enumerate(population)
-                       if not {"F", "G", "H"} <= individual.evaluated)
+                       if (not hasattr(individual, "screening_payload") if screening else
+                           not {"F", "G", "H"} <= individual.evaluated))
         exhausted = False
         initial = True
         self.checkpoint(force=True)
@@ -126,12 +141,33 @@ class _Search:
                     break
                 candidate_id = f"candidate:{self.state['sequence']}"
                 self.state["sequence"] += 1
-                plan = self.registry.planner.prepare(candidate_id, population[index].X)
+                plan = self.registry.planner.prepare(
+                    candidate_id, population[index].X,
+                    scenarios=self.screening_policy["scenarios"] if screening else None,
+                )
                 self.session.admit(plan)
                 self._pending[candidate_id] = index
                 if initial or time.perf_counter() - started >= self._cadence.budget_seconds:
                     initial = False
                     break
+
+    def promote_screening(self):
+        population = self.state["population"]
+        scores = [individual.screening_payload for individual in population]
+        count = screening_survivor_count(len(population), self.screening_policy)
+        survivors = screening_survivor_indices(
+            np.asarray([score["fitness"] for score in scores]),
+            np.asarray([score["constraint_violation"] for score in scores]), count=count,
+        )
+        promoted = population[survivors]
+        for individual in promoted:
+            del individual.screening_payload
+        # Rejected partial observations never enter evolutionary survival. The
+        # existing complete parent population remains available to pymoo.
+        self.state.update(phase="generation", population=promoted)
+        self.checkpoint(force=True)
+        logging.info("GPU scenario screening | candidates=%d full_suite=%d scenarios=%s",
+                     len(population), len(promoted), self.screening_policy["scenarios"])
 
     def drain_after_stop(self):
         # Service has already stopped/drained. Persist full successes which
@@ -160,6 +196,9 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
     termination = get_termination("n_gen", ngen)
     seed = config["optimize"].get("seed")
     gpu = config["optimize"].get("gpu", {})
+    screening_policy = resolve_gpu_screening(gpu.get("screening"))
+    if screening_policy["scenarios"] and not callable(getattr(evaluator_for_pool, "score_scenario_results", None)):
+        raise ValueError("GPU screening.scenarios requires a prepared scenario suite")
     batch_size = None if is_auto(gpu.get("batch_size")) else gpu["batch_size"]
     dispatch_budget = (500_000_000 if gpu.get("max_dispatch_candidate_bars") is None
                        else gpu["max_dispatch_candidate_bars"])
@@ -185,12 +224,21 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         algorithm.setup(problem, termination=termination, seed=seed, verbose=False)
         state = dict(backend="gpu_native", version=CHECKPOINT_VERSION, algorithm=algorithm,
                      phase="seeds" if starts else "idle", sequence=0, completed=0,
-                     population=Population.new("X", np.asarray(starts)) if starts else None)
+                     screened=0, population=Population.new("X", np.asarray(starts)) if starts else None)
         state[CONTRACT_KEY] = build_evaluation_contract(config)
         state["resume_config"] = checkpoint_config(config, state[CONTRACT_KEY])
 
     with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
                                overrides_list=overrides_list) as registry:
+        labels = set(screening_policy["scenarios"])
+        if labels:
+            unknown = labels - registry.scorer.coverage.keys()
+            if unknown:
+                raise ValueError(f"GPU screening.scenarios contains unknown labels: {sorted(unknown)}")
+            registry.scorer.validate_coverage(
+                [(binding.scenario, binding.dataset.exchange) for binding in registry.bindings
+                 if binding.scenario in labels], "screening",
+            )
         service = CudaBacktestService(batch_size=batch_size,
                                      max_dispatch_candidate_bars=dispatch_budget,
                                      interrupt_check=interrupt_check, tuning_mode=gpu.get("tuning_mode", "auto"))
@@ -199,7 +247,8 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         search = _Search(state=state, session=session, registry=registry, recorder=recorder,
                          template=base.config, build_config_fn=build_config_fn, overrides_fn=overrides_fn,
                          overrides_list=overrides_list, checkpoint_path=checkpoint_path,
-                         checkpoint_interval=checkpoint_interval, interrupt_check=interrupt_check)
+                         checkpoint_interval=checkpoint_interval, interrupt_check=interrupt_check,
+                         screening_policy=screening_policy)
         try:
             registry.register(service)
             if state["phase"] == "seeds":
@@ -217,7 +266,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             # n_iter is the next generation after tell. A freshly configured
             # resume termination has no progress yet; also check that next index
             # so a completed checkpoint does not run an extra generation.
-            while state["phase"] == "generation" or (
+            while state["phase"] in {"screening", "generation"} or (
                 (state["algorithm"].n_iter or 1) <= ngen and state["algorithm"].has_next()
             ):
                 interrupt_check()
@@ -227,7 +276,16 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                         break
                     if population is None or not len(population):
                         raise RuntimeError("GPU native evolutionary algorithm returned no candidates")
-                    state.update(phase="generation", population=population)
+                    parents = state["algorithm"].pop
+                    screening = bool(labels) and parents is not None and len(parents) > 0
+                    # All-label selection is already a full evaluation, with no
+                    # partial search stage or survivor reduction.
+                    screening = screening and labels != registry.scorer.coverage.keys()
+                    screening = screening and screening_survivor_count(len(population), screening_policy) < len(population)
+                    state.update(phase="screening" if screening else "generation", population=population)
+                if state["phase"] == "screening":
+                    search.evaluate_population()
+                    search.promote_screening()
                 search.evaluate_population()
                 state["algorithm"].tell(infills=state["population"])
                 state.update(phase="idle", population=None)

@@ -156,6 +156,16 @@ Scenario screening remains an explicit CPU search-budget policy using GPU evalua
 Screening-only observations do not masquerade as complete-suite results. Aggregate and
 store a complete candidate only after all required scenario evaluations succeed.
 
+The experimental native backend fully evaluates seeds and initial parents. For later
+offspring cohorts, the existing `optimize.gpu.screening` settings select a feasibility-
+and Pareto-diverse subset for full-suite GPU evaluation. Only those complete offspring
+enter evolutionary survival with the existing complete parents. Selecting every scenario
+or retaining every offspring bypasses the partial stage. Explicit objective/limit scenarios
+must remain in the screen. `iters` retains its cohort-generation interpretation; screening
+reduces the number of complete evaluations rather than extending the generation budget.
+Native checkpoint version 2 stores partial selection evidence separately from fitness.
+Earlier experimental native checkpoints require a fresh run; saved configs remain usable seeds.
+
 Reject invalid requests and effective duplicate candidates before expensive work. Keep
 new speculative prefilters optional until their missed-good-candidate behavior is tested.
 Preserve configured bounds, floats, overrides and warmup when eliminating ineffective genes.
@@ -233,6 +243,8 @@ Completion requires:
 - [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
   - [x] Reuse validated scenario evidence across screening/full stages without reusing partial
     scores or skipping required full-suite collection; keep caches bounded and run-local.
+  - [x] Add CPU-owned native survivor selection, full seed/bootstrap evaluation and checkpointed
+    screening/promotion/full stages; exclude incomplete observations from fitness/storage.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
     from CPU cost, and keep suite notification fan-in independent of persistence batches.
@@ -759,3 +771,35 @@ Completion requires:
   Future integration must choose survivors on CPU, keep rejected partial observations out of
   full fitness/storage, persist stage progress safely and retain explicit objective/limit scenarios.
   Preserve full GPU seed/bootstrap evaluation and existing evolutionary cohort semantics.
+
+### 2026-10-06 — Native scenario-screening search policy
+
+- The scenario-evidence reuse slice merged into development only after clear exact-head
+  automatic review and successful Python 3.12/3.14 and Rust checks. The following integration
+  retains that review/CI gate and leaves the default branch unchanged.
+- Extract the existing feasibility/Pareto/diversity selector into a CPU-only module shared
+  with the legacy backend. Reuse existing screening configuration; add no worker-side search
+  policy. Fully simulate seeds and initial parents, screen subsequent offspring, and submit
+  only promoted complete offspring to pymoo survival alongside complete parents. Reject unknown
+  or omitted explicit objective/limit scenarios before constructing the device service.
+- Keep partial scores as compact CPU selection evidence, never evaluated fitness or result
+  records. Checkpoint version 2 preserves screening completion and promoted/full-evaluation
+  progress; obsolete experimental checkpoints are rejected explicitly. Lost row-cache evidence
+  may repeat GPU work on resume. Cancellation still drains successes and saves usable state.
+- All 763 affected legacy/native tests pass, including 18 native screening cases and 12 actual
+  CUDA CLI cases. Coverage includes constrained/unconstrained NSGA-II/III, full seed reuse,
+  no-op policies, malformed partial checkpoints and interruption/resume during screening,
+  immediately after promotion and during full evaluation. CUDA CLI tests forbid CPU simulations
+  and CPU pools and verify durable full results/Pareto with actual SIGINT and resume.
+- A bounded synthetic CUDA experiment used the public Trailing Martingale, both-side fixture:
+  three coins, 4,096 bars, fixture seed 7; population 32, three cohorts, search seed 12;
+  GPU width 16; ADG/max and strategy drawdown/min with completion ratio at least 0.99.
+  The mean-reduced suite had a full base scenario and a two-coin, 2,496-bar stress scenario.
+  Screening base at fraction 0.25/minimum 4 retained 8 of each 32 offspring. In run order
+  full/screened/screened/full, elapsed seconds were 16.17/12.13/12.03/12.34. Full runs stored
+  96 complete candidates and submitted 96 requests per scenario. Screened runs stored 48
+  complete candidates, screened 64 offspring and submitted 96 base/48 stress requests.
+  Shared candidates had identical canonical metrics; final parent populations stayed at 32.
+  Promotion did not repeat base simulations. Warm elapsed time was comparable despite less
+  scenario work; this small experiment proves reuse/budget semantics, not speedup or search
+  quality. Representative scenarios and repeated-seed Pareto quality remain acceptance work.
