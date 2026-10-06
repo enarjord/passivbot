@@ -6,12 +6,13 @@ The service is exclusively borrowed and its lifetime belongs to the caller.
 """
 
 from collections import OrderedDict, deque
-from concurrent.futures import CancelledError
+from concurrent.futures import CancelledError, Future
 from copy import deepcopy
+import json
 import math
 from queue import Empty, SimpleQueue
 
-from optimization.gpu.executor import BacktestQueueFull, BacktestRequest
+from optimization.gpu.executor import BacktestQueueFull, BacktestRequest, BacktestResult
 from optimization.native_results import CandidateCompletion
 
 
@@ -32,6 +33,7 @@ class NativeEvaluationSession:
         self._notifications = SimpleQueue()
         self._ready = deque()
         self._cache = OrderedDict()
+        self._row_cache = OrderedDict()
         self._stopped = False
         self._failure = None
         self._submission_failure = None
@@ -88,6 +90,13 @@ class NativeEvaluationSession:
         payload["evaluation_vector"] = list(plan.vector)
         return CandidateCompletion(plan.candidate_id, plan.stage, payload)
 
+    @staticmethod
+    def _row_key(plan, request):
+        # Keep request parameters explicit: future scenario plans may share one
+        # prepared dataset while overriding different dynamic execution values.
+        return (plan.effective_key, request.dataset_id,
+                json.dumps(dict(request.parameters), sort_keys=True, allow_nan=False))
+
     def _pump(self):
         if self._submission_failure is not None:
             if not self._futures and not self._ready:
@@ -96,7 +105,19 @@ class NativeEvaluationSession:
         while self._queued and not self._stopped:
             candidate_id, request = self._queued[0]
             try:
-                future = self.service.submit(request)
+                plan, _collector = self._active[candidate_id]
+                key = self._row_key(plan, request)
+                if key in self._row_cache:
+                    # Reuse identified simulator evidence, never a partial score.
+                    # Full collection must still validate every required slot.
+                    self._row_cache.move_to_end(key)
+                    row = self._row_cache[key]
+                    future = Future()
+                    future.set_result(BacktestResult(
+                        request.request_id, request.dataset_id, deepcopy(row.metrics), row.liquidated,
+                    ))
+                else:
+                    future = self.service.submit(request)
             except BacktestQueueFull:
                 if not self._futures:
                     raise RuntimeError("borrowed backtest service is full without session-owned work")
@@ -159,8 +180,20 @@ class NativeEvaluationSession:
                     if not self._stopped:
                         raise RuntimeError("an admitted backtest was cancelled unexpectedly")
                     continue
-                _plan, collector = self._active[candidate_id]
+                if not isinstance(row, BacktestResult) or (
+                    row.request_id, row.dataset_id
+                ) != (_request.request_id, _request.dataset_id):
+                    raise RuntimeError("backtest result identity does not match its submitted request")
+                plan, collector = self._active[candidate_id]
                 complete = collector.add_result(row)
+                # Only collector-validated simulator rows enter this bounded,
+                # run-local cache. Keys include the complete effective candidate
+                # identity and prepared dataset, independent of screening stage.
+                key = self._row_key(plan, _request)
+                self._row_cache[key] = deepcopy(row)
+                self._row_cache.move_to_end(key)
+                while len(self._row_cache) > self.cache_size:
+                    self._row_cache.popitem(last=False)
                 if complete is not None:
                     self._complete(complete)
                 self._pump()

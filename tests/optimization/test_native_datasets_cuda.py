@@ -7,7 +7,8 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_canonical_lazy_suite_registry_drives_cuda_without_cpu_simulation(monkeypatch):
+@pytest.mark.parametrize("screen_first", [False, True])
+async def test_canonical_lazy_suite_registry_drives_cuda_without_cpu_simulation(monkeypatch, screen_first):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -97,6 +98,15 @@ async def test_canonical_lazy_suite_registry_drives_cuda_without_cpu_simulation(
                     return future
                 monkeypatch.setattr(service, "submit", submit)
                 session = NativeEvaluationSession(service, registry.scorer)
+                if screen_first:
+                    session.admit(registry.planner.prepare("screen", vector, scenarios=["base"]))
+                    screened = []
+                    deadline = time.monotonic() + 60
+                    while not screened and time.monotonic() < deadline:
+                        screened = session.poll(timeout=0.05)
+                    assert len(screened) == 1 and screened[0].stage == "screening"
+                    with pytest.raises(ValueError, match="screening"):
+                        screened[0].require_full()
                 session.admit(plan)
                 completed = []
                 deadline = time.monotonic() + 60
@@ -106,6 +116,14 @@ async def test_canonical_lazy_suite_registry_drives_cuda_without_cpu_simulation(
                 assert completed[0].require_full()["fitness"]
                 assert session.pending_request_count == 0
                 assert len(observed) == 2
+                assert len({request.dataset_id for request, _future in observed}) == 2
+                if screen_first:
+                    assert {request.request_id for request, _future in observed} == {"screen:0", "candidate:1"}
+                analyses = {binding.scenario: {binding.dataset.exchange: {
+                    **reference[binding.dataset_id].metrics,
+                    "liquidated":reference[binding.dataset_id].liquidated,
+                }} for binding in registry.bindings}
+                assert completed[0].require_full() == registry.scorer.score(plan.vector, analyses)
             for request, future in observed:
                 actual = future.result()
                 assert actual.metrics == pytest.approx(reference[request.dataset_id].metrics, rel=1e-7, abs=1e-9)
