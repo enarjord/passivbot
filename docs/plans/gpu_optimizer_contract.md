@@ -806,6 +806,8 @@ Completion requires:
 
 ### 2026-10-06 — Explicit native parity execution
 
+- Native scenario screening merged into development after clear exact-head automatic review
+  and successful Python 3.12/3.14 and Rust checks. Keep the same gate for this tooling slice.
 - Inspection found the standalone comparator still chose the legacy single-coin replay
   for one-coin inputs, while native optimization always uses the shared-account replay.
   Add `--gpu-engine native` to run the actual prepared CUDA service for 1..64 coins; keep
@@ -827,6 +829,9 @@ Completion requires:
   shared segments are reclaimed and earlier failures preserved. Existing prepared-input
   identity checks, legacy comparison policies and measured discrepancies stay intact.
   This closes a path-selection gap in parity tooling, not the broader parity acceptance gate.
+- An additional 140 existing CPU backend/preparation and artifact/Pareto plotting tests pass,
+  with one environment-specific skip. This is focused compatibility coverage, not completion
+  of the broader standalone CLI and dependency-isolation acceptance checklist.
 - A 21-case seed-7, 5,760-bar matrix using the native service preserves completion coverage
   in every case and the two passing long-only TM fixtures. Strict measurement policies
   still expose the small residual differences recorded previously: EMA ADG relative error
