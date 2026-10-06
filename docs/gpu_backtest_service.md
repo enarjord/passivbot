@@ -319,13 +319,20 @@ mode retains full state even when HSL is disabled: its separate panic segments a
 reported drawdown reductions. Fused portfolios and Trailing Martingale retain their
 existing layouts. Execution scheduling does not decide this semantic specialization.
 
-Shared-account EMA realized-loss admission and auto-unstuck use one bounded fill-PnL
-window selected by `live.pnls_max_lookback_days`. The history is prepared when either
-consumer is enabled and compiled out when neither needs it or the scope is all history.
-Loss-only requests retain the window even with auto-unstuck and HSL disabled. Shared
-long/short cash and generation-time loss reservations remain unchanged. HSL histories
-and Trailing Martingale's conservative realized-loss policy are separate. Native
-single-coin requests use this shared-account engine as well.
+Shared-account EMA and Trailing Martingale realized-loss admission and auto-unstuck
+use one bounded fill-PnL window selected by `live.pnls_max_lookback_days`. The history
+is prepared when either consumer is enabled and compiled out when neither needs it
+or the scope is all history. Loss-only requests retain the window even with
+auto-unstuck and HSL disabled. HSL history remains separate.
+
+Trailing Martingale finalizes executable close quantities before reserving projected
+negative PnL across coins and both sides. It prioritizes finalized protective reducers,
+then ordinary closes; projected profits cannot fund another emitted loss. Unfilled
+emitted orders also reserve allowance, panic closes are exempt, and fills consume
+admitted intent without repeating the loss check at a changed candle price or balance.
+The disabled loss gate compiles out its admission state and work. Native single-coin
+requests use this shared-account engine as well. The retained legacy directional
+single-coin Trailing Martingale engine still uses its conservative loss policy.
 
 GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
 Reporting state is separate from the panic tier used by the simulation; counting

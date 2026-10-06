@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Use the configured realized-loss allowance for shared-account Trailing Martingale
+  GPU backtests, including native single-coin runs. Reserve generated close losses
+  across coins and sides, honor finite fill-PnL history, and consume admitted orders
+  without repeating their loss checks at fill time.
+
 - Honor finite fill-PnL lookback in shared-account EMA Anchor GPU realized-loss
   admission, including native single-coin and long/short runs. Reuse the existing
   bounded history buffer and prepare it even when auto-unstuck is disabled.

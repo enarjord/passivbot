@@ -1119,12 +1119,22 @@ def _trailing_martingale_multicoin_shader_library(
     mps_coin_capacity: int | None = None,
     unstuck_pnl_lookback_bars: int = 0,
     unstuck_pnl_capacity: int = 0,
+    loss_gate_disabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
 
     source = _with_hsl_features(
-        passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
+        _with_tm_dispatch_features(
+            passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
+            trailing_entry_only=False,
+            recursive_entry_only=False,
+            trailing_close_only=False,
+            reducers_disabled=False,
+            market_orders_disabled=False,
+            volatility_disabled=False,
+            loss_gate_disabled=loss_gate_disabled,
+        ),
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
@@ -1232,6 +1242,8 @@ def _require_available_held_valuation(scalars):
     # Metal writes -2 and returns immediately if a held coin has no price.
     if bool((scalars[:, 9] == -3.0).any()):
         raise RuntimeError("GPU fill-PnL history overflow")
+    if bool((scalars[:, 9] == -5.0).any()):
+        raise RuntimeError("GPU close-admission invariant failed")
     invalid_hsl = scalars[:, 9] == -4.0
     if bool(invalid_hsl.any()):
         indices = invalid_hsl.nonzero().flatten()
@@ -3084,8 +3096,11 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
         self.interrupt_check = interrupt_check or (lambda: None)
         self._replay_state_bytes = None
+        self._replay_state_sizes = {}
         self._replay_states = {}
         self._last_temporal_dispatch = None
+        self.loss_gate_enabled = _encode_max_realized_loss_pct(max_realized_loss_pct) < 1.0
+        self.loss_gate_specialization = True
         super().__init__(
             run,
             data,
@@ -3148,25 +3163,14 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.equity_balance_diff_enabled,
             self.entry_interval_enabled,
             self.max_dispatch_candidate_bars is not None,
+            self.cuda_coin_capacity,
+            self.hsl_capacity,
+            self.pnl_lookback_bars,
+            self.mps_coin_capacity,
+            self.unstuck_pnl_lookback_bars,
+            self.unstuck_pnl_capacity,
+            self.loss_gate_specialization and not self.loss_gate_enabled,
         )
-        if self.hsl_capacity:
-            args += (
-                self.cuda_coin_capacity,
-                self.hsl_capacity,
-                self.pnl_lookback_bars,
-                self.mps_coin_capacity,
-            )
-        elif self.cuda_coin_capacity is not None:
-            args += (self.cuda_coin_capacity,)
-        if self.unstuck_pnl_capacity:
-            args = args[:9] + (
-                self.cuda_coin_capacity,
-                self.hsl_capacity,
-                self.pnl_lookback_bars,
-                self.mps_coin_capacity,
-                self.unstuck_pnl_lookback_bars,
-                self.unstuck_pnl_capacity,
-            )
         return _trailing_martingale_multicoin_shader_library, args
 
     def _dispatch(
@@ -3235,19 +3239,22 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         )
         if chunk_bars < 1:
             raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
-        if self._replay_state_bytes is None:
+        _, library_args = self._library_cache_call()
+        if library_args not in self._replay_state_sizes:
             size = torch.empty(1, dtype=torch.int32, device=gpu_device())
             library.passivbot_tm_multicoin_replay_state_bytes(size, threads=1)
-            self._replay_state_bytes = int(size.item())
-        if batch_size not in self._replay_states:
+            self._replay_state_sizes[library_args] = int(size.item())
+        self._replay_state_bytes = self._replay_state_sizes[library_args]
+        state_key = (batch_size, self._replay_state_bytes)
+        if state_key not in self._replay_states:
             self._replay_states = {
-                batch_size: torch.empty(
+                state_key: torch.empty(
                     (batch_size, self._replay_state_bytes),
                     dtype=torch.uint8,
                     device=gpu_device(),
                 )
             }
-        replay_states = self._replay_states[batch_size]
+        replay_states = self._replay_states[state_key]
         stop_k = int(end_steps.max().item())
         dispatch_count = 0
         max_dispatch_seconds = 0.0

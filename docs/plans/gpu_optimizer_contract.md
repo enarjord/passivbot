@@ -1159,3 +1159,96 @@ Completion requires:
   test targets compile, and the rebuilt extension's source stamp is verified.
   Source-only preparation and documentation checks pass; AI documentation has
   zero errors and the two existing size warnings. Tolerances are unchanged.
+
+### 2026-10-06 — TM loss-admission reproduction and local foundation
+
+- EMA finite loss history merged into development in [PR #1903](https://github.com/enarjord/passivbot/pull/1903)
+  after completed clear exact-head automatic review, exact-target author sign-off,
+  successful Python 3.12/3.14 and Rust CI, and a fresh all-surface review/identity
+  gate immediately before the SHA-pinned merge. Master remains unchanged.
+- Reproduced a separate TM semantic gap with offline flat-price fixtures: an ample
+  configured loss allowance admits fee-only closes on CPU, while the GPU's zero-loss
+  envelope rejects them. One/two-coin and long/short/fused cases differ in actual
+  fills and cash. A 36-case regression matrix has 18 expected baseline failures;
+  zero-budget and tight all-history controls pass. This is not precision noise.
+- Keep this next change local until shared admission is implemented and validated.
+  Replacing the history expression or loosening individual fill checks is insufficient.
+  Rust reserves projected negative PnL for generated orders across coins and sides;
+  profitable orders do not expand that reservation budget. Reducer priority/fallback,
+  ordinary order iteration, executable sizing, dust and panic exemptions all matter.
+- Preserve Rust's next-candle recursive expansion decision before admission. Reserve
+  unfilled emitted orders as well as reachable orders, and consume admitted intent at
+  fill time without checking it again against the next candle's price or cash.
+- Start with an immutable grid context and a bounded iterator over duplicate-merged
+  close groups. All existing group selectors share it; streaming future admission
+  avoids regenerating the complete ladder for each group. A bounded differential
+  CUDA probe matched 1,884 contexts and every one of 33,031 groups bitwise, including
+  500-group ladders, both exposure slopes, prefix merging and market sizing. This
+  validates the refactor, not the still-unimplemented loss-admission replacement.
+- Explore compact persisted admission flags and bounded quantity adjustments rather
+  than per-candidate full order histories. Keep the disabled gate compiled out,
+  reuse finite fill history with unstuck, and include directional/fused, temporal
+  replay, scratch batching, reuse and native requests with CPU simulations forbidden.
+  Existing tests asserting the conservative envelope must become correct budget
+  controls with Rust parity coverage; acceptance tolerances remain unchanged.
+- The retained directional TM engine has loss-gate compiler specialization, while
+  the native shared-account TM library does not currently expose that specialization.
+  Add it at the shared-account execution boundary with the replacement; do not assume
+  a legacy guard also removes native admission scratch or work.
+- Refactor validation: 194 affected checks pass in the CUDA environment, including
+  existing recursive fills/market reducers and finite-history/temporal replay cases,
+  plus a new bounded streaming regression. Six Metal-only cases are skipped. One
+  direct shader probe needed its helper-call interface updated; its dust-allocation
+  assertions are unchanged and pass. Rust tests pass (330, one ignored), default-feature
+  test targets compile, and the rebuilt extension is source-verified. Documentation
+  checks pass with zero errors and the two existing size warnings. The admission
+  replacement remains open; these results do not erase its reproduced failures.
+
+### 2026-10-06 — Local shared-account TM close admission
+
+- Replace the shared-account TM zero-loss envelope with one generation-time
+  admission stage across coins and both sides. Finalize executable quantities,
+  rank reducer alternatives globally, reserve projected negative PnL, then admit
+  ordinary closes in Rust's finalized iteration order. Projected profits do not
+  fund other orders; panic closes remain exempt. Fill execution consumes emitted
+  intent without repeating admission at the next candle's price or balance.
+- Keep persistent intent compact: one immutable grid context, 500 admission bits
+  and at most two trim/dust quantity adjustments per position. Reuse a bounded
+  temporary close vector across positions and reducer alternatives. Compile this
+  state and stage out when the configured loss gate is disabled.
+- Share the finite fill-PnL tape with auto-unstuck for TM as well as EMA. Cache
+  temporal replay sizes by the compiled variant and allocate buffers by their
+  actual byte size, since admission ablation changes the persisted state layout.
+- CUDA validation resolves all 18 reproduced failures in the 36-case Rust comparison
+  matrix. The full new admission/streaming modules pass 135 tests; an additional
+  regression passes twelve long/short dust, minimum and aggregate-trim scenarios.
+  Coverage includes 54 recursive slope/market/WEL/TWEL comparisons, 24 combined
+  unstuck/loss history comparisons, finite/all history, compiler ablation, temporal
+  replay, scratch batching, candidate variation/reordering and native requests with
+  CPU simulations forbidden. Direct account cases cover unfilled reservations,
+  reducer priority/fallback, panic exemption and execution-cost projection.
+- Adjudicate legacy assertions that deliberately required the old conservative
+  envelope: rejection controls now use zero allowance; ample allowance admits
+  fee-only closes and matches Rust. Corrected controls and shader smoke pass 24
+  tests. The final existing recursive/market/reducer/loss-gate slice passes 131
+  checks, and shared history/HSL/temporal replay passes 62 with six Metal-only
+  skips. Preparation/service tests pass 275 checks. Rust tests pass (330, one
+  ignored), default-feature test compilation passes, and the rebuilt extension is
+  source-verified. The real native parity CLI passes single-coin and fused synthetic
+  fee-only-close comparisons, including unchanged metric policies and matching limit
+  violations. Documentation checks pass with zero errors and the two existing
+  size warnings. Repository-wide formatting has pre-existing unrelated differences;
+  leave them outside this behavior change.
+- A bounded direct CUDA measurement uses the synthetic cohort generator's seed 7,
+  16 candidates, four coins, both sides and 10,080 bars on an RTX 3070 Ti Laptop GPU.
+  Three warm repetitions have median times 2.44 seconds for disabled/specialized
+  admission, 2.48 for disabled/general, and 2.92 for enabled allowance 0.1. Disabled
+  specialized/general outputs agree. Compiler-reported local storage is respectively
+  7,488, 21,664 and 21,728 bytes per thread; these are not total device-memory or
+  persistent-state measurements. Timing includes raw packing/decoding, synchronization
+  and output copies, excludes preparation/CPU simulation and uncontrolled first-use
+  compilation, and does not establish generic throughput acceptance. Preserve this
+  genuine disabled-feature ablation; broader optimizations remain future work.
+- These results do not establish general simulator parity or goal completion.
+  Any implementation PR still needs completed exact-head automatic review, resolved
+  findings, author sign-off and CI before development-only integration.

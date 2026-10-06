@@ -1472,11 +1472,20 @@ mod tests {
         assert!(source.contains("twel_enforcer_enabled"));
         assert!(source.contains("twel_enforcer_reduce_portfolio"));
         assert!(source.contains("twel_close_qty"));
-        assert!(source.contains("realized_loss_proxy_allows_close"));
-        assert!(source.contains("const bool loss_gate_enabled = run_settings[5] < 1.0f"));
-        assert!(source.contains("float projected_close_fee = close_market[c]"));
-        assert!(source.contains("float twel_gate_fee = twel_reducer_market"));
-        assert!(source.contains("float unstuck_gate_fee = unstuck_reducer_market"));
+        assert!(!source.contains("realized_loss_proxy_allows_close"));
+        assert!(
+            source.contains("const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED")
+        );
+        assert!(source.contains("prepare_tm_close_admission"));
+        assert!(source.contains("tm_projected_close_pnl"));
+        assert!(source.contains("source.finalized_reducer_qty"));
+        assert!(source.contains("source.admitted_groups[group / 32]"));
+        assert_eq!(
+            source
+                .matches("&& !apply_tm_multicoin_close_admission(")
+                .count(),
+            2
+        );
         assert!(source.contains(
             "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
         ));
