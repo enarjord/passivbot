@@ -267,6 +267,33 @@ report = run_comparison(inputs, "binance", (name,),
 print(report["status"], report["metrics"])
 ```
 
+## Requested-metric cohort evidence
+
+The [cohort tool](../gpu_cohort_benchmark.md#optional-metric-cohort-measurements)
+now requests optional histories/reductions and scalar diagnostic limit metrics from
+both simulators. Explicit policy files are resolved into the report; unknown policies
+remain unassessed. BTC-denominated requests enable CPU BTC analysis. The core three
+comparisons and two-objective ADG/drawdown ranking remain fixed.
+
+Four public seven-day, four-coin, both-side cohorts (both strategies, seeds 7/43,
+sixteen candidates) retain identical core comparisons/rankings on the integrated
+bounded-allowance/HSL simulator. The eleven-metric experiment has no flips for five
+selected diagnostic checks, but HSL is disabled, its EMA tail is trivially zero, and
+these thresholds do not establish all constraint decisions or extra-objective rankings.
+EMA recovery/gap tails and weighted-volume residuals remain visible and unassessed.
+Native warm cohort cost remains close to direct replay; no tuning optimum is inferred
+from underfilled automatic batches with zero eligible samples. Requested-history
+Torch and externally sampled whole-process/device memory are documented separately;
+large suites and cold-native execution still require measurements.
+
+A CUDA regression checks exact raw daily summaries, timestamps, fills and drawdowns
+across a 16-versus-1+15 TM replay. Weighted ADG can differ by six float64 units with
+those identical inputs. The tool permits at most eight float64 units in GPU-reference
+checks, records every accepted discrepancy and reports exactness separately. It does
+not admit float32 replay drift or widen CPU/GPU tolerances. Missing metric keys,
+identity/liquidation changes and larger/non-finite disagreements still fail. This is a
+bounded numerical-reference policy, not a general simulator-parity approval.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account

@@ -17,10 +17,37 @@ def options(*values):
 
 @pytest.mark.parametrize("flags", [("--widths", "0"), ("--widths", "broken"),
                                    ("--warm-runs", "0"), ("--candidates", "129"),
-                                   ("--adg-floor", "nan"), ("--drawdown-ceiling", "inf")])
+                                   ("--adg-floor", "nan"), ("--drawdown-ceiling", "inf"),
+                                   ("--limit", "fills_gap_p95_hours", "greater_than", "nan"),
+                                   ("--limit", "fills_gap_p95_hours", "auto", "1"),
+                                   ("--limit", "unknown", "greater_than", "1")])
 def test_invalid_workload_is_rejected_before_device_access(flags):
     with pytest.raises(SystemExit) as error:
         options(*flags)
+    assert error.value.code == 2
+
+
+def test_metric_requests_include_limit_work_and_preserve_undefined_policies(tmp_path):
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"adg_strategy_pnl_rebased": {"absolute": 0.001, "relative": 0.01}}))
+    args = options("--metrics", "adg_strategy_pnl_rebased", "strategy_eq_recovery_days_p95",
+                   "--limit", "volume_pct_per_day_avg_w", "greater_than", "2",
+                   "--tolerances", str(path))
+    assert args.metrics == [*benchmark.gpu_parity.DEFAULT_METRICS,
+                            "strategy_eq_recovery_days_p95", "volume_pct_per_day_avg_w"]
+    assert args.policies["adg_strategy_eq"] == benchmark.gpu_parity.MetricTolerance(0.001, 0.01)
+    assert "strategy_eq_recovery_days_p95" not in args.policies
+    assert "volume_pct_per_day_avg_w" not in args.policies
+
+
+@pytest.mark.parametrize("policy", [[], {"adg_strategy_eq": {"absolute": -1, "relative": 0}},
+                                    {"adg_strategy_eq": {"absolute": True, "relative": 0}},
+                                    {"adg_strategy_eq": {"absolute": 0, "relative": float("nan")}}])
+def test_malformed_metric_policies_are_rejected_before_device_access(tmp_path, policy):
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps(policy))
+    with pytest.raises(SystemExit) as error:
+        options("--tolerances", str(path))
     assert error.value.code == 2
 
 
@@ -56,7 +83,17 @@ def test_diagnostic_limits_use_canonical_feasibility_and_inclusive_boundaries():
     assert benchmark._checks(options()) == []
 
 
-@pytest.mark.parametrize("fault", [None, "identity", "metric", "liquidation"])
+def test_additional_diagnostic_limits_use_canonical_metric_feasibility():
+    from optimization.gpu.parity import compare_limits
+
+    checks = benchmark._checks(options("--limit", "fills_gap_p95_hours", "greater_than", "1"))
+    report = compare_limits({"fills_gap_p95_hours": 1.0}, {"fills_gap_p95_hours": 1.1}, checks)
+    assert report["cpu_feasible"] is True
+    assert report["gpu_feasible"] is False
+    assert report["checks"][0]["status"] == "flip"
+
+
+@pytest.mark.parametrize("fault", [None, "identity", "metric", "liquidation", "rounding"])
 def test_native_observation_binds_each_completion_and_keeps_batch_evidence(monkeypatch, fault):
     import optimization.gpu.native as native
     from optimization.gpu.executor import BacktestResult, ReplayResult
@@ -74,7 +111,8 @@ def test_native_observation_binds_each_completion_and_keeps_batch_evidence(monke
         def submit(self, request):
             self._batch_policy.observe(request.dataset_id, 1, 0.001, backlog=0, closing=False)
             result = BacktestResult(request.request_id, "wrong" if fault == "identity" else request.dataset_id,
-                                    {"metric": request.parameters["metric"] + (1 if fault == "metric" else 0)},
+                                    {"metric": (math.nextafter(request.parameters["metric"], math.inf) if fault == "rounding" else
+                                                request.parameters["metric"] + (1 if fault == "metric" else 0))},
                                     fault == "liquidation")
             future = Future()
             future.set_result(result)
@@ -87,17 +125,39 @@ def test_native_observation_binds_each_completion_and_keeps_batch_evidence(monke
     ))
     parameters = [{"metric": value} for value in range(3)]
     reference = [ReplayResult(row, False) for row in parameters]
-    if fault:
-        with pytest.raises(RuntimeError, match="identity|differs"):
+    if fault and fault != "rounding":
+        with pytest.raises(RuntimeError, match="identity|differs") as error:
             benchmark._native_runs(torch, None, parameters, reference, 2, 1)
+        if fault == "metric":
+            assert "metric_differences=[('metric'" in str(error.value)
     else:
         report = benchmark._native_runs(torch, None, parameters, reference, 2, 1)
-        assert report["matches_direct_gpu_exactly"]
+        assert report["matches_direct_gpu"]
+        assert report["matches_direct_gpu_exactly"] is (fault != "rounding")
+        assert bool(report["reduction_rounding"]) is (fault == "rounding")
+        if fault == "rounding":
+            assert report["reduction_rounding"]["metric"]["count"] == 6
+            assert report["reduction_rounding"]["metric"]["max_float64_ulps"] == 1
         assert sum(row["count"] for row in report["successful_batches"]) == 6
         assert report["tuning"] is None
         assert len(report["runs"]) == 2
         assert report["torch_memory_bytes"]["peak_allocated"] == 6
     assert closed == [True]
+
+
+def test_gpu_reference_comparison_accepts_only_reported_float64_rounding():
+    expected = {"value": 1.0}
+    actual = 1.0
+    for _ in range(benchmark.MAX_FLOAT64_REDUCTION_ULPS):
+        actual = math.nextafter(actual, math.inf)
+    assert benchmark._metric_rounding(expected, {"value": actual}) == {
+        "value": {"absolute_error": actual - 1, "float64_ulps": 8}}
+    assert benchmark._metric_rounding(expected, {"value": math.nextafter(actual, math.inf)}) is None
+    assert benchmark._metric_rounding(expected, {"value": 1 + 2**-23}) is None
+    assert benchmark._metric_rounding(expected, {}) is None
+    assert benchmark._metric_rounding(expected, {"value": math.nan}) is None
+    assert benchmark._metric_rounding({"value": math.inf}, {"value": math.inf}) == {}
+    assert benchmark._metric_rounding({"value": math.inf}, {"value": -math.inf}) is None
 
 
 def test_failed_execution_is_structured_and_report_file_matches_stdout(monkeypatch, tmp_path, capsys):
@@ -162,22 +222,79 @@ def test_cli_dispatches_benchmark_help_without_full_dependency_gate(monkeypatch)
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(strategy):
+def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(strategy, tmp_path):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("NVIDIA CUDA required")
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"strategy_eq_recovery_days_p95": {"absolute": 0, "relative": 0}}))
     args = options("--strategies", strategy, "--bars", "512", "--coins", "2",
-                   "--candidates", "3", "--warm-runs", "1", "--widths", "1", "2", "auto")
+                   "--candidates", "3", "--warm-runs", "1", "--widths", "1", "2", "auto",
+                   "--metrics", "strategy_eq_recovery_days_p95", "volume_pct_per_day_avg_w", "adg_btc",
+                   "--limit", "fills_gap_p95_hours", "greater_than", "1",
+                   "--tolerances", str(path))
     report = benchmark.run_benchmark(args)
     json.dumps(report, allow_nan=False)
     case = report["cases"][0]
     assert report["runtime"]["rust_source_fingerprint"]
     assert len(case["cpu_gpu_comparisons"]) == 3
-    assert all(set(row["metrics"]) == set(benchmark.gpu_parity.DEFAULT_METRICS)
+    assert all(set(row["metrics"]) == set(args.metrics) for row in case["cpu_gpu_comparisons"])
+    assert report["recipe"]["metrics"] == args.metrics
+    assert "tolerances" not in report["recipe"] and "policies" not in report["recipe"]
+    assert report["tolerance_policy"]["volume_pct_per_day_avg_w"] is None
+    assert report["tolerance_policy"]["strategy_eq_recovery_days_p95"] == dict(
+        absolute=0, relative=0, matching_infinity=False)
+    assert all(row["metrics"]["adg_btc"]["cpu"] is not None for row in case["cpu_gpu_comparisons"])
+    assert all(row["metrics"]["strategy_eq_recovery_days_p95"]["status"] in {"match", "mismatch"}
+               for row in case["cpu_gpu_comparisons"])
+    assert all(row["metrics"]["volume_pct_per_day_avg_w"]["status"] == "unassessed"
                for row in case["cpu_gpu_comparisons"])
     assert case["ranking"]["assessed"]
-    assert case["diagnostic_limits"]["comparisons"] is None
+    assert len(case["diagnostic_limits"]["comparisons"]) == 3
+    assert all(row["assessed"] for row in case["diagnostic_limits"]["comparisons"])
     for native in case["native"]:
         assert native["matches_direct_gpu_exactly"]
         assert sum(row["count"] for row in native["successful_batches"]) == 6
         assert len(native["timing"]["warm_seconds"]) == 1
+
+
+def test_cuda_weighted_reduction_batch_shapes_preserve_raw_replay():
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("NVIDIA CUDA required")
+    from optimization.gpu.service import MpsMulticoinProxy
+
+    args = options("--strategies", "trailing_martingale", "--seeds", "43",
+                   "--metrics", "drawdown_worst_mean_1pct_strategy_eq",
+                   "drawdown_worst_mean_1pct_ema_strategy_eq", "fills_gap_p95_hours",
+                   "adg_strategy_eq_w", "strategy_eq_recovery_days_mean",
+                   "strategy_eq_recovery_days_p95", "strategy_eq_recovery_days_mean_worst_1pct",
+                   "volume_pct_per_day_avg_w")
+    inputs, _configs, parameters = benchmark._cohort(args, "trailing_martingale", 43)
+    config, candles, markets, btc, timestamps = inputs
+    proxy = MpsMulticoinProxy(config=config, hlcvs=candles, mss=markets, btc=btc,
+                             timestamps=timestamps, exchange="binance", batch_size=16,
+                             needed_metrics=args.metrics,
+                             max_dispatch_candidate_bars=benchmark.DISPATCH_BUDGET)
+    keys = ("day_end_eq", "day_min_eq", "day_max_dd", "first_eq_ts", "last_eq_ts", "fill_count", "max_dd")
+    captured = []
+    original = proxy._compute_objectives
+
+    def record(out, run, data, needed=None):
+        captured.append({name: out[name].clone().cpu() for name in keys})
+        return original(out, run, data, needed=needed)
+
+    try:
+        proxy._compute_objectives = record
+        full = proxy.evaluate_results(parameters)
+        split = proxy.evaluate_results(parameters[:1]) + proxy.evaluate_results(parameters[1:])
+    finally:
+        proxy._compute_objectives = original
+    assert len(captured) == 3
+    for name in keys:
+        torch.testing.assert_close(captured[0][name],
+                                   torch.cat([captured[1][name], captured[2][name]], dim=0),
+                                   rtol=0, atol=0, equal_nan=True)
+    for expected, observed in zip(full, split, strict=True):
+        assert expected.liquidated == observed.liquidated
+        assert benchmark._metric_rounding(expected.metrics, observed.metrics) is not None

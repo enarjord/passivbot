@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Extend offline GPU cohort measurements with requested metrics, explicit comparison
+  policies and repeatable canonical diagnostic limits. Measure opt-in reductions;
+  keep undefined tolerances unassessed and request limit metrics from both simulators.
+  Report bounded float64 rounding separately in native/direct GPU checks and
+  diagnose larger discrepancies without changing CPU/GPU comparison policies.
+
 - Include zero-length gaps between fills in the same candle in GPU fill-gap
   percentiles. Recover their multiplicity from compact counts without exporting
   fill histories; preserve time-weighted gap calculations and logarithmic bins.

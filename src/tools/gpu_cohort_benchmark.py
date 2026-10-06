@@ -22,6 +22,9 @@ from optimization.gpu.parity import compare_limits, compare_metrics
 from tools import gpu_parity
 
 DISPATCH_BUDGET = 500_000_000
+# Identical float32 replay summaries can differ in the last float64 reduction
+# bits across batch shapes. This does not admit a float32 ULP of replay drift.
+MAX_FLOAT64_REDUCTION_ULPS = 8
 
 
 def build_parser():
@@ -39,6 +42,12 @@ def build_parser():
     parser.add_argument("--unstuck", action="store_true")
     parser.add_argument("--adg-floor", type=float)
     parser.add_argument("--drawdown-ceiling", type=float)
+    parser.add_argument("--metrics", nargs="+", default=[],
+                        help="Additional GPU metrics; ADG, drawdown and fills/day remain included")
+    parser.add_argument("--tolerances", help="JSON per-metric comparison policies, as in gpu-parity")
+    parser.add_argument("--limit", dest="limits", action="append", nargs=3, default=[],
+                        metavar=("METRIC", "MODE", "VALUE"),
+                        help="Repeatable diagnostic limit; MODE is less_than or greater_than")
     parser.add_argument("--report")
     parser.add_argument("--compact", action="store_true")
     return parser
@@ -70,6 +79,32 @@ def validate_args(parser, args):
     for value in (args.adg_floor, args.drawdown_ceiling):
         if value is not None and not math.isfinite(value):
             parser.error("diagnostic limit values must be finite")
+
+    from config.metrics import canonicalize_metric_name
+
+    try:
+        limits = []
+        for metric, mode, value in args.limits:
+            if mode not in {"less_than", "greater_than"}:
+                raise ValueError("--limit MODE must be less_than or greater_than")
+            bound = float(value)
+            if not math.isfinite(bound):
+                raise ValueError("diagnostic limit values must be finite")
+            limits.append(dict(metric=canonicalize_metric_name(metric), penalize_if=mode, value=bound))
+        args.limits = limits
+        checks = _checks(args)
+        args.metrics = list(dict.fromkeys(canonicalize_metric_name(name) for name in
+                            [*gpu_parity.DEFAULT_METRICS, *args.metrics,
+                             *(check["metric"] for check in checks)]))
+        args.policies = dict(gpu_parity.DEFAULT_TOLERANCES)
+        if args.tolerances:
+            policies = json.loads(Path(args.tolerances).read_text())
+            if not isinstance(policies, dict):
+                raise ValueError("comparison policies must be a JSON object")
+            for name, value in policies.items():
+                args.policies[canonicalize_metric_name(name)] = gpu_parity.MetricTolerance(**value)
+    except (OSError, TypeError, ValueError) as error:
+        parser.error(str(error))
 
 
 def _timing_summary(samples, count):
@@ -107,7 +142,7 @@ def _ranking(cpu, gpu):
 def _checks(args):
     from limit_utils import expand_limit_checks
 
-    entries = []
+    entries = list(args.limits)
     for metric, mode, bound in (("adg_strategy_eq", "less_than", args.adg_floor),
                                 ("drawdown_worst_strategy_eq", "greater_than", args.drawdown_ceiling)):
         if bound is not None:
@@ -170,12 +205,31 @@ def _observe_batches(policy, batches):
     return evidence
 
 
+def _metric_rounding(reference, observed):
+    """Return bounded machine-scale differences, or None for a mismatch."""
+    if reference.keys() != observed.keys():
+        return None
+    rounding = {}
+    for name, expected in reference.items():
+        actual = observed[name]
+        if actual == expected:
+            continue
+        if not (math.isfinite(expected) and math.isfinite(actual)):
+            return None
+        error = abs(actual - expected)
+        ulps = error / max(math.ulp(expected), math.ulp(actual))
+        if ulps > MAX_FLOAT64_REDUCTION_ULPS:
+            return None
+        rounding[name] = dict(absolute_error=error, float64_ulps=ulps)
+    return rounding
+
+
 def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
     import numpy as np
     from optimization.gpu.executor import BacktestRequest
     from optimization.gpu.native import CudaBacktestService
 
-    samples, batches = [], []
+    samples, batches, rounding = [], [], {}
     allocated_start = torch.cuda.memory_allocated()
     reserved_start = torch.cuda.memory_reserved()
     torch.cuda.reset_peak_memory_stats()
@@ -200,8 +254,22 @@ def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
                 observed = time.perf_counter()
                 if row.request_id != request_id or row.dataset_id != "cohort":
                     raise RuntimeError("native result identity differs from submitted request")
-                if row.metrics != reference[index].metrics or row.liquidated != reference[index].liquidated:
-                    raise RuntimeError("native result differs from direct GPU replay")
+                differences_allowed = _metric_rounding(reference[index].metrics, row.metrics)
+                if differences_allowed is None or row.liquidated != reference[index].liquidated:
+                    expected = reference[index]
+                    names = sorted(set(expected.metrics) | set(row.metrics))
+                    differences = [(name, expected.metrics.get(name), row.metrics.get(name))
+                                   for name in names if name not in expected.metrics or name not in row.metrics
+                                   or expected.metrics[name] != row.metrics[name]]
+                    raise RuntimeError(
+                        f"native result differs from direct GPU replay: request={request_id!r}, "
+                        f"liquidation={expected.liquidated!r}/{row.liquidated!r}, "
+                        f"metric_differences={differences[:8]!r}, count={len(differences)}")
+                for name, difference in differences_allowed.items():
+                    metric_evidence = rounding.setdefault(name, dict(count=0, max_absolute_error=0.0, max_float64_ulps=0.0))
+                    metric_evidence["count"] += 1
+                    metric_evidence["max_absolute_error"] = max(metric_evidence["max_absolute_error"], difference["absolute_error"])
+                    metric_evidence["max_float64_ulps"] = max(metric_evidence["max_float64_ulps"], difference["float64_ulps"])
                 elapsed.append(observed - started)
                 latencies.append(observed - submitted)
             samples.append(dict(seconds=elapsed[-1], first_completion_seconds=elapsed[0],
@@ -217,7 +285,9 @@ def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
                   if controller is not None else None)
         peak_allocated = torch.cuda.max_memory_allocated()
         peak_reserved = torch.cuda.max_memory_reserved()
-    return dict(requested_width="auto" if width is None else width, matches_direct_gpu_exactly=True,
+    return dict(requested_width="auto" if width is None else width,
+                matches_direct_gpu=True, matches_direct_gpu_exactly=not rounding,
+                reduction_rounding=rounding,
                 timing=_timing_summary([row["seconds"] for row in samples], len(parameters)),
                 runs=samples, successful_batches=batches, tuning=tuning,
                 torch_memory_bytes=dict(allocated_start=allocated_start, reserved_start=reserved_start,
@@ -237,14 +307,16 @@ def _measure(torch, args, strategy, seed):
         rows = []
         for candidate in configs:
             payload = build_backtest_payload(candles, markets, candidate, "binance", btc, timestamps,
-                                             metrics_only=True, skip_btc_analysis=True)
+                                             metrics_only=True,
+                                             skip_btc_analysis=not any(name.endswith("_btc") for name in args.metrics))
             _, _, analysis = execute_backtest(payload, candidate)
-            rows.append({name: resolve_metric_value(analysis, name) for name in gpu_parity.DEFAULT_METRICS})
+            rows.append({name: value for name in args.metrics
+                         if (value := resolve_metric_value(analysis, name)) is not None})
         cpu_samples.append(time.perf_counter() - started)
         cpu = rows
     started = time.perf_counter()
     proxy = MpsMulticoinProxy(config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
-                             exchange="binance", batch_size=len(parameters), needed_metrics=gpu_parity.DEFAULT_METRICS,
+                             exchange="binance", batch_size=len(parameters), needed_metrics=args.metrics,
                              max_dispatch_candidate_bars=DISPATCH_BUDGET)
     prepare_seconds = time.perf_counter() - started
     direct_samples, reference = [], None
@@ -259,11 +331,11 @@ def _measure(torch, args, strategy, seed):
         reference = rows
     del proxy
     gc.collect()
-    with gpu_parity._native_dataset(inputs, "binance", gpu_parity.DEFAULT_METRICS) as dataset:
+    with gpu_parity._native_dataset(inputs, "binance", args.metrics) as dataset:
         native = [_native_runs(torch, dataset, parameters, reference, width, args.warm_runs)
                   for width in args.widths]
     gpu = [dict(row.metrics) for row in reference]
-    policies = {name: gpu_parity.DEFAULT_TOLERANCES[name] for name in gpu_parity.DEFAULT_METRICS}
+    policies = {name: args.policies.get(name) for name in args.metrics}
     comparisons = [compare_metrics(left, right, policies)
                    for left, right in zip(cpu, gpu, strict=True)]
     checks = _checks(args)
@@ -276,13 +348,15 @@ def _measure(torch, args, strategy, seed):
                 direct_gpu=_timing_summary(direct_samples, len(parameters)), native=native,
                 cpu_gpu_comparisons=comparisons, ranking=_ranking(cpu, gpu),
                 diagnostic_limits=dict(adg_floor=args.adg_floor, drawdown_ceiling=args.drawdown_ceiling,
-                                       comparisons=limits))
+                                       limits=args.limits, comparisons=limits))
 
 
 def run_benchmark(args):
     import torch
     from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension
+    from optimization.gpu.metrics import validate_gpu_metric_names
 
+    validate_gpu_metric_names(args.metrics)
     if not torch.cuda.is_available() or getattr(torch.version, "hip", None):
         raise RuntimeError("cohort benchmark requires NVIDIA CUDA")
     if "passivbot_rust" not in sys.modules:
@@ -293,13 +367,18 @@ def run_benchmark(args):
         raise RuntimeError("cohort benchmark requires a source-verified Rust extension")
     device = torch.cuda.get_device_properties(torch.cuda.current_device())
     import cupy
-    return dict(schema_version=1, status="measured", measurement_scope=dict(
+    return dict(schema_version=1, status="measured",
+                native_reference_policy=dict(max_float64_ulps=MAX_FLOAT64_REDUCTION_ULPS,
+                                             metric_keys="exact", liquidation="exact"),
+                measurement_scope=dict(
         cpu="serial_payload_preparation_and_simulation",
         direct_first_use_cache="not_cleared",
         native_first_use_cache="after_direct_runs_not_cleared",
         latency="caller_observed_since_submission", memory="torch_allocations_only",
         dispatch_candidate_bars=DISPATCH_BUDGET), recipe={
-        key: value for key, value in vars(args).items() if key not in {"report", "compact"}},
+        key: value for key, value in vars(args).items() if key not in {"report", "compact", "tolerances", "policies"}},
+        tolerance_policy={name: vars(args.policies[name]) if name in args.policies else None
+                          for name in args.metrics},
         runtime=dict(rust_source_fingerprint=runtime["expected_source_fingerprint"],
                      rust_artifact_sha256=runtime["runtime_compiled_sha256"],
                      python_source_fingerprint=gpu_parity._source_fingerprint(),
