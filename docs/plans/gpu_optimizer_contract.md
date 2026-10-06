@@ -944,3 +944,30 @@ Completion requires:
   Metal-only skips, including native optimizer CLI screening, interruption and resume.
   The reporting-only change merged into development after completed exact-head automatic
   review with no findings, exact-target author review and successful required CI.
+
+### 2026-10-06 — CPU lowering for coupled candidate dependencies
+
+- Reproduce a native-preparation gap using canonical synthetic requests: with coupled
+  unstuck EMAs and a fixed coin patch, a searched strategy span of 2 is rejected while
+  the prepared span of 20 succeeds. Canonical materialization changes derived coin
+  span copies, even though the replay already supports request-owned span inheritance.
+- Prefer CPU lowering over expanding the GPU request ABI for this dependency. Exclude
+  redundant coupled coin span copies from execution identity, retain genuine strategy
+  pins and bind the coupling policy explicitly. Uncoupled coin-span changes still require
+  compatible prepared data. Arbitrary continuous coin-patch transport remains separate work.
+- Project registered worker views to ordinary backtest sections on the CPU. Remove
+  optimizer/bookkeeping metadata, omit inherited coin span copies and retain pinned
+  counterparts. Immutable history references stay shared; canonical request values and
+  effective candidate identity remain CPU-owned. No kernel or metric change is needed.
+- Full coupled-suite CLI checks expose a resume gap: plain-replay exports contain
+  candidate-dependent scenario spans that raw comparison mistakes for changed recipes.
+  Materialize incoming recipes against each saved candidate before comparison. Retain
+  all other scenario inputs, reject altered stored spans and leave checkpoint policy
+  checks intact; this applies to CPU/legacy suites as well as native optimization.
+- Final affected checks pass 185 cases on CUDA, including both strategies, standalone/lazy
+  suites, scenario span overrides, enabled unstuck EMA consumers, pinned/inherited spans,
+  independent effective replay comparisons, native CLI screening/interruption/resume and
+  evaluation-contract guards. Another 31 legacy resume/context checks pass. Documentation
+  checks pass with two existing size warnings. Rust and numerical tolerance policy are unchanged.
+- The parity-fixture correction merged into development after completed exact-head automatic
+  review with no findings, author semantic sign-off and successful required CI.

@@ -170,7 +170,12 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
     tools = algorithms = None
 import math
 import fcntl
-from optimizer_overrides import optimizer_overrides, validate_optimizer_overrides
+from optimizer_overrides import (
+    optimizer_overrides,
+    validate_optimizer_overrides,
+    unstuck_ema_spans_coupled,
+    materialize_coupled_scenario_spans,
+)
 from opt_utils import (
     deep_updated,
     generate_incremental_diff,
@@ -872,6 +877,16 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         # scenario list is the source of truth for per-scenario coins.
         if old_bt_compare.get("coins") is None:
             new_bt_compare.pop("coins", None)
+        if unstuck_ema_spans_coupled(entry) and unstuck_ema_spans_coupled(config):
+            # Saved suites contain explicit candidate-dependent spans for plain
+            # backtest replay. Compare incoming recipes after materializing them
+            # against this saved candidate, not against the current seed values.
+            # All other scenario inputs remain in the comparison, and corrupted
+            # stored spans still fail because only the incoming view is rebuilt.
+            expected = deepcopy(entry)
+            expected["backtest"]["scenarios"] = deepcopy(new_bt.get("scenarios", []))
+            materialize_coupled_scenario_spans(expected)
+            new_bt_compare["scenarios"] = expected["backtest"]["scenarios"]
     _append_resume_section_mismatches(
         mismatches, "backtest", old_bt_compare, new_bt_compare
     )

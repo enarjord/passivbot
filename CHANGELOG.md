@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Allow native GPU optimization to vary coupled unstuck EMA spans with fixed coin
+  patches. Preserve strategy coin pins and prepare optimizer-free backtest views
+  on the CPU before registering them with the GPU service. Compare coupled suite
+  resume recipes against saved candidate spans so generated overrides do not
+  prevent resuming an unchanged run.
+
 - Include terminal cooldown in GPU hard-stop time-in-red reporting, while keeping
   the panic signal and simulation behavior separate from reporting state.
 

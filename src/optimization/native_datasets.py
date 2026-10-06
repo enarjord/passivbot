@@ -15,8 +15,31 @@ from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY
 from optimization.gpu.model import gpu_side_enabled
 from optimization.native_results import CanonicalResultScorer
+from config.project import project_config
+from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.prepared_dataset_identity import _array_identity
 from shared_arrays import SharedArrayManager
+
+
+def _worker_config(config):
+    """Lower CPU-owned dependencies into ordinary backtest parameter inheritance."""
+    result = project_config(config, "backtest", record_step=False)
+    for name in ("_coins_sources", "_raw", "_raw_effective", "_transform_log"):
+        result.pop(name, None)
+    if unstuck_ema_spans_coupled(config):
+        kind = config["live"]["strategy_kind"]
+        for patch in result.get("coin_overrides", {}).values():
+            for side in ("long", "short"):
+                side_patch = patch.get("bot", {}).get(side, {})
+                strategy_patch = side_patch.get("strategy", {}).get(kind, {})
+                if kind == "trailing_martingale":
+                    strategy_patch = strategy_patch.get("entry", {})
+                for name in ("ema_span_0", "ema_span_1"):
+                    if name not in strategy_patch:
+                        # No coin strategy pin: inherit the explicit request value.
+                        side_patch.get("unstuck", {}).pop(name, None)
+                        side_patch.pop(f"unstuck_{name}", None)
+    return result
 
 
 class NativeDatasetRegistry:
@@ -151,7 +174,8 @@ class NativeDatasetRegistry:
         if self._closed:
             raise RuntimeError("native dataset registry is closed")
         for binding in self.bindings:
-            service.register_dataset(binding.dataset_id, binding.dataset)
+            runtime = _worker_config(json.loads(binding.dataset.config_json))
+            service.register_dataset(binding.dataset_id, binding.dataset.with_config(runtime))
 
     def close(self):
         if not self._closed:

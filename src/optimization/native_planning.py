@@ -20,6 +20,7 @@ from optimization.gpu.executor import BacktestRequest
 from optimization.gpu.model import gpu_side_enabled
 from optimization.gpu.parameters import prepare_candidate_parameters
 from optimization.native_results import CandidateEvaluation, CanonicalResultScorer, ResultSlot
+from optimizer_overrides import unstuck_ema_spans_coupled
 
 
 def _remove_path(config, path):
@@ -69,6 +70,17 @@ def _static_contract(config):
                 _remove_path(result, path)
     for key in ("red_threshold", "ema_span_minutes", "cooldown_minutes_after_red"):
         _remove_path(result, ("bot", "hsl", key))
+    coupled = unstuck_ema_spans_coupled(config)
+    # CPU worker views lower coupled unstuck spans to ordinary request inheritance.
+    # Strategy coin pins remain static; their derived unstuck copies must not
+    # split otherwise identical execution views.
+    result["coupled_unstuck_emas"] = coupled
+    if coupled:
+        for patch in result.get("coin_overrides", {}).values():
+            for side in ("long", "short"):
+                for name in ("ema_span_0", "ema_span_1"):
+                    _remove_path(patch, ("bot", side, "unstuck", name))
+                    _remove_path(patch, ("bot", side, f"unstuck_{name}"))
     return result
 
 
