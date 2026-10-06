@@ -143,3 +143,70 @@ def test_real_cuda_parity_cli(require_real_passivbot_rust_module, capsys):
         assert report["metrics"][name]["status"] == "match", report
     assert report["feasibility"]["passed"]
     assert report["rust_source_fingerprint"]
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "short", "both"])
+def test_real_cuda_multicoin_filter_preserves_funded_cpu_and_gpu_runs(
+    require_real_passivbot_rust_module, strategy, sides
+):
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    options = args("--fixture", strategy, "--sides", sides)
+    inputs = gpu_parity.fixture_inputs(options)
+    baseline = gpu_parity.run_comparison(
+        inputs, "binance", ["fills_per_day"], gpu_parity.DEFAULT_TOLERANCES
+    )
+    inputs[0]["backtest"]["filter_by_min_effective_cost"] = True
+    filtered = gpu_parity.run_comparison(
+        inputs, "binance", ["fills_per_day"], gpu_parity.DEFAULT_TOLERANCES
+    )
+    # Both engines independently consider these markets affordable. Filtering
+    # must not introduce the old all-zero screen; other known simulator gaps
+    # remain visible rather than widening the tool's CPU/GPU tolerance here.
+    for engine in ("cpu", "gpu"):
+        assert baseline["metrics"]["fills_per_day"][engine] > 0
+        assert filtered["metrics"]["fills_per_day"][engine] == pytest.approx(
+            baseline["metrics"]["fills_per_day"][engine], rel=1e-7
+        )
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("initial_qty_pct, funded", [
+    (0.01 * (1 - 1e-4), False), (float(np.nextafter(0.01, 0.0)), False),
+    (0.01, True), (0.01 * (1 + 1e-4), True),
+])
+def test_real_cuda_multicoin_cost_admission_boundary_is_measured(
+    require_real_passivbot_rust_module, strategy, initial_qty_pct, funded
+):
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    inputs = gpu_parity.fixture_inputs(args(
+        "--fixture", strategy, "--bars", "128", "--filter-by-min-effective-cost"
+    ))
+    config, candles, markets, _btc, _timestamps = inputs
+    strategy_config = config["bot"]["long"]["strategy"][strategy]
+    if strategy == "ema_anchor":
+        strategy_config["base_qty_pct"] = initial_qty_pct
+    else:
+        strategy_config["entry"]["initial_qty_pct"] = initial_qty_pct
+    candles[:, :, :3] = (101.0, 99.0, 100.0)
+    for coin in config["backtest"]["coins"]["binance"]:
+        markets[coin].update(min_cost=5.0, maker=0.0, taker=0.0)
+    report = gpu_parity.run_comparison(
+        inputs, "binance", ["fills_per_day"], gpu_parity.DEFAULT_TOLERANCES
+    )
+    metric = report["metrics"]["fills_per_day"]
+    assert (metric["cpu"] > 0) is funded
+    if initial_qty_pct == float(np.nextafter(0.01, 0.0)):
+        # This input and exactly 0.01 have identical float32 payloads. CPU
+        # rejects its sub-minimum float64 projection; GPU rounding may admit
+        # it. Do not require perfect identity or conceal the discontinuity.
+        if metric["gpu"] != metric["cpu"]:
+            assert metric["status"] == "mismatch"
+            assert not report["passed"]
+    else:
+        assert (metric["gpu"] > 0) is funded
+        assert metric["status"] == "match", report

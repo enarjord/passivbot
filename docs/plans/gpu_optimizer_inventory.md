@@ -45,7 +45,7 @@ the replacement must not claim to have computed those additional metrics.
 | Difference | Existing evidence / owner | Initial treatment |
 | --- | --- | --- |
 | Float32 paths versus CPU float64 | GPU parameter packing, shader state and CUDA lowering | Measure material effects; permit justified numerical differences |
-| Conservative minimum-effective-cost filtering | `service.py` configuration and Rust shader filters; documented liquidation-floor and all-history-minimum bound | Replace screening-only admission restrictions with the actual simulated-account test |
+| Conservative single-coin minimum-effective-cost filtering | Directional Rust shader filters; documented liquidation-floor and all-history-minimum bound | Multicoin now uses simulated cash/current-price minima; replace the remaining single-coin restrictions |
 | Conservative realized-loss allowance | Shader loss gates and topology-specific histories; documented all-history/zero-loss envelopes | Compare rolling-window expiry and shared reservations; do not treat this as decimal noise |
 | Rolling unstuck history only in some topologies | TM multicoin finite-history path and `test_gpu_unstuck_lookback.py` | Inventory consumers before reusing history storage elsewhere |
 | Bounded logarithmic histogram tails | Fill-gap and drawdown reducers in `metrics.py` | Quantify bin error and optimizer feasibility/ranking effects before accepting |

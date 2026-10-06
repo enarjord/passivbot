@@ -379,21 +379,30 @@ The supported slice is intentionally narrow:
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the effective wallet-exposure limit, including dynamic
   position counts and static per-coin wallet-exposure, allowance, and initial-quantity overrides.
-  The screening proxy compares each coin against its highest executable minimum over the prepared
+  Multicoin EMA Anchor and Trailing Martingale use current simulated cash and each candle's
+  executable minimum cost. Filtering occurs before Forager selection and one-way side arbitration;
+  held positions remain managed. An unaffordable coin does not permanently block other flat slots,
+  and EMA selection refreshes cost eligibility each candle when filtering is enabled.
+  Multicoin admission uses float32 arithmetic. Inputs inside the same float32 rounding
+  cell can straddle the CPU float64 minimum-cost boundary and produce different admission
+  decisions. The parity tool reports such discontinuities without widening metric tolerances.
+  Boundary coverage checks affordable equality and cases on both sides; it does not impose
+  a conservative exclusion margin that would also reject affordable equality.
+  The single-coin screening proxy compares against its highest executable minimum over the prepared
   window, rounds that threshold upward, and discounts the projected float32 product so boundary
   rounding cannot turn a just-below-threshold proxy projection into an admission. To remain
   conservative across float32 proxy versus float64 Rust path divergence, Metal uses the configured
   liquidation floor—not proxy balance—as the guaranteed cash-balance lower bound while the entire
   portfolio is flat and Metal has not rejected a candidate that exact Rust may still admit. For
-  multicoin and dual-side single-coin runs, the first independently selected or arbitrated candidate
+  dual-side single-coin runs, the first independently selected or arbitrated candidate
   set also exhausts this bound because later proxy/exact selection may diverge without a proxy fill.
   Once any of those events occurs, the liquidation floor bounds equity but no longer proves a lower
   bound for exact cash. Metal therefore keeps that uncertainty for the rest of the candidate
   backtest and immediately fails every later flat coin/side closed, even if its own portfolio remains
   or becomes flat again. These candidates are
-  removed before Forager selection and one-way long/short arbitration; every open position remains
-  managed. This supports single- and
-  multi-coin, one- and dual-side EMA Anchor and Trailing Martingale runs and compatible suites.
+  removed before entry/side arbitration; every open position remains managed. This restriction
+  remains in one- and dual-side single-coin EMA Anchor and Trailing Martingale runs and
+  compatible suites.
   The all-history minimum and whole-portfolio-flat bound may produce proxy false negatives, which
   exact validation may admit. Runs that depend on filling several slots sequentially while earlier
   positions remain open may therefore accumulate more proxy/exact rank drift and can halt at the

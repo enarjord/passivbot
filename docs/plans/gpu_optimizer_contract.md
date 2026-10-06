@@ -299,3 +299,39 @@ Completion requires:
   switches set to fixture defaults. Prepared reports must not imply that an ignored
   execution setting was exercised; regression checks reject all eight fixture options
   before loading inputs.
+
+### 2026-10-05 — Multicoin minimum-cost simulation semantics
+
+- Replaced multicoin liquidation-floor/all-history-minimum admission with current
+  simulated account balance and current-candle executable exchange minima. Kept dynamic
+  WEL/allowance/initial-quantity overrides, preselection and one-way arbitration, and
+  held-position management. Removed the permanent proxy/exact uncertainty state and
+  rejection scan; the shader change removes roughly 190 net lines of obsolete machinery.
+- EMA selection refreshes each candle when cost filtering is enabled, because both cash
+  and current-price minima can change. Unfiltered selection cadence is unchanged in
+  this slice and still requires the broader authoritative-simulation audit.
+- Updated obsolete conservative-filter regressions to exercise affordable slots,
+  delayed eligibility, rejected-coin isolation, per-coin overrides and side arbitration.
+  A delayed-entry fixture initially also exhausted the exposure budget; made the first
+  coin independently unaffordable so the test isolates cost admission from exposure.
+- Independent paired CPU and GPU synthetic comparisons check that affordable filtering
+  preserves each engine's unfiltered fills in all three side modes for both strategies.
+  They do not conceal the separate baseline TM short/passive-order discrepancy.
+- Full Rust tests and default-feature checks pass; rebuilt native source fingerprint
+  matches the changed tree. Remaining single-coin conservative filters, unused packed
+  maximum-cost metadata and the old optimizer configuration guard are subsequent work.
+- Validation: 330 Rust tests pass (one ignored), default-feature test compilation passes,
+  23 CUDA admission regressions and 37 parity-tool tests pass. Ten asynchronous-service
+  and temporal-replay cases pass, including partial tails and 3/28/64-coin layouts after
+  removing the obsolete serialized state. Source-only parity tests: 30 pass, seven skips.
+- Reviewed minimum-cost rounding explicitly: with two markets at price 100 and minimum
+  cost 5, initial quantity 0.01 admits in both engines; its immediately lower float64
+  neighbor is rejected on CPU but rounds to the same admitted GPU payload. Cases 0.01%
+  below/above the boundary agree. Retain native float32 admission and expose ambiguous
+  threshold discontinuities, rather than adding a screening-style conservative margin
+  that would also reject affordable equality. This is a bounded input-quantization
+  limitation; its potentially large metric effect remains a mismatch in reports.
+- Added paired boundary coverage for both strategies. These tests require agreement at
+  equality and outside the ambiguous rounding cell, and truthful mismatch reporting
+  when an ambiguous input produces different simulation paths. No global tolerance or
+  implicit CPU fallback is introduced.

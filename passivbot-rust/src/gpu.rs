@@ -781,14 +781,9 @@ mod tests {
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
-        assert_eq!(source.matches("float min_cost_balance_lower =").count(), 2);
-        assert!(source.contains("long_has_position || short_has_position"));
-        assert!(source.contains("multicoin_min_cost_rejection_possible"));
-        assert_eq!(
-            source.matches("bool min_cost_exact_open_uncertain").count(),
-            2
-        );
-        assert!(source.contains("never reuse the equity-derived liquidation floor"));
+        assert!(source.contains("filter_by_min_effective_cost, account.balance"));
+        assert!(!source.contains("min_cost_exact_open_uncertain"));
+        assert!(!source.contains("multicoin_min_cost_rejection_possible"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));
@@ -1263,16 +1258,9 @@ mod tests {
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
-        assert_eq!(source.matches("float min_cost_balance_lower =").count(), 2);
-        assert!(source.contains("long_has_position || short_has_position"));
-        assert!(source.contains("multicoin_min_cost_rejection_possible"));
-        assert_eq!(
-            source
-                .matches("bool min_cost_exact_open_uncertain =")
-                .count(),
-            2
-        );
-        assert!(source.contains("never reuse the equity-derived liquidation floor"));
+        assert!(source.contains("filter_by_min_effective_cost, account.balance"));
+        assert!(!source.contains("min_cost_exact_open_uncertain"));
+        assert!(!source.contains("multicoin_min_cost_rejection_possible"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));
         assert!(source.contains("constant int SCALAR_COLS = 63"));
         assert!(source.contains("constant int SCALAR_COLS = 67"));

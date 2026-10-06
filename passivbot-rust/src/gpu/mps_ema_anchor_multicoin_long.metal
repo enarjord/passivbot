@@ -979,7 +979,7 @@ inline void update_ema_multicoin_side_selection(
     float score_hysteresis,
     ulong one_way_initial_blocked_mask,
     bool filter_by_min_effective_cost,
-    float guaranteed_balance_lower
+    float balance
 ) {
     thread HslState* coin_hsl = side.coin_hsl;
     thread ulong& coin_hsl_entry_blocked_mask =
@@ -1035,6 +1035,7 @@ inline void update_ema_multicoin_side_selection(
         && candle_eligibility_mask != side.candle_eligibility_mask;
     side.candle_eligibility_mask = candle_eligibility_mask;
     bool reselect = !side.selection_initialized || any_fill
+        || filter_by_min_effective_cost
         || coin_hsl_eligibility_changed
         || one_way_eligibility_changed
         || candle_eligibility_changed
@@ -1068,8 +1069,8 @@ inline void update_ema_multicoin_side_selection(
             coin_overrides, c, 0, config.base_qty_pct
         );
         bool min_cost_eligible = passes_multicoin_min_effective_cost(
-            filter_by_min_effective_cost, guaranteed_balance_lower,
-            allowed_wel, initial_qty_pct, coin_settings[coin_offset + 12]
+            filter_by_min_effective_cost, balance,
+            allowed_wel, initial_qty_pct, bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
         );
         bool base_eligible = k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
@@ -3088,7 +3089,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     int last_active_fill_day = -1;
     bool alive = true;
     bool equity_started = false;
-    bool min_cost_exact_open_uncertain = false;
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
@@ -3225,35 +3225,15 @@ inline void passivbot_ema_anchor_multicoin_impl(
         int current_hsl_mode = coin_hsl_mode
             ? 0 : hsl_mode(hsl, has_hsl_position);
 #endif
-        // A proxy position or filter rejection can leave exact Rust in a
-        // different open/cash state. Once that can happen,
-        // never reuse the equity-derived liquidation floor as a cash bound,
-        // even if the proxy later looks flat.
-        if (has_hsl_position) min_cost_exact_open_uncertain = true;
-        float min_cost_balance_lower = min_cost_exact_open_uncertain
-            ? 0.0f : liquidation_floor;
-        if (filter_by_min_effective_cost && can_generate
-            && !min_cost_exact_open_uncertain
-            && multicoin_min_cost_rejection_possible(
-                side.psize, side.coin_hsl, config.coin_hsl_mode,
-                current_hsl_mode, config.twel, config.allowance_pct,
-                config.legacy_raw_allowance, config.base_qty_pct,
-                bars, coin_settings, coin_overrides, 11, 12, 0,
-                k, C, effective_n_positions,
-                min_cost_balance_lower
-            )) {
-            min_cost_exact_open_uncertain = true;
-            min_cost_balance_lower = 0.0f;
-        }
 
         if (can_generate) {
             update_ema_multicoin_side_selection(
                 side, config, bars, coin_settings, coin_overrides,
                 k, C, short_side,
-                any_fill || min_cost_exact_open_uncertain,
+                any_fill,
                 effective_n_positions,
                 score_hysteresis, 0ul,
-                filter_by_min_effective_cost, min_cost_balance_lower
+                filter_by_min_effective_cost, account.balance
             );
             generate_ema_multicoin_side_orders(
                 side, config, account,
@@ -3262,9 +3242,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 current_hsl_mode, market_orders_allowed,
                 market_order_near_touch_threshold, -2, 0ul
             );
-            if (filter_by_min_effective_cost) {
-                min_cost_exact_open_uncertain = true;
-            }
             finalize_ema_multicoin_reducers_one_side(
                 side, account, bars, coin_settings, k, C, short_side,
                 market_orders_allowed, market_order_near_touch_threshold,
@@ -3731,7 +3708,7 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
     bool long_can_generate,
     bool short_can_generate,
     bool filter_by_min_effective_cost,
-    float guaranteed_balance_lower,
+    float balance,
     thread ulong& long_selection_blocked_mask,
     thread ulong& short_selection_blocked_mask,
     thread ulong& long_order_blocked_mask,
@@ -3793,21 +3770,21 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
         );
         const bool long_min_cost_eligible =
             passes_multicoin_min_effective_cost(
-                filter_by_min_effective_cost, guaranteed_balance_lower,
+                filter_by_min_effective_cost, balance,
                 long_allowed_wel,
                 coin_override_or(
                     long_coin_overrides, c, 0, long_config.base_qty_pct
                 ),
-                coin_settings[coin_offset + 12]
+                bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
             );
         const bool short_min_cost_eligible =
             passes_multicoin_min_effective_cost(
-                filter_by_min_effective_cost, guaranteed_balance_lower,
+                filter_by_min_effective_cost, balance,
                 short_allowed_wel,
                 coin_override_or(
                     short_coin_overrides, c, 0, short_config.base_qty_pct
                 ),
-                coin_settings[coin_offset + 12]
+                bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
             );
         const int long_coin_mode = long_config.coin_hsl_mode
             ? hsl_mode(long_side.coin_hsl[c], false) : long_hsl_mode;
@@ -3982,7 +3959,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
     bool alive = true;
     bool equity_started = false;
-    bool min_cost_exact_open_uncertain = false;
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
     float run_peak = -INFINITY;
@@ -4163,12 +4139,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             ema_multicoin_side_has_position(long_side, C);
         const bool short_has_position =
             ema_multicoin_side_has_position(short_side, C);
-        if (long_has_position || short_has_position) {
-            min_cost_exact_open_uncertain = true;
-        }
-        float min_cost_balance_lower =
-            min_cost_exact_open_uncertain
-            ? 0.0f : liquidation_floor;
         int long_hsl_mode = long_config.coin_hsl_mode ? 0
             : hsl_mode(
                 long_side.hsl,
@@ -4179,35 +4149,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_side.hsl,
                 short_has_position
             );
-        if (filter_by_min_effective_cost
-            && !min_cost_exact_open_uncertain
-            && (
-                (long_can_generate
-                    && multicoin_min_cost_rejection_possible(
-                        long_side.psize, long_side.coin_hsl,
-                        long_config.coin_hsl_mode, long_hsl_mode,
-                        long_config.twel, long_config.allowance_pct,
-                        long_config.legacy_raw_allowance,
-                        long_config.base_qty_pct,
-                        bars, coin_settings, long_coin_overrides, 11, 12, 0,
-                        k, C, long_effective_n_positions,
-                        min_cost_balance_lower
-                    ))
-                || (short_can_generate
-                    && multicoin_min_cost_rejection_possible(
-                        short_side.psize, short_side.coin_hsl,
-                        short_config.coin_hsl_mode, short_hsl_mode,
-                        short_config.twel, short_config.allowance_pct,
-                        short_config.legacy_raw_allowance,
-                        short_config.base_qty_pct,
-                        bars, coin_settings, short_coin_overrides, 11, 12, 0,
-                        k, C, short_effective_n_positions,
-                        min_cost_balance_lower
-                    ))
-            )) {
-            min_cost_exact_open_uncertain = true;
-            min_cost_balance_lower = 0.0f;
-        }
         ulong long_one_way_selection_blocked_mask = 0ul;
         ulong short_one_way_selection_blocked_mask = 0ul;
         ulong long_one_way_order_blocked_mask = 0ul;
@@ -4221,7 +4162,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 long_effective_n_positions,
                 short_effective_n_positions,
                 long_can_generate, short_can_generate,
-                filter_by_min_effective_cost, min_cost_balance_lower,
+                filter_by_min_effective_cost, account.balance,
                 long_one_way_selection_blocked_mask,
                 short_one_way_selection_blocked_mask,
                 long_one_way_order_blocked_mask,
@@ -4263,10 +4204,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             update_ema_multicoin_side_selection(
                 long_side, long_config, bars, coin_settings,
                 long_coin_overrides, k, C, false,
-                any_fill || min_cost_exact_open_uncertain,
+                any_fill,
                 long_effective_n_positions, score_hysteresis,
                 long_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost, min_cost_balance_lower
+                filter_by_min_effective_cost, account.balance
             );
             generate_ema_multicoin_side_orders(
                 long_side, long_config, account,
@@ -4281,10 +4222,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             update_ema_multicoin_side_selection(
                 short_side, short_config, bars, coin_settings,
                 short_coin_overrides, k, C, true,
-                any_fill || min_cost_exact_open_uncertain,
+                any_fill,
                 short_effective_n_positions, score_hysteresis,
                 short_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost, min_cost_balance_lower
+                filter_by_min_effective_cost, account.balance
             );
             generate_ema_multicoin_side_orders(
                 short_side, short_config, account,
@@ -4294,10 +4235,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 market_orders_allowed, market_order_near_touch_threshold,
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
-        }
-        if (filter_by_min_effective_cost
-            && (long_can_generate || short_can_generate)) {
-            min_cost_exact_open_uncertain = true;
         }
         if (long_can_generate || short_can_generate) {
             finalize_ema_multicoin_reducers_fused(
