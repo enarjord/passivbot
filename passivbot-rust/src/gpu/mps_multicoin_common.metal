@@ -441,18 +441,41 @@ inline float coin_override_or(
 }
 
 inline float allowed_wallet_exposure_limit(
-    float base_limit, float total_limit, float allowance_pct, bool legacy_raw
-) {
+    float base_limit, float total_limit, float allowance_pct) {
     if (!(isfinite(base_limit) && base_limit > 0.0f)) return 0.0f;
     float raw = fmax(allowance_pct, 0.0f);
-    float effective = raw;
-    if (!legacy_raw) {
-        float max_effective = (
-            isfinite(total_limit) && total_limit > 0.0f
-        ) ? fmax(total_limit / base_limit - 1.0f, 0.0f) : 0.0f;
-        effective = fmin(raw, max_effective);
-    }
+    float max_effective = (isfinite(total_limit) && total_limit > 0.0f)
+        ? fmax(total_limit / base_limit - 1.0f, 0.0f) : 0.0f;
+    float effective = fmin(raw, max_effective);
     return base_limit * (1.0f + effective);
+}
+
+inline float coin_hsl_budget_multiplier(
+    bool scale, float twel, int slots, constant float* overrides,
+    int coin, int wel_col, int allowance_col, float allowance
+) {
+    if (!scale || slots <= 0) return 1.0f;
+    float authored_wel = coin_override_or(overrides, coin, wel_col, -1.0f);
+    float base = authored_wel >= 0.0f ? authored_wel : twel / float(slots);
+    if (!(isfinite(base) && base > 0.0f)) return 1.0f;
+    return allowed_wallet_exposure_limit(base, twel,
+        coin_override_or(overrides, coin, allowance_col, allowance)) / base;
+}
+
+// Terminal accounting must use the same configured headroom as mark observations.
+inline void prepare_coin_hsl_budgets(
+    thread HslState* controllers, bool coin_mode, bool scale, float twel,
+    int slots, constant float* overrides, int coins, int wel_col,
+    int allowance_col, float allowance
+) {
+#if !PASSIVBOT_HSL_DISABLED
+    if (!coin_mode || slots <= 0) return;
+    for (int c = 0; c < coins; ++c) {
+        controllers[c].slot_count = float(slots);
+        controllers[c].budget_multiplier = coin_hsl_budget_multiplier(
+            scale, twel, slots, overrides, c, wel_col, allowance_col, allowance);
+    }
+#endif
 }
 
 inline bool passes_multicoin_min_effective_cost(
@@ -476,7 +499,6 @@ inline bool multicoin_min_cost_rejection_possible(
     int current_hsl_mode,
     float twel,
     float allowance_pct,
-    bool legacy_raw_allowance,
     float initial_qty_pct,
     constant float* bars,
     constant float* coin_settings,
@@ -514,9 +536,7 @@ inline bool multicoin_min_cost_rejection_possible(
             base_limit, twel,
             coin_override_or(
                 coin_overrides, c, allowance_override_col, allowance_pct
-            ),
-            legacy_raw_allowance
-        );
+            ));
         if (!passes_multicoin_min_effective_cost(
             true, guaranteed_balance_lower, allowed_wel,
             coin_override_or(

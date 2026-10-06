@@ -500,8 +500,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **total_exposure_enforcer_enabled**: Enables TWEL auto-reduce repair for already-over-target same-side exchange exposure. Manual and panic exposure counts toward the trigger, but only managed positions can receive TWEL auto-reduce orders. Disable this independently from the TWEL entry gate when you want entry capping without repair closes, or repair closes without entry capping.
 - **total_exposure_enforcer_policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit * total_exposure_enforcer_threshold / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
 - **total_exposure_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` used by TWEL entry gating and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL when the entry gate is enabled; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
-- **risk_we_excess_allowance_pct**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. With the default `we_excess_allowance_mode = "bounded"`, the effective allowance is capped at `max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
-- **we_excess_allowance_mode**: Controls how `risk_we_excess_allowance_pct` is applied. Use `"bounded"` for the v8 default cap described above. Use `"legacy_raw"` only when intentionally preserving v7-style raw excess allowance where the configured percentage is not capped by side TWEL.
+- **risk_we_excess_allowance_pct**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. The effective allowance is capped at `max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
 - **max_realized_loss_pct**: Global realized-loss gate for close orders, anchored to peak realized balance from fill history. For each close order, if projected realized PnL would push balance below `peak_balance * (1 - max_realized_loss_pct)`, the order is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
   - Default: `1.0` (disabled).
   - `<= 0.0`: block all lossy closes.
@@ -752,6 +751,17 @@ Passivbot stores a few metadata keys alongside the normalized config:
 Additional reserved keys may appear in future releases; all keys beginning with an underscore are
 ignored by persistence helpers to keep user configs tidy.
 
+## Retired excess allowance selector
+
+Excess allowance is always bounded. On loading older configs, an explicit
+`we_excess_allowance_mode="bounded"` (including the flat risk alias) is removed
+with a warning in the normalized copy. Source files remain unchanged. An explicit
+`"legacy_raw"` or any unsupported value stops configuration loading with the full
+field path and migration instructions. Review the reduced exposure headroom, remove
+the field, and re-backtest before use; raw sizing cannot be preserved automatically.
+The same check includes coin overrides, external override files, optimizer fixed
+overrides and suite scenarios.
+
 ## HSL configuration
 
 See [Equity Hard Stop Loss](equity_hard_stop_loss.md) for formulas and lifecycle behavior.
@@ -772,7 +782,12 @@ For `coin`/`pside`, use `bot.long.hsl` and `bot.short.hsl`. `unified`
 requires an explicitly supplied `bot.hsl` block, even when side settings match or HSL
 is disabled. Supply all six fields: `enabled`, `red_threshold`, `ema_span_minutes`,
 `panic_close_order_type`, `cooldown_minutes_after_red`, and `restart_after_red_policy`.
-No side or template is silently promoted to portfolio authority.
+No side or template is silently promoted to portfolio authority. The optional
+`scale_budget_with_excess_allowance` field defaults to `false`; `true` is supported
+only for coin mode and multiplies the slot budget by that coin's bounded exposure
+headroom. Set it globally per side; the excess percentage itself remains coin-overridable.
+This affects current RED and terminal cooldown reconstruction. See the HSL guide
+for the formula.
 
 An enabled active scope must explicitly choose `restart_after_red_policy="always"`
 or `"never"`; missing choices and legacy `"threshold"` fail with migration guidance.

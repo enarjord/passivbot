@@ -24,6 +24,7 @@ REMOVED_LIVE_FIELDS = frozenset(
 FIELDS = frozenset(
     {
         "enabled",
+        "scale_budget_with_excess_allowance",
         "red_threshold",
         "ema_span_minutes",
         "panic_close_order_type",
@@ -218,7 +219,7 @@ def normalize_block(
     if not isinstance(block, dict):
         raise TypeError(f"{path} must be a mapping")
     if portfolio:
-        required = FIELDS - {"restart_after_red_policy"}
+        required = FIELDS - {"restart_after_red_policy", "scale_budget_with_excess_allowance"}
         missing = required - block.keys()
         if missing:
             raise ValueError(
@@ -237,10 +238,15 @@ def normalize_block(
     # All ordinary defaults are canonical; restart needs an explicit choice.
     for key in FIELDS - {"restart_after_red_policy"}:
         if key not in block:
-            block[key] = deepcopy(defaults[key])
+            block[key] = (
+                False if key == "scale_budget_with_excess_allowance"
+                else deepcopy(defaults[key])
+            )
     block.setdefault("restart_after_red_policy", None)
     if type(block["enabled"]) is not bool:
         raise TypeError(f"{path}.enabled must be a boolean")
+    if type(block["scale_budget_with_excess_allowance"]) is not bool:
+        raise TypeError(f"{path}.scale_budget_with_excess_allowance must be a boolean")
     policy = block["restart_after_red_policy"]
     if isinstance(policy, str):
         policy = policy.strip().lower()
@@ -284,6 +290,10 @@ def _is_hsl_path(path):
 
 
 def validate_parameter_path(path, mode):
+    if "scale_budget_with_excess_allowance" in path and "coin_overrides" in path:
+        raise ValueError(
+            f"{path} is global per-side HSL policy and cannot be overridden per coin"
+        )
     if "hsl_position_during_cooldown_policy" in path:
         raise ValueError(f"{path} is removed in HSL; exposure clears cooldown")
     if any(key in path for key in REMOVED_LIVE_FIELDS):
@@ -387,6 +397,8 @@ def normalize_hsl(config, template, *, verbose=True):
             active=mode != "unified",
             verbose=verbose,
         )
+        if mode != "coin" and side_cfg["hsl"]["scale_budget_with_excess_allowance"]:
+            raise ValueError(f"bot.{side}.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
         enabled |= mode != "unified" and side_cfg["hsl"]["enabled"]
     if "hsl" in bot:
         normalize_block(
@@ -397,6 +409,8 @@ def normalize_hsl(config, template, *, verbose=True):
             portfolio=True,
             verbose=verbose,
         )
+        if bot["hsl"]["scale_budget_with_excess_allowance"]:
+            raise ValueError("bot.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
         enabled |= mode == "unified" and bot["hsl"]["enabled"]
     for coin, patch in config.get("coin_overrides", {}).items():
         for side, values in patch.get("bot", {}).items():

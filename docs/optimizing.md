@@ -222,7 +222,7 @@ The supported slice is intentionally narrow:
   per-coin
   `risk.position_exposure_enforcer_enabled` and
   `risk.position_exposure_enforcer_threshold`; per-coin
-  `risk.we_excess_allowance_mode`, modeled leaves for disabled sides, and other override leaves
+  `hsl.scale_budget_with_excess_allowance`, modeled leaves for disabled sides, and other override leaves
   fail closed. Non-`normal` forced modes remain accepted for either side because they are
   backtest-inert. Trailing
   Martingale also resolves all four `entry.ema_gate_mode` values per coin and side. In one-sided

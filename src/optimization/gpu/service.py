@@ -1089,21 +1089,14 @@ def _candidate_position_slot_outputs(
     return outputs
 
 
-def _single_coin_exposure_params(risk: dict, *, side: str) -> dict[str, float]:
-    allowance_mode = (
-        str(risk.get("we_excess_allowance_mode", "bounded")).strip().lower()
-    )
-    if allowance_mode not in {"bounded", "legacy_raw"}:
-        raise ValueError(
-            "MPS proxy requires "
-            f"bot.{side}.risk.we_excess_allowance_mode to be bounded or "
-            f"legacy_raw, got {allowance_mode!r}"
-        )
+def _single_coin_exposure_params(
+    risk: dict, *, side: str, scale_hsl_budget: bool = False
+) -> dict[str, float]:
     return {
         "we_excess_allowance_pct": float(
             risk.get("we_excess_allowance_pct", 0.0) or 0.0
         ),
-        "we_excess_allowance_legacy_raw": float(allowance_mode == "legacy_raw"),
+        "hsl_scale_budget_with_excess_allowance": float(scale_hsl_budget),
         "twel_entry_gate_enabled": float(
             bool(risk.get("total_exposure_entry_gate_enabled", True))
         ),
@@ -1952,7 +1945,12 @@ class MpsSingleCoinProxy:
                 strategy["total_wallet_exposure_limit"] = float(
                     risk["total_wallet_exposure_limit"]
                 )
-            strategy.update(_single_coin_exposure_params(risk, side=side))
+            strategy.update(
+                _single_coin_exposure_params(
+                    risk, side=side,
+                    scale_hsl_budget=bool(bot["hsl_scale_budget_with_excess_allowance"]),
+                )
+            )
             if self.strategy_kind == "trailing_martingale":
                 strategy.update(_position_exposure_enforcer_params(risk, side=side))
             if self.strategy_kind in {"ema_anchor", "trailing_martingale"}:
@@ -3157,7 +3155,8 @@ class MpsMulticoinProxy:
             )
             first_strategy.update(
                 _single_coin_exposure_params(
-                    config["bot"][side].get("risk", {}), side=side
+                    config["bot"][side].get("risk", {}), side=side,
+                    scale_hsl_budget=config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"],
                 )
             )
             if self.strategy_kind == "trailing_martingale":

@@ -3750,7 +3750,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 7,  # Adaptive timing/RMS parameter layout and four-weight ranking.
+        "version": 8,  # Always-bounded allowance and opt-in coin HSL budget scaling.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {

@@ -4,7 +4,6 @@ from copy import deepcopy
 from .bot import (
     ensure_optimize_bounds_for_bot,
     format_bot_config,
-    normalize_coin_override_risk_config,
     strip_deprecated_coin_override_entry_grid_inflation_flags,
 )
 from .hydrate import (
@@ -56,6 +55,9 @@ def normalize_config(
     # Wrapper metadata stays on the outer document for provenance.
     flavor = detect_flavor(config, {})
     source_payload = config["config"] if flavor == "nested_current" else config
+    from .migrations.excess_allowance import retire_excess_allowance_mode
+
+    retire_excess_allowance_mode(source_payload, tracker=tracker)
     require_current_hsl_schema(source_payload, base_config_path=base_config_path)
     optimize_suite_defined = (
         isinstance(source_payload.get("optimize"), dict)
@@ -151,7 +153,6 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
-    normalize_coin_override_risk_config(result, tracker=tracker)
     ensure_optimize_bounds_for_bot(
         result,
         verbose=verbose,

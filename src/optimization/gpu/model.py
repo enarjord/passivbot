@@ -129,7 +129,7 @@ EMA_ANCHOR_PARAM_KEYS = (
 
 EXPOSURE_PARAM_KEYS = (
     "we_excess_allowance_pct",
-    "we_excess_allowance_legacy_raw",
+    "hsl_scale_budget_with_excess_allowance",
     "twel_entry_gate_enabled",
     "twel_enforcer_threshold",
 )

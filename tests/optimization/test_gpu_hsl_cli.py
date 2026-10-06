@@ -31,6 +31,11 @@ async def test_hsl_gpu_optimizer_cli_is_offline(
     import msgpack
 
     cfg = offline_cli_config(tmp_path, monkeypatch, mode)
+    if mode == "coin":
+        cfg["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True
+        cfg["bot"]["long"]["risk"].update(
+            n_positions=1 if suite else coin_count, we_excess_allowance_pct=0.44
+        )
     if coin_count == 2:
         add_offline_coin(tmp_path, cfg)
     if suite:
@@ -184,6 +189,11 @@ async def test_hsl_gpu_optimizer_cli_is_offline(
     assert state["halt_reason"] is None
     assert "hsl_engine" not in state["optimizer_evaluation_contract"]["live"]
     assert all("hsl_engine" not in record["live"] for record in records)
+    if mode == "coin":
+        assert all(
+            record["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is True
+            for record in records
+        )
     before = artifacts[0].stat().st_size
     cfg["optimize"]["iters"] = 48
     path.write_text(json.dumps(cfg))

@@ -491,7 +491,6 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
-                "risk_we_excess_allowance_mode": "LEGACY_RAW",
                 "unstuck_close_pct": 0.01,
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.1,
@@ -508,7 +507,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert out["hsl_enabled"] is True
     assert out["hsl_panic_close_order_type"] == "market"
     assert out["risk_twel_enforcer_policy"] == "reduce_portfolio"
-    assert out["risk_we_excess_allowance_mode"] == "legacy_raw"
+    assert "risk_we_excess_allowance_mode" not in out
     assert "entry_grid_inflation_enabled" not in out
     assert out["forager_score_weights"] == {
         "unilateralness": pytest.approx(0.0),
@@ -577,7 +576,6 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "risk_twel_entry_gate_enabled": True,
                         "risk_twel_enforcer_threshold": 1.0,
                         "risk_we_excess_allowance_pct": 0.0,
-                        "risk_we_excess_allowance_mode": "bounded",
                         "unstuck_close_pct": 0.01,
                         "unstuck_ema_dist": 0.0,
                         "unstuck_ema_span_0": 2.0,
