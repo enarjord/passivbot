@@ -769,7 +769,7 @@ def _weighted_percentile(values, counts, percentile):
 
 
 def _fill_gap_metrics(out, run):
-    """Reduce streamed gap moments and conservative percentile log bins."""
+    """Reduce per-fill gaps from candle gaps, fill multiplicity and log bins."""
 
     interval_ms = max(float(run.interval_ms), 1.0)
     first_eq_ts = out["first_eq_ts"].to(torch.float64)
@@ -806,6 +806,23 @@ def _fill_gap_metrics(out, run):
     gap_counts = torch.where(
         has_fill.unsqueeze(1), gap_counts, torch.zeros_like(gap_counts)
     )
+    fill_count = out["fill_count"].to(torch.float64)
+    rounded_fill_count = torch.round(fill_count)
+    if bool((
+        ~torch.isfinite(fill_count)
+        | (fill_count < 0.0)
+        | ((fill_count - rounded_fill_count).abs() > 1.0e-4)
+    ).any()):
+        raise RuntimeError("GPU fill-gap output contains an invalid fill count")
+    # Replay records one gap per filled candle. Rust's percentile population
+    # includes every fill, so additional fills in a candle contribute zero gaps.
+    # Recover that multiplicity from existing summaries without exporting fills
+    # or changing the time-weighted moment, for which zero gaps add nothing.
+    filled_candles = gap_counts.sum(dim=1) + has_fill.to(torch.long)
+    extra_fills = rounded_fill_count.to(torch.long) - filled_candles
+    if bool((has_fill & (extra_fills < 0)).any()):
+        raise RuntimeError("GPU fill-gap histogram exceeds the fill count")
+    extra_fills = torch.where(has_fill, extra_fills, torch.zeros_like(extra_fills))
 
     lead_hours = torch.where(
         has_fill,
@@ -825,8 +842,8 @@ def _fill_gap_metrics(out, run):
         ),
         dim=1,
     )
-    values = torch.cat((gap_values, boundary_values), dim=1)
-    counts = torch.cat((gap_counts, boundary_counts), dim=1)
+    values = torch.cat((gap_values, boundary_values, torch.zeros_like(span_ms).unsqueeze(1)), dim=1)
+    counts = torch.cat((gap_counts, boundary_counts, extra_fills.unsqueeze(1)), dim=1)
     total = counts.sum(dim=1).clamp(min=1).to(torch.float64)
     weighted_values = torch.where(counts > 0, values, torch.zeros_like(values))
     mean = (weighted_values * counts.to(values.dtype)).sum(dim=1) / total

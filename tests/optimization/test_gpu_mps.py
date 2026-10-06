@@ -18577,6 +18577,7 @@ def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
         {
             key: output[key].cpu()
             for key in (
+                "fill_count",
                 "gap_hist",
                 "gap_sum_squared_hours",
                 "first_fill_ts",

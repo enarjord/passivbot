@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Include zero-length gaps between fills in the same candle in GPU fill-gap
+  percentiles. Recover their multiplicity from compact counts without exporting
+  fill histories; preserve time-weighted gap calculations and logarithmic bins.
+
 - Match CPU traded-volume definitions in shared-account GPU backtests, including
   native single-coin runs: normalize actual fill quantities without an additional
   contract-multiplier factor, and include partial UTC days in weighted suffixes.
