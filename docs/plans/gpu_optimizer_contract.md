@@ -498,3 +498,14 @@ Completion requires:
   specialization test independently reproduces the failure on its original test source.
 - This is a preparation/residency foundation, not optimizer cutover, complete evaluation
   fingerprints, host/disk admission budgets, multi-device routing or adaptive scheduling.
+
+### 2026-10-06 — Prepared attachment failure preservation
+
+- Current-head auto review identified that raw attachment-close callbacks could replace
+  an original setup/execution exception. Added three failing regressions before changing
+  ownership to resource contexts. Close every acquired attachment, propagate the original
+  failure and log later cleanup failures. With no earlier error, propagate the first
+  cleanup failure rather than replacing it with another close error.
+- Validation: 124 offline lifecycle/dataset/residency/preparation cases pass. The combined
+  prepared-dataset/facade CUDA run passes 32 cases, including real setup failure and
+  interruption. No simulation semantics or result policy changes in this correction.

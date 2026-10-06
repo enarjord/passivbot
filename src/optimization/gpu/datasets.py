@@ -8,10 +8,26 @@ No device runtime, simulation or search dependency is imported here.
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 import json
+import logging
 
 import numpy as np
 
 from shared_arrays import SharedArraySpec, attach_shared_array
+
+
+@contextmanager
+def _borrow_array(spec):
+    attachment = attach_shared_array(spec)
+    try:
+        yield attachment.array
+    except BaseException:
+        try:
+            attachment.close()
+        except BaseException:
+            logging.exception("GPU dataset attachment cleanup failed after an earlier failure")
+        raise
+    else:
+        attachment.close()
 
 
 @dataclass(frozen=True, init=False)
@@ -88,8 +104,7 @@ class PreparedGpuDataset:
         with ExitStack() as resources:
             arrays = []
             for spec in (self.hlcvs, self.btc, self.timestamps):
-                attachment = attach_shared_array(spec)
-                resources.callback(attachment.close)
-                attachment.array.flags.writeable = False
-                arrays.append(attachment.array[slice(*self.time_range)])
+                array = resources.enter_context(_borrow_array(spec))
+                array.flags.writeable = False
+                arrays.append(array[slice(*self.time_range)])
             yield arrays

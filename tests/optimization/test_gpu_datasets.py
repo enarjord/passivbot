@@ -131,3 +131,28 @@ def test_cuda_facade_rejects_other_device_before_attachment(monkeypatch):
             service.submit(BacktestRequest("candidate", "market", {})).result(timeout=3)
     assert service._residency is None
     assert not service._prepared_cache and not service._subset_cache
+
+
+@pytest.mark.parametrize("phase", ["setup", "body", "cleanup"])
+def test_attachment_cleanup_preserves_primary_failure_and_attempts_every_close(monkeypatch, caplog, phase):
+    from types import SimpleNamespace
+    import optimization.gpu.datasets as module
+    dataset = PreparedGpuDataset(**inputs())
+    opened, closed = [], []
+    def attach(spec):
+        if phase == "setup" and spec == dataset.btc:
+            raise FileNotFoundError("primary setup")
+        opened.append(spec.name)
+        def close():
+            closed.append(spec.name)
+            raise RuntimeError("cleanup " + spec.name)
+        return SimpleNamespace(array=np.zeros(spec.shape, dtype=spec.dtype), close=close)
+    monkeypatch.setattr(module, "attach_shared_array", attach)
+    expected = FileNotFoundError if phase == "setup" else ValueError if phase == "body" else RuntimeError
+    message = "primary setup" if phase == "setup" else "primary body" if phase == "body" else "cleanup timestamps"
+    with pytest.raises(expected, match=message):
+        with dataset.attach():
+            if phase == "body":
+                raise ValueError("primary body")
+    assert closed == list(reversed(opened))
+    assert "cleanup candles" in caplog.text
