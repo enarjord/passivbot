@@ -4,6 +4,8 @@ A registered replay owns its prepared dataset and implements ``evaluate(candidat
 The device service serializes access to that mutable replay, combining adjacent compatible
 requests into short microbatches. Callers consume individual futures; they do not observe
 dispatch boundaries. No GPU runtime or evolutionary dependency is imported here.
+Prepared-input factories can create and release replay resources on the owning worker;
+preconstructed registration remains available as a transitional adapter.
 
 This service does not certify a replay's simulation semantics. In particular, wrapping an
 existing screening replay does not make its results authoritative.
@@ -12,14 +14,16 @@ existing screening replay does not make its results authoritative.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
+from contextlib import ExitStack
 from copy import deepcopy
 from dataclasses import dataclass
 import math
+import logging
 from threading import Condition, Thread, current_thread
 import time
-from typing import Protocol
+from typing import ContextManager, Protocol
 
 
 class BatchReplay(Protocol):
@@ -62,6 +66,8 @@ class GpuBacktestService:
     Closing drains accepted work by default. ``cancel_pending=True`` cancels queued
     requests, then joins the currently running bounded dispatch. An executing replay
     may additionally use its own interrupt callback; threads are never force-killed.
+    Factory cleanup failures are reported by ``close``. If execution also failed, its
+    original exception remains authoritative and secondary cleanup failure is logged.
     """
 
     def __init__(
@@ -78,10 +84,12 @@ class GpuBacktestService:
         self.max_batch_delay = float(max_batch_delay)
         self._condition = Condition()
         self._replays: dict[str, BatchReplay] = {}
+        self._factories: dict[str, Callable[[], ContextManager[BatchReplay]]] = {}
         self._queue: deque[_Pending] = deque()
         self._outstanding: dict[str, _Pending] = {}
         self._closing = False
         self._failure: BaseException | None = None
+        self._cleanup_failure: BaseException | None = None
         self._thread: Thread | None = None
 
     def register_dataset(self, dataset_id: str, replay: BatchReplay) -> None:
@@ -96,9 +104,29 @@ class GpuBacktestService:
             raise TypeError("replay must implement evaluate(candidates)")
         with self._condition:
             self._require_open()
-            if dataset_id in self._replays:
+            if dataset_id in self._replays or dataset_id in self._factories:
                 raise ValueError(f"dataset already registered: {dataset_id}")
             self._replays[dataset_id] = replay
+
+    def register_dataset_factory(
+        self, dataset_id: str, factory: Callable[[], ContextManager[BatchReplay]]
+    ) -> None:
+        """Register prepared inputs without constructing a mutable device replay.
+
+        The factory enters once on the owning worker, on first use. Its resource
+        context remains open for reuse and exits on that same worker during shutdown.
+        Factories must retain immutable prepared inputs for the service lifetime.
+        Neither registration nor closing an unused service invokes a factory.
+        """
+        if not isinstance(dataset_id, str) or not dataset_id:
+            raise ValueError("dataset_id must be a non-empty string")
+        if not callable(factory):
+            raise TypeError("dataset factory must be callable")
+        with self._condition:
+            self._require_open()
+            if dataset_id in self._replays or dataset_id in self._factories:
+                raise ValueError(f"dataset already registered: {dataset_id}")
+            self._factories[dataset_id] = factory
 
     def submit(self, request: BacktestRequest) -> Future[BacktestResult]:
         if not isinstance(request.request_id, str) or not request.request_id:
@@ -113,7 +141,7 @@ class GpuBacktestService:
         )
         with self._condition:
             self._require_open()
-            if snapshot.dataset_id not in self._replays:
+            if snapshot.dataset_id not in self._replays and snapshot.dataset_id not in self._factories:
                 raise ValueError(f"dataset not registered: {snapshot.dataset_id}")
             if snapshot.request_id in self._outstanding:
                 raise ValueError(f"request already outstanding: {snapshot.request_id}")
@@ -227,13 +255,24 @@ class GpuBacktestService:
 
     def _run(self) -> None:
         batch: list[_Pending] = []
+        resources = ExitStack()
+        failure_info = (None, None, None)
         try:
             while True:
                 batch = self._next_batch()
                 if not batch:
                     return
-                replay = self._replays[batch[0].request.dataset_id]
-                rows = replay.evaluate([dict(item.request.parameters) for item in batch])
+                dataset_id = batch[0].request.dataset_id
+                if dataset_id not in self._replays:
+                    replay = resources.enter_context(self._factories[dataset_id]())
+                    if not callable(getattr(replay, "evaluate", None)):
+                        raise TypeError("dataset factory must yield a replay implementing evaluate(candidates)")
+                    self._replays[dataset_id] = replay
+                replay = self._replays[dataset_id]
+                try:
+                    rows = replay.evaluate([dict(item.request.parameters) for item in batch])
+                finally:
+                    del replay
                 # Validate the whole producer batch before releasing any success.
                 results = self._results(batch, rows)
                 for entry, result in zip(batch, results):
@@ -242,20 +281,37 @@ class GpuBacktestService:
                 del entry
                 batch = []
         except BaseException as error:
-            with self._condition:
+            failure_info = (type(error), error, error.__traceback__)
+            self._fail(error, batch)
+        finally:
+            # Drop service references before exiting their owning resource contexts.
+            for dataset_id in self._factories:
+                self._replays.pop(dataset_id, None)
+            try:
+                resources.__exit__(*failure_info)
+            except BaseException as error:
+                self._cleanup_failure = error
+                if self._failure is not None:
+                    logging.exception("GPU replay cleanup failed after execution failure")
+                self._fail(error, [])
+
+    def _fail(self, error: BaseException, batch: list[_Pending]) -> None:
+        with self._condition:
+            if self._failure is None:
                 self._failure = error
-                self._closing = True
-                abandoned = list(self._queue)
-                self._queue.clear()
-                self._condition.notify_all()
-            for entry in batch:
-                if not entry.future.done():
-                    self._release(entry)
-                    entry.future.set_exception(error)
-            for entry in abandoned:
-                if entry.future.set_running_or_notify_cancel():
-                    self._release(entry)
-                    entry.future.set_exception(error)
+            error = self._failure
+            self._closing = True
+            abandoned = list(self._queue)
+            self._queue.clear()
+            self._condition.notify_all()
+        for entry in batch:
+            if not entry.future.done():
+                self._release(entry)
+                entry.future.set_exception(error)
+        for entry in abandoned:
+            if entry.future.set_running_or_notify_cancel():
+                self._release(entry)
+                entry.future.set_exception(error)
 
     def close(self, *, cancel_pending: bool = False) -> None:
         if current_thread() is self._thread:
@@ -276,6 +332,9 @@ class GpuBacktestService:
         if self._thread is not None:
             self._thread.join()
         self._replays.clear()
+        self._factories.clear()
+        if self._cleanup_failure is not None:
+            raise self._failure
 
     def __enter__(self) -> GpuBacktestService:
         return self

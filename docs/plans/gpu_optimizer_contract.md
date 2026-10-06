@@ -78,6 +78,14 @@ while bounding queue memory and starvation. Device errors and malformed output p
 never fabricate successful metrics or silently substitute CPU backtests. Preserve the
 original failure if cleanup also fails.
 
+The current service accepts `register_dataset_factory(dataset_id, factory)`, where
+the factory returns a replay resource context. Its first request creates the replay on
+the owning worker; repeated requests reuse it, and shutdown exits all entered contexts
+on that worker. Registration and unused/cancelled datasets do not initialize device state.
+Prepared-input immutability is the factory adapter's responsibility; the final dataset
+registry and residency policy are still separate work. Preconstructed replay registration
+remains a temporary compatibility path.
+
 ## Scheduling, tuning and specialization
 
 Use completed-work evidence to tune batch width/delay, concurrency, replay-slot capacity,
@@ -367,3 +375,25 @@ Completion requires:
   absolute error of 1. Four policy-field regressions and a CLI pre-execution check pass;
   the combined CUDA comparator/tool suite now passes 60 tests (source-only: 43 pass,
   seventeen device skips).
+
+### 2026-10-05 — Worker-owned replay construction and cleanup
+
+- Added lazy replay-resource factories to the dependency-light execution service.
+  Context entry, repeated evaluation and context exit belong to the worker, with
+  last-in/first-out cleanup for every initialized dataset. Unused and cancelled work
+  does not create a device replay. Registration identity remains shared with the
+  preconstructed compatibility adapter.
+- Setup/evaluation failures fail admitted work and poison further admission. Cleanup
+  failures are surfaced on close; a prior simulation/setup exception is preserved and
+  secondary cleanup failure logged. Exit all resource contexts even if one cleanup fails.
+- The standalone parity tool now constructs its GPU replay through this path and restores
+  diagnostic hooks before disposal. Preparation timing is measured inside construction
+  and excluded from the cold service-execution timing, preserving their definitions.
+- Validation: 32 offline lifecycle tests pass. Four CUDA factory cases cover both
+  strategies and one/three coins, proving construction/cleanup thread ownership, replay
+  reuse/disposal and direct GPU metric agreement with CPU backtest calls forbidden.
+  Combined lifecycle/parity/old-adapter/factory CUDA tests: 100 pass; source-only lifecycle
+  and parity tests: 75 pass, seventeen device skips. Bounded real diagnostic CLI smoke
+  passes with matching completion, fills, ADG and drawdown under provisional policies.
+- This is an ownership foundation, not the final immutable dataset API, multi-device
+  router, residency budget or optimizer cutover. Those checklist items remain open.
