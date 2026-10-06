@@ -25,8 +25,10 @@ def make_proxy(sides, lookback=8 / 1440):
         bot["risk"].update(
             n_positions=2,
             total_wallet_exposure_limit=2.0,
-            entry_cooldown_minutes=1000.0,
         )
+        # The fixture template already carries the canonical cooldown leaf;
+        # a legacy risk leaf cannot override it. Prevent reentry after closes.
+        bot["entry_cooldown"]["base_duration_minutes"] = 1000.0
         bot["unstuck"].update(
             enabled=True,
             ema_gating_enabled=False,
@@ -143,6 +145,7 @@ def test_unstuck_expiring_loss_budget_matches_exact_rust(sides, lookback):
     runner, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
     assert output["fill_count"].item() == len(fills)
+    assert sum(str(fill[13]).startswith("entry_") for fill in fills) == 2 * len(sides)
     assert any("close_unstuck" in fill[13] for fill in fills)
     # Expired losses replenish the configured allowance; all-history exhausts it.
     assert (len(fills) > 10) == (lookback != "all")
