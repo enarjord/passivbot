@@ -430,3 +430,13 @@ Completion requires:
   changing the guards. This review finding is addressed before integration.
 - After source-role correction, 70 CUDA comparator/tool tests pass; source-only checks
   pass 54 with 16 device skips. No simulator or tolerance-policy changes in this slice.
+- Further current-head review exposed inconsistent connector-name normalization and a
+  wrapped-config declaration bypass. Normalize requested and declared exchange identities
+  consistently, reject conflicting alias mappings, and use canonical flavor detection
+  for both declaration checks and ignored gene bounds. Added seven source regressions
+  and three paired CUDA alias/wrapper replays. All 80 comparator/tool cases pass on
+  CUDA; source-only checks pass 61 with 19 device skips. Findings are addressed before
+  re-review and integration; simulation and tolerance policies remain unchanged.
+- Rebased onto the integrated worker-ownership and recursive-ladder changes and checked
+  the merged result: 87 CUDA comparator/tool cases pass; source-only checks pass 66 with
+  21 native/device skips. Documentation checks retain zero errors and two size warnings.

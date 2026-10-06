@@ -146,6 +146,7 @@ def prepared_inputs(args):
         raise ValueError("fixture-only options cannot be used with --config: " + ", ".join(specified))
     import numpy as np
     from config import load_input_config, prepare_config
+    from config.migrations import detect_flavor
     from hlcv_preparation import _filter_forced_sources_for_coins, _filter_market_settings_sources_for_coins
     from optimization.warmup import _apply_config_overrides
     from utils import to_standard_exchange_name
@@ -153,10 +154,15 @@ def prepared_inputs(args):
     if not args.dataset or not args.markets:
         raise ValueError("--config requires --dataset and --markets")
     source, base, snapshot = load_input_config(args.config, log_info=False)
+    # Use the same document payload as canonical config normalization. Outer
+    # metadata must not hide a wrapped candidate's declared data identities.
+    wrapped = detect_flavor(source, {}) == "nested_current"
+    source_payload = source["config"] if wrapped else source
+    snapshot_payload = snapshot["config"] if wrapped else snapshot
     # Gene bounds are not inputs to this standalone backtest comparison. Removing
     # them also permits effective candidate exports without a reusable opt search.
-    source.setdefault("optimize", {})["bounds"] = {}
-    snapshot.setdefault("optimize", {})["bounds"] = {}
+    source_payload.setdefault("optimize", {})["bounds"] = {}
+    snapshot_payload.setdefault("optimize", {})["bounds"] = {}
     config = prepare_config(source, base_config_path=base, raw_snapshot=snapshot, verbose=False)
     if config["optimize"]["enable_overrides"]:
         raise ValueError("prepared comparisons require materialized optimize.enable_overrides")
@@ -169,7 +175,8 @@ def prepared_inputs(args):
         )
     exchanges = [to_standard_exchange_name(value) for value in config["backtest"]["exchanges"]]
     expected_exchange = "combined" if len(exchanges) > 1 else exchanges[0]
-    if args.exchange != expected_exchange:
+    exchange = to_standard_exchange_name(args.exchange)
+    if exchange != expected_exchange:
         raise ValueError("prepared exchange must match effective config.backtest.exchanges "
                          f"(expected {expected_exchange!r}, got {args.exchange!r})")
     with np.load(args.dataset, allow_pickle=False) as bundle:
@@ -183,20 +190,25 @@ def prepared_inputs(args):
     # their input order. Accept only its canonical layout at this tool boundary.
     if ordered != sorted(ordered):
         raise ValueError("dataset requires sorted coin order to match backtest payload construction")
-    declared_coins = source.get("backtest", {}).get("coins", {})
-    if declared_coins and args.exchange not in declared_coins:
+    declared_coins = {}
+    for venue, identities in source_payload.get("backtest", {}).get("coins", {}).items():
+        venue = to_standard_exchange_name(venue)
+        if venue in declared_coins and declared_coins[venue] != identities:
+            raise ValueError("config.backtest.coins has conflicting coin lists for exchange aliases")
+        declared_coins[venue] = identities
+    if declared_coins and exchange not in declared_coins:
         raise ValueError("prepared exchange must match config.backtest.coins")
-    declared = declared_coins.get(args.exchange)
+    declared = declared_coins.get(exchange)
     if declared is not None and declared != ordered:
         raise ValueError("dataset coin order must exactly match config.backtest.coins")
-    config["backtest"]["coins"] = {args.exchange: ordered}
+    config["backtest"]["coins"] = {exchange: ordered}
     if hlcvs.ndim != 3 or hlcvs.shape[1:] != (len(ordered), 4):
         raise ValueError("dataset hlcvs must have shape (bars, coins, 4)")
     if timestamps.shape != (len(hlcvs),) or btc.shape != timestamps.shape:
         raise ValueError("dataset timestamps/BTC prices must align with candle rows")
     markets = json.loads(Path(args.markets).read_text())
     forced_sources, settings_sources = {}, {}
-    if args.exchange == "combined":
+    if exchange == "combined":
         forced_sources = {
             coin: to_standard_exchange_name(venue) for coin, venue in
             _filter_forced_sources_for_coins(config["backtest"].get("coin_sources", {}), ordered).items()
@@ -379,10 +391,12 @@ def main(argv=None):
         from optimization.gpu.metrics import validate_gpu_metric_names
         from config.scoring import default_scoring_weights, extract_objective_specs
         from limit_utils import expand_limit_checks
+        from utils import to_standard_exchange_name
 
         metrics = list(dict.fromkeys(canonicalize_metric_name(name) for name in args.metrics))
         validate_gpu_metric_names(metrics)
         stage = "inputs"
+        args.exchange = to_standard_exchange_name(args.exchange)
         policies = dict(DEFAULT_TOLERANCES)
         if args.tolerances:
             for name, value in json.loads(Path(args.tolerances).read_text()).items():

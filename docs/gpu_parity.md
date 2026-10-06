@@ -43,7 +43,10 @@ one-dimensional `timestamps` in milliseconds, aligned `btc` prices, and an order
 string array `coins` in sorted order, matching the canonical backtest payload layout.
 Unsorted inputs are rejected; sort coin identities and reorder candle columns together
 when preparing the NPZ. Object/pickle arrays are rejected. If the raw config declares
-`backtest.coins[exchange]`, its order must exactly match the dataset. The markets JSON
+`backtest.coins[exchange]`, its order must exactly match the dataset. The same checks
+apply to a supported `{"config": {...}}` candidate wrapper. Exchange aliases are
+normalized consistently; conflicting coin lists under equivalent aliases are rejected.
+The markets JSON
 is the normal prepared market-settings mapping, including quantity/price steps,
 minima, fees, valid indices, warmup, explicit per-coin `exchange` and
 `__meta__.requested_start_ts`. `--exchange` must match the effective config's sole

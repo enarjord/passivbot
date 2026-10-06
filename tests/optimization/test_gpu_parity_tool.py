@@ -66,6 +66,64 @@ def test_prepared_inputs_preserve_matching_nondefault_exchange(tmp_path):
     np.testing.assert_array_equal(prepared[1], candles)
 
 
+@pytest.mark.parametrize("requested", ["binance", "binanceusdm"])
+def test_prepared_inputs_preserve_exchange_aliases(tmp_path, requested):
+    paths, _config, _markets, candles = _prepared_fixture_files(tmp_path, exchange="binanceusdm")
+    prepared = gpu_parity.prepared_inputs(_prepared_options(paths, "--exchange", requested))
+    assert prepared[0]["backtest"]["coins"] == {"binance": ["COIN00", "COIN01"]}
+    np.testing.assert_array_equal(prepared[1], candles)
+
+
+def test_prepared_inputs_reject_conflicting_exchange_alias_coin_lists(tmp_path):
+    paths, config, _markets, _candles = _prepared_fixture_files(tmp_path)
+    config["backtest"]["coins"]["binanceusdm"] = ["COIN00", "COIN02"]
+    paths[0].write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="conflicting.*exchange aliases"):
+        gpu_parity.prepared_inputs(_prepared_options(paths))
+
+
+@pytest.mark.parametrize("problem", ["coins", "exchange"])
+def test_prepared_inputs_validate_wrapped_config_declarations(tmp_path, problem):
+    paths, config, _markets, _candles = _prepared_fixture_files(tmp_path)
+    config["optimize"]["bounds"] = {"unused.candidate_gene": [0, 1]}
+    config["backtest"]["coins"] = (
+        {"binance": ["COIN00", "COIN02"]} if problem == "coins" else
+        {"bybit": ["COIN00", "COIN01"]}
+    )
+    paths[0].write_text(json.dumps({"config": config, "backtest": {"coins": {}}}))
+    with pytest.raises(ValueError, match="config.backtest.coins"):
+        gpu_parity.prepared_inputs(_prepared_options(paths))
+
+
+def test_prepared_inputs_preserve_wrapped_config_and_clear_gene_bounds(tmp_path):
+    paths, config, _markets, candles = _prepared_fixture_files(tmp_path, exchange="binanceusdm")
+    config["optimize"]["bounds"] = {"unused.candidate_gene": [0, 1]}
+    paths[0].write_text(json.dumps({"config": config}))
+    prepared = gpu_parity.prepared_inputs(_prepared_options(paths))
+    assert prepared[0]["backtest"]["coins"] == {"binance": ["COIN00", "COIN01"]}
+    assert "unused.candidate_gene" not in prepared[0]["optimize"]["bounds"]
+    np.testing.assert_array_equal(prepared[1], candles)
+
+
+def test_main_passes_canonical_prepared_exchange_to_simulation(monkeypatch, capsys, tmp_path):
+    from types import SimpleNamespace
+    import sys
+    paths, _config, _markets, _candles = _prepared_fixture_files(tmp_path, exchange="binanceusdm")
+    monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
+        validate_gpu_metric_names=lambda names: names,
+    ))
+    def compared(inputs, exchange, *_args, **_kwargs):
+        assert exchange == "binance"
+        assert exchange in inputs[0]["backtest"]["coins"]
+        return {"passed": True}
+    monkeypatch.setattr(gpu_parity, "run_comparison", compared)
+    assert gpu_parity.main([
+        "--config", str(paths[0]), "--markets", str(paths[1]), "--dataset", str(paths[2]),
+        "--exchange", "binanceusdm",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["passed"]
+
+
 @pytest.mark.parametrize("forced", [False, True])
 def test_prepared_inputs_preserve_combined_exchange_sources(tmp_path, forced):
     paths, config, markets, candles = _prepared_fixture_files(tmp_path)
@@ -164,19 +222,26 @@ def test_main_rejects_prepared_identity_errors_before_simulation(monkeypatch, ca
     assert not report["passed"]
 
 
+@pytest.mark.parametrize("exchange,requested,wrapped", [
+    ("bybit", "bybit", False), ("binanceusdm", "binance", False),
+    ("binanceusdm", "binanceusdm", False), ("binanceusdm", "binanceusdm", True),
+])
 def test_real_cuda_prepared_nondefault_exchange_matches_fixture(
-    require_real_passivbot_rust_module, tmp_path
+    require_real_passivbot_rust_module, tmp_path, exchange, requested, wrapped
 ):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
-    paths, _config, _markets, _candles = _prepared_fixture_files(tmp_path, exchange="bybit")
-    prepared = gpu_parity.prepared_inputs(_prepared_options(paths, "--exchange", "bybit"))
+    paths, config, _markets, _candles = _prepared_fixture_files(tmp_path, exchange=exchange)
+    if wrapped:
+        paths[0].write_text(json.dumps({"config": config}))
+    prepared = gpu_parity.prepared_inputs(_prepared_options(paths, "--exchange", requested))
     fixture = gpu_parity.fixture_inputs(args(
-        "--fixture", "trailing_martingale", "--bars", "128", "--exchange", "bybit",
+        "--fixture", "trailing_martingale", "--bars", "128", "--exchange", exchange,
     ))
-    baseline = gpu_parity.run_comparison(fixture, "bybit", gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES)
-    actual = gpu_parity.run_comparison(prepared, "bybit", gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES)
+    baseline = gpu_parity.run_comparison(fixture, exchange, gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES)
+    canonical = next(iter(prepared[0]["backtest"]["coins"]))
+    actual = gpu_parity.run_comparison(prepared, canonical, gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES)
     for name in gpu_parity.DEFAULT_METRICS:
         assert actual["metrics"][name] == baseline["metrics"][name]
     assert actual["feasibility"] == baseline["feasibility"]
