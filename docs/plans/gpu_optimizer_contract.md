@@ -18,6 +18,11 @@ more efficient implementations. Acceptance scope must not be silently weakened.
   `00ce7d0ddf123071ae67db149753d6b3619f52ac`.
 - Implementation PRs target the development branch, never master. Integration into
   master is a separate decision after acceptance. Publish completed slices as regular PRs.
+- Before any merge, wait for the auto review of the current head, inspect all reported
+  issues and address them with evidence and appropriate regressions. Recheck review
+  metadata and comments immediately before merging; CI and author review are additional
+  checks. Development-branch PRs follow the same rule. Disputed findings follow the
+  repository review-adjudication runbook and remain unresolved until adjudicated.
 - Keep the existing GPU screening/CPU-validation backend until its replacement passes
   the relevant acceptance gates. Do not retain both architectures indefinitely.
 - Follow [repository authority and data boundaries](../../AGENTS.md). Public evidence
@@ -397,3 +402,41 @@ Completion requires:
   passes with matching completion, fills, ADG and drawdown under provisional policies.
 - This is an ownership foundation, not the final immutable dataset API, multi-device
   router, residency budget or optimizer cutover. Those checklist items remain open.
+### 2026-10-05 — Prepared parity input binding and merge review gate
+
+- Late review findings exposed two missed prepared-input checks: matching unsorted
+  config/NPZ coins were accepted although payload construction sorted only identities;
+  a requested/default exchange could disagree with config and market venues. Reproduced
+  acceptance with failing regressions before changing the checks. These can invalidate
+  prepared reports even when the two simulators agree; prior synthetic measurements use
+  sorted identities and matching venues and are unaffected by these specific defects.
+- Require canonical sorted NPZ coin order, exact declared order when present, and the
+  effective single or combined exchange. Validate per-coin market venues against the
+  configured sources, including explicit combined-source assignments. Reject ambiguity
+  before either simulation; do not silently relabel data or reorder large arrays.
+- Add a current-head auto-review gate before all development merges. Inspect reported
+  comments as well as review status, address findings, and recheck immediately before
+  merge. CI and author checks alone are insufficient.
+- Validation: 65 comparator/tool cases pass on CUDA; the source-only run passes 49
+  with 16 device skips. CLI regressions prove invalid identities fail before simulation,
+  and a valid prepared nondefault-venue input reproduces its synthetic CPU/GPU metrics.
+  Documentation checks have zero errors and two existing size warnings.
+- Current-head auto review caught a further distinction: `exchange` identifies market
+  settings while `ohlcv_source` identifies candles when they differ. Validate candle
+  assignments against configured/forced data sources and settings independently against
+  `market_settings_sources`; preserve the producer's documented settings-to-candle
+  fallback. Reuse offline source-key reconciliation and normalize venue names. Added
+  valid independent/fallback and incorrect candle/settings-source regressions before
+  changing the guards. This review finding is addressed before integration.
+- After source-role correction, 70 CUDA comparator/tool tests pass; source-only checks
+  pass 54 with 16 device skips. No simulator or tolerance-policy changes in this slice.
+- Further current-head review exposed inconsistent connector-name normalization and a
+  wrapped-config declaration bypass. Normalize requested and declared exchange identities
+  consistently, reject conflicting alias mappings, and use canonical flavor detection
+  for both declaration checks and ignored gene bounds. Added seven source regressions
+  and three paired CUDA alias/wrapper replays. All 80 comparator/tool cases pass on
+  CUDA; source-only checks pass 61 with 19 device skips. Findings are addressed before
+  re-review and integration; simulation and tolerance policies remain unchanged.
+- Rebased onto the integrated worker-ownership and recursive-ladder changes and checked
+  the merged result: 87 CUDA comparator/tool cases pass; source-only checks pass 66 with
+  21 native/device skips. Documentation checks retain zero errors and two size warnings.

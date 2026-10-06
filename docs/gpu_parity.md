@@ -40,10 +40,22 @@ passivbot tool gpu-parity --config candidate.json --dataset prepared.npz \
 
 The NPZ must contain `hlcvs` with shape `(bars, coins, 4)` (high, low, close, volume),
 one-dimensional `timestamps` in milliseconds, aligned `btc` prices, and an ordered
-string array `coins`. Object/pickle arrays are rejected. If the raw config declares
-`backtest.coins[exchange]`, its order must exactly match the dataset. The markets JSON
+string array `coins` in sorted order, matching the canonical backtest payload layout.
+Unsorted inputs are rejected; sort coin identities and reorder candle columns together
+when preparing the NPZ. Object/pickle arrays are rejected. If the raw config declares
+`backtest.coins[exchange]`, its order must exactly match the dataset. The same checks
+apply to a supported `{"config": {...}}` candidate wrapper. Exchange aliases are
+normalized consistently; conflicting coin lists under equivalent aliases are rejected.
+The markets JSON
 is the normal prepared market-settings mapping, including quantity/price steps,
-minima, fees, valid indices, warmup and `__meta__.requested_start_ts`.
+minima, fees, valid indices, warmup, explicit per-coin `exchange` and
+`__meta__.requested_start_ts`. `--exchange` must match the effective config's sole
+exchange, or be `combined` for multiple exchanges. Candle venues use `ohlcv_source`,
+falling back to the market `exchange` when absent, and must match the configured data
+sources and explicit combined `backtest.coin_sources`. Market settings may independently
+use `backtest.market_settings_sources`. Combined preparation's documented fallback to
+the candle venue is accepted as already resolved metadata; the tool does not fetch or
+substitute settings. The Binance default does not infer or relabel a prepared exchange.
 
 Preserve effective candidate/scenario settings and dataset preparation metadata.
 Fixture switches (`--sides`, `--coins`, `--bars`, `--seed`, `--hsl`, `--unstuck`,
