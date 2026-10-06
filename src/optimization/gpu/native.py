@@ -21,7 +21,19 @@ class CudaBacktestService:
     """
 
     def __init__(self, *, batch_size=64, max_pending=1024, max_batch_delay=0.005,
-                 max_dispatch_candidate_bars=500_000_000, interrupt_check=None):
+                 max_dispatch_candidate_bars=500_000_000, interrupt_check=None,
+                 tuning_mode="auto"):
+        from optimization.gpu.autotune import is_auto
+        from optimization.gpu.execution_tuning import ExecutionBatchTuner
+
+        if isinstance(tuning_mode, str):
+            tuning_mode = tuning_mode.strip().lower()
+        if not isinstance(tuning_mode, str) or tuning_mode not in {"auto", "refresh", "off"}:
+            raise ValueError("GPU tuning mode must be auto, refresh, or off")
+        automatic = is_auto(batch_size) and tuning_mode != "off"
+        self._batch_tuner = ExecutionBatchTuner(headroom=self._headroom) if automatic else None
+        requested_width = max_pending if automatic else (64 if is_auto(batch_size) else batch_size)
+        self._batch_policy = self._batch_tuner or ExecutionBatchTuner(initial=requested_width, enabled=False)
         if (isinstance(max_dispatch_candidate_bars, bool)
                 or not isinstance(max_dispatch_candidate_bars, int) or max_dispatch_candidate_bars < 1):
             raise ValueError("dispatch budget must be a positive integer")
@@ -33,10 +45,32 @@ class CudaBacktestService:
         self._subset_cache = {}
         self._residency = None
         self._executor = GpuBacktestService(
-            batch_size=batch_size, max_pending=max_pending, max_batch_delay=max_batch_delay,
+            batch_size=requested_width, max_pending=max_pending, max_batch_delay=max_batch_delay,
             worker_context=self._worker_scope,
+            batch_policy=self._batch_policy,
         )
         self._batch_size = self._executor.batch_size
+
+    @staticmethod
+    def _headroom():
+        # Queried on the CUDA owner, only before a growth trial. Producer errors
+        # propagate; tuning never reruns a failed simulation or substitutes CPU work.
+        import torch
+        free, total = torch.cuda.mem_get_info()
+        return free >= max(256 * 1024**2, total * 0.2)
+
+    @staticmethod
+    def _dispatch_ceiling(replay):
+        # Keep runner references out of the suspended factory context: another
+        # dataset must be able to release this replay's tensors and scratch.
+        runners = ([replay.fused_runner] if replay.fused_runner is not None
+                   else list(replay.runners.values()))
+        ceiling = replay.dispatch_batch_size
+        for runner in runners:
+            history_bytes = runner._history_bytes_per_candidate()
+            if history_bytes:
+                ceiling = min(ceiling, max(1, runner.hsl_scratch_budget_bytes // history_bytes))
+        return ceiling
 
     @contextmanager
     def _worker_scope(self):
@@ -77,6 +111,11 @@ class CudaBacktestService:
                     interrupt_check=self._interrupt_check, prepared_data_cache=self._prepared_cache,
                 )
                 try:
+                    # Discover physical limits after claiming just one cold
+                    # request. Preparation and mutable runners remain worker-owned.
+                    self._residency.activate(replay)
+                    self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
+                    self._batch_policy.width(dataset_id, self._batch_size)
                     yield SimpleNamespace(evaluate=replay.evaluate_results)
                 finally:
                     del replay

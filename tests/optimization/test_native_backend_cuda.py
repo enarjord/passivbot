@@ -10,7 +10,8 @@ import pytest
 @pytest.mark.asyncio
 @pytest.mark.parametrize("suite", [False, True])
 @pytest.mark.parametrize("interrupted", [False, True])
-async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted):
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -28,7 +29,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     config["optimize"]["scoring"] = [dict(metric="adg_strategy_eq", goal="max"),
                                       dict(metric="drawdown_worst_strategy_eq", goal="min")]
     config["optimize"]["limits"] = [dict(metric="backtest_completion_ratio", penalize_if="less_than", value=0.99)]
-    config["optimize"]["gpu"].update(batch_size=2, checkpoint_interval_seconds=0)
+    config["optimize"]["gpu"].update(batch_size=None if automatic else 2, checkpoint_interval_seconds=0)
     config["optimize"]["bounds"] = {}
     for side in ("long", "short"):
         for key in ("n_positions", "total_wallet_exposure_limit"):

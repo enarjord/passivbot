@@ -123,6 +123,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 checkpoint_path=None, resume=False, interrupt_check=no_interrupt_requested,
                 standalone_candle_coins=None, **_cpu_only_arguments):
     from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.autotune import is_auto
 
     base = getattr(evaluator_for_pool, "base", evaluator_for_pool)
     problem = NativeSearchProblem(base)
@@ -132,10 +133,10 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
     termination = get_termination("n_gen", ngen)
     seed = config["optimize"].get("seed")
     gpu = config["optimize"].get("gpu", {})
-    batch_size = 64 if gpu.get("batch_size") is None else gpu["batch_size"]
+    batch_size = None if is_auto(gpu.get("batch_size")) else gpu["batch_size"]
     dispatch_budget = (500_000_000 if gpu.get("max_dispatch_candidate_bars") is None
                        else gpu["max_dispatch_candidate_bars"])
-    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+    if batch_size is not None and (isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1):
         raise ValueError("GPU native batch size must be a positive integer")
     checkpoint_interval = float(gpu.get("checkpoint_interval_seconds", 5.0))
     if not math.isfinite(checkpoint_interval) or checkpoint_interval < 0:
@@ -163,10 +164,11 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
 
     with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
                                overrides_list=overrides_list) as registry:
-        service = CudaBacktestService(batch_size=batch_size, max_pending=max(2, batch_size * 4),
+        service = CudaBacktestService(batch_size=batch_size,
                                      max_dispatch_candidate_bars=dispatch_budget,
-                                     interrupt_check=interrupt_check)
-        session = NativeEvaluationSession(service, registry.scorer, max_candidates=max(2, batch_size * 4))
+                                     interrupt_check=interrupt_check, tuning_mode=gpu.get("tuning_mode", "auto"))
+        session = NativeEvaluationSession(service, registry.scorer,
+                                          max_candidates=max(2, min(population_size, 1024)))
         search = _Search(state=state, session=session, registry=registry, recorder=recorder,
                          template=base.config, build_config_fn=build_config_fn, overrides_fn=overrides_fn,
                          overrides_list=overrides_list, checkpoint_path=checkpoint_path,

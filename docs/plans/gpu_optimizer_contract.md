@@ -232,6 +232,7 @@ Completion requires:
 - [x] Add experimental GPU-only ask/tell CLI, seed evaluation and partial-cohort checkpoint resume.
 - [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
+- [x] Add service-owned production batch tuning and prepared work/scratch dispatch limits.
 - [ ] Flush results/Pareto promptly; validate interruption and compatible resume.
 - [ ] Prove no CPU backtest is invoked during GPU optimize/bootstrap/resume.
 - [ ] Retire superseded GPU screening/validation state and keep CPU functionality intact.
@@ -657,3 +658,39 @@ Completion requires:
   The modest improvement validates removing inactive work, not representative optimizer
   throughput or quality acceptance. Default coin-mode, TM, fused and further inactive-feature
   specializations remain future work.
+
+### 2026-10-06 — Service-owned production batch tuning
+
+- The disabled-HSL EMA slice passed clear current-head auto review and all required CI
+  before merging into development. This work starts from that integrated source tree.
+- Reuse the existing batch evidence controller inside the asynchronous service, with
+  separate dataset measurements, cold/partial/failed-work exclusion, median smoothing,
+  bounded trials, demand/headroom growth gates, cooldown and rollback. No calibration
+  simulation is added. Width changes occur between completely validated producer batches.
+  Numeric settings/off mode retain fixed ceilings; automatic settings tune in the service.
+  Native CPU admission follows a bounded population window independently of device width.
+- Preparation claims one cold request, discovers work and HSL/unstuck history-scratch
+  bounds on its owner, and limits subsequent service batches to actual replay capacity.
+  Otherwise an oversized outer batch could contain several serial device replays, delaying
+  every returned future. Keep temporary runner references out of suspended resource contexts
+  so inactive datasets can release device tensors and mutable scratch.
+- All 142 focused policy/executor/native session/backend/device cases pass, with one existing
+  skip. Six real CUDA service cases prove width changes preserve every metric/status without
+  extra simulations, enforce work/scratch limits and release inactive runners. Eight real CLI
+  cases cover fixed/automatic standalone/suite seeds, SIGINT, persistence and resume with CPU
+  simulation/pool entry points forbidden. All 531 wider CUDA, preparation/residency, service
+  and comparison-tool cases pass. Five documentation cases pass; doc checks have zero errors
+  and two existing size warnings. Rust/kernel source is unchanged and the extension is verified.
+- A bounded production-window comparison uses the public EMA synthetic fixture, one side,
+  three coins, 32,768 bars, seed 7 and 8,192 submitted requests per run, with a rolling 1,024
+  pending window and `long_base_qty_pct = 0.005 + (request_index % 512) * 0.00005`, requesting
+  the fixture's default ADG, drawdown and fill-rate metrics. Fixed width 64 completes in
+  99.14 s (82.63 requests/s); automatic completes
+  in 64.88 s (126.27 requests/s). It accepts width 128 using unmodified 24-sample/30-second
+  evidence windows, with measured baseline/trial rates 84.88/171.10 requests/s. Every request's
+  metrics and terminal status match exactly. This is one sequential service comparison including
+  startup, not repeated representative optimization/performance acceptance.
+- Run-local evidence remains advisory and is not search/checkpoint state. Persistent calibration,
+  demand-limited workload classes, admission/launch sizing, dispatch duration/delay, residency
+  budgets and CPU preparation/result/evolution cadence remain open. Retain generation semantics
+  and the legacy backend until full replacement acceptance.
