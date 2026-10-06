@@ -90,7 +90,10 @@ class NativeDatasetRegistry:
         for index, ((key, _path), bound) in enumerate(zip(base.key_paths, base.bounds, strict=True)):
             if key == ANCHOR_GENE_KEY:
                 dimensions.append((index, range(int(bound.low), int(bound.high) + 1)))
-            elif key in topology_keys and bound.low <= 0 < bound.high:
+            elif key in topology_keys and bound.low < bound.high:
+                # Canonical endpoint preparation handles position rounding,
+                # stepped bounds and fixed/mirrored policies. Raw zero crossing
+                # is insufficient; equivalent endpoint contracts deduplicate below.
                 dimensions.append((index, (bound.low, bound.high)))
         configurations = []
         for values in product(*(choices for _index, choices in dimensions)):

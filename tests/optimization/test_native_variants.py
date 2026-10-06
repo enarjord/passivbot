@@ -86,6 +86,29 @@ def test_unprepared_continuous_static_changes_still_fail_before_submission(monke
                 registry.planner.prepare("changed", vector(base))
 
 
+@pytest.mark.parametrize("bounds,expected", [([0.4, 1.0], 2), ([0.5, 1.0], 2),
+                                            ([0.4, 1.0, 0.6], 2), ([0.4, 0.59, 0.1], 1),
+                                            ([0.6, 1.0], 1)])
+def test_position_rounding_and_stepped_endpoints_determine_finite_views(monkeypatch, bounds, expected):
+    guard_cpu(monkeypatch)
+    with managed_arrays() as manager:
+        original = inputs(manager)
+        config = deepcopy(original.config)
+        config["optimize"]["bounds"]["short_n_positions"] = bounds
+        base = optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
+                                  config, timestamps=original.timestamps)
+        with NativeDatasetRegistry(base, standalone_candle_coins={"binance":("COIN00", "COIN01", "COIN02")}) as registry:
+            assert len(registry.bindings) == expected
+            requests = []
+            for index, endpoint in enumerate((bounds[0], bounds[1])):
+                candidate = deepcopy(config)
+                candidate["bot"]["short"]["risk"]["n_positions"] = endpoint
+                values = optimize.config_to_individual(candidate, base.bounds,
+                                                        optimization_shape=base.optimization_shape)
+                requests.append(registry.planner.prepare(f"endpoint:{index}", values).requests[0])
+            assert len({request.dataset_id for request in requests}) == expected
+
+
 def test_two_side_choices_prepare_only_supported_topologies_and_reject_zero_sides(monkeypatch):
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:
