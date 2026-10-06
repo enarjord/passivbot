@@ -532,11 +532,11 @@ inline bool update_joint_pside_hsl(
     );
 }
 
-inline int joint_pside_hsl_global_tier(
+inline int joint_hsl_report_tier(
     thread const HslState& long_hsl,
     thread const HslState& short_hsl
 ) {
-    return max(long_hsl.tier, short_hsl.tier);
+    return max(hsl_report_tier(long_hsl), hsl_report_tier(short_hsl));
 }
 
 // Unheld unavailable coins need no valuation. Held positions must remain

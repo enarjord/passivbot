@@ -375,7 +375,7 @@ mod tests {
             "inline float joint_portfolio_equity(",
             "inline bool joint_portfolio_can_generate(",
             "inline bool update_joint_pside_hsl(",
-            "inline int joint_pside_hsl_global_tier(",
+            "inline int joint_hsl_report_tier(",
         ] {
             assert_eq!(source.matches(signature).count(), 1, "{signature}");
         }

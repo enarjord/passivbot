@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Include terminal cooldown in GPU hard-stop time-in-red reporting, while keeping
+  the panic signal and simulation behavior separate from reporting state.
+
 - Prepare finite side-enable and fine-tune anchor variants for native GPU optimization
   over shared market data. Restore checkpoint-owned anchors on resume without the
   original seed files; retain explicit errors for unprepared continuous coin patches.

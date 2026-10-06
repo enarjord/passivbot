@@ -891,3 +891,37 @@ Completion requires:
   minutes, whereas GPU reporting counts sampled RED tiers. Cooldown/flat-scope and observation
   timing need a focused diagnosis; this is a hypothesis, not a confirmed root cause. These
   findings reinforce the open parity acceptance item and do not justify broader tolerances.
+
+### 2026-10-06 — Separate HSL reporting from panic intent
+
+- Finite execution variants and checkpoint-owned anchors merged into development only
+  after the rounded-position finding was fixed, answered in its original thread and
+  cleared by a completed exact-head automatic review. All required CI checks passed;
+  author review recorded the exact base/head/merge-base before a fresh merge gate.
+- Controller tracing confirms that GPU time-in-red samples previously excluded terminal
+  cooldown because they reused the current panic tier. Add a reporting-only projection
+  that includes panic or halted cooldown, and use it across directional and shared-account
+  samplers. Keep trading state, episode evaluation, lifecycle counters and metrics ABI intact.
+- Repeat the 18-case seed-43 controller sweep before and after the change. Only six EMA
+  time-in-red results change; every other requested metric stays exactly unchanged.
+  At threshold `0.002`, GPU red coverage changes from 6 to 18 sampled bars out of 2,938;
+  CPU remains 15 elapsed minutes out of 2,937. The residual absolute fraction difference
+  is approximately `0.0010194` (0.10194 percentage points), or 16.64% relative error.
+- CPU observations distinguish completed-bar valuation from scope-flat execution boundaries.
+  The remaining difference needs a separate timing/episode diagnosis; including cooldown
+  fixes a confirmed omission without establishing complete controller parity. Preserve the
+  existing tolerance policy and open acceptance checklist.
+- The broad CUDA run passes 232 cases, with 13 Metal-only skips. Four failures are
+  stale expectations that disabled single-side EMA side/unified dispatches retain full
+  HSL state; update those expectations to the documented compact layout while keeping
+  metric-equivalence assertions. Two dual-side unstuck comparisons report 71 GPU fills
+  versus 72 CPU fills. Rebuild the unchanged development baseline and reproduce both
+  failures identically; they predate this reporting change and remain acceptance debt.
+- All 330 Rust tests pass (one ignored), and default-feature test compilation succeeds.
+  Rebuild and verify the current extension after the baseline comparison. Add actual
+  replay controls restoring only the previous reporting expression, so regression checks
+  can require changed red coverage with every other raw output unchanged.
+- All 29 focused CUDA checks pass: four controller-state probes, six real replay controls,
+  all 18 disabled-policy permutations and compact/full disabled-HSL output equivalence.
+  The six controls exercise both strategies and all HSL scopes and require every raw
+  output other than red sample coverage to remain exactly unchanged.

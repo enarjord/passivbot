@@ -161,7 +161,10 @@ def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, 
             }
         ],
     )
-    assert runner.dispatch_hsl_disabled is False
+    # Single-side EMA side/unified replays now compile disabled HSL away.
+    # Coin mode retains loss-reporting state; fused/TM layouts remain full.
+    compact_hsl = strategy == "ema_anchor" and len(sides) == 1 and mode != "coin"
+    assert runner.dispatch_hsl_disabled is compact_hsl
     compare(baseline, changed)
     assert float(baseline["fill_count"].sum()) > 0
     assert not (baseline["hsl_triggers_long"] + baseline["hsl_triggers_short"]).any()
