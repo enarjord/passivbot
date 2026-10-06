@@ -440,3 +440,27 @@ Completion requires:
 - Rebased onto the integrated worker-ownership and recursive-ladder changes and checked
   the merged result: 87 CUDA comparator/tool cases pass; source-only checks pass 66 with
   21 native/device skips. Documentation checks retain zero errors and two size warnings.
+
+### 2026-10-05 — One-coin shared-account replay experiment
+
+- Permit one coin in the existing multicoin packer and replay constructor. This enables
+  the same directional/fused account implementation to accept 1..64 coins without
+  changing the legacy optimizer's choice of replay engine.
+- CUDA coverage: 17 cases pass, including one-coin specialized/full-capacity raw-output
+  equality, all three side modes and both market policies, repeated asynchronous
+  microbatches, a partial batch, candidate exposure changes and forced temporal chunks.
+  CPU backtest entry points are forbidden during replay tests. Packing preserves valid
+  listing/delisting windows and input arrays and rejects zero/65-coin requests.
+- The six public one-coin parity fixtures run through the shared engine. EMA metrics
+  match the earlier single engine; TM differences remain small under case-specific
+  assessment and still fail the tool's strict policies where appropriate.
+- An exploratory warm comparison uses 256 repeated candidates, 4,096 bars, widths
+  32/128 and three repeats for both strategies in long/dual modes. The shared engine
+  delivers approximately 35–67% of the single engine's throughput in these short
+  fixtures. Fixed measurement order and repeated identical candidates limit this
+  experiment; it is not an optimizer-quality or general performance benchmark.
+- Keep one-coin shared replay as an internal capability rather than switching every
+  request now. Restore effective kernel ablation and measure representative workloads
+  before choosing the native backend's default; simplification should not silently
+  impose this observed throughput loss. No extra conservative screening or CPU replay
+  is added to the service.

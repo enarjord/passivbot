@@ -1040,9 +1040,9 @@ def build_mps_multicoin_data(
             f"got {values.shape}"
         )
     candle_count, coin_count, _channels = values.shape
-    if not 2 <= coin_count <= MPS_MULTICOIN_MAX_COINS:
+    if not 1 <= coin_count <= MPS_MULTICOIN_MAX_COINS:
         raise ValueError(
-            "MPS multicoin proxy supports 2.."
+            "MPS multicoin proxy supports 1.."
             f"{MPS_MULTICOIN_MAX_COINS} coins; got {coin_count}"
         )
     if len(runs) != coin_count or len(markets) != coin_count:

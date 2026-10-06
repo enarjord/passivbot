@@ -2949,9 +2949,9 @@ class MpsMulticoinProxy:
                 "expected multicoin HLCVs with three dimensions, " f"got {values.shape}"
             )
         coin_count = int(values.shape[1])
-        if not (2 <= coin_count <= MPS_MULTICOIN_MAX_COINS):
+        if not (1 <= coin_count <= MPS_MULTICOIN_MAX_COINS):
             raise ValueError(
-                f"MPS multicoin proxy supports 2..{MPS_MULTICOIN_MAX_COINS} coins; "
+                f"MPS multicoin proxy supports 1..{MPS_MULTICOIN_MAX_COINS} coins; "
                 f"got {coin_count}"
             )
         self.strategy_kind = (

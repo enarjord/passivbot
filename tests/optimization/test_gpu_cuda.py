@@ -267,7 +267,7 @@ def test_disabled_hsl_source_removes_hsl_portfolio_scans():
 
 
 @pytest.mark.parametrize("case", ["ema-multicoin-overhead", "tm-multicoin-overhead"])
-@pytest.mark.parametrize("coins", [2, 3, 5, 9, 17, 33, 64])
+@pytest.mark.parametrize("coins", [1, 2, 3, 5, 9, 17, 33, 64])
 def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
     torch, _library_cls = cuda
     from tools.gpu_proxy_benchmark import _build_case
@@ -305,6 +305,50 @@ def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
     assert specialized.keys() == baseline.keys()
     for key in baseline:
         np.testing.assert_array_equal(specialized[key], baseline[key], err_msg=key)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "short", "both"])
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_cuda_shared_account_one_coin_reuses_isolated_candidate_state(
+    cuda, monkeypatch, strategy, sides, market_orders_allowed
+):
+    """One coin uses the same account kernel, including fused directional state."""
+    from optimization.gpu.executor import BacktestRequest, GpuBacktestService
+    from optimization.gpu.service import MpsMulticoinProxy
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+    import backtest
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("shared-account replay must not call a CPU backtest")
+
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", sides, "--coins", "1", "--bars", "512",
+    ]))
+    config["backtest"]["market_orders_allowed"] = market_orders_allowed
+    replay = MpsMulticoinProxy(
+        config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+        exchange="binance", batch_size=2, needed_metrics=set(DEFAULT_METRICS),
+    )
+    if strategy == "trailing_martingale":
+        runners = [replay.fused_runner] if replay.fused_runner is not None else replay.runners.values()
+        for runner in runners:
+            runner.max_dispatch_candidate_bars = 2 * 31
+    candidates = [{}, {f"{side}_total_wallet_exposure_limit": 0.5 for side in replay.sides}, {}]
+    expected = [replay.evaluate([candidate])[0] for candidate in candidates]
+    assert expected[0]["fills_per_day"] > 0
+    with GpuBacktestService(batch_size=2, max_pending=3) as service:
+        service.register_dataset("one-coin", replay)
+        for repeat in range(2):
+            futures = [service.submit(BacktestRequest(f"{repeat}:{i}", "one-coin", candidate))
+                       for i, candidate in enumerate(candidates)]
+            actual = [future.result(timeout=60).metrics for future in futures]
+            for baseline, row in zip(expected, actual):
+                assert baseline.keys() == row.keys()
+                for name in baseline:
+                    np.testing.assert_array_equal(row[name], baseline[name], err_msg=name)
 
 
 @pytest.mark.parametrize(
