@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce optimizer CPU preparation overhead by reusing strategy path metadata
+  within each bounds/execution projection and constructing fallback templates only
+  when needed. Preserve current-config path resolution and validation.
+
 - Add an offline `gpu-cohort-benchmark` tool for serial CPU, direct GPU and native
   CUDA service measurements, with completion latency, strict metric comparisons,
   Pareto/feasibility diagnostics and observed batch/tuning evidence.

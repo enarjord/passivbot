@@ -1042,3 +1042,41 @@ Completion requires:
   require changed-head validation and automatic re-review before integration.
   Changed-head validation passes all 181 affected CUDA parity/benchmark/CLI cases;
   source-only benchmark regressions pass 18 with two device cases deselected.
+
+### 2026-10-06 — Cohort-tool integration and CPU preparation foundation
+
+- The cohort benchmark merged into development in [PR #1899](https://github.com/enarjord/passivbot/pull/1899)
+  after fixing the tuning-evidence review finding, completed clear changed-head
+  automatic review, exact-target author sign-off and successful Python 3.12/3.14
+  and Rust checks. A fresh review/CI/base/head gate preceded the SHA-pinned merge.
+  The default branch and simulation semantics remain unchanged.
+- Warm request streams can underfill GPU batches when canonical CPU preparation
+  takes longer than the service's queue-wait allowance. Measure actual batch sizes,
+  request preparation and result export separately before adding scheduling state;
+  a larger fixed delay alone is not a general throughput solution.
+- Candidate preparation repeatedly constructs immutable strategy/configuration
+  metadata through canonical helpers. Investigate reuse of that static work while
+  preserving caller-owned mutable copies, effective overrides and explicit errors.
+  Keep trading decisions in their existing owners and retain CPU functionality.
+- Search comparisons must report the normalized, effective genome and bounds.
+  Config loading hydrates omitted bounds; a sparse input mapping does not by itself
+  define a restricted search. Separate preparation/kernel timing from evolutionary
+  policy and sampling differences when assessing resulting Pareto quality.
+- Resolve related optimizer keys through one operation-local strategy path table
+  in bounds validation, key extraction and native static execution projection.
+  Share the existing single-key resolution rules, preserve ordered/duplicate keys,
+  and keep mode/shape-dependent paths scoped to the unchanged input config. Empty
+  and portfolio-HSL-only groups retain their lazy metadata/error behavior.
+- Build the key-extraction fallback template only when bot configuration is absent.
+  Prefer bounded reuse within an operation over new persistent metadata caches,
+  mutable cached defaults or invalidation machinery. Preserve existing canonical
+  loading, explicit bounds, overrides and simulation ownership.
+- A bounded synthetic before/after check confirms identical prepared requests and
+  cleaned result exports. Preparation timing improves in that fixture; export
+  timing has no clear improvement. This does not establish full-search throughput,
+  quality equivalence or representative performance acceptance.
+- Validation: 352 configuration/path/planning/warmup checks and 320 CPU/native
+  integration checks pass with the source-verified Rust extension, including CUDA
+  suites, screening, anchors, interruption and resume while forbidding CPU
+  simulations and worker pools in native optimization. Six documentation tests
+  pass; documentation checks report zero errors and two existing size warnings.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from .shared_bot import canonical_shared_bot_path_for_flat_key, resolve_shared_bot_path
 from .strategy_spec import (
@@ -138,6 +138,27 @@ def _strategy_path_map_for_config(config: dict) -> dict[str, tuple[str, ...]]:
 
 def resolve_optimizer_key_path(config: dict, key: str) -> tuple[str, ...] | None:
     canonical_key = canonical_optimizer_key(key)
+    return _resolve_optimizer_key_path(config, canonical_key, None)
+
+
+def iter_optimizer_key_paths(
+    config: dict, keys: Iterable[str]
+) -> Iterator[tuple[str, tuple[str, ...] | None]]:
+    """Resolve an operation's keys with one local strategy metadata projection.
+
+    The config must remain unchanged while iterating. No config-dependent paths
+    survive this operation; a later call observes current modes and bot shape.
+    HSL-only and empty operations do not request strategy metadata.
+    """
+    strategy_path_map = None
+    for key in keys:
+        canonical_key = canonical_optimizer_key(key)
+        if not canonical_key.startswith("hsl_") and strategy_path_map is None:
+            strategy_path_map = _strategy_path_map_for_config(config)
+        yield key, _resolve_optimizer_key_path(config, canonical_key, strategy_path_map)
+
+
+def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
     if canonical_key.startswith("hsl_"):
         if config.get("live", {}).get("hsl_signal_mode") == "unified":
             field = canonical_key.removeprefix("hsl_")
@@ -148,7 +169,8 @@ def resolve_optimizer_key_path(config: dict, key: str) -> tuple[str, ...] | None
             }:
                 return ("bot", "hsl", field)
         return None
-    strategy_path_map = _strategy_path_map_for_config(config)
+    if strategy_path_map is None:
+        strategy_path_map = _strategy_path_map_for_config(config)
     if canonical_key in strategy_path_map:
         return strategy_path_map[canonical_key]
     if canonical_key in OPTIMIZABLE_BOT_KEY_PATHS:

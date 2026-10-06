@@ -11,7 +11,7 @@ import json
 import math
 from types import MappingProxyType
 
-from config.param_paths import resolve_optimizer_key_path
+from config.param_paths import iter_optimizer_key_paths
 from config.strategy_spec import get_strategy_param_keys
 from config_utils import clean_config
 from optimization.bounds import enforce_bounds
@@ -50,6 +50,7 @@ def _static_contract(config):
     for key in ("scenarios", "suite_enabled", "suite_reducers", "cache_dir", "base_dir"):
         result["backtest"].pop(key, None)
     kind = config["live"]["strategy_kind"]
+    dynamic_bound_keys = []
     for side in ("long", "short"):
         for key in get_strategy_param_keys(kind):
             _remove_path(result, ("bot", side, "strategy", kind, *key.split(".")))
@@ -64,10 +65,10 @@ def _static_contract(config):
             "hsl_cooldown_minutes_after_red",
             *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "volatility", "unilateralness")),
         )
-        for key in dynamic_keys:
-            path = resolve_optimizer_key_path(config, f"{side}_{key}")
-            if path is not None:
-                _remove_path(result, path)
+        dynamic_bound_keys.extend(f"{side}_{key}" for key in dynamic_keys)
+    for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):
+        if path is not None:
+            _remove_path(result, path)
     for key in ("red_threshold", "ema_span_minutes", "cooldown_minutes_after_red"):
         _remove_path(result, ("bot", "hsl", key))
     coupled = unstuck_ema_spans_coupled(config)
