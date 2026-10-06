@@ -222,6 +222,7 @@ Completion requires:
 - [ ] Audit approximation inventory against representative correctness cases.
 - [ ] Resolve material differences and record accepted numerical discrepancies.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
+- [x] Restore safe disabled-HSL single-side EMA ablation and verify all returned outputs.
 
 ### Optimizer cutover
 
@@ -629,3 +630,30 @@ Completion requires:
   candidate-dependent coin patches remain open, as do representative parity/performance
   comparisons and the known disabled-HSL specialized/general kernel equivalence debt.
   Retain the legacy backend until these acceptance items are resolved.
+
+### 2026-10-06 — Restore safe disabled-HSL EMA compiler ablation
+
+- The initial GPU-only CLI integration passed current-head auto review and every required
+  Python/Rust CI check before merging into development. Master remains unchanged.
+- Reproduced the old specialization test failure at selection, before output comparison:
+  the sole-engine migration had forced the full layout for every dispatch. Simply restoring
+  the former predicate would initialize per-coin controllers in the compact one-element
+  array. Guard that history/controller binding in the Rust-owned one-side implementation.
+- An offline synthetic probe also reproduced a semantic boundary: forcing compact state
+  in disabled coin mode changes forced-delisting panic drawdown minimum/sum/maximum/count.
+  Preserve full coin-mode state. Select compact EMA only for wholly disabled side/unified
+  dispatches without enabling coin overrides; fused and TM kernels remain unspecialized.
+  Broader ablation acceptance stays open rather than dropping required diagnostics.
+- Compare every returned tensor against the general kernel across both sides, all three
+  signal modes, forced delists and optional coin fill counts. Mixed-mode dispatches also
+  match individual requests exactly, although they choose different compiled variants.
+  All 26 device regressions pass. All 198 wider CUDA, parity-tool/comparator and real native
+  optimizer CLI cases pass, including the formerly failing specialization case. The rebuilt,
+  verified extension passes 330 Rust tests with one existing ignored benchmark; default-feature
+  test compilation passes. Documentation checks have zero errors and two existing size warnings.
+- A bounded warmed public benchmark fixture uses 64 candidates, 4,096 bars, seed 11 and
+  ten alternating runs per variant. Median general/compact wall times are 42.4/36.0 ms
+  for one coin and 209.9/197.5 ms for nine coins; kernel times are 39.6/33.2 and 207.2/194.8 ms.
+  The modest improvement validates removing inactive work, not representative optimizer
+  throughput or quality acceptance. Default coin-mode, TM, fused and further inactive-feature
+  specializations remain future work.

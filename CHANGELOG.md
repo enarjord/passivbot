@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Restore compact disabled-HSL GPU kernels for single-side multicoin EMA Anchor
+  with side/unified HSL modes. Preserve full coin-mode state for forced-delisting
+  loss diagnostics, even when HSL is disabled.
+
 - Add experimental `gpu_native` optimization using authoritative CUDA simulations,
   CPU-owned ask/tell search, prompt results/Pareto storage and GPU-only seed/resume
   evaluation. Existing CPU and GPU screening/validation backends remain available.

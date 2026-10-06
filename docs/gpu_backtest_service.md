@@ -206,3 +206,11 @@ implementation internally; legacy optimizer routing is unchanged. Short syntheti
 one-coin measurements show a substantial throughput disadvantage against the old
 single-coin implementation. Kernel ablation and representative measurements are required
 before selecting the final native optimizer's default execution policy.
+
+Single-side multicoin EMA replay selects a compact HSL layout only when every request
+in the dispatch disables HSL, no effective coin override can enable it, and all signal
+modes are side or unified. The specialized kernel removes controller/history binding
+and per-candle HSL scans but retains aggregate forced-delisting loss diagnostics. Coin
+mode retains full state even when HSL is disabled: its separate panic segments affect
+reported drawdown reductions. Fused portfolios and Trailing Martingale retain their
+existing layouts. Execution scheduling does not decide this semantic specialization.

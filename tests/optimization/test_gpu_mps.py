@@ -4847,8 +4847,9 @@ def _multicoin_exposure_fixture(
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("forced_delist", [False, True])
 @pytest.mark.parametrize("collect_counts", [False, True])
+@pytest.mark.parametrize("signal_mode", [0, 1, 2])
 def test_ema_disabled_hsl_preserves_optional_fill_counts(
-    side, forced_delist, collect_counts
+    side, forced_delist, collect_counts, signal_mode
 ):
     from optimization.gpu.metrics import _fill_activity_metrics
 
@@ -4871,11 +4872,21 @@ def test_ema_disabled_hsl_preserves_optional_fill_counts(
         return_context=True,
     )
     params = np.asarray([row] * 3, dtype=np.float64)
-    params[:, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_signal_mode")] = [0, 1, 2]
+    params[:, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_signal_mode")] = signal_mode
 
     output = runner.run(params)
     synchronize()
-    compact = {key: value.cpu() for key, value in output.items()}
+    compact = {key: value.cpu().clone() for key, value in output.items()}
+    assert runner.dispatch_hsl_disabled is (signal_mode != 2)
+    runner.hsl_disabled_specialization = False
+    baseline = runner.run(params)
+    assert runner.dispatch_hsl_disabled is False
+    assert compact.keys() == baseline.keys()
+    for key, expected in compact.items():
+        torch.testing.assert_close(
+            baseline[key].cpu(), expected, rtol=0, atol=0, equal_nan=True,
+            msg=lambda message: f"{key}: {message}",
+        )
     assert torch.all(compact["fill_count_entry"] > 0)
     assert torch.all(compact["fill_count"] > compact["fill_count_entry"])
     if forced_delist:
@@ -4893,6 +4904,36 @@ def test_ema_disabled_hsl_preserves_optional_fill_counts(
         assert torch.all(metrics["fills_active_symbols_count"] == 2)
         assert torch.all(metrics["fills_top_symbol_share"] >= 0.5)
         assert torch.all(metrics["fills_top_symbol_share"] <= 1.0)
+
+
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_ema_disabled_hsl_mixed_batch_preserves_each_candidate(side):
+    count = 1509
+    steps = np.arange(count)
+    closes = np.column_stack(
+        [base * (1.0 + 0.09 * np.sin(steps / 17.0 + coin))
+         for coin, base in enumerate((100.0, 120.0))]
+    )
+    runner, row = _multicoin_exposure_fixture(
+        "ema_anchor", side, count=count, closes=closes,
+        last_valid_indices=(89, 97), collect_coin_fill_counts=True,
+        markets=[ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001, 0.02)] * 2,
+    )
+    params = np.asarray([row] * 3, dtype=np.float64)
+    params[:, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_signal_mode")] = [0, 1, 2]
+    mixed = {key: value.cpu().clone() for key, value in runner.run(params).items()}
+    assert runner.dispatch_hsl_disabled is False
+    assert torch.all(mixed["hsl_panic_close_loss_sum"] > 0)
+    for index, mode in enumerate((0, 1, 2)):
+        individual = runner.run(params[index:index + 1])
+        assert runner.dispatch_hsl_disabled is (mode != 2)
+        for key, expected in mixed.items():
+            torch.testing.assert_close(
+                individual[key].cpu(), expected[index:index + 1],
+                rtol=0, atol=0, equal_nan=True,
+                msg=lambda message: f"{key}: {message}",
+            )
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
