@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Start native GPU work after the first prepared candidate and interleave bounded
+  CPU preparation with result scoring/storage. Adapt completion grouping to CPU
+  processing cost while keeping suite fan-in and evolutionary cohorts independent.
+
 - Tune native GPU optimizer batch widths from successful production work when the
   batch setting is automatic. Keep tuning inside the service and honor prepared
   work/scratch limits so oversized serial replays do not delay returned completions.

@@ -126,10 +126,19 @@ class NativeEvaluationSession:
             alias, _collector = self._active[alias_id]
             self._ready.append(self._reuse(alias, complete.payload))
 
-    def poll(self, *, timeout=0.0, max_results=256):
-        """Consume bounded notifications and return independently completed candidates."""
+    def poll(self, *, timeout=0.0, max_results=256, max_completions=None):
+        """Bound device notifications separately from returned complete candidates.
+
+        A large suite can consume many notifications before yielding one candidate;
+        cached duplicates can yield many candidates from one notification. Keep both
+        bounds independent so CPU persistence cadence need not throttle suite fan-in.
+        """
         if isinstance(max_results, bool) or not isinstance(max_results, int) or max_results < 1:
             raise ValueError("max_results must be a positive integer")
+        if max_completions is None:
+            max_completions = max_results
+        if isinstance(max_completions, bool) or not isinstance(max_completions, int) or max_completions < 1:
+            raise ValueError("max_completions must be a positive integer")
         if not math.isfinite(timeout) or timeout < 0:
             raise ValueError("poll timeout must be finite and nonnegative")
         if self._failure is not None:
@@ -156,7 +165,7 @@ class NativeEvaluationSession:
                     self._complete(complete)
                 self._pump()
             ready = []
-            while self._ready and len(ready) < max_results:
+            while self._ready and len(ready) < max_completions:
                 complete = self._ready.popleft()
                 del self._active[complete.candidate_id]
                 ready.append(complete)

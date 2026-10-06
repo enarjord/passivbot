@@ -148,6 +148,20 @@ and writes full candidate records immediately through the existing results/Paret
 Evolution advances after the cohort is complete; asynchronous execution does not silently
 change the evolutionary policy. Effective duplicates share pending/cached work.
 
+GPU submission starts after the first prepared candidate rather than waiting for the
+entire CPU admission window. Preparation and CPU result servicing then alternate within
+a soft 50 ms latency target, with interruption checks between candidates. Single preparation,
+scoring or storage operations can exceed that target; it is not a hard deadline. Completion
+grouping starts at one candidate and grows from observed CPU work, up to 256, with immediate
+reduction after increased cost. Device waiting time does not count as CPU throughput evidence.
+This cadence is run-local and is not part of saved fitness or search checkpoints.
+
+`NativeEvaluationSession.poll` independently bounds device notifications (`max_results`)
+and returned full candidates (`max_completions`, defaulting to `max_results`). Large suites
+can consume many notifications per candidate, while cached duplicates can produce many
+completions from one notification. A small persistence batch therefore does not throttle
+suite fan-in; ready aliases remain retained until their next CPU consumption call.
+
 The native integration uses `optimize.gpu.batch_size`, `tuning_mode`,
 `max_dispatch_candidate_bars` and `checkpoint_interval_seconds`. An omitted/null or `auto`
 batch setting enables service-owned batch tuning in `auto`/`refresh` mode. A positive
@@ -171,7 +185,7 @@ preference, cooldown and rollback apply. Growth also requires observed request d
 device memory headroom. Tuning submits no extra simulations and never changes precision
 or search policy. Measurements are run-local; `auto` and `refresh` currently both start
 fresh. Persistent advisory calibration, demand-limited classes, dispatch duration/delay,
-residency budgets and CPU result/evolution cadence remain development work. This policy
+residency budgets and further CPU/evolution cadence experiments remain development work. This policy
 does not claim a globally optimal width or a representative optimizer speedup.
 
 Native checkpoints contain CPU search state and a partially evaluated cohort, without

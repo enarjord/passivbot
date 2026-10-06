@@ -25,6 +25,7 @@ from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_cont
 from optimization.interrupts import no_interrupt_requested
 from optimization.native_checkpoint import CHECKPOINT_VERSION, checkpoint_config, load_checkpoint, save_checkpoint
 from optimization.native_datasets import NativeDatasetRegistry
+from optimization.native_pipeline import ResultCadence
 from optimization.native_session import NativeEvaluationSession
 
 
@@ -51,6 +52,7 @@ class _Search:
         self.interrupt_check = interrupt_check
         self._last_checkpoint = 0.0
         self._pending = {}
+        self._cadence = ResultCadence()
 
     def checkpoint(self, *, force=False):
         now = time.monotonic()
@@ -90,10 +92,33 @@ class _Search:
         waiting = iter(index for index, individual in enumerate(population)
                        if not {"F", "G", "H"} <= individual.evaluated)
         exhausted = False
+        initial = True
         self.checkpoint(force=True)
         while self._pending or not exhausted:
             self.interrupt_check()
+            # Start GPU work after the first prepared candidate. Then alternate
+            # bounded CPU preparation with scoring/persistence instead of filling
+            # the entire admission window before pumping or consuming the service.
+            started = time.perf_counter()
+            timeout = (0.0 if not exhausted and len(self._pending) < self.session.max_candidates
+                       else self._cadence.budget_seconds)
+            while self._pending:
+                polled = time.perf_counter()
+                completions = self.session.poll(timeout=timeout, max_completions=self._cadence.limit)
+                consumed = time.perf_counter()
+                self.consume(completions)
+                finished = time.perf_counter()
+                # Blocking polls may include device idle time. Their record work
+                # still counts; nonblocking polls include CPU fan-in/scoring too.
+                cost = finished - (polled if timeout == 0 else consumed)
+                self._cadence.observe(len(completions), cost)
+                timeout = 0.0
+                if not completions or finished - started >= self._cadence.budget_seconds:
+                    break
+                self.interrupt_check()
+            started = time.perf_counter()
             while not exhausted and len(self._pending) < self.session.max_candidates:
+                self.interrupt_check()
                 try:
                     index = next(waiting)
                 except StopIteration:
@@ -104,7 +129,9 @@ class _Search:
                 plan = self.registry.planner.prepare(candidate_id, population[index].X)
                 self.session.admit(plan)
                 self._pending[candidate_id] = index
-            self.consume(self.session.poll(timeout=0.05))
+                if initial or time.perf_counter() - started >= self._cadence.budget_seconds:
+                    initial = False
+                    break
 
     def drain_after_stop(self):
         # Service has already stopped/drained. Persist full successes which
