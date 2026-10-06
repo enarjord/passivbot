@@ -252,6 +252,38 @@ def test_disabled_hsl_specialization_excludes_fused_layout(source_kernel):
     assert MpsEmaAnchorMulticoinFusedRunner.hsl_disabled_specialization is False
 
 
+@pytest.mark.parametrize(
+    "enabled,modes,label,coin_enabled,supported,expected",
+    [
+        ([0, 0], [0, 1], "EMA", False, True, True),
+        ([0, 0.5], [1, 1], "EMA", False, True, True),
+        ([0, 1], [0, 0], "EMA", False, True, False),
+        ([0, np.nan], [0, 0], "EMA", False, True, False),
+        ([0, 0], [0, 2], "EMA", False, True, False),
+        ([0, 0], [0, 2.1], "EMA", False, True, False),
+        ([0, 0], [0, np.nan], "EMA", False, True, False),
+        ([0, 0], [0, 0], "EMA", True, True, False),
+        ([0, 0], [0, 0], "EMA", False, False, False),
+        ([0, 0], [0, 0], "Trailing Martingale", False, True, False),
+    ],
+)
+def test_disabled_hsl_selection_preserves_diagnostic_topology(
+    source_kernel, enabled, modes, label, coin_enabled, supported, expected
+):
+    keys = source_kernel.EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    matrix = np.zeros((2, len(keys)), dtype=np.float32)
+    matrix[:, keys.index("hsl_enabled")] = enabled
+    matrix[:, keys.index("hsl_signal_mode")] = modes
+    runner = SimpleNamespace(
+        coin_override_label=label,
+        coin_hsl_may_enable=coin_enabled,
+        hsl_disabled_specialization=supported,
+    )
+    assert source_kernel.MpsEmaAnchorMulticoinRunner._use_disabled_hsl_specialization(
+        runner, matrix
+    ) is expected
+
+
 def test_disabled_hsl_source_removes_hsl_portfolio_scans():
     """The ordinary disabled-HSL candle path has no pre-fill or HSL update scan."""
     source = (
@@ -264,6 +296,7 @@ def test_disabled_hsl_source_removes_hsl_portfolio_scans():
         in source
     )
     assert "#if !PASSIVBOT_HSL_DISABLED\n        if (can_generate && alive" in source
+    assert "#if !PASSIVBOT_HSL_DISABLED\n    bind_hsl_multicoin_hsl" in source
 
 
 @pytest.mark.parametrize("case", ["ema-multicoin-overhead", "tm-multicoin-overhead"])

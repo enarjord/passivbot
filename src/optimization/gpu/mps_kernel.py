@@ -2451,6 +2451,19 @@ class MpsEmaAnchorMulticoinRunner:
         loader, args = self._library_cache_call()
         return loader(*args)
 
+    def _use_disabled_hsl_specialization(self, matrix):
+        # Coin-mode forced delists still report per-coin panic segments when
+        # HSL is disabled. The compact layout preserves only aggregate state.
+        # Fused and TM kernels do not implement this one-side EMA layout.
+        keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        return bool(
+            self.coin_override_label == "EMA"
+            and getattr(self, "hsl_disabled_specialization", True)
+            and not self.coin_hsl_may_enable
+            and np.all(matrix[:, keys.index("hsl_enabled")] <= 0.5)
+            and np.isin(matrix[:, keys.index("hsl_signal_mode")], [0, 1]).all()
+        )
+
     def _library_cache_call(self):
         args = (
             self.hsl_ema_tail_enabled,
@@ -2634,7 +2647,7 @@ class MpsEmaAnchorMulticoinRunner:
             MpsEmaAnchorRunner._validate_hsl_params(self, policy_matrix, keys)
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
-        self.dispatch_hsl_disabled = False
+        self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(matrix)
         packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])

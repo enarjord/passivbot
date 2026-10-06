@@ -3137,8 +3137,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float day_start_balance = balance;
     thread float& day_fill_count = fills.day_fill_count;
 
+#if !PASSIVBOT_HSL_DISABLED
     bind_hsl_multicoin_hsl(side.hsl, side.coin_hsl,
         hsl_trees, hsl_rows, int(b) * (C + 1), C, true, true);
+#endif
     for (int k = 1; k < stop_k; ++k) {
         if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
