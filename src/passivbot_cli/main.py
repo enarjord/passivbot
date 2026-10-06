@@ -145,6 +145,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.gpu_proxy_benchmark",
         "benchmark deterministic Apple MPS proxy workloads",
     ),
+    "gpu-parity": CommandSpec(
+        "tools.gpu_parity",
+        "compare offline CPU/GPU backtest metrics (requires full install)",
+        requires_full=True,
+    ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",
         "summarize local live monitor events and text logs",

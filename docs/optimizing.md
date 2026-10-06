@@ -1210,6 +1210,10 @@ feature shape changes.
 HSL topology likewise considers enabled sides only; an HSL setting left on an exposure-disabled
 side does not make the active side pay for an HSL controller.
 
+For offline CPU/GPU metric and limit-feasibility comparisons, use
+[`passivbot tool gpu-parity`](gpu_parity.md). It accepts reproducible synthetic fixtures
+or prepared datasets and reports mismatches separately from execution failures.
+
 For comparable local MPS measurements, first confirm another optimizer is not using the device,
 then run each case in a fresh process. The harness uses only fixed-seed, in-memory synthetic candles
 and candidate matrices; it never reads exchange credentials, local cache data, configs, or prior

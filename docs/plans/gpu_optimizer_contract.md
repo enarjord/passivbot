@@ -197,7 +197,7 @@ Completion requires:
 
 ### Authoritative simulation and tooling
 
-- [ ] Implement standalone GPU/CPU parity tooling with structured diagnostics.
+- [x] Implement standalone GPU/CPU parity tooling with structured diagnostics.
 - [ ] Audit approximation inventory against representative correctness cases.
 - [ ] Resolve material differences and record accepted numerical discrepancies.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
@@ -268,3 +268,26 @@ Completion requires:
   snapshots from retained future callbacks and rolled back failed thread startup. Added
   four deterministic regressions. Source-only specialization checks again run without
   Torch through an isolated module import that restores both module/package references.
+
+### 2026-10-05 — Standalone parity tooling and measured gaps
+
+- Added [offline parity tooling](../gpu_parity.md) with reproducible synthetic fixtures
+  and prepared NPZ/config/market inputs. Comparisons use the verified native CPU engine
+  and the new asynchronous service, with standard JSON, explicit per-metric policies,
+  input/source identities, canonical scalar limit checks and bounded optional diagnostics.
+- Missing/unsupported metrics, absent policies, non-finite values, suite-only checks
+  and execution failures remain distinguishable from numerical agreement. Limit
+  feasibility is compared independently; a tolerance does not hide threshold crossings.
+- A 21-case, 5,760-bar, seed-7 matrix exposed small EMA fill/ADG differences and
+  material multicoin TM short/passive-order differences. Both long-only TM cases
+  pass the provisional policies; all cases agree on completion coverage.
+  Ordinary market-order variants remove the large TM discrepancy in this fixture,
+  narrowing the next investigation. Conservative minimum-cost filtering yields zero
+  GPU fills in the tested dual-side cases. None of these is approved by widening a
+  global tolerance or treating transport equivalence as CPU parity.
+- Initial fixture revisions used template dates and then failed to account for canonical
+  UTC-day end-date normalization. Aligned exclusive endpoints to midnight before
+  recording the matrix; the earlier coverage discrepancy was input preparation, not
+  a confirmed simulator defect. Controller toggles alone are not transition coverage.
+- Scalar comparison is implemented; suite/ranking comparisons and broader stress cases
+  remain required acceptance work. No optimizer cutover or implicit CPU fallback added.

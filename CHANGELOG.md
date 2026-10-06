@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add `passivbot tool gpu-parity` for offline CPU/GPU backtest comparisons with
+  explicit per-metric tolerances, canonical limit-feasibility checks, reproducible
+  synthetic fixtures and prepared dataset inputs. GPU optimizer behavior is unchanged.
+
 - Add optimizer `-ltwel` and `-stwel` aliases for wallet exposure bounds, accepting fixed
   values or ranges. GPU setup now uses the bounds-clamped seed, allowing bounds to enable
   or disable a side relative to the input config while keeping side topology fixed throughout
