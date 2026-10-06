@@ -6,11 +6,14 @@ here and reused by content. Close the service before closing this registry.
 
 import json
 import logging
+from itertools import product
 
 import numpy as np
 
 from optimization.gpu.datasets import PreparedGpuDataset
-from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
+from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding, execution_key
+from optimization.fine_tune_anchors import ANCHOR_GENE_KEY
+from optimization.gpu.model import gpu_side_enabled
 from optimization.native_results import CanonicalResultScorer
 from optimization.prepared_dataset_identity import _array_identity
 from shared_arrays import SharedArrayManager
@@ -64,7 +67,7 @@ class NativeDatasetRegistry:
                         base.btc_usd_specs.get(exchange), base.timestamps.get(exchange), columns,
                         None, None, requested, len(bindings),
                     ))
-            self.bindings = tuple(bindings)
+            self.bindings = self._execution_variants(base, evaluator, bindings, vector, overrides)
             self.planner = NativeCandidatePlanner(evaluator, self.bindings, overrides_list=overrides)
             # Metric surface and effective static inputs must be valid before registration.
             self.planner.prepare("preparation", vector)
@@ -74,6 +77,54 @@ class NativeDatasetRegistry:
             except BaseException:
                 logging.exception("native dataset cleanup failed after preparation failure")
             raise
+
+    @staticmethod
+    def _execution_variants(base, evaluator, bindings, vector, overrides):
+        from optimize import _canonicalize_optimizer_individual
+
+        # Anchors and side enablement have finite choices. All other transported
+        # numeric genes stay request-owned; arbitrary static changes still fail.
+        dimensions = []
+        topology_keys = {f"{side}_{name}" for side in ("long", "short")
+                         for name in ("n_positions", "total_wallet_exposure_limit")}
+        for index, ((key, _path), bound) in enumerate(zip(base.key_paths, base.bounds, strict=True)):
+            if key == ANCHOR_GENE_KEY:
+                dimensions.append((index, range(int(bound.low), int(bound.high) + 1)))
+            elif key in topology_keys and bound.low < bound.high:
+                # Canonical endpoint preparation handles position rounding,
+                # stepped bounds and fixed/mirrored policies. Raw zero crossing
+                # is insufficient; equivalent endpoint contracts deduplicate below.
+                dimensions.append((index, (bound.low, bound.high)))
+        configurations = []
+        for values in product(*(choices for _index, choices in dimensions)):
+            candidate = list(vector)
+            for (index, _choices), value in zip(dimensions, values, strict=True):
+                candidate[index] = value
+            effective = _canonicalize_optimizer_individual(
+                candidate, base.config, base.bounds, base.sig_digits, base.key_paths, overrides,
+            )
+            configurations.append(effective)
+        result = []
+        contexts = {ctx.label: ctx for ctx in evaluator.contexts} if callable(
+            getattr(evaluator, "build_scenario_candidate_config", None)) else {}
+        for binding in bindings:
+            variants = {}
+            # Keep the original view's identity stable when it is usable.
+            original = json.loads(binding.dataset.config_json)
+            variants[execution_key(original)] = original
+            for effective in configurations:
+                if contexts:
+                    effective = evaluator.build_scenario_candidate_config(effective, contexts[binding.scenario])
+                variants.setdefault(execution_key(effective), effective)
+            for index, effective in enumerate(variants.values()):
+                # Existing replay support requires an enabled side; do not
+                # manufacture a trading side for a zero-side candidate.
+                if not any(gpu_side_enabled(effective, side) for side in ("long", "short")):
+                    continue
+                identity = binding.dataset_id if index == 0 else f"{binding.dataset_id}:variant:{index}"
+                dataset = binding.dataset if index == 0 else binding.dataset.with_config(effective)
+                result.append(ScenarioBinding(binding.scenario, identity, dataset))
+        return tuple(result)
 
     def _binding(self, label, exchange, config, markets, candles, btc, timestamps,
                  columns, span, indices, requested, index):

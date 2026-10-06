@@ -118,3 +118,12 @@ class PreparedGpuDataset:
                 array.flags.writeable = False
                 arrays.append(array[slice(*span)])
             yield arrays
+
+    def with_config(self, config):
+        """Prepare another execution view over the same immutable source arrays."""
+        return PreparedGpuDataset(
+            config=config, markets=json.loads(self.markets_json), exchange=self.exchange,
+            hlcvs=self.hlcvs, btc=self.btc, timestamps=self.timestamps,
+            candle_coins=self.candle_coins, coin_indices=self.coin_indices,
+            time_range=self.time_range, timestamp_range=self.timestamp_range, metrics=self.metrics,
+        )

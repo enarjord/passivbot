@@ -99,14 +99,17 @@ class NativeCandidatePlanner:
         self.overrides = tuple(overrides_list if overrides_list is not None else
                                self.base.config["optimize"].get("enable_overrides", []))
         self.bindings = tuple(bindings)
-        pairs = [(binding.scenario, binding.dataset.exchange) for binding in self.bindings]
-        if len(set(pairs)) != len(pairs):
-            raise ValueError("scenario/exchange bindings must be unique")
-        self.scorer.validate_coverage(pairs, "full")
+        self._variants = {}
+        for binding in self.bindings:
+            pair = (binding.scenario, binding.dataset.exchange)
+            variants = self._variants.setdefault(pair, {})
+            key = execution_key(json.loads(binding.dataset.config_json))
+            if key in variants:
+                raise ValueError("scenario/exchange execution variants must be unique")
+            variants[key] = binding
+        self.scorer.validate_coverage(list(self._variants), "full")
         if len({binding.dataset_id for binding in self.bindings}) != len(self.bindings):
             raise ValueError("prepared dataset identities must be unique")
-        self._contracts = tuple(_static_contract(json.loads(binding.dataset.config_json))
-                                for binding in self.bindings)
 
     def prepare(self, candidate_id, vector, *, scenarios=None):
         from optimize import _canonicalize_optimizer_individual
@@ -128,10 +131,11 @@ class NativeCandidatePlanner:
             raise ValueError("screening must select nonempty known scenario labels")
         stage = "full" if selected == set(configs) else "screening"
         requests, slots, identity = [], [], []
-        for index, (binding, expected_contract) in enumerate(zip(self.bindings, self._contracts, strict=True)):
-            effective = configs[binding.scenario]
-            if _static_contract(effective) != expected_contract:
-                raise ValueError(f"candidate changes dataset-owned execution inputs for scenario {binding.scenario!r}; "
+        for index, ((scenario, exchange), variants) in enumerate(self._variants.items()):
+            effective = configs[scenario]
+            binding = variants.get(execution_key(effective))
+            if binding is None:
+                raise ValueError(f"candidate changes dataset-owned execution inputs for scenario {scenario!r}; "
                                  "prepare a compatible dataset before submitting it")
             parameters = prepare_candidate_parameters(
                 effective, json.loads(binding.dataset.markets_json), binding.dataset.exchange,
@@ -147,3 +151,7 @@ class NativeCandidatePlanner:
         # Validate the selected stage and requested metric surface before device work.
         plan.collector(self.scorer)
         return plan
+
+
+def execution_key(config):
+    return json.dumps(_static_contract(config), sort_keys=True, allow_nan=False)

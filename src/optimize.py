@@ -1011,7 +1011,7 @@ def _require_resume_checkpoint(results_dir: str) -> str:
 def _restore_gpu_resume_anchor_plan(config: dict, checkpoint_path: str) -> bool:
     """Restore checkpoint-owned fine-tune anchors before building optimizer shape."""
 
-    if config.get("optimize", {}).get("backend") != "gpu":
+    if config.get("optimize", {}).get("backend") not in {"gpu", "gpu_native"}:
         return False
     try:
         import pickle

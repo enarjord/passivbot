@@ -94,8 +94,10 @@ and expected result slots. A screening plan's duplicate identity includes unscre
 scenarios: identical screenings alone do not prove identical complete candidates. Values
 outside the dynamic scalar transport remain dataset-owned; changes to feature flags,
 execution modes, side enablement or materialized coin patches require compatible prepared datasets and are
-rejected before submission. Candidate-dependent coin patches and finite anchor variants
-still require integration work; they are not silently ignored.
+rejected before submission. The canonical registry prepares finite anchor and side-enable
+views before registration, sharing the same borrowed source histories. Equivalent execution
+contracts share a view; exact-last scenario policies can remove ineffective choices.
+Candidate-dependent continuous coin patches still require transport integration.
 
 `optimization.native_session.NativeEvaluationSession` exclusively borrows the backtest
 service. The caller admits plans and polls independently completed candidates, then
@@ -225,8 +227,15 @@ or old GPU proxy/validation fitness. The current replay uses f32 state, integer 
 encodings and f64 host preparation/metric work. Changes to that contract require fresh
 evaluation; the existing strict config resume checks also remain in force.
 
-Candidate-dependent coin patches, changing side/kernel topology and fine-tune anchor variants
-require compatible preparation and currently fail explicitly. Representative parity,
+Native checkpoints retain fine-tune anchor definitions and restore them before optimizer
+shape construction, without requiring the original seed files. Changed fixed anchor values
+invalidate saved fitness. Older experimental anchored checkpoints without a stored plan
+cannot restore their anchors automatically; use saved configs as seeds for a fresh run.
+
+Finite anchor and side-enable choices use registered compatible execution views without
+copying candle histories. Numeric candidate values still travel in compact requests.
+Continuous changes to dataset-owned coin patches remain explicit errors, and candidates
+with both sides disabled remain unsupported by the replay. Representative parity,
 specialized/general kernel equivalence, performance acceptance and adaptive tuning remain
 open; the native backend does not supersede the legacy backend yet.
 
