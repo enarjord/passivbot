@@ -279,6 +279,85 @@ passivbot tool trailing-inspect configs/examples/default_trailing_martingale_lon
   --entry-threshold-base-pct 0.02 --json
 ```
 
+## Config cleanup and formatting
+
+`passivbot tool clean-config SRC DST` exports a clean config offline. The default `--mode full`
+uses the shared config normalization and schema cleaner: fill missing defaults, normalize supported
+V8 aliases, remove result metrics, helper metadata, unknown static fields and inactive strategy
+subtrees/bounds, then sort keys and write streamlined JSON. It accepts full or lean V8 configs and
+result envelopes containing a `config` object with `bot` and `live` sections. A missing bot side
+stays disabled. The command preserves authored date tokens such as `"now"`, approved/ignored coin
+lists and file references, sparse coin overrides, scenarios, reducers and optimizer runtime pins.
+It does not apply optimizer pins to bot values or flatten referenced override files.
+Relative `override_config_path` values are kept verbatim and resolve relative to the exported
+config's directory. Keep the output beside the input or update those references when relocating it.
+
+Modes:
+
+| Mode | Output |
+| --- | --- |
+| `full` (default) | All canonical sections, including backtest and optimize |
+| `live` | `config_version`, `bot`, `coin_overrides`, `live`, `logging`, `monitor` |
+| `backtest` | Backtest inputs and shared bot/live/logging sections; no optimize or monitor |
+| `optimize` | Optimizer and backtest inputs with shared bot/live/logging sections; no monitor |
+| `format` | Strict JSON formatting only; preserve every value, numeric spelling and duplicate object member |
+
+Cleanup validates selected sections using the shared loader before export; irrelevant sections are
+discarded before normalization. Only `format` accepts arbitrary JSON (including arrays and result
+documents) without requiring a config. Cleanup rejects duplicate object keys instead of silently
+choosing one. Dynamic schema areas such as scenarios and coin patches remain sparse. Full cleanup
+can change values through the same supported normalization/default rules as loading: inspect a new
+output before adopting it. Explicit strategy/HSL migrations remain separate: enabled pre-v8.6 HSL
+requires `migrate-hsl`, and V7 trailing-grid configs require `migrate-config-v7`. Cleanup does not
+authorize strategy migration or remove the need to re-backtest a migrated configuration.
+
+```shell
+# Default full cleanup to a separate file.
+passivbot tool clean-config configs/private/input.json configs/private/clean.json
+
+# Lean live export, preserving strategy and live policy.
+passivbot tool clean-config configs/private/input.json configs/private/live.json --mode live
+
+# Formatting only, without schema/default changes or metadata removal.
+passivbot tool clean-config input.json pretty.json --mode format
+passivbot tool clean-config input.json pretty.json --mode format --sort-keys --max-inline 100
+
+# Explicit in-place replacement (never the default).
+passivbot tool clean-config configs/private/input.json --in-place
+
+# Bulk: depth 1 (default) selects direct .json files; 2 includes one subdirectory level.
+# Keep relative paths and filenames under a separate destination tree.
+passivbot tool clean-config configs/private/raw configs/private/clean --max-depth 2
+passivbot tool clean-config configs/private/raw --in-place --max-depth 3 --mode format
+
+# Read-only preview; --check exits 1 if any source would change, 0 if already clean.
+passivbot tool clean-config configs/private/raw --dry-run --max-depth 2
+passivbot tool clean-config configs/private/raw --check --max-depth 2
+```
+
+`SRC DST` is required unless `--in-place`, `--dry-run` or `--check` is selected. Existing destinations
+are refused unless `--overwrite` is specified; even then a destination cannot alias a source file.
+Directory source/destination trees must be disjoint. Bulk discovery skips symlink files/directories.
+A directly selected source symlink can be cleaned in place, preserving the link and replacing its
+target. Directory depth must be at least 1; `--max_depth` is an alias for `--max-depth`.
+
+Single `.hjson` sources are parsed as HJSON; `--include-hjson` also selects them in bulk. Outputs
+retain their relative names/extensions and contain JSON, which is valid HJSON. Use `--input-format
+hjson` for HJSON stored in a `.json` file or `--input-format json` to force strict JSON. Format mode
+requires strict JSON. `--indent` and `--max-inline` control formatting; cleanup modes always sort
+keys while format mode sorts only with `--sort-keys`.
+
+The complete selected batch is parsed/normalized before any write. Validation failures leave all
+inputs and outputs untouched. Publication is atomic **per file**, preserving permissions and
+ownership of replaced files; new config files are private (owner read/write). A later filesystem
+failure can leave earlier files in a bulk run completed; the batch is not a directory transaction.
+The tool makes no network or authenticated exchange calls and starts no bot.
+
+`streamline-json` retains its existing in-place, recursively selected formatting interface for
+compatibility. Prefer `clean-config --mode format` for explicit output paths and bounded depth.
+The migration tools retain their own reports and explicit semantic choices; all cleanup modes use
+the shared config pipeline rather than adding a second migration implementation.
+
 ## Historical data helpers
 
 - `passivbot download` – Pre-warm the v2 OHLCV store using the same config/date/exchange selection as backtesting.

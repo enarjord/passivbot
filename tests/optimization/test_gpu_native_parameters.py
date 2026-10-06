@@ -34,3 +34,29 @@ def test_effective_disabled_side_and_canonical_adaptive_values_are_explicit(monk
     assert parameters["short_n_positions"] == 0
     assert parameters["long_entry_cooldown_max_duration_minutes"] == -1
     assert parameters["long_unilateralness_window"] >= parameters["long_unilateralness_ema_span_1m"]
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_candidate_parameters_pack_global_scaled_hsl_budget_policy(strategy, side, monkeypatch):
+    import backtest
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("parameter preparation must not simulate a CPU backtest")
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    config, _candles, markets, _btc, _timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "128",
+    ]))
+    before = prepare_candidate_parameters(config, markets, "binance")
+    config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = True
+    config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.44
+    config["coin_overrides"] = {"COIN00": {"bot": {side: {"risk": {
+        "wallet_exposure_limit": 0.2, "we_excess_allowance_pct": 0.1,
+    }}}}}
+    after = prepare_candidate_parameters(config, markets, "binance")
+    other = "short" if side == "long" else "long"
+    assert before[f"{side}_hsl_scale_budget_with_excess_allowance"] == 0
+    assert after[f"{side}_hsl_scale_budget_with_excess_allowance"] == 1
+    assert after[f"{other}_hsl_scale_budget_with_excess_allowance"] == 0
+    assert after[f"{side}_we_excess_allowance_pct"] == 0.44
+    assert not any("legacy_raw" in key for key in after)

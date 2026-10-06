@@ -13,7 +13,7 @@ import pytest
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
-                                                                    screening=False, anchors=False, coupled=False):
+                                                                    screening=False, anchors=False, coupled=False, scaled_hsl=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -52,6 +52,17 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             "COIN02": {"bot": {"long": {"strategy": {"trailing_martingale": {
                 "entry": {"ema_span_0": 7.5},
             }}}}},
+        }
+    if scaled_hsl:
+        for side in ("long", "short"):
+            config["bot"][side]["hsl"].update(
+                enabled=True, scale_budget_with_excess_allowance=True,
+            )
+            config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.44
+        config["coin_overrides"] = {
+            "COIN00": {"bot": {"long": {"risk": {
+                "wallet_exposure_limit": 0.2, "we_excess_allowance_pct": 0.1,
+            }}}},
         }
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},
         {"label": "window", "coins": ["COIN00", "COIN02"]}] if suite else [])
@@ -167,6 +178,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         await optimize.main()
     assert resumed.value.code == 0
     assert len(records()) == (8 if screening else 12)
+    if scaled_hsl:
+        for row in records():
+            assert all(row["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+                       for side in ("long", "short"))
+        assert state[CONTRACT_KEY]["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"]
     if screening:
         with (directory / "checkpoint.pkl").open("rb") as source:
             final = pickle.load(source)
@@ -206,4 +222,15 @@ async def test_native_coupled_cli_cuda_searches_spans_with_coin_pins_and_resumes
                                                                             suite, screening, interrupted):
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, suite, interrupted, True, screening=screening, coupled=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suite", [False, True])
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_native_scaled_coin_hsl_cli_cuda_preserves_policy_and_resumes_without_cpu(
+    monkeypatch, tmp_path, suite, interrupted,
+):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, interrupted, True, scaled_hsl=True,
     )

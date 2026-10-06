@@ -1924,30 +1924,17 @@ def test_gpu_single_coin_rejects_nan_forced_delist_endpoint():
 
 
 @pytest.mark.parametrize(
-    ("mode", "legacy_raw"), [("bounded", 0.0), ("legacy_raw", 1.0)]
+    ("mode", "scale_budget"), [("unscaled", 0.0), ("scaled", 1.0)]
 )
-def test_single_coin_exposure_policy_packs_rust_inputs(mode, legacy_raw):
-    packed = _single_coin_exposure_params(
-        {
-            "we_excess_allowance_pct": 0.25,
-            "we_excess_allowance_mode": mode,
-            "total_exposure_entry_gate_enabled": False,
-            "total_exposure_enforcer_threshold": 0.8,
-        },
-        side="long",
-    )
-
-    assert packed == {
-        "we_excess_allowance_pct": 0.25,
-        "we_excess_allowance_legacy_raw": legacy_raw,
-        "twel_entry_gate_enabled": 0.0,
-        "twel_enforcer_threshold": 0.8,
-    }
+def test_single_coin_exposure_policy_packs_rust_inputs(mode, scale_budget):
+    packed = _single_coin_exposure_params({"we_excess_allowance_pct": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer_threshold": 0.8}, side="long", scale_hsl_budget=bool(scale_budget))
+    assert packed == {"we_excess_allowance_pct": 0.25, "hsl_scale_budget_with_excess_allowance": scale_budget, "twel_entry_gate_enabled": 0.0, "twel_enforcer_threshold": 0.8}
 
 
-def test_single_coin_exposure_policy_rejects_unknown_allowance_mode():
-    with pytest.raises(ValueError, match="we_excess_allowance_mode"):
-        _single_coin_exposure_params({"we_excess_allowance_mode": "raw"}, side="short")
+
+def test_single_coin_hsl_budget_scaling_defaults_off():
+    assert _single_coin_exposure_params({}, side="short")["hsl_scale_budget_with_excess_allowance"] == 0.0
+
 
 
 def test_tm_position_exposure_repair_packs_exact_rust_inputs():

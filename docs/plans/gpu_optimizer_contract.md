@@ -1355,3 +1355,26 @@ Completion requires:
   execution and broader resource/performance acceptance remain open. This completed
   slice still requires exact-head automatic/author review and required CI before
   development integration.
+
+
+### 2026-10-06 — Refresh development from master after bounded allowance/HSL changes
+
+- Integrate master `492246b8c55bfe8cc4a45a407e66a270a7d20608`, including
+  PR #1905's always-bounded excess allowance and opt-in per-side coin-HSL budget
+  scaling, plus PR #1904's configuration cleanup/export tool. Keep all redesign
+  work on development; this integration does not publish it to master.
+- Keep CPU-owned canonical candidate parameter preparation and the development
+  kernels' current-balance minimum-effective-cost behavior. Apply the new HSL
+  parameter in the extracted parameter module rather than restoring old service
+  preparation or conservative screening helpers removed by the redesign.
+- Carry budget scaling through shared single/multicoin and directional replay;
+  preserve disabled-feature compilation, streamed metrics and dispatch-local scratch.
+  Add both-strategy/side parameter regressions and native GPU-only CLI, suite,
+  interruption and resume regressions with scaled budgets and authored coin patches.
+- Retained GPU checkpoints use master's updated signature. Native saved fitness
+  already requires matching Python and Rust implementation identities, so old-source
+  checkpoints cannot authorize fitness reuse after this simulator change. Existing
+  benchmark/parity results remain evidence for their recorded implementation only;
+  broader acceptance of the integrated simulator remains open.
+- Development integration requires completed current-head automatic review,
+  addressed findings, author sign-off and successful required CI.

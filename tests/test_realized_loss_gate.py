@@ -1012,7 +1012,9 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         )
         config = self._make_config(policy)
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
-        assert bp["equity_hard_stop_loss"]["sides"][0] == policy
+        assert bp["equity_hard_stop_loss"]["sides"][0] == {
+            **policy, "scale_budget_with_excess_allowance": False
+        }
 
     @pytest.mark.parametrize(
         "policy,field",

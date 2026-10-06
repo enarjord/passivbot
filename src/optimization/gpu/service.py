@@ -1869,7 +1869,12 @@ class MpsSingleCoinProxy:
                 strategy["total_wallet_exposure_limit"] = float(
                     risk["total_wallet_exposure_limit"]
                 )
-            strategy.update(_single_coin_exposure_params(risk, side=side))
+            strategy.update(
+                _single_coin_exposure_params(
+                    risk, side=side,
+                    scale_hsl_budget=bool(bot["hsl_scale_budget_with_excess_allowance"]),
+                )
+            )
             if self.strategy_kind == "trailing_martingale":
                 strategy.update(_position_exposure_enforcer_params(risk, side=side))
             if self.strategy_kind in {"ema_anchor", "trailing_martingale"}:

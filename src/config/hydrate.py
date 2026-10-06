@@ -173,7 +173,7 @@ def sync_with_template(
     )
 
 
-def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
+def normalize_backtest_coin_sources(raw: Any) -> Dict[str, str]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
@@ -236,7 +236,7 @@ def apply_non_live_adjustments(
             if coin not in result["live"]["ignored_coins"][pside]
         ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
-    result["backtest"]["coin_sources"] = _normalize_coin_sources(
+    result["backtest"]["coin_sources"] = normalize_backtest_coin_sources(
         result["backtest"].get("coin_sources", {})
     )
     if result["backtest"].get("filter_by_min_effective_cost") is None:
@@ -244,6 +244,24 @@ def apply_non_live_adjustments(
             result["live"].get("filter_by_min_effective_cost", False)
         )
 
+    normalize_optimizer_settings(
+        result,
+        verbose=verbose,
+        tracker=tracker,
+        raw_optimize_limits=raw_optimize_limits,
+        raw_optimize_limits_present=raw_optimize_limits_present,
+    )
+
+
+def normalize_optimizer_settings(
+    result: dict,
+    *,
+    verbose: bool = True,
+    tracker=None,
+    raw_optimize_limits: Any = None,
+    raw_optimize_limits_present: Optional[bool] = None,
+) -> None:
+    """Normalize optimizer policy without resolving dates or coin-list files."""
     result["optimize"]["scoring"] = [
         spec.to_config() for spec in extract_objective_specs(result)
     ]
