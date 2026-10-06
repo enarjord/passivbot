@@ -225,6 +225,7 @@ Completion requires:
 ### Optimizer cutover
 
 - [ ] Integrate GPU result scoring/limits through existing CPU-owned canonical helpers.
+- [x] Add incremental candidate/suite result collection using canonical CPU scoring helpers.
 - [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
 - [ ] Flush results/Pareto promptly; validate interruption and compatible resume.
@@ -509,3 +510,29 @@ Completion requires:
 - Validation: 124 offline lifecycle/dataset/residency/preparation cases pass. The combined
   prepared-dataset/facade CUDA run passes 32 cases, including real setup failure and
   interruption. No simulation semantics or result policy changes in this correction.
+
+### 2026-10-06 — Incremental CPU scoring of GPU results
+
+- Native replay completions now retain the simulator's actual liquidation flag separately
+  from requested metrics. The legacy metric-only replay interface remains unchanged and
+  explicitly has unknown status; authoritative consumers reject that unknown status.
+- Added per-candidate scenario/exchange collection and canonical CPU scoring, without
+  simulation calls or GPU runtime imports. Validate identities, coverage and requested
+  metrics before completing candidates; preserve canonical invalid-candidate handling of
+  non-finite metric sentinels. Partial scenario screenings remain explicitly separate
+  from recordable full evaluations and retain named objective/limit scenarios.
+- Real CUDA tests exercise mixed liquidated/non-liquidated candidates and asynchronous
+  two-scenario completion scoring with CPU backtest/evaluator simulation entry points
+  forbidden. The crash fixture additionally compares actual terminal flags against
+  standalone CPU references outside service execution. Candidate results may complete
+  independently while other candidates are still waiting.
+- Validation: 69 executor/scoring/prepared-service CUDA cases pass, including 21 CPU
+  scoring cases and eight real CUDA facade/integration cases. Documentation checks have
+  zero errors and two existing size warnings. No Rust, kernel, or legacy CLI routing
+  changes are included in this slice.
+- Optimizer CLI integration, global admission/deduplication, seed handling, search cadence,
+  durable result/Pareto storage and compatible resume remain open. These scoring helpers
+  do not certify the entire metric surface or simulation approximation inventory.
+- Enforced the requested merge discipline on the prepared-dataset slice: fix the auto
+  review's finding, add regressions, answer its original thread, await clear current-head
+  re-review, perform author semantic review, and wait for all required CI before dev merge.

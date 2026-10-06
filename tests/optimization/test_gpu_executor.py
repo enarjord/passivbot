@@ -16,6 +16,7 @@ from optimization.gpu.executor import (
     BacktestQueueFull,
     BacktestRequest,
     GpuBacktestService,
+    ReplayResult,
 )
 
 
@@ -314,6 +315,37 @@ def test_adjacent_requests_microbatch_and_keep_identity():
     assert [result.request_id for result in results] == ["0", "1", "2"]
     assert [result.metrics for result in results] == [{"gain": float(i)} for i in range(3)]
     assert all(result.dataset_id == "market" for result in results)
+    assert all(result.liquidated is None for result in results)
+
+
+def test_structured_replay_preserves_terminal_status_per_request():
+    class StructuredReplay(Replay):
+        def evaluate(self, candidates):
+            return [ReplayResult(row, bool(item["value"] % 2)) for row, item in
+                    zip(super().evaluate(candidates), candidates)]
+    with GpuBacktestService(batch_size=3, max_batch_delay=1) as service:
+        service.register_dataset("market", StructuredReplay())
+        futures = [service.submit(request(i)) for i in range(3)]
+        results = [future.result(timeout=3) for future in futures]
+    assert [row.metrics for row in results] == [{"gain": float(i)} for i in range(3)]
+    assert [row.liquidated for row in results] == [False, True, False]
+
+
+@pytest.mark.parametrize("bad_status", [None, 0, "true"])
+def test_invalid_terminal_status_rejects_the_complete_producer_batch(bad_status):
+    class BrokenReplay(Replay):
+        def evaluate(self, candidates):
+            rows = [ReplayResult(row, False) for row in super().evaluate(candidates)]
+            rows[-1] = ReplayResult(rows[-1].metrics, bad_status)
+            return rows
+    with GpuBacktestService(batch_size=2, max_batch_delay=1) as service:
+        service.register_dataset("market", BrokenReplay())
+        futures = [service.submit(request(i)) for i in range(2)]
+        for future in futures:
+            with pytest.raises(RuntimeError, match="liquidation status"):
+                future.result(timeout=3)
+        with pytest.raises(RuntimeError, match="service failed"):
+            service.submit(request(2))
 
 
 def test_completion_does_not_wait_for_all_accepted_requests():

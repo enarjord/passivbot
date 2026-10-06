@@ -548,6 +548,7 @@ def test_cuda_prepared_service_reuses_packing_and_bounds_resident_scenarios(cuda
             rows = {}
             for i, name in enumerate(("base", "changed", "subset", "subset-copy", "base", "changed", "subset")):
                 row = service.submit(BacktestRequest(str(i), name, {})).result(timeout=60)
+                assert row.liquidated is False
                 if name in rows:
                     assert row.metrics == rows[name]
                 rows[name] = row.metrics
@@ -643,6 +644,145 @@ def test_cuda_prepared_service_cleans_up_after_setup_or_interrupt(cuda, monkeypa
         assert all(not path.exists() for path in directories)
         assert service._residency is None
         assert not service._prepared_cache and not service._subset_cache
+    finally:
+        manager.cleanup()
+
+
+def test_cuda_prepared_service_preserves_actual_liquidation_per_candidate(cuda, monkeypatch):
+    from optimization.gpu.datasets import PreparedGpuDataset
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.executor import BacktestRequest
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+    from shared_arrays import SharedArrayManager
+    import backtest
+
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", "trailing_martingale", "--coins", "1", "--bars", "128",
+    ]))
+    candles[:, :, :3] = [101.0, 99.0, 100.0]
+    candles[80:, :, :3] *= 0.01
+    bot = config["bot"]["long"]
+    bot["risk"]["total_wallet_exposure_limit"] = 10.0
+    strategy = bot["strategy"]["trailing_martingale"]
+    strategy["entry"].update(initial_qty_pct=1.0, ema_gate_mode="disabled")
+    strategy["close"]["threshold_base_pct"] = 1.0
+    parameters = [{}, {"long_total_wallet_exposure_limit": 0.1, "long_entry_initial_qty_pct": 0.01}]
+    manager = SharedArrayManager()
+    try:
+        specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
+        dataset = PreparedGpuDataset(
+            config=config, markets=markets, exchange="binance", candle_coins=["COIN00"],
+            hlcvs=specs[0], btc=specs[1], timestamps=specs[2], metrics=DEFAULT_METRICS,
+        )
+        def forbidden(*_args, **_kwargs):
+            pytest.fail("native service must not run a CPU backtest")
+        with monkeypatch.context() as guard:
+            guard.setattr(backtest, "execute_backtest", forbidden)
+            guard.setattr(backtest, "run_backtest", forbidden)
+            with CudaBacktestService(batch_size=2, max_batch_delay=0.05) as service:
+                service.register_dataset("crash", dataset)
+                futures = [service.submit(BacktestRequest(str(i), "crash", row)) for i, row in enumerate(parameters)]
+                results = [future.result(timeout=60) for future in futures]
+        assert [result.liquidated for result in results] == [True, False]
+        for index, result in enumerate(results):
+            candidate = deepcopy(config)
+            if index:
+                candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.1
+                candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.01
+            payload = backtest.build_backtest_payload(
+                candles, markets, candidate, "binance", btc, timestamps, metrics_only=True,
+            )
+            analysis = backtest.execute_backtest(payload, candidate)[2]
+            assert analysis["liquidated"] is result.liquidated
+    finally:
+        manager.cleanup()
+
+
+def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backtests(cuda, monkeypatch):
+    from concurrent.futures import as_completed
+    from optimization.gpu.datasets import PreparedGpuDataset
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.native_results import CandidateEvaluation, CanonicalResultScorer, ResultSlot
+    from optimize import Evaluator, SuiteEvaluator
+    from metrics_schema import build_scenario_metrics
+    from suite_runner import ScenarioResult, SuiteScenario
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+    from shared_arrays import SharedArrayManager
+    import backtest
+
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
+    ]))
+    config["optimize"]["bounds"] = {"long_entry_initial_qty_pct": [0.01, 0.03]}
+    for side in ("long", "short"):
+        for key in ("n_positions", "total_wallet_exposure_limit"):
+            value = config["bot"][side]["risk"][key]
+            config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
+    config["optimize"]["scoring"] = [
+        {"metric": "adg_strategy_eq", "goal": "max", "scenario": "base"},
+        {"metric": "drawdown_worst_strategy_eq", "goal": "min", "scenario": None, "aggregate": "max"},
+    ]
+    config["optimize"]["limits"] = [
+        {"metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.99},
+    ]
+    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_ratio")
+    manager = SharedArrayManager()
+    try:
+        specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
+        base = Evaluator({"binance": specs[0]}, {"binance": specs[1]}, {"binance": markets}, config)
+        contexts = [SimpleNamespace(label=label, exchanges=["binance"]) for label in ("base", "stress")]
+        suite = SuiteEvaluator(base, contexts, {"default": "mean"})
+        scorer = CanonicalResultScorer(suite)
+        scenario_configs = {"base": config, "stress": deepcopy(config)}
+        scenario_configs["stress"]["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.5
+        def forbidden(*_args, **_kwargs):
+            pytest.fail("native completion scoring must not run CPU simulations")
+        monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+        monkeypatch.setattr(backtest, "run_backtest", forbidden)
+        monkeypatch.setattr(base, "evaluate", forbidden)
+        monkeypatch.setattr(suite, "evaluate", forbidden)
+        candidate_values = [0.03, 0.02, 0.01]
+        parameters = [{"long_entry_initial_qty_pct": value} for value in candidate_values]
+        collectors, final, received = {}, {}, {}
+        with CudaBacktestService(batch_size=2, max_pending=8) as service:
+            for label, scenario_config in scenario_configs.items():
+                service.register_dataset(label, PreparedGpuDataset(
+                    config=scenario_config, markets=markets, exchange="binance",
+                    candle_coins=config["backtest"]["coins"]["binance"],
+                    hlcvs=specs[0], btc=specs[1], timestamps=specs[2], metrics=requested_metrics,
+                ))
+            requests = []
+            owners = {}
+            for index, candidate in enumerate(parameters):
+                graph = [ResultSlot(f"{index}:{label}", label, label, "binance", requested_metrics)
+                         for label in scenario_configs]
+                vector = [candidate_values[index] if key == "long_entry_initial_qty_pct" else bound.low
+                          for (key, _path), bound in zip(base.key_paths, base.bounds, strict=True)]
+                collectors[str(index)] = CandidateEvaluation(str(index), vector, graph, scorer)
+                for slot in graph:
+                    owners[slot.request_id] = str(index)
+                    requests.append(BacktestRequest(slot.request_id, slot.dataset_id, candidate))
+            # Scenario locality is an execution choice; fan-in still identifies each candidate.
+            futures = [service.submit(request) for request in sorted(requests, key=lambda item: item.dataset_id)]
+            for future in as_completed(futures, timeout=60):
+                row = future.result()
+                received[row.request_id] = row
+                complete = collectors[owners[row.request_id]].add_result(row)
+                if complete is not None:
+                    final[complete.candidate_id] = complete.require_full()
+        assert set(final) == {"0", "1", "2"}
+        for candidate_id, payload in final.items():
+            rows = []
+            for label in scenario_configs:
+                result = received[f"{candidate_id}:{label}"]
+                per_exchange = {"binance": dict(result.metrics, liquidated=result.liquidated)}
+                rows.append(ScenarioResult(SuiteScenario(label, None, None, None, None), per_exchange,
+                                           build_scenario_metrics(per_exchange), 0.0, None))
+            expected = suite.score_scenario_results(rows)
+            assert payload["fitness"] == expected["objectives"]
+            assert payload["metrics"]["suite_metrics"] == expected["suite_metrics"]
+            assert payload["constraint_violation"] == expected["constraint_violation"]
     finally:
         manager.cleanup()
 

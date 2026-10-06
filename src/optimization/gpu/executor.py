@@ -27,7 +27,15 @@ from typing import ContextManager, Protocol
 
 
 class BatchReplay(Protocol):
-    def evaluate(self, candidates: list[dict]) -> list[dict]: ...
+    def evaluate(self, candidates: list[dict]) -> list[ReplayResult | Mapping]: ...
+
+
+@dataclass(frozen=True)
+class ReplayResult:
+    """Compact simulator output, before the executor attaches request identity."""
+
+    metrics: Mapping[str, float]
+    liquidated: bool
 
 
 @dataclass(frozen=True)
@@ -42,6 +50,8 @@ class BacktestResult:
     request_id: str
     dataset_id: str
     metrics: dict[str, float]
+    # The legacy metric-only adapter does not establish terminal-event provenance.
+    liquidated: bool | None = None
 
 
 class BacktestQueueFull(RuntimeError):
@@ -240,6 +250,11 @@ class GpuBacktestService:
             raise RuntimeError("GPU replay result cardinality does not match requests")
         results = []
         for entry, row in zip(batch, rows):
+            liquidated = None
+            if isinstance(row, ReplayResult):
+                if not isinstance(row.liquidated, bool):
+                    raise RuntimeError("GPU replay liquidation status must be Boolean")
+                liquidated, row = row.liquidated, row.metrics
             if not isinstance(row, Mapping) or not row:
                 raise RuntimeError("GPU replay must return non-empty metric mappings")
             metrics = {}
@@ -253,7 +268,7 @@ class GpuBacktestService:
                 # Its interpretation remains the canonical metric/scoring owner's job.
                 metrics[name] = number
             results.append(
-                BacktestResult(entry.request.request_id, entry.request.dataset_id, metrics)
+                BacktestResult(entry.request.request_id, entry.request.dataset_id, metrics, liquidated)
             )
         return results
 
