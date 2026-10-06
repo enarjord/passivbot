@@ -1,4 +1,5 @@
 import sys
+from functools import partial
 from types import ModuleType, SimpleNamespace
 
 import numpy as np
@@ -26,6 +27,8 @@ from optimization.gpu.model import (
     validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
+from optimization.gpu.coin_parameters import build_coin_override_parameters
+
 from optimization.gpu.service import (
     CORE_OUTPUT_KEYS,
     DIRECTIONAL_HSL_OUTPUT_KEYS,
@@ -33,8 +36,6 @@ from optimization.gpu.service import (
     MpsEmaAnchorProxy,
     MpsSingleCoinProxy,
     MpsMulticoinEmaProxy,
-    _build_multicoin_ema_coin_overrides,
-    _build_multicoin_tm_coin_overrides,
     _btc_daily_price_context,
     _candidate_wallet_exposure_limit_outputs,
     _candidate_position_slot_outputs,
@@ -70,6 +71,10 @@ from optimization.gpu.service import (
     _total_exposure_enforcer_params,
     _unstuck_params,
 )
+
+
+build_ema_coin_parameters = partial(build_coin_override_parameters, strategy_kind="ema_anchor")
+build_tm_coin_parameters = partial(build_coin_override_parameters, strategy_kind="trailing_martingale")
 
 
 def _complete_hsl_payload(payload):
@@ -2548,7 +2553,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
         }
     }
 
-    matrix, contract = _build_multicoin_ema_coin_overrides(
+    matrix, contract = build_ema_coin_parameters(
         config=config,
         mss={"BTC": {}, "ETH": {}},
         exchange="bybit",
@@ -2606,7 +2611,7 @@ def test_coin_override_contract_keeps_exact_values_beyond_float32_precision():
             ],
         )
         _complete_hsl_payload(payload)
-        return _build_multicoin_ema_coin_overrides(
+        return build_ema_coin_parameters(
             config=config,
             mss={"ETH": {}},
             exchange="bybit",
@@ -2653,7 +2658,7 @@ def test_coin_override_contract_keeps_backtest_inert_live_values():
     )
     _complete_hsl_payload(payload)
 
-    matrix, contract = _build_multicoin_ema_coin_overrides(
+    matrix, contract = build_ema_coin_parameters(
         config=config,
         mss={"ETH": {}},
         exchange="bybit",
@@ -2674,12 +2679,12 @@ def test_coin_override_contract_keeps_backtest_inert_live_values():
     ("builder", "strategy", "forced_column"),
     [
         (
-            _build_multicoin_ema_coin_overrides,
+            build_ema_coin_parameters,
             {},
             EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
         ),
         (
-            _build_multicoin_tm_coin_overrides,
+            build_tm_coin_parameters,
             {"entry": {}, "close": {}},
             TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
         ),
@@ -2784,7 +2789,7 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
     def resolver(config, _mss, _exchange, coin):
         return config["coin_overrides"].get(coin, {})
 
-    long_matrix, _ = _build_multicoin_ema_coin_overrides(
+    long_matrix, _ = build_ema_coin_parameters(
         config=config,
         mss={"BTC": {}, "ETH": {}},
         exchange="bybit",
@@ -2793,7 +2798,7 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
         side="long",
         resolve_override=resolver,
     )
-    short_matrix, _ = _build_multicoin_ema_coin_overrides(
+    short_matrix, _ = build_ema_coin_parameters(
         config=config,
         mss={"BTC": {}, "ETH": {}},
         exchange="bybit",
@@ -2815,8 +2820,8 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
 @pytest.mark.parametrize(
     ("builder", "wallet_exposure_column"),
     [
-        (_build_multicoin_ema_coin_overrides, 11),
-        (_build_multicoin_tm_coin_overrides, 24),
+        (build_ema_coin_parameters, 11),
+        (build_tm_coin_parameters, 24),
     ],
 )
 def test_multicoin_coin_overrides_preserve_side_entry_eligibility(
@@ -2894,7 +2899,7 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     }
     config = {"coin_overrides": {"ETH": {"bot": {"long": {"hsl": hsl_patch}}}}}
 
-    matrix, contract = _build_multicoin_ema_coin_overrides(
+    matrix, contract = build_ema_coin_parameters(
         config=config,
         mss={"BTC": {}, "ETH": {}},
         exchange="bybit",
@@ -2941,7 +2946,7 @@ def test_multicoin_coin_overrides_reject_invalid_hsl_panic_order_type():
     }
 
     with pytest.raises(ValueError, match="to be limit or market"):
-        _build_multicoin_ema_coin_overrides(
+        build_ema_coin_parameters(
             config=config,
             mss={"BTC": {}, "ETH": {}},
             exchange="bybit",
@@ -3074,7 +3079,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         }
     }
 
-    matrix, contract = _build_multicoin_tm_coin_overrides(
+    matrix, contract = build_tm_coin_parameters(
         config=config,
         mss={"BTC": {}, "ETH": {}},
         exchange="bybit",
