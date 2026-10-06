@@ -1,6 +1,8 @@
 """CUDA launch contract, independent of the shared strategy regression suite."""
 
 import sys
+import inspect
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -187,13 +189,35 @@ def test_mps_compilation_does_not_apply_cuda_coin_specialization(monkeypatch):
     assert sources == [source]
 
 
-def test_disabled_hsl_specialization_requires_explicit_shader_guard(monkeypatch):
-    """Only guarded multicoin sources may opt into the compact HSL state."""
+@pytest.fixture
+def source_kernel():
+    """Source-only checks run without Torch and cannot poison later device tests."""
     from optimization import gpu
-    monkeypatch.delattr(gpu, "mps_kernel", raising=False)
-    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
-    monkeypatch.delitem(sys.modules, "optimization.gpu.mps_kernel", raising=False)
-    from optimization.gpu.mps_kernel import _with_hsl_disabled, _with_hsl_features
+
+    missing = object()
+    name = "optimization.gpu.mps_kernel"
+    old_torch = sys.modules.get("torch", missing)
+    old_kernel = sys.modules.pop(name, missing)
+    old_attribute = getattr(gpu, "mps_kernel", missing)
+    sys.modules["torch"] = SimpleNamespace()
+    try:
+        yield importlib.import_module(name)
+    finally:
+        for module_name, previous in (("torch", old_torch), (name, old_kernel)):
+            if previous is missing:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous
+        if old_attribute is missing:
+            delattr(gpu, "mps_kernel")
+        else:
+            gpu.mps_kernel = old_attribute
+
+
+def test_disabled_hsl_specialization_requires_explicit_shader_guard(source_kernel):
+    """Only guarded multicoin sources may opt into the compact HSL state."""
+    _with_hsl_disabled = source_kernel._with_hsl_disabled
+    _with_hsl_features = source_kernel._with_hsl_features
 
     guarded = (
         "#ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED\n"
@@ -214,19 +238,13 @@ def test_disabled_hsl_specialization_requires_explicit_shader_guard(monkeypatch)
     )
     with pytest.raises(RuntimeError, match="disabled-HSL feature guard"):
         _with_hsl_disabled("kernel void unguarded() {}", True)
-    monkeypatch.delitem(sys.modules, "optimization.gpu.mps_kernel", raising=False)
 
 
-def test_disabled_hsl_specialization_excludes_fused_layout(monkeypatch):
+def test_disabled_hsl_specialization_excludes_fused_layout(source_kernel):
     """The compact one-side HSL arrays must never back the fused kernel."""
-    from optimization import gpu
-    monkeypatch.delattr(gpu, "mps_kernel", raising=False)
-    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
-    monkeypatch.delitem(sys.modules, "optimization.gpu.mps_kernel", raising=False)
-    from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinFusedRunner
+    MpsEmaAnchorMulticoinFusedRunner = source_kernel.MpsEmaAnchorMulticoinFusedRunner
 
     assert MpsEmaAnchorMulticoinFusedRunner.hsl_disabled_specialization is False
-    monkeypatch.delitem(sys.modules, "optimization.gpu.mps_kernel", raising=False)
 
 
 def test_disabled_hsl_source_removes_hsl_portfolio_scans():
@@ -262,7 +280,9 @@ def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
         runner = proxy.runners["long"]
         expected_capacity = 1 << (coins - 1).bit_length()
         assert runner.cuda_coin_capacity == expected_capacity
-        assert runner._library_cache_call()[1][-1] == expected_capacity
+        loader, arguments = runner._library_cache_call()
+        bound = inspect.signature(loader).bind(*arguments)
+        assert bound.arguments["cuda_coin_capacity"] == expected_capacity
         if full_capacity:
             runner.cuda_coin_capacity = 64
         if case.startswith("tm-"):
@@ -280,6 +300,57 @@ def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
     assert specialized.keys() == baseline.keys()
     for key in baseline:
         np.testing.assert_array_equal(specialized[key], baseline[key], err_msg=key)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "ema-single-long",
+        "tm-single-long",
+        "ema-multicoin-overhead",
+        "tm-multicoin-overhead",
+    ],
+)
+def test_cuda_async_service_reuses_replay_and_preserves_metrics(cuda, case):
+    """Cold compilation and repeated dispatches work on the owning service thread."""
+    from concurrent.futures import as_completed
+    from optimization.gpu.executor import BacktestRequest, GpuBacktestService
+    from tools.gpu_proxy_benchmark import _build_case
+
+    proxy, candidates, *_ = _build_case(
+        case,
+        candidates=7,
+        dispatch_batch_size=7,
+        single_bars=256,
+        multicoin_bars=256,
+        coins=3,
+        seed=11,
+    )
+    with GpuBacktestService(batch_size=2, max_batch_delay=0.001) as service:
+        service.register_dataset("fixture", proxy)
+        observations = []
+        for repeat in range(2):
+            futures = [
+                service.submit(BacktestRequest(f"{repeat}:{i}", "fixture", candidate))
+                for i, candidate in enumerate(candidates)
+            ]
+            completed = [future.result() for future in as_completed(futures, timeout=60)]
+            assert {result.request_id for result in completed} == {
+                f"{repeat}:{i}" for i in range(len(candidates))
+            }
+            assert all(result.dataset_id == "fixture" for result in completed)
+            rows = {result.request_id: result.metrics for result in completed}
+            observations.append([rows[f"{repeat}:{i}"] for i in range(len(candidates))])
+
+    # Different batch shapes and a different calling thread cannot change simulation.
+    expected = proxy.evaluate(candidates)
+    for actual in observations:
+        for row, baseline in zip(actual, expected):
+            assert row.keys() == baseline.keys()
+            for metric, value in baseline.items():
+                np.testing.assert_allclose(
+                    row[metric], value, rtol=1e-6, atol=1e-7, err_msg=metric
+                )
 
 
 def test_cuda_disabled_hsl_specialization_matches_full_hsl_state(cuda):

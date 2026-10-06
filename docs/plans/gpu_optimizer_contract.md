@@ -182,16 +182,16 @@ Completion requires:
 
 - [x] Activate the high-level goal with this contract as its detailed reference.
 - [x] Refresh master and create an isolated development branch.
-- [ ] Commit/publish this contract on the development branch; master unchanged.
-- [ ] Inventory current supported topologies, metrics, deliberate approximations and direct callers.
-- [ ] Establish isolated NVIDIA runtime with source-fingerprint verification.
+- [x] Commit/publish this contract on the development branch; master unchanged.
+- [x] Inventory current supported topologies, metrics, deliberate approximations and direct callers.
+- [x] Establish isolated NVIDIA runtime with source-fingerprint verification.
 - [ ] Record reproducible CPU/GPU parity and cold/warm benchmark baselines.
 
 ### Backtest service
 
-- [ ] Implement dependency-light request/completion API and bounded asynchronous lifecycle.
-- [ ] Reuse existing replay engines behind a temporary adapter without changing their semantics.
-- [ ] Verify identity, output cardinality, backpressure, exceptions, cancellation and shutdown.
+- [x] Implement dependency-light request/completion API and bounded asynchronous lifecycle.
+- [x] Reuse existing replay engines behind a temporary adapter without changing their semantics.
+- [x] Verify identity, output cardinality, backpressure, exceptions, cancellation and shutdown.
 - [ ] Register immutable data, reuse packing/compilation, isolate mutable replay state.
 - [ ] Demonstrate incremental completions and bounded memory on CUDA.
 
@@ -235,3 +235,36 @@ Completion requires:
   adding an asynchronous wrapper does not make their current outputs authoritative.
 - Current source inspection: GPU evolution tells NSGA-II proxy objectives; CPU results populate
   the authoritative archive and drift monitoring. Cutover must change this information flow.
+
+### 2026-10-05 — First execution-service slice
+
+- Published the contract on `codex/gpu-native-optimizer`; implementation slice uses
+  `codex/gpu-native-service`, with a PR to the development branch.
+- Added [`GpuBacktestService`](../../src/optimization/gpu/executor.py): one owning
+  execution thread, bounded queued-plus-running admission, FIFO compatible microbatches,
+  individual futures, parameter snapshots, fail-stop producer errors and clean drain/cancel.
+  Cancellation must notify completion consumers even when removed before dispatch.
+- The API imports no optional GPU or evolutionary dependencies. Existing replay handles
+  are exclusively registered transitional adapters; optimizer integration and the final
+  immutable dataset/residency interface remain outstanding.
+- Nineteen offline lifecycle cases pass. Four CUDA cases cover both strategies in single-
+  and multicoin replay, cold owner-thread compilation, repeated reuse, partial batches,
+  request identity and matching metrics across caller threads/batch shapes.
+- A bounded warm comparison uses the public deterministic benchmark fixtures, 256 candidates,
+  4,096 bars, one/three coins, seed 7, dispatch/microbatch width 64, queue capacity 256 and
+  1 ms accumulation delay. Five repeated runs preserve all returned metrics exactly. The
+  first microbatch completes before the full accepted set; transport adds about 1–10% on
+  these small workloads. This establishes baseline overhead, not an end-to-end speedup.
+- Native device validation uses a rebuilt extension whose embedded source fingerprint
+  matches the current Rust tree. Corrected test-only Torch leakage and a stale shader-cache
+  argument assertion; all fourteen capacity-specialization comparisons pass on CUDA.
+- Recorded the code-backed [cutover inventory](gpu_optimizer_inventory.md), including
+  current conservative filters/loss gates and baseline disabled-HSL/dual-side unstuck
+  findings. These remain acceptance work, not silently approved numerical exceptions.
+- No optimizer behavior or CPU validation policy changes in this slice. Existing CPU/GPU
+  backends remain selectable while authoritative simulation/parity tooling is developed.
+- First PR review found lifecycle ordering issues. Detached queued cancellation before
+  waking the owner thread, released admission before publishing success, removed request
+  snapshots from retained future callbacks and rolled back failed thread startup. Added
+  four deterministic regressions. Source-only specialization checks again run without
+  Torch through an isolated module import that restores both module/package references.
