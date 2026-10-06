@@ -1,6 +1,7 @@
 from copy import deepcopy
 from contextlib import contextmanager
 import pickle
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -192,3 +193,58 @@ def test_native_contract_and_checkpoint_reject_other_engines_or_precision(monkey
         cpu["optimize"]["backend"] = "pymoo"
         assert "execution" not in build_evaluation_contract(cpu)
         assert optimize._resume_config_mismatches({**cpu, CONTRACT_KEY: build_evaluation_contract(cpu)}, base.config)
+
+
+@pytest.mark.parametrize("fail_preparation", [False, True])
+def test_cpu_pipeline_starts_gpu_and_records_before_preparing_full_window(monkeypatch, tmp_path, fail_preparation):
+    guard_cpu(monkeypatch)
+    import optimization.backends.gpu_native_backend as backend
+    import optimization.gpu.native as native
+    from optimization.native_planning import NativeCandidatePlanner
+
+    clock = [0.0]
+    monkeypatch.setattr(backend, "time", SimpleNamespace(
+        monotonic=time.monotonic, perf_counter=lambda: clock[0],
+    ))
+    submitted = []
+    class ObservedService(FakeService):
+        def submit(self, request):
+            future = super().submit(request)
+            submitted.append(future)
+            return future
+    monkeypatch.setattr(native, "CudaBacktestService", ObservedService)
+    original = NativeCandidatePlanner.prepare
+    prepared, records = [], []
+    failure = ValueError("candidate preparation failed after GPU work started")
+    def prepare(self, candidate_id, vector, **kwargs):
+        if candidate_id != "preparation":
+            if prepared:
+                # Deterministic barrier: submitting the first candidate must not
+                # wait for the rest of the admission window to be prepared.
+                assert submitted
+                submitted[0].result(timeout=5)
+            if len(prepared) == 3:
+                assert records  # Persist full successes before preparing more.
+                if fail_preparation:
+                    raise failure
+            prepared.append(candidate_id)
+            clock[0] += 0.03
+        return original(self, candidate_id, vector, **kwargs)
+    monkeypatch.setattr(NativeCandidatePlanner, "prepare", prepare)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"].update(population_size=16, iters=16)
+        checkpoint = tmp_path / "checkpoint.pkl"
+        if fail_preparation:
+            with pytest.raises(ValueError) as raised:
+                execute(base, SimpleNamespace(record=records.append), checkpoint)
+            assert raised.value is failure
+            state = load_checkpoint(checkpoint, base.config)
+            assert state["completed"] == len(records) > 0
+            assert state["phase"] == "generation"
+            monkeypatch.setattr(NativeCandidatePlanner, "prepare", original)
+            execute(base, SimpleNamespace(record=records.append), checkpoint, resume=True)
+        else:
+            execute(base, SimpleNamespace(record=records.append), checkpoint)
+        assert len(records) == 16
+        assert load_checkpoint(checkpoint, base.config)["phase"] == "idle"

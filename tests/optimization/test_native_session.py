@@ -254,3 +254,38 @@ def test_request_slot_mismatch_is_rejected_before_admission():
         session.admit(candidate)
     assert session.active_candidate_ids == ()
     assert session.pending_request_count == 0
+
+
+def test_notification_bound_does_not_limit_suite_fan_in_to_completion_batch_size():
+    service = Service()
+    session = NativeEvaluationSession(service, scorer())
+    session.admit(plan(0))
+    session.poll(max_completions=1)
+    for name in tuple(service.requests):
+        service.complete(name)
+    # Two venue notifications must be consumed to complete this one candidate.
+    assert [row.candidate_id for row in session.poll(max_results=2, max_completions=1)] == ["0"]
+    assert session.pending_request_count == 0
+
+
+def test_small_completion_batches_preserve_ready_aliases_without_more_backtests():
+    service = Service()
+    session = NativeEvaluationSession(service, scorer(), max_candidates=8)
+    for index in range(6):
+        session.admit(plan(index, key="shared"))
+    session.poll(max_completions=2)
+    for name in tuple(service.requests):
+        service.complete(name)
+    for expected in (("0", "1"), ("2", "3"), ("4", "5")):
+        assert tuple(row.candidate_id for row in session.poll(max_completions=2)) == expected
+    assert len(service.requests) == 2
+    assert not session.active_candidate_ids
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_invalid_completion_bound_does_not_poison_session(value):
+    session = NativeEvaluationSession(Service(), scorer())
+    with pytest.raises(ValueError, match="max_completions"):
+        session.poll(max_completions=value)
+    session.admit(plan(0))
+    session.stop_admission()

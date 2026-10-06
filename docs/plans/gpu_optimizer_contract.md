@@ -232,6 +232,8 @@ Completion requires:
 - [x] Add experimental GPU-only ask/tell CLI, seed evaluation and partial-cohort checkpoint resume.
 - [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
+  - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
+    from CPU cost, and keep suite notification fan-in independent of persistence batches.
 - [x] Add service-owned production batch tuning and prepared work/scratch dispatch limits.
 - [ ] Flush results/Pareto promptly; validate interruption and compatible resume.
 - [ ] Prove no CPU backtest is invoked during GPU optimize/bootstrap/resume.
@@ -694,3 +696,42 @@ Completion requires:
   demand-limited workload classes, admission/launch sizing, dispatch duration/delay, residency
   budgets and CPU preparation/result/evolution cadence remain open. Retain generation semantics
   and the legacy backend until full replacement acceptance.
+
+### 2026-10-06 — CPU preparation/result pipeline
+
+- The service-tuning slice has completed clear exact-head auto review; its required CI
+  remains a merge gate. Keep this subsequent CPU change isolated from the reviewed head.
+- Inspection and a synthetic CUDA optimization comparison show that filling a 256-candidate
+  admission window before polling delays the first GPU submission by roughly 2.7 seconds.
+  Submit after the first prepared candidate, then alternate CPU preparation and result
+  servicing within a soft 50 ms latency target. Check interruption between preparations.
+  Slow atomic preparation/scoring/storage can exceed the target; no hard deadline is claimed.
+- Adapt returned completion grouping to measured CPU cost, starting at one and growing
+  cautiously up to 256. Increased measured cost reduces grouping immediately. Exclude idle
+  device waits, retain run-local measurements, and preserve existing evolutionary cohorts,
+  candidate identities, canonical scores and checkpoint compatibility.
+- Separate notification and returned-candidate bounds in the CPU session. Large suites
+  need multiple notifications before yielding one candidate; cached/pending duplicates can
+  yield many candidates from one result. Retain ready aliases until consumed, and preserve
+  the original producer failure and earlier completed work across deferred submit failures.
+- All 38 focused CPU cadence/session/backend/CUDA CLI tests pass, including a deterministic
+  preparation barrier proving early submission/persistence and failure/resume after earlier
+  GPU successes. All 46 additional dataset/planner/scoring/device-tuning cases and five
+  documentation tests pass. No Rust/kernel code changes or CPU simulations are introduced.
+- A four-run synthetic comparison alternates old/new/new/old over the public TM fixture,
+  both sides, three coins, 128 bars, population/iterations 256, fixed GPU width 16 and a
+  5-second checkpoint interval. Reset NumPy sampling to seed 12 before each optimization,
+  alongside pymoo seed 12; retain the fixture's locked position/exposure bounds and variable
+  long/short initial-quantity bounds. All 256 matched candidate metrics remain identical
+  in every run. Old preparation-to-submission delays are 2.69/2.80 s; new delays are
+  27.0/27.3 ms. Total times are 11.11/7.70/7.68/7.50 s, including the first run's cold
+  preparation. Warm total throughput is broadly unchanged; this supports improved overlap
+  and prompt result servicing, not a representative optimizer speedup claim.
+- Repeat that comparison with two distinct lazy scenarios: the full three-coin 128-bar
+  dataset and a 64-bar `[32:96]` window using coins 00/02, with mean suite reducers.
+  Every matched metric and full-suite aggregate remains identical. Old preparation-to-submit
+  delays are 4.66/4.79 s, new delays 43.0/41.8 ms; total old/new/new/old times are
+  14.12/10.80/11.04/10.96 s including first-run cold startup. Warm throughput remains
+  broadly unchanged in this bounded suite; larger scenario-locality cases remain open.
+- Further cadence/evolution experiments, scenario-screening policy, representative parity
+  and workload acceptance, and retirement of the legacy backend remain open.
