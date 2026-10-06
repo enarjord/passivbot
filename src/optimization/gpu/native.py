@@ -65,14 +65,9 @@ class CudaBacktestService:
     def _dispatch_ceiling(replay):
         # Keep runner references out of the suspended factory context: another
         # dataset must be able to release this replay's tensors and scratch.
-        runners = ([replay.fused_runner] if replay.fused_runner is not None
-                   else list(replay.runners.values()))
-        ceiling = replay.dispatch_batch_size
-        for runner in runners:
-            history_bytes = runner._history_bytes_per_candidate()
-            if history_bytes:
-                ceiling = min(ceiling, max(1, runner.hsl_scratch_budget_bytes // history_bytes))
-        return ceiling
+        from optimization.gpu.autotune import history_dispatch_ceiling
+
+        return history_dispatch_ceiling(replay, replay.dispatch_batch_size)
 
     @contextmanager
     def _worker_scope(self):

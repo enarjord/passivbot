@@ -1174,25 +1174,27 @@ def _strategy_eq_recovery_distribution_shader_library():
     )
 
 
-@lru_cache(maxsize=2)
-def _strategy_eq_recovery_distribution_buffers(batch_size: int, sample_capacity: int):
+def _strategy_eq_recovery_distribution_buffers(batch_size: int, sample_capacity: int, device):
+    # Mutable reduction scratch belongs to this dispatch, never a process-global
+    # cache shared by independent replay owners or CUDA streams. The allocator
+    # reuses released storage without retaining inactive dataset histories here.
     shape = (int(batch_size), int(sample_capacity))
     return (
-        torch.empty(shape, dtype=torch.int32, device=gpu_device()),
-        torch.empty(shape, dtype=torch.int32, device=gpu_device()),
+        torch.empty(shape, dtype=torch.int32, device=device),
+        torch.empty(shape, dtype=torch.int32, device=device),
         torch.empty(
             (int(batch_size), MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
             dtype=torch.float32,
-            device=gpu_device(),
+            device=device,
         ),
-        torch.tensor(shape, dtype=torch.int32, device=gpu_device()),
+        torch.tensor(shape, dtype=torch.int32, device=device),
     )
 
 
 def strategy_eq_recovery_distribution_from_samples(
     strategy_equity_samples, *, sample_interval_days: float = 1.0
 ):
-    """Approximate exact recovery summaries from uniformly spaced proxy samples."""
+    """Reduce strict time-to-exceed durations on uniformly spaced GPU samples."""
 
     if strategy_equity_samples.device.type not in {"mps", "cuda"}:
         raise ValueError(
@@ -1202,7 +1204,7 @@ def strategy_eq_recovery_distribution_from_samples(
         raise ValueError("strategy-equity recovery distribution requires float32 input")
     if strategy_equity_samples.ndim != 2:
         raise ValueError(
-            "strategy-equity recovery distribution expects a batch-by-day matrix"
+            "strategy-equity recovery distribution expects a batch-by-sample matrix"
         )
     sample_interval_days = float(sample_interval_days)
     if not np.isfinite(sample_interval_days) or sample_interval_days <= 0.0:
@@ -1213,16 +1215,16 @@ def strategy_eq_recovery_distribution_from_samples(
         return torch.empty(
             (0, MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
             dtype=torch.float32,
-            device=gpu_device(),
+            device=matrix.device,
         )
     if sample_capacity == 0:
         return torch.zeros(
             (batch_size, MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
             dtype=torch.float32,
-            device=gpu_device(),
+            device=matrix.device,
         )
     stack, histogram, output, sizes = _strategy_eq_recovery_distribution_buffers(
-        batch_size, sample_capacity
+        batch_size, sample_capacity, matrix.device
     )
     histogram.zero_()
     library = _strategy_eq_recovery_distribution_shader_library()
@@ -1235,6 +1237,12 @@ def strategy_eq_recovery_distribution_from_samples(
         threads=(batch_size, 1, 1),
     )
     return output * sample_interval_days
+
+
+def _recovery_history_bytes(sample_capacity: int):
+    # Samples, a possible contiguous copy of a truncated view, the index stack
+    # and duration histogram. Output and scaled result coexist until completion.
+    return int(sample_capacity) * 16 + MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS * 8
 
 
 def _require_available_held_valuation(scalars):
@@ -1614,11 +1622,7 @@ class MpsEmaAnchorRunner:
             self.btc_risk_enabled or self.equity_balance_diff_enabled
         )
         self.daily_cols = MPS_DAILY_COLS + (3 if self.btc_risk_enabled else 0)
-        self.recovery_stride = (
-            max(1, int(np.ceil(3_600_000.0 / float(run.interval_ms))))
-            if self.recovery_distribution_enabled
-            else 0
-        )
+        self.recovery_stride = 1 if self.recovery_distribution_enabled else 0
         self.n_recovery_samples = (
             max(
                 1,
@@ -1865,13 +1869,21 @@ class MpsEmaAnchorRunner:
         tree_size, storage_nodes = _hsl_layout(self.hsl_capacity)
         return 2 * (storage_nodes * 32 + self.hsl_capacity * 8)
 
+    def _history_bytes_per_candidate(self):
+        return (
+            (self._hsl_bytes_per_candidate() if self.hsl_capacity else 0)
+            + (_recovery_history_bytes(self.n_recovery_samples)
+               if self.recovery_distribution_enabled else 0)
+        )
+
     def _run_hsl_batches(self, params, **kwargs):
         """Partition independent candidates before allocating bounded history scratch."""
-        if not self.hsl_capacity or params.ndim != 2:
+        history_bytes = self._history_bytes_per_candidate()
+        if not history_bytes or params.ndim != 2:
             return None
-        limit = self.hsl_scratch_budget_bytes // self._hsl_bytes_per_candidate()
+        limit = self.hsl_scratch_budget_bytes // history_bytes
         if limit < 1:
-            raise ValueError("HSL history exceeds the GPU scratch budget")
+            raise ValueError("GPU history exceeds the scratch budget")
         if len(params) <= limit:
             return None
         outputs, profiles = [], []
@@ -1935,6 +1947,8 @@ class MpsEmaAnchorRunner:
         return self._hsl_scratch_buffers[batch_size]
 
     def _recovery_sample_buffer(self, batch_size: int):
+        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+            raise ValueError("GPU history batch exceeds its scratch budget")
         if batch_size not in self._recovery_buffers:
             self._recovery_buffers = {
                 batch_size: torch.full(
@@ -2220,11 +2234,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.btc_risk_enabled or self.equity_balance_diff_enabled
         )
         self.daily_cols = MPS_MULTICOIN_DAILY_COLS + (3 if self.btc_risk_enabled else 0)
-        self.recovery_stride = (
-            max(1, int(np.ceil(3_600_000.0 / float(run.interval_ms))))
-            if self.recovery_distribution_enabled
-            else 0
-        )
+        self.recovery_stride = 1 if self.recovery_distribution_enabled else 0
         self.n_recovery_samples = (
             max(
                 1,
@@ -2537,7 +2547,11 @@ class MpsEmaAnchorMulticoinRunner:
         return self.hsl_scopes * (nodes * 32 + self.hsl_capacity * 8)
 
     def _history_bytes_per_candidate(self):
-        return self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
+        return (
+            self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
+            + (_recovery_history_bytes(self.n_recovery_samples)
+               if self.recovery_distribution_enabled else 0)
+        )
 
     def _unstuck_history_buffers(self, batch_size):
         if (
@@ -2633,13 +2647,17 @@ class MpsEmaAnchorMulticoinRunner:
         return _decode_outputs(daily, scalars, gaps)
 
     def _recovery_sample_buffer(self, batch_size: int):
+        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+            raise ValueError("GPU history batch exceeds its scratch budget")
         if batch_size not in self._recovery_buffers:
-            self._recovery_buffers[batch_size] = torch.full(
-                (batch_size, self.n_recovery_samples),
-                float("nan"),
-                dtype=torch.float32,
-                device=gpu_device(),
-            )
+            self._recovery_buffers = {
+                batch_size: torch.full(
+                    (batch_size, self.n_recovery_samples),
+                    float("nan"),
+                    dtype=torch.float32,
+                    device=gpu_device(),
+                )
+            }
         else:
             self._recovery_buffers[batch_size].fill_(float("nan"))
         return self._recovery_buffers[batch_size]

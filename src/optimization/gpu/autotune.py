@@ -385,12 +385,29 @@ class ProxyBatchTuner(CalibrationCache):
         return controller
 
 
+def history_dispatch_ceiling(proxy, ceiling):
+    """Bound replay plus reduction history before claiming an outer request batch."""
+    single = getattr(proxy, "runner", None)
+    fused = getattr(proxy, "fused_runner", None)
+    runners = ([single] if single is not None else [fused] if fused is not None
+               else list(getattr(proxy, "runners", {}).values()))
+    for runner in runners:
+        history_size = getattr(runner, "_history_bytes_per_candidate", None)
+        history_bytes = history_size() if history_size is not None else 0
+        if history_bytes:
+            ceiling = min(ceiling, max(1, runner.hsl_scratch_budget_bytes // history_bytes))
+    return ceiling
+
+
 def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=time.perf_counter):
     """Measure through the caller's completed host results, without extra GPU sync.
 
     A failed/interrupted yield never produces a sample. Shape changes happen only
     after the entire previous candidate replay, reductions and host copy finish.
     """
+    # Limit the outer batch too: splitting a kernel and then concatenating its
+    # full sample histories would exceed the budget again during reduction.
+    ceiling = history_dispatch_ceiling(proxy, ceiling)
     tuner = getattr(proxy, "batch_tuner", None)
     controller = (
         tuner.controller(ceiling, len(candidates), end_step) if tuner and candidates else None
