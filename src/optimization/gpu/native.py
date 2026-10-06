@@ -6,6 +6,7 @@ acceptance of the existing replay engine, and optimizer cutover remains separate
 
 from contextlib import contextmanager
 import json
+from types import SimpleNamespace
 
 from optimization.gpu.datasets import PreparedGpuDataset
 from optimization.gpu.executor import GpuBacktestService
@@ -76,7 +77,7 @@ class CudaBacktestService:
                     interrupt_check=self._interrupt_check, prepared_data_cache=self._prepared_cache,
                 )
                 try:
-                    yield replay
+                    yield SimpleNamespace(evaluate=replay.evaluate_results)
                 finally:
                     del replay
 

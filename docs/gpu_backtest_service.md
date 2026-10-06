@@ -2,7 +2,8 @@
 
 `optimization.gpu.native.CudaBacktestService` is an internal execution interface under
 development. CPU code registers prepared scenarios, submits identified backtest requests
-and receives futures containing compact metrics. Device buffers, packing, replay handles
+and receives futures containing compact metrics and actual simulator liquidation status.
+Device buffers, packing, replay handles
 and residency stay inside the service. No CPU backtest or evolutionary algorithm runs
 there. Optimizer integration and practical simulation-parity acceptance remain separate.
 
@@ -42,7 +43,8 @@ try:
         service.register_dataset("scenario", dataset)
         future = service.submit(BacktestRequest("candidate", "scenario", {}))
         result = future.result()
-        # The caller scores, reduces, records and selects using result.metrics.
+        # The caller scores/reduces result.metrics with result.liquidated,
+        # then records complete candidates and performs selection.
 finally:
     arrays.cleanup()
 ```
@@ -52,6 +54,29 @@ transitional replay adapter also accepts its materialized scalar parameter mappi
 unsupported topology changes require a separately prepared dataset. The request and
 dataset IDs are caller-owned identities. Persistent content/evaluation fingerprints,
 precision stamps and resume compatibility are subsequent integration work.
+
+## CPU completion scoring
+
+`optimization.native_results` collects identified scenario/exchange results for one
+candidate independently of other candidates. `ResultSlot` declares the expected dataset,
+scenario, exchange and requested metrics; `CandidateEvaluation` rejects wrong identities,
+duplicate results, missing metrics or unknown terminal status. Full evaluations require
+all prepared scenario/exchange pairs. Screening can cover a subset, but must retain every
+explicitly selected objective/limit scenario; its completion cannot be admitted as a full
+evaluation through `require_full()`.
+
+`CanonicalResultScorer` reuses the CPU optimizer's canonical metric aggregation, suite
+reducers, scoring and limits, without calling either evaluator's simulation method.
+Non-finite metric sentinels follow canonical invalid-candidate scoring; malformed output
+raises rather than becoming a successful evaluation. Actual simulator liquidation status
+is independent of requested metrics. The legacy metric-only replay API remains available
+but cannot supply authoritative completion status.
+
+Candidate preparation, bounded global admission, effective deduplication, search updates,
+durable storage and resume are the orchestrator's responsibility. This result interface
+does not yet integrate the new service into the optimizer CLI or define persistent
+evaluation fingerprints. Prepare a stable scorer before submitting work and do not mutate
+its evaluator's scoring configuration while results are in flight.
 
 ## Execution and cleanup
 

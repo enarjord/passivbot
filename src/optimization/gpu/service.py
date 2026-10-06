@@ -3588,7 +3588,14 @@ class MpsMulticoinProxy:
         return result
 
     def evaluate(self, candidates: list[dict]) -> list[dict]:
-        results: list[dict] = []
+        return self._evaluate(candidates, include_status=False)
+
+    def evaluate_results(self, candidates: list[dict]):
+        """Preserve actual simulator terminal status for authoritative consumers."""
+        return self._evaluate(candidates, include_status=True)
+
+    def _evaluate(self, candidates: list[dict], *, include_status: bool):
+        results = []
         torch = self._torch
         if getattr(self, "_cuda_residency", None) is not None:
             if not candidates:
@@ -3829,10 +3836,16 @@ class MpsMulticoinProxy:
             arrays = {
                 name: value.detach().cpu().numpy() for name, value in objectives.items()
             }
-            results.extend(
+            rows = [
                 {name: float(values[index]) for name, values in arrays.items()}
                 for index in range(len(chunk))
-            )
+            ]
+            if include_status:
+                from optimization.gpu.executor import ReplayResult
+                liquidated = (output["liq_step"] >= 0).tolist()
+                results.extend(ReplayResult(row, bool(flag)) for row, flag in zip(rows, liquidated))
+            else:
+                results.extend(rows)
             if profile is not None:
                 profile["timings_seconds"]["result_materialization"] += (
                     time.perf_counter() - stage_started
