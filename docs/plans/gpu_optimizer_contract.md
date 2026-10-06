@@ -215,6 +215,8 @@ Completion requires:
 - [x] Inventory current supported topologies, metrics, deliberate approximations and direct callers.
 - [x] Establish isolated NVIDIA runtime with source-fingerprint verification.
 - [ ] Record reproducible CPU/GPU parity and cold/warm benchmark baselines.
+  - [x] Add public synthetic cohort measurements with first-use/warm scope, direct/native
+    equivalence, completion latency and CPU ranking/feasibility evidence for two seeds.
 
 ### Backtest service
 
@@ -1000,3 +1002,43 @@ Completion requires:
   extension is source-fingerprint verified. Documentation checks have no errors.
 - Coupled-span CPU lowering merged into development only after completed exact-head
   automatic review with no findings, exact-target author review and all required CI.
+
+### 2026-10-06 — Reproducible cohort measurements
+
+- The finite EMA unstuck-history fix merged into development after a completed
+  exact-head automatic review with no findings, exact-target author review, and
+  successful Python 3.12, Python 3.14 and Rust CI. Recheck every review surface and
+  current base/head immediately before the SHA-pinned merge; keep master unchanged.
+- Add a public synthetic cohort benchmark for serial CPU preparation/simulation,
+  direct shared-account GPU replay and native-service completion latency. Bind
+  completions to their submitted identities and require exact direct/native metrics
+  and liquidation status across widths and repeated cohorts.
+- Retain strict per-candidate CPU/GPU comparisons. Report two-objective Pareto
+  membership, pair ordering including ties, GPU-choice regret measured on CPU, and
+  explicitly requested diagnostic feasibility limits. These fixed cohorts do not
+  establish repeated-seed evolutionary search quality or multicore CPU throughput.
+- Distinguish first-use samples from warm repetitions; retain and disclose compiler
+  cache scope rather than presenting service first use after direct warmup as a cold
+  compiler measurement. Expose observed batch sizes and controller evidence, not
+  just configured widths. Label Torch memory separately from total device VRAM.
+- Run the public default seed-7 recipe and seed 43 with widths 16/automatic and a
+  fresh CuPy compiler-cache directory. Both reports identify the measured Python
+  tree and verified Rust extension. Direct/native results match exactly in
+  every measured cohort; automatic width 64 sees demand no greater than 16 and
+  accumulates no eligible tuning evidence. Do not report this as a tuning success.
+- All four CPU/GPU Pareto member sets agree and GPU maximum-ADG selections have
+  zero CPU regret; EMA seed 43 has three ADG and two drawdown pair-order changes.
+  Requested diagnostic feasibility limits have no flips. Strict metric gates still
+  expose residual differences, so representative controller, optimizer and search
+  acceptance remains open. Record recipes, timings, errors and limits in the
+  [cohort benchmark documentation](../gpu_cohort_benchmark.md).
+- Validation: 180 benchmark, comparator, native-service parity and CLI checks pass
+  on CUDA with the current source-verified Rust extension. The slice changes only
+  development tooling and documentation, not simulation kernels or optimization.
+- Automatic review identified consumed tuning windows disappearing from the final
+  controller snapshot. Preserve cumulative eligible samples/seconds and completed
+  windows alongside the pending remainder, without changing execution decisions.
+  Add a regression for completed windows, rejected trials and incomplete evidence;
+  require changed-head validation and automatic re-review before integration.
+  Changed-head validation passes all 181 affected CUDA parity/benchmark/CLI cases;
+  source-only benchmark regressions pass 18 with two device cases deselected.

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add an offline `gpu-cohort-benchmark` tool for serial CPU, direct GPU and native
+  CUDA service measurements, with completion latency, strict metric comparisons,
+  Pareto/feasibility diagnostics and observed batch/tuning evidence.
+
 - Honor finite realized-PnL lookback for EMA Anchor GPU auto-unstuck, including
   native single-coin and shared long/short replays. Reuse bounded history scratch
   with Trailing Martingale and omit it when no enabled consumer needs it.
