@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from contextlib import contextmanager, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -56,6 +56,8 @@ def build_parser():
     parser.add_argument("--report", help="Save a standard-JSON report here")
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--diagnostics", action="store_true", help="Include bounded fill/state summaries")
+    parser.add_argument("--gpu-engine", choices=("legacy", "native"), default="legacy",
+                        help="GPU replay path: legacy selection or the native CUDA optimizer service")
     return parser
 
 
@@ -271,7 +273,38 @@ def _source_fingerprint():
     return digest.hexdigest()
 
 
-def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostics=False):
+@contextmanager
+def _native_dataset(inputs, exchange, metrics):
+    from optimization.gpu.datasets import PreparedGpuDataset
+    from shared_arrays import SharedArrayManager
+
+    config, candles, markets, btc, timestamps = inputs
+    arrays = SharedArrayManager()
+    resources = ExitStack()
+    try:
+        specs = []
+        for value in (candles, btc, timestamps):
+            spec = arrays.create_from(value)[0]
+            specs.append(spec)
+            resources.callback(arrays.cleanup, [spec])
+        yield PreparedGpuDataset(
+            config=config, markets=markets, exchange=exchange,
+            hlcvs=specs[0], btc=specs[1], timestamps=specs[2],
+            candle_coins=config["backtest"]["coins"][exchange], metrics=metrics,
+        )
+    except BaseException:
+        try:
+            resources.close()
+        except BaseException:
+            logging.exception("native parity dataset cleanup failed after an earlier failure")
+        raise
+    else:
+        resources.close()
+
+
+def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostics=False, gpu_engine="legacy"):
+    if gpu_engine not in {"legacy", "native"}:
+        raise ValueError("GPU parity engine must be legacy or native")
     from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension
 
     if "passivbot_rust" not in sys.modules:
@@ -333,11 +366,25 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
             for runner, original in hooks:
                 runner.run = original
 
-    with GpuBacktestService(batch_size=1) as service:
-        service.register_dataset_factory(identity, replay_factory)
-        started = time.perf_counter()
-        result = service.submit(BacktestRequest(identity, identity, {})).result()
-        gpu_seconds = time.perf_counter() - started - preparation_seconds
+    if gpu_engine == "native":
+        from optimization.gpu.native import CudaBacktestService
+
+        with _native_dataset(inputs, exchange, metrics) as dataset:
+            with CudaBacktestService(batch_size=1, tuning_mode="off") as service:
+                service.register_dataset(identity, dataset)
+                started = time.perf_counter()
+                result = service.submit(BacktestRequest(identity, identity, {})).result()
+                gpu_seconds = time.perf_counter() - started
+        # Preparation stays behind the native worker boundary. Report its full
+        # cold request time rather than inventing a separate preparation timing.
+        preparation_seconds = None
+        states = {"native_result": {"liquidated": result.liquidated}} if diagnostics else {}
+    else:
+        with GpuBacktestService(batch_size=1) as service:
+            service.register_dataset_factory(identity, replay_factory)
+            started = time.perf_counter()
+            result = service.submit(BacktestRequest(identity, identity, {})).result()
+            gpu_seconds = time.perf_counter() - started - preparation_seconds
     report = compare_metrics(cpu, result.metrics, {name: policies.get(name) for name in metrics})
     report["feasibility"] = compare_limits(cpu, result.metrics, checks)
     report["passed"] = report["passed"] and report["feasibility"]["passed"]
@@ -351,6 +398,8 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
         schema_version=1, status=status,
         evaluation_id=identity, bars=int(hlcvs.shape[0]), coins=int(hlcvs.shape[1]),
         strategy=config["live"]["strategy_kind"],
+        gpu_engine=gpu_engine,
+        gpu_replay="shared_account" if gpu_engine == "native" or hlcvs.shape[1] > 1 else "single_coin",
         rust_source_fingerprint=runtime["expected_source_fingerprint"],
         python_source_fingerprint=_source_fingerprint(),
         timings_seconds=dict(cpu=cpu_seconds, gpu_prepare=preparation_seconds, gpu_cold=gpu_seconds),
@@ -415,7 +464,8 @@ def main(argv=None):
         validate_gpu_metric_names(metrics)
         stage = "simulation"
         with redirect_stdout(sys.stderr):
-            report = run_comparison(inputs, args.exchange, metrics, policies, checks, diagnostics=args.diagnostics)
+            report = run_comparison(inputs, args.exchange, metrics, policies, checks,
+                                    diagnostics=args.diagnostics, gpu_engine=args.gpu_engine)
         code = 0 if report["passed"] else 1
     except Exception as error:
         # Diagnostic boundary: failed execution is never reported as a metric match.
@@ -423,6 +473,7 @@ def main(argv=None):
         if stage == "metric_contract" and isinstance(error, ValueError):
             status = "unsupported"
         report = {"schema_version": 1, "status": status, "stage": stage, "passed": False,
+                  "gpu_engine": args.gpu_engine,
                   "error": {"type": type(error).__name__, "message": str(error)}}
         code = 2
     rendered = json.dumps(report, allow_nan=False, indent=None if args.compact else 2, sort_keys=True)

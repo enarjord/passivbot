@@ -19,6 +19,7 @@ passivbot tool gpu-parity --fixture trailing_martingale --coins 2 --sides long
 passivbot tool gpu-parity --fixture trailing_martingale --coins 2 --sides short --diagnostics
 passivbot tool gpu-parity --fixture ema_anchor --coins 2 --sides both --hsl unified
 passivbot tool gpu-parity --fixture trailing_martingale --sides both --market-orders
+passivbot tool gpu-parity --fixture trailing_martingale --coins 1 --gpu-engine native
 ```
 
 Defaults are 5,760 one-minute candles and seed 7, with two synthetic markets,
@@ -26,6 +27,14 @@ USD cash and no BTC collateral. Side activation, HSL mode, unstuck, market execu
 and minimum-effective-cost filtering are explicit options. These toggles exercise
 configuration paths; enabling a controller does not prove that a particular fixture
 triggers its transitions. Add targeted stress fixtures for behavioral coverage.
+
+`--gpu-engine native` uses the actual `CudaBacktestService` selected by native GPU
+optimization, including its shared-account replay for a single coin. It requires NVIDIA
+CUDA and never falls back to the legacy path. The default `legacy` retains the existing
+single-coin/multicoin replay selection, including supported Apple Metal installations.
+Reports label both the chosen engine and replay family; a one-coin legacy comparison does
+not establish parity of the native shared-account implementation. Neither mode changes
+metric tolerances or calls this comparator during optimization.
 
 The fixture's requested dates and ordered market metadata match its candle arrays.
 The tool strips optimizer gene bounds when preparing standalone comparisons; it
@@ -123,6 +132,12 @@ GPU replay construction and resource cleanup run on the service's owning worker 
 registered factory. Preparation timing is measured during that construction and excluded
 from cold execution timing. Diagnostic hooks are restored before replay disposal.
 
+For native service comparisons, `gpu_cold` includes worker preparation and simulation;
+`gpu_prepare` is null because that timing is not exposed by the service boundary. CPU
+preparation of shared arrays precedes that timer. Native diagnostics retain the bounded CPU
+fill summary and actual GPU liquidation status; they do not expose worker buffers or
+invent unavailable final positions. Legacy diagnostics retain their raw scalar summaries.
+
 ## Measured development parity
 
 The initial 21-case seed-7 matrix covers both strategies, three side modes, one/two
@@ -144,6 +159,13 @@ policies still expose small residual differences: multicoin passive TM short/dua
 relative errors are approximately 0.0412%/0.0549%, and fill errors 0.0234%/0.0210%.
 EMA differences remain at the earlier scale. These observations do not widen the tool's
 policies or establish a blanket acceptance tolerance.
+
+Running the same 21-case seed-7, 5,760-bar matrix explicitly through `--gpu-engine native`
+preserves matching completion and the two passing long-only TM cases. Native one-coin
+shared-account results also expose small residual differences: EMA ADG relative error
+reaches 0.4911% and fill error 0.1967%; passive short/dual-side TM ADG/fill relative errors
+stay below 0.055%/0.035% in these fixtures. These measurements retain the same strict
+policies and do not certify controller-transition coverage or ranking acceptance.
 
 Minimum-cost boundary coverage checks affordable equality and cases 0.01% below/above
 the threshold for both strategies. Inputs below float32 resolution can still straddle

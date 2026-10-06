@@ -803,3 +803,33 @@ Completion requires:
   Promotion did not repeat base simulations. Warm elapsed time was comparable despite less
   scenario work; this small experiment proves reuse/budget semantics, not speedup or search
   quality. Representative scenarios and repeated-seed Pareto quality remain acceptance work.
+
+### 2026-10-06 — Explicit native parity execution
+
+- Inspection found the standalone comparator still chose the legacy single-coin replay
+  for one-coin inputs, while native optimization always uses the shared-account replay.
+  Add `--gpu-engine native` to run the actual prepared CUDA service for 1..64 coins; keep
+  default legacy comparison available for existing replay/Metal measurements. Reports label
+  the engine even on failure and identify the replay family on successful comparison. No native
+  failure falls back to legacy execution and no metric tolerance changes.
+- Native comparisons allocate immutable shared inputs on the CPU, keep them alive through
+  service close, and clean every allocation even if another cleanup fails. Preserve the
+  original producer/consumer error. Device packing, buffers and replay construction stay
+  on the owning worker. No simulation or optimizer routing changes.
+- Native cold timing includes worker preparation and execution; separate preparation is
+  explicitly unavailable. Bounded native diagnostics expose actual liquidation status
+  alongside existing CPU fills, without exporting device internals or fabricated positions.
+- The affected comparator/tool suite passes 112 tests on CUDA, including 12 native cases
+  across both strategies, three side modes and one/two coins, plus two real native CLI
+  cases and prepared nondefault/alias/wrapped exchange comparisons. Each native comparison
+  in the 12-case matrix runs the CPU simulation once and matches independent
+  shared-account replay metrics. Four allocation/consumer/cleanup regressions verify all
+  shared segments are reclaimed and earlier failures preserved. Existing prepared-input
+  identity checks, legacy comparison policies and measured discrepancies stay intact.
+  This closes a path-selection gap in parity tooling, not the broader parity acceptance gate.
+- A 21-case seed-7, 5,760-bar matrix using the native service preserves completion coverage
+  in every case and the two passing long-only TM fixtures. Strict measurement policies
+  still expose the small residual differences recorded previously: EMA ADG relative error
+  reaches 0.4911% and fill error 0.1967%; passive short/dual-side TM ADG/fill relative errors
+  stay below 0.055%/0.035% in these fixtures. HSL/unstuck toggles do not prove controller
+  transitions were exercised. No failures were concealed by fallback or wider tolerances.
