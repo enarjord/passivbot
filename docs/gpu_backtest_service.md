@@ -148,6 +148,16 @@ and writes full candidate records immediately through the existing results/Paret
 Evolution advances after the cohort is complete; asynchronous execution does not silently
 change the evolutionary policy. Effective duplicates share pending/cached work.
 
+The CPU session also retains bounded simulator-row evidence by complete effective candidate
+identity, prepared dataset and exact request parameters. Screen-to-full promotion can reuse
+already simulated scenarios; it still collects and validates every required full-suite slot before canonical scoring and
+storage. A partial score is never reused as complete fitness. Reused rows receive the current
+request identity and are consumed on the CPU poller. Future results must match their actual
+submitted request before entering either collection or this cache. Each candidate-payload and
+simulator-row LRU is independently limited by `cache_size`; eviction or loss only repeats GPU
+work. These snapshots are run-local, without device handles or checkpoint state. Selective
+scenario-screening search policy remains separate development work.
+
 GPU submission starts after the first prepared candidate rather than waiting for the
 entire CPU admission window. Preparation and CPU result servicing then alternate within
 a soft 50 ms latency target, with interruption checks between candidates. Single preparation,

@@ -231,6 +231,8 @@ Completion requires:
 - [x] Add canonical CPU request preparation and bounded polling/duplicate collection helpers.
 - [x] Add experimental GPU-only ask/tell CLI, seed evaluation and partial-cohort checkpoint resume.
 - [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
+  - [x] Reuse validated scenario evidence across screening/full stages without reusing partial
+    scores or skipping required full-suite collection; keep caches bounded and run-local.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
     from CPU cost, and keep suite notification fan-in independent of persistence batches.
@@ -735,3 +737,25 @@ Completion requires:
   broadly unchanged in this bounded suite; larger scenario-locality cases remain open.
 - Further cadence/evolution experiments, scenario-screening policy, representative parity
   and workload acceptance, and retirement of the legacy backend remain open.
+
+### 2026-10-06 — Reuse screened simulator evidence
+
+- The CPU pipeline slice has completed clear exact-head auto review; required CI remains
+  its merge gate. Keep this subsequent scenario work separate from that reviewed head.
+- Add a bounded, run-local CPU cache of collector-validated simulator rows, keyed by the
+  complete effective candidate identity, prepared dataset and exact request parameters.
+  Promotion re-identifies and consumes those rows on the CPU poller, submits only missing scenarios, and still requires
+  every complete-suite slot. Partial aggregate scores and full-candidate caches remain
+  stage-separated. Cache eviction/loss only repeats GPU work, never changes calculations.
+- Before collection or caching, verify a future's result matches its actual submitted
+  request/dataset. Previously a mislabeled result could match a different valid slot of the
+  same candidate; request-specific binding prevents wrong evidence from entering the cache.
+- All 40 affected session/backend/real CLI cases and 33 registry/planning/scoring cases pass.
+  Tests cover incomplete full-suite promotion, different candidate/data identities, eviction,
+  immutable snapshots, malformed future binding, original failures, cancellation and resume.
+  Two actual CUDA lazy-suite cases preserve independent full-result payloads. Screen-to-full
+  promotion performs exactly one simulation per distinct scenario, with CPU simulations forbidden.
+- This is reusable CPU collection infrastructure, not completed native screening search policy.
+  Future integration must choose survivors on CPU, keep rejected partial observations out of
+  full fitness/storage, persist stage progress safely and retain explicit objective/limit scenarios.
+  Preserve full GPU seed/bootstrap evaluation and existing evolutionary cohort semantics.

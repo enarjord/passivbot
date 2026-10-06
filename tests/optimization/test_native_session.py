@@ -193,22 +193,104 @@ def test_failed_snapshot_does_not_partially_admit_candidate():
     session.stop_admission()
 
 
-def test_screening_cache_cannot_satisfy_full_candidate_evaluation():
+def suite_scorer():
+    return CanonicalResultScorer(SuiteEvaluator(scorer().base, [SimpleNamespace(
+        label=label, exchanges=["binance", "bybit"],
+    ) for label in ("base", "stress")], {"default": "mean"}))
+
+
+def suite_plan(index, *, key="same", labels=("base", "stress"), namespace=""):
+    slots = tuple(ResultSlot(f"{index}:{label}:{venue}", f"{namespace}{label}:{venue}",
+                             label, venue, METRICS) for label in labels for venue in ("binance", "bybit"))
+    requests = tuple(BacktestRequest(slot.request_id, slot.dataset_id, {}) for slot in slots)
+    return CandidatePlan(str(index), (float(index),), key,
+                         "full" if len(labels) == 2 else "screening", requests, slots)
+
+
+def test_screening_rows_reuse_simulations_but_cannot_satisfy_full_suite_score(monkeypatch):
     service = Service()
-    session = NativeEvaluationSession(service, scorer())
-    session.admit(replace(plan(0), stage="screening"))
+    value = suite_scorer()
+    scored = []
+    original = value.score
+    def score(vector, analyses):
+        scored.append(tuple(analyses))
+        return original(vector, analyses)
+    monkeypatch.setattr(value, "score", score)
+    session = NativeEvaluationSession(service, value)
+    session.admit(suite_plan(0, labels=("base",)))
     session.poll()
     for name in tuple(service.requests):
         service.complete(name)
     screening = session.poll()[0]
     with pytest.raises(ValueError, match="screening"):
         screening.require_full()
-    session.admit(plan(1, key="0"))
-    session.poll()
+    session.admit(suite_plan(1))
+    assert session.poll() == []
     assert len(service.requests) == 4
-    for name in ("1:binance", "1:bybit"):
+    assert scored == [("base",)]
+    assert not any(name.startswith("1:base") for name in service.requests)
+    for name in ("1:stress:binance", "1:stress:bybit"):
         service.complete(name)
     assert session.poll()[0].require_full()["fitness"]
+    assert scored == [("base",), ("base", "stress")]
+
+
+@pytest.mark.parametrize("changed", ["candidate", "dataset", "parameters"])
+def test_reused_rows_require_identical_effective_candidate_and_dataset(changed):
+    service = Service(capacity=4)
+    session = NativeEvaluationSession(service, suite_scorer())
+    session.admit(suite_plan(0, labels=("base",)))
+    session.poll()
+    for name in tuple(service.requests):
+        service.complete(name)
+    session.poll()
+    promoted = suite_plan(1, key="different" if changed == "candidate" else "same",
+                          namespace="different:" if changed == "dataset" else "")
+    if changed == "parameters":
+        promoted = replace(promoted, requests=tuple(replace(request, parameters={"value":0.5})
+                                                   for request in promoted.requests))
+    session.admit(promoted)
+    session.poll()
+    assert len(service.requests) == 6
+    session.stop_admission()
+
+
+def test_row_cache_eviction_only_repeats_work_and_cached_rows_are_snapshots():
+    service = Service(capacity=4)
+    value = suite_scorer()
+    session = NativeEvaluationSession(service, value, cache_size=1)
+    session.admit(suite_plan(0, labels=("base",)))
+    session.poll()
+    for name in tuple(service.requests):
+        service.complete(name)
+    session.poll()
+    assert len(session._row_cache) == 1
+    # Mutation after consumption must not corrupt retained simulator evidence.
+    service.futures["0:base:bybit"].result().metrics["adg_strategy_eq"] = 999
+    session.admit(suite_plan(1))
+    session.poll()
+    assert len(service.requests) == 5  # One evicted base row repeats on the service.
+    for name in tuple(service.requests):
+        if name.startswith("1:"):
+            service.complete(name)
+    result = session.poll()[0].require_full()
+    assert result["fitness"] == pytest.approx((-0.01,))
+    assert len(session._row_cache) == 1
+
+
+def test_misbound_future_result_is_rejected_before_it_can_enter_row_cache():
+    service = Service()
+    session = NativeEvaluationSession(service, scorer())
+    candidate = plan(0)
+    session.admit(candidate)
+    session.poll()
+    first, second = candidate.requests
+    service.futures[first.request_id].set_result(BacktestResult(
+        second.request_id, second.dataset_id, {"adg_strategy_eq":0.01, "drawdown_worst_usd":0.1}, False,
+    ))
+    with pytest.raises(RuntimeError, match="submitted request"):
+        session.poll()
+    assert not session._row_cache
 
 
 def test_screening_subsets_do_not_share_pending_work_or_completed_cache():

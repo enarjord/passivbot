@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reuse validated native GPU scenario results when a screened candidate advances
+  to its full suite. Keep partial scores separate, require every full-suite slot,
+  and reject results bound to another submitted request before caching them.
+
 - Start native GPU work after the first prepared candidate and interleave bounded
   CPU preparation with result scoring/storage. Adapt completion grouping to CPU
   processing cost while keeping suite fan-in and evolutionary cohorts independent.
