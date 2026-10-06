@@ -27,6 +27,77 @@ def test_result_files_preserve_values_with_compact_scenarios(tmp_path):
     assert (folder / "analysis.json").read_text() == json.dumps(report, indent=2, sort_keys=True)
 
 
+def test_iteration_directory_never_reuses_existing_files(tmp_path):
+    session = ib.IterativeBacktestSession(Path("config.json"), None, False)
+    session.session_dir = tmp_path
+    args = (1, 1_700_000_000_000, {}, {}, {}, (), 0.0)
+    folder = session._write_results(*args)
+    original = (folder / "analysis.json").read_bytes()
+    with pytest.raises(FileExistsError):
+        session._write_results(*args)
+    assert (folder / "analysis.json").read_bytes() == original
+
+
+def test_dataset_reload_allocates_new_session_without_overwriting_old_runs(
+    tmp_path, monkeypatch
+):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    import numpy as np
+    from config_utils import get_template_config
+
+    cfg = get_template_config()
+    cfg["backtest"].update(
+        base_dir=str(tmp_path),
+        exchanges=["binance"],
+        start_date="2026-01-01",
+        end_date="2026-01-02",
+    )
+    dataset = SimpleNamespace(
+        coins=["BTC"],
+        hlcvs=np.ones((3, 1, 4)),
+        btc_usd_prices=np.ones(3),
+        timestamps=np.arange(3),
+        mss={"BTC": {}},
+    )
+
+    async def load(self):
+        return deepcopy(cfg)
+
+    async def prepare(self, config):
+        assert self.backtest_exchanges == config["backtest"]["exchanges"]
+        assert self.combine_ohlcvs == (len(self.backtest_exchanges) > 1)
+        return {"combined" if self.combine_ohlcvs else "binance": dataset}
+
+    monkeypatch.setattr(ib.IterativeBacktestSession, "_load_config", load)
+    monkeypatch.setattr(ib.IterativeBacktestSession, "_prepare_datasets", prepare)
+    monkeypatch.setattr(
+        ib, "evaluation_implementation_identity", lambda: {"test": True}
+    )
+    session = ib.IterativeBacktestSession(tmp_path / "config.json", None, False)
+    asyncio.run(session.initialize())
+    first_session = session.session_dir
+    first = session._write_results(1, 1_700_000_000_000, {}, {}, cfg, (), 0.0)
+    old_bytes = (first / "config_used.json").read_bytes()
+    session.history.append(SimpleNamespace(index=1))
+    cfg["backtest"].update(
+        start_date="2026-01-02", end_date="2026-01-03", exchanges=["binance", "bybit"]
+    )
+    asyncio.run(session.reload_datasets(cfg))
+    assert session.history == []
+    assert session.session_dir != first_session
+    second = session._write_results(1, 1_700_000_060_000, {}, {}, cfg, (), 0.0)
+    assert first != second
+    assert (first / "config_used.json").read_bytes() == old_bytes
+    assert json.loads((second / "config_used.json").read_text()) == cfg
+    assert (
+        json.loads((first_session / "session.json").read_text())["setup_sha256"]
+        != json.loads((session.session_dir / "session.json").read_text())[
+            "setup_sha256"
+        ]
+    )
+
+
 def test_parse_override_value_supports_common_scalar_types():
     assert ib.parse_override_value("true") is True
     assert ib.parse_override_value("false") is False
@@ -300,7 +371,16 @@ def test_session_initialize_infers_combined_mode_from_exchange_count(monkeypatch
     config_path.write_text("{}", encoding="utf-8")
 
     async def fake_load_config(self):
-        return {"backtest": {"exchanges": ["binance", "bybit"], "base_dir": "backtests"}}
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        config["backtest"].update(
+            exchanges=["binance", "bybit"],
+            base_dir=str(tmp_path),
+            start_date="2026-01-01",
+            end_date="2026-01-02",
+        )
+        return config
 
     async def fake_prepare_datasets(self, config):
         assert config["backtest"]["exchanges"] == ["binance", "bybit"]
@@ -310,7 +390,9 @@ def test_session_initialize_infers_combined_mode_from_exchange_count(monkeypatch
     monkeypatch.setattr(ib.IterativeBacktestSession, "_prepare_datasets", fake_prepare_datasets)
     monkeypatch.setattr(ib, "make_backtest_signature", lambda config: "sig")
     monkeypatch.setattr(ib, "make_get_filepath", lambda path: path)
-    monkeypatch.setattr(ib.time, "strftime", lambda fmt: "iterative_20260404_000000")
+    monkeypatch.setattr(
+        ib, "evaluation_implementation_identity", lambda: {"test": True}
+    )
 
     session = ib.IterativeBacktestSession(config_path, None, False)
     asyncio.run(session.initialize())
