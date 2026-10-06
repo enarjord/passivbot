@@ -2,6 +2,7 @@ from copy import deepcopy
 import json
 import pickle
 import signal
+from pathlib import Path
 
 import msgpack
 import pytest
@@ -98,10 +99,22 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     monkeypatch.setattr(optimize_suite, "reject_cross_exchange_market_identifier_collisions", offline)
     monkeypatch.setattr(optimize_suite, "prepare_master_datasets", master)
     emitted = False
+    first_record_persisted = False
     record = optimize.ResultRecorder.record
     def record_and_interrupt(self, row):
-        nonlocal emitted
+        nonlocal emitted, first_record_persisted
         record(self, row)
+        if not first_record_persisted:
+            # Read through independent file handles before shutdown, checkpoint
+            # flushing or a completed cohort can hide deferred persistence.
+            with open(self.results_file.name, "rb") as source:
+                stored = list(msgpack.Unpacker(source, raw=False, strict_map_key=False))
+            assert len(stored) == 1
+            assert stored[0][CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
+            members = list(Path(self.store.pareto_dir).glob("*.json"))
+            assert members
+            assert json.loads(members[0].read_text())[CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
+            first_record_persisted = True
         # With screening, interrupt after the initial full generation so the
         # on-disk checkpoint exercises a partially completed screening stage.
         if interrupted and not emitted and not screening:
@@ -126,6 +139,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     with pytest.raises(SystemExit) as first:
         await optimize.main()
     assert first.value.code == (130 if interrupted else 0)
+    assert first_record_persisted
     results = list((tmp_path / "optimize_results").iterdir())
     assert len(results) == 1
     directory = results[0]

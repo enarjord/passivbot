@@ -7,6 +7,9 @@ Device buffers, packing, replay handles
 and residency stay inside the service. No CPU backtest or evolutionary algorithm runs
 there. An experimental optimizer integration is available below; practical simulation-parity
 acceptance and replacement of the legacy GPU backend remain open.
+The [development evidence map](plans/gpu_optimizer_acceptance.md) records the ownership,
+incremental-admission and optimizer persistence cases separately from outstanding parity
+and cutover requirements.
 
 ## Input ownership
 

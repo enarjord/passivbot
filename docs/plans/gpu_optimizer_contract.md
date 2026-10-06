@@ -12,6 +12,9 @@ This document contains the acceptance contract, evolving checklist, decisions, a
 progress. Design choices may change when evidence supports simpler, more capable, or
 more efficient implementations. Acceptance scope must not be silently weakened.
 
+The [acceptance evidence map](gpu_optimizer_acceptance.md) separates verified ownership,
+search/storage and device cases from the remaining simulator, resource and cutover gates.
+
 ## Branch and publication policy
 
 - Development target: `codex/gpu-native-optimizer`, initially based on master
@@ -223,10 +226,12 @@ Completion requires:
 - [x] Implement dependency-light request/completion API and bounded asynchronous lifecycle.
 - [x] Reuse existing replay engines behind a temporary adapter without changing their semantics.
 - [x] Verify identity, output cardinality, backpressure, exceptions, cancellation and shutdown.
-- [ ] Register immutable data, reuse packing/compilation, isolate mutable replay state.
+- [x] Register immutable data, reuse packing/compilation, isolate mutable replay state.
 - [x] Add prepared shared-array metadata with explicit column binding and worker-owned residency.
 - [x] Bind canonical standalone/lazy suite preparation to the service without copying candle histories.
 - [ ] Demonstrate incremental completions and bounded memory on CUDA.
+  - [x] Prove incremental admission/completions and bounded replay allocations on CUDA;
+    total device/host/disk resource measurements remain in representative acceptance.
 
 ### Authoritative simulation and tooling
 
@@ -238,11 +243,11 @@ Completion requires:
 
 ### Optimizer cutover
 
-- [ ] Integrate GPU result scoring/limits through existing CPU-owned canonical helpers.
+- [x] Integrate GPU result scoring/limits through existing CPU-owned canonical helpers.
 - [x] Add incremental candidate/suite result collection using canonical CPU scoring helpers.
 - [x] Add canonical CPU request preparation and bounded polling/duplicate collection helpers.
 - [x] Add experimental GPU-only ask/tell CLI, seed evaluation and partial-cohort checkpoint resume.
-- [ ] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
+- [x] Preserve suite screening, full-suite reduction, effective deduplication and seed handling.
   - [x] Prepare finite anchor/side-enable execution views over shared histories and restore
     checkpoint-owned anchors before native resume shape construction.
   - [x] Reuse validated scenario evidence across screening/full stages without reusing partial
@@ -253,8 +258,8 @@ Completion requires:
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
     from CPU cost, and keep suite notification fan-in independent of persistence batches.
 - [x] Add service-owned production batch tuning and prepared work/scratch dispatch limits.
-- [ ] Flush results/Pareto promptly; validate interruption and compatible resume.
-- [ ] Prove no CPU backtest is invoked during GPU optimize/bootstrap/resume.
+- [x] Flush results/Pareto promptly; validate interruption and compatible resume.
+- [x] Prove no CPU backtest is invoked during GPU optimize/bootstrap/resume.
 - [ ] Retire superseded GPU screening/validation state and keep CPU functionality intact.
 
 ### Acceptance
@@ -1252,3 +1257,37 @@ Completion requires:
 - These results do not establish general simulator parity or goal completion.
   Any implementation PR still needs completed exact-head automatic review, resolved
   findings, author sign-off and CI before development-only integration.
+
+### 2026-10-06 — Service and optimizer lifecycle acceptance evidence
+
+- PR #1906 completed current-head automatic review, author review and all required CI
+  before development-only integration. Shared-account TM loss admission now uses the
+  configured finite/all history and finalized close reservations; update the inventory
+  so the removed envelope is not carried forward as a native limitation.
+- Add the [acceptance evidence map](gpu_optimizer_acceptance.md), including the ownership,
+  state and dependency simplification against screening/CPU validation. Keep the overall
+  goal and retirement gates open; representative metric approximations, resource/performance
+  measurements and CPU-preserving cutover remain work.
+- Add real CUDA tests for both strategies with immutable metadata/borrowed arrays,
+  mutation of a queued request, immediate capacity replacement after a completed result,
+  unfinished later work and repeated candidate/shape isolation. Each case compares five
+  isolated references with 165 service requests. Repeated traffic stays inside its warmed
+  Torch allocation envelope; this does not certify total VRAM, host RAM or disk bounds.
+- Strengthen native optimizer CLI tests to read the first full record and a Pareto member
+  through independent file handles before cohort completion or shutdown. Run standalone,
+  suite, seed/bootstrap, screening/promotion, fixed/automatic dispatch, interruption/resume,
+  anchor restoration without seed files and coupled coin-span cases with CPU simulation
+  APIs and CPU worker construction forbidden.
+- Validation: 42 CUDA ownership/dispatch/CLI cases pass; a final run passes the two new
+  service cases and eight anchor CLI cases (52 distinct device cases across the runs).
+  The focused CPU orchestration/scoring/residency corpus passes 144 checks. Six documentation
+  checks pass; AI checks report zero errors and two existing size warnings, generated
+  registry is current, Python syntax and changed Markdown links validate. The device
+  runtime's 360 Python/Rust/shader source files match the development tree and its actual
+  Rust extension passes source verification. Verification failures remain fatal; passing
+  evidence uses the actual source-verified runtime.
+- Close the implemented ownership, canonical scoring, suite/seed handling, prompt storage
+  and no-CPU optimize/bootstrap/resume checklist items with this scoped evidence. Retain
+  the broader memory and final simulator acceptance boxes; changing their scope to obtain
+  completion would weaken the contract. This slice still requires current-head automatic
+  review and CI before its own development integration.
