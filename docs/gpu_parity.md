@@ -107,6 +107,10 @@ throughput. `--diagnostics` additionally requests CPU fills and reports a bounde
 fill/state summary and raw GPU scalar summaries; it changes the CPU collection path
 and is not a warm performance benchmark.
 
+GPU replay construction and resource cleanup run on the service's owning worker via a
+registered factory. Preparation timing is measured during that construction and excluded
+from cold execution timing. Diagnostic hooks are restored before replay disposal.
+
 ## Measured development parity
 
 The initial 21-case seed-7 matrix covers both strategies, three side modes, one/two

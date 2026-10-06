@@ -3,6 +3,11 @@
 import sys
 import inspect
 import importlib
+from contextlib import contextmanager
+from copy import deepcopy
+from threading import get_ident
+import gc
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -384,6 +389,59 @@ def test_cuda_disabled_hsl_specialization_matches_full_hsl_state(cuda):
     assert compact.keys() == baseline.keys()
     for key in baseline:
         np.testing.assert_array_equal(compact[key], baseline[key], err_msg=key)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("coins", [1, 3])
+def test_cuda_factory_owns_replay_lifetime_and_matches_direct_metrics(cuda, monkeypatch, strategy, coins):
+    from optimization.gpu.executor import BacktestRequest, GpuBacktestService
+    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+    import backtest
+
+    def cpu_backtest_forbidden(*_args, **_kwargs):
+        raise AssertionError("GPU execution must not call a CPU backtest")
+
+    monkeypatch.setattr(backtest, "execute_backtest", cpu_backtest_forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", cpu_backtest_forbidden)
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", "both", "--coins", str(coins), "--bars", "128",
+    ]))
+    cls = MpsSingleCoinProxy if coins == 1 else MpsMulticoinProxy
+
+    def construct():
+        return cls(config=deepcopy(config), hlcvs=candles, mss=markets, btc=btc,
+                   timestamps=timestamps, exchange="binance", batch_size=2,
+                   needed_metrics=set(DEFAULT_METRICS))
+
+    events, references = [], []
+
+    @contextmanager
+    def factory():
+        events.append(("enter", get_ident()))
+        replay = construct()
+        references.append(weakref.ref(replay))
+        try:
+            yield replay
+        finally:
+            events.append(("exit", get_ident()))
+
+    main_thread = get_ident()
+    with GpuBacktestService(batch_size=2) as service:
+        service.register_dataset_factory("fixture", factory)
+        assert not events
+        for repeat in range(2):
+            futures = [service.submit(BacktestRequest(f"{repeat}:{i}", "fixture", {})) for i in range(3)]
+            metrics = [future.result(timeout=60).metrics for future in futures]
+            assert len(events) == 1
+    gc.collect()
+    assert events == [("enter", service._thread.ident), ("exit", service._thread.ident)]
+    assert service._thread.ident != main_thread
+    assert references[0]() is None
+    expected = construct().evaluate([{}])[0]
+    for row in metrics:
+        for name, value in expected.items():
+            np.testing.assert_allclose(row[name], value, rtol=1e-6, atol=1e-7, err_msg=name)
 
 
 @pytest.mark.parametrize("pending_queries", [0, 2])

@@ -1,11 +1,12 @@
 """Offline execution-service lifecycle; no trading or GPU emulation."""
 
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import subprocess
 import sys
-from threading import Event, Thread
+from threading import Event, Thread, get_ident
 import gc
 import weakref
 
@@ -42,6 +43,180 @@ class GatedReplay(Replay):
 
 def request(index, dataset="market", **params):
     return BacktestRequest(str(index), dataset, {"value": index, **params})
+
+
+def test_factory_constructs_reuses_and_releases_resources_on_worker():
+    events = []
+    main_thread = get_ident()
+
+    @contextmanager
+    def factory():
+        events.append(("enter", get_ident()))
+        replay = Replay()
+        try:
+            yield replay
+        finally:
+            events.append(("exit", get_ident(), len(replay.calls)))
+
+    service = GpuBacktestService(batch_size=1)
+    service.register_dataset_factory("market", factory)
+    assert not events
+    for i in range(2):
+        assert service.submit(request(i)).result(timeout=3).metrics == {"gain": i}
+    assert len(events) == 1
+    service.close()
+    assert events == [("enter", service._thread.ident), ("exit", service._thread.ident, 2)]
+    assert service._thread.ident != main_thread
+
+
+def test_unused_and_cancelled_factories_are_not_entered():
+    calls = []
+
+    @contextmanager
+    def factory():
+        calls.append("entered")
+        yield Replay()
+
+    with GpuBacktestService() as unused:
+        unused.register_dataset_factory("unused", factory)
+    replay = GatedReplay()
+    service = GpuBacktestService(batch_size=1)
+    service.register_dataset("slow", replay)
+    service.register_dataset_factory("unused", factory)
+    try:
+        service.submit(request(0, "slow"))
+        assert replay.started.wait(3)
+        cancelled = service.submit(request(1, "unused"))
+        assert cancelled.cancel()
+    finally:
+        replay.release.set()
+        service.close()
+    assert not calls
+
+
+def test_factory_setup_failure_fails_running_and_queued_requests():
+    started, release = Event(), Event()
+    failure = MemoryError("resident dataset allocation failed")
+
+    @contextmanager
+    def factory():
+        started.set()
+        assert release.wait(3)
+        raise failure
+        yield  # pragma: no cover - context setup deliberately never reaches yield
+
+    service = GpuBacktestService(batch_size=1)
+    service.register_dataset_factory("market", factory)
+    first = service.submit(request(0))
+    assert started.wait(3)
+    queued = service.submit(request(1))
+    release.set()
+    service.close()
+    assert first.exception() is failure
+    assert queued.exception() is failure
+    with pytest.raises(RuntimeError, match="service failed"):
+        service.submit(request(2))
+
+
+@pytest.mark.parametrize("context_valid", [False, True])
+def test_invalid_factory_output_is_fatal_and_entered_context_is_released(context_valid):
+    errors = []
+
+    @contextmanager
+    def invalid():
+        try:
+            yield object()
+        except BaseException as error:
+            errors.append(error)
+            raise
+
+    with GpuBacktestService(batch_size=1) as service:
+        service.register_dataset_factory("market", invalid if context_valid else lambda: Replay())
+        future = service.submit(request(0))
+        with pytest.raises(TypeError):
+            future.result(timeout=3)
+    assert len(errors) == int(context_valid)
+    if errors:
+        assert errors[0] is future.exception()
+
+
+@pytest.mark.parametrize("producer_fails", [False, True])
+def test_factory_cleanup_failure_is_reported_without_replacing_producer_error(producer_fails, caplog):
+    producer_error = MemoryError("simulation failed")
+    cleanup_error = RuntimeError("device cleanup failed")
+
+    class BrokenReplay(Replay):
+        def evaluate(self, candidates):
+            if producer_fails:
+                raise producer_error
+            return super().evaluate(candidates)
+
+    @contextmanager
+    def factory():
+        try:
+            yield BrokenReplay()
+        finally:
+            raise cleanup_error
+
+    service = GpuBacktestService(batch_size=1)
+    service.register_dataset_factory("market", factory)
+    result = service.submit(request(0))
+    if producer_fails:
+        assert result.exception(timeout=3) is producer_error
+    else:
+        assert result.result(timeout=3).metrics == {"gain": 0}
+    expected = producer_error if producer_fails else cleanup_error
+    with pytest.raises(type(expected)) as raised:
+        service.close()
+    assert raised.value is expected
+    assert service._failure is expected
+    assert not service._replays and not service._factories
+    if producer_fails:
+        assert "cleanup failed after execution failure" in caplog.text
+
+
+def test_all_factory_contexts_exit_even_if_one_cleanup_fails():
+    released = []
+    failure = RuntimeError("second dataset cleanup failed")
+
+    @contextmanager
+    def first():
+        try:
+            yield Replay()
+        finally:
+            released.append(("first", get_ident()))
+
+    @contextmanager
+    def second():
+        try:
+            yield Replay()
+        finally:
+            released.append(("second", get_ident()))
+            raise failure
+
+    service = GpuBacktestService(batch_size=1)
+    service.register_dataset_factory("first", first)
+    service.register_dataset_factory("second", second)
+    for i, dataset in enumerate(("first", "second")):
+        service.submit(request(i, dataset)).result(timeout=3)
+    with pytest.raises(RuntimeError) as raised:
+        service.close()
+    assert raised.value is failure
+    assert released == [("second", service._thread.ident), ("first", service._thread.ident)]
+
+
+def test_factory_and_preconstructed_registration_share_identity_validation():
+    with GpuBacktestService() as service:
+        with pytest.raises(TypeError, match="must be callable"):
+            service.register_dataset_factory("invalid", None)
+        with pytest.raises(ValueError, match="non-empty"):
+            service.register_dataset_factory("", lambda: None)
+        service.register_dataset_factory("factory", lambda: None)
+        with pytest.raises(ValueError, match="already registered"):
+            service.register_dataset("factory", Replay())
+        service.register_dataset("direct", Replay())
+        with pytest.raises(ValueError, match="already registered"):
+            service.register_dataset_factory("direct", lambda: None)
 
 
 def test_executor_import_is_independent_of_gpu_and_search_dependencies():

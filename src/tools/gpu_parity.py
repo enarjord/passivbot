@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -241,36 +241,49 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
     fills, equities, analysis = execute_backtest(payload, config)
     cpu_seconds = time.perf_counter() - started
     cpu = {name: value for name in metrics if (value := resolve_metric_value(analysis, name)) is not None}
-    started = time.perf_counter()
     replay_cls = MpsSingleCoinProxy if hlcvs.shape[1] == 1 else MpsMulticoinProxy
-    replay = replay_cls(
-        config=deepcopy(config), hlcvs=hlcvs, mss=markets, btc=btc,
-        timestamps=timestamps, exchange=exchange, batch_size=1, needed_metrics=set(metrics),
-    )
-    preparation_seconds = time.perf_counter() - started
+    preparation_seconds = 0.0
     states = {}
-    if diagnostics:
-        runners = ({"single": replay.runner} if hasattr(replay, "runner") else
-                   {"fused": replay.fused_runner} if replay.fused_runner is not None else replay.runners)
-        for label, runner in runners.items():
-            original = runner.run
 
-            def captured(*args, _label=label, _original=original, **kwargs):
-                output = _original(*args, **kwargs)
-                states[_label] = {
-                    key: float(output[key].item())
-                    for key in ("fill_count", "psize", "short_psize", "pprice", "short_pprice",
-                                "balance", "first_eq_ts", "last_eq_ts")
-                    if key in output and output[key].numel() == 1
-                }
-                return output
+    @contextmanager
+    def replay_factory():
+        nonlocal preparation_seconds
+        started = time.perf_counter()
+        replay = replay_cls(
+            config=deepcopy(config), hlcvs=hlcvs, mss=markets, btc=btc,
+            timestamps=timestamps, exchange=exchange, batch_size=1, needed_metrics=set(metrics),
+        )
+        preparation_seconds = time.perf_counter() - started
+        hooks = []
+        try:
+            if diagnostics:
+                runners = ({"single": replay.runner} if hasattr(replay, "runner") else
+                           {"fused": replay.fused_runner} if replay.fused_runner is not None else replay.runners)
+                for label, runner in runners.items():
+                    original = runner.run
 
-            runner.run = captured
+                    def captured(*args, _label=label, _original=original, **kwargs):
+                        output = _original(*args, **kwargs)
+                        states[_label] = {
+                            key: float(output[key].item())
+                            for key in ("fill_count", "psize", "short_psize", "pprice", "short_pprice",
+                                        "balance", "first_eq_ts", "last_eq_ts")
+                            if key in output and output[key].numel() == 1
+                        }
+                        return output
+
+                    hooks.append((runner, original))
+                    runner.run = captured
+            yield replay
+        finally:
+            for runner, original in hooks:
+                runner.run = original
+
     with GpuBacktestService(batch_size=1) as service:
-        service.register_dataset(identity, replay)
+        service.register_dataset_factory(identity, replay_factory)
         started = time.perf_counter()
         result = service.submit(BacktestRequest(identity, identity, {})).result()
-        gpu_seconds = time.perf_counter() - started
+        gpu_seconds = time.perf_counter() - started - preparation_seconds
     report = compare_metrics(cpu, result.metrics, {name: policies.get(name) for name in metrics})
     report["feasibility"] = compare_limits(cpu, result.metrics, checks)
     report["passed"] = report["passed"] and report["feasibility"]["passed"]
