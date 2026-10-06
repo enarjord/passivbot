@@ -91,6 +91,12 @@ Prepared-input immutability is the factory adapter's responsibility; the final d
 registry and residency policy are still separate work. Preconstructed replay registration
 remains a temporary compatibility path.
 
+The [prepared CUDA facade](../gpu_backtest_service.md) snapshots CPU metadata and borrows
+shared arrays with explicit source-column identities. It owns lazy worker-side attachment,
+packing and a one-active-dataset/scratch residency policy. Caller-owned shared segments
+remain immutable/live until shutdown. Full evaluation identity, adaptive residency and
+optimizer integration remain subsequent work.
+
 ## Scheduling, tuning and specialization
 
 Use completed-work evidence to tune batch width/delay, concurrency, replay-slot capacity,
@@ -206,6 +212,7 @@ Completion requires:
 - [x] Reuse existing replay engines behind a temporary adapter without changing their semantics.
 - [x] Verify identity, output cardinality, backpressure, exceptions, cancellation and shutdown.
 - [ ] Register immutable data, reuse packing/compilation, isolate mutable replay state.
+- [x] Add prepared shared-array metadata with explicit column binding and worker-owned residency.
 - [ ] Demonstrate incremental completions and bounded memory on CUDA.
 
 ### Authoritative simulation and tooling
@@ -464,3 +471,30 @@ Completion requires:
   before choosing the native backend's default; simplification should not silently
   impose this observed throughput loss. No extra conservative screening or CPU replay
   is added to the service.
+
+### 2026-10-05 — Prepared datasets and bounded CUDA ownership
+
+- Added CPU-side metadata snapshots and borrowed shared-array descriptors. Source-column
+  identities are explicit and selected indices must match canonical scenario coins;
+  scenario time/validity metadata stays CPU-owned. Registration neither copies full
+  histories nor initializes device dependencies. Owners keep arrays immutable/live until
+  service shutdown; worker views are read-only.
+- Added a CUDA-only facade over the bounded asynchronous executor. A lazy worker resource
+  context surrounds dataset attachments and replay lifetimes. Reuse existing packing,
+  compile caches and disk-backed scenario subsets; keep one active invariant dataset and
+  one owner's replay scratch on device. Compatible config variants reuse the immutable
+  packed data. No evolution/scoring or CPU backtest enters this facade.
+- Keep the uniform 1..64-coin replay as this internal adapter's foundation; legacy routing
+  is unchanged. Its measured one-coin slowdown still requires ablation and representative
+  performance work before choosing optimizer defaults.
+- Validation: 121 offline lifecycle/dataset/residency/preparation cases pass. Six CUDA
+  facade cases cover both strategies, one/three coins, scenario/subset reuse, direct GPU
+  metric equality, setup failure and interruption with CPU backtests forbidden. Shared
+  attachments and temporary files close after success/failure. A wider selected run passes
+  185 cases and reproduces the existing disabled-HSL specialization failure; its runner
+  and test are unchanged by this slice. Full kernel-ablation acceptance remains open.
+- A bounded synthetic benchmark CLI smoke succeeds with three coins, eight candidates,
+  four-request dispatches, 128 bars and one warm run. The baseline's unchanged HSL
+  specialization test independently reproduces the failure on its original test source.
+- This is a preparation/residency foundation, not optimizer cutover, complete evaluation
+  fingerprints, host/disk admission budgets, multi-device routing or adaptive scheduling.

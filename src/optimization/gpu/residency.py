@@ -190,20 +190,26 @@ class CudaSuiteResidency:
                 self._directory = None
 
 
+@contextmanager
+def cuda_residency_scope():
+    """Own run-local packing/residency on the calling execution thread."""
+    residency = CudaSuiteResidency()
+    token = _current.set(residency)
+    try:
+        try:
+            yield residency
+        except BaseException:
+            _cleanup_after_failure(residency.close)
+            raise
+        else:
+            residency.close()
+    finally:
+        _current.reset(token)
+
+
 def cuda_suite_residency_scope(func):
     @wraps(func)
     def scoped(*args, **kwargs):
-        residency = CudaSuiteResidency()
-        token = _current.set(residency)
-        try:
-            try:
-                result = func(*args, **kwargs)
-            except BaseException:
-                _cleanup_after_failure(residency.close)
-                raise
-            else:
-                residency.close()
-                return result
-        finally:
-            _current.reset(token)
+        with cuda_residency_scope():
+            return func(*args, **kwargs)
     return scoped

@@ -71,7 +71,8 @@ class GpuBacktestService:
     """
 
     def __init__(
-        self, *, batch_size: int = 64, max_pending: int = 1024, max_batch_delay: float = 0.005
+        self, *, batch_size: int = 64, max_pending: int = 1024, max_batch_delay: float = 0.005,
+        worker_context: Callable[[], ContextManager] | None = None,
     ):
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
             raise ValueError("batch_size must be a positive integer")
@@ -79,6 +80,8 @@ class GpuBacktestService:
             raise ValueError("max_pending must be a positive integer")
         if not math.isfinite(max_batch_delay) or max_batch_delay < 0:
             raise ValueError("max_batch_delay must be finite and non-negative")
+        if worker_context is not None and not callable(worker_context):
+            raise TypeError("worker_context must be a resource-context factory")
         self.batch_size = min(batch_size, max_pending)
         self.max_pending = max_pending
         self.max_batch_delay = float(max_batch_delay)
@@ -91,6 +94,7 @@ class GpuBacktestService:
         self._failure: BaseException | None = None
         self._cleanup_failure: BaseException | None = None
         self._thread: Thread | None = None
+        self._worker_context = worker_context
 
     def register_dataset(self, dataset_id: str, replay: BatchReplay) -> None:
         """Take exclusive replay ownership until close; never replace a handle.
@@ -256,12 +260,16 @@ class GpuBacktestService:
     def _run(self) -> None:
         batch: list[_Pending] = []
         resources = ExitStack()
+        context_entered = False
         failure_info = (None, None, None)
         try:
             while True:
                 batch = self._next_batch()
                 if not batch:
                     return
+                if self._worker_context is not None and not context_entered:
+                    resources.enter_context(self._worker_context())
+                    context_entered = True
                 dataset_id = batch[0].request.dataset_id
                 if dataset_id not in self._replays:
                     replay = resources.enter_context(self._factories[dataset_id]())
