@@ -11,6 +11,8 @@ passivbot tool gpu-cohort-benchmark --seeds 7 43 --report cohort.json
 passivbot tool gpu-cohort-benchmark --strategies ema_anchor --coins 2 --bars 512 \
   --candidates 3 --warm-runs 1 --widths 1 2 auto
 passivbot tool gpu-cohort-benchmark --adg-floor 0 --drawdown-ceiling 0.01
+passivbot tool gpu-cohort-benchmark --metrics strategy_eq_recovery_days_p95 \
+  volume_pct_per_day_avg_w --limit fills_gap_p95_hours greater_than 0.05
 ```
 
 Defaults use both strategies, four coins, both sides, 10,080 one-minute candles,
@@ -27,9 +29,31 @@ maximum. Optional diagnostic limits use canonical feasibility calculations; thes
 are explicit measurement thresholds, not the constraints of a production search.
 Missing or non-finite objectives leave ranking unassessed.
 
-Native service results must match direct GPU metrics and liquidation status exactly,
-for every width and repeated cohort. Requests are consumed individually through
-their futures and checked against the submitted identity. Successful batch sizes
+`--metrics` adds requested GPU work to the three core metrics; it does not replace
+ADG/drawdown ranking or fills/day comparisons. This enables measurements of opt-in
+histories/reductions and their resource cost. Repeat `--limit METRIC MODE VALUE` to
+add canonical scalar diagnostic checks; modes are `less_than` and `greater_than`.
+Limit metrics are automatically requested from both simulators. The convenience
+`--adg-floor` and `--drawdown-ceiling` options remain available. These are measurement
+thresholds, not a production search configuration or optimizer policy.
+
+`--tolerances policy.json` uses the same explicit per-metric format as
+[`gpu-parity`](gpu_parity.md#policies-and-reports). The resolved policies appear in
+the report; the policy file path is omitted. Added metrics have no tolerance unless
+one is provided or already has a provisional parity policy. Undefined policies remain
+`unassessed`; they never become matches. Strict numerical comparisons and canonical
+feasibility are separate, so an allowed error can still produce a limit flip.
+Additional metric comparisons/limits do not extend the two-objective ranking test.
+
+Native service results must retain the direct GPU metric keys and liquidation status
+exactly. Finite metric differences may be at most eight float64 rounding units, using
+the larger `math.ulp` of the two values. The fixed `native_reference_policy` and each
+accepted difference's count, maximum absolute error and maximum rounding units appear
+in the report. `matches_direct_gpu_exactly` remains false when rounding is observed;
+`matches_direct_gpu` records agreement under this machine-scale policy. A float32 ULP
+of replay drift exceeds this bound. CPU/GPU tolerance policies remain separate.
+Requests are consumed individually through their futures and checked against the
+submitted identity. Successful batch sizes
 and controller evidence distinguish configured width from actual demand; a final
 automatic width alone is not evidence that tuning improved performance.
 The tuning report preserves cumulative eligible samples/seconds and completed
@@ -141,3 +165,91 @@ GPU usage ranged from 344 to 963 MiB. This includes runtime/compiler allocations
 existing device usage; it is not a per-service VRAM maximum or a bound. Sampling can
 miss transient peaks. The earlier Torch-only figures substantially understate total
 resource use, and representative larger suites remain a separate acceptance gate.
+
+## Refresh after bounded allowance and HSL integration
+
+The same seven-day, four-coin, both-side, sixteen-candidate recipe runs on the integrated
+bounded-allowance/HSL implementation with HSL disabled. The full strict metric rows,
+ranking and diagnostic-limit results are unchanged from the prior refresh. Evaluation
+and candidate-parameter digests change with the policy/schema update; these are fresh
+measurements, not old fitness reused under a new implementation identity.
+
+| Strategy | Seed | CPU serial | Direct GPU | Native width 16 | Automatic |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| EMA Anchor | 7 | 1.129 | 0.678 | 0.674 | 0.681 |
+| EMA Anchor | 43 | 1.129 | 0.677 | 0.681 | 0.683 |
+| Trailing Martingale | 7 | 9.040 | 2.508 | 2.516 | 2.513 |
+| Trailing Martingale | 43 | 9.239 | 2.500 | 2.517 | 2.507 |
+
+Values are median warm cohort seconds on the same GPU/runtime. This remains a
+comparable-cost foundation rather than evidence of a speedup. Native/direct outputs
+match exactly, fronts agree, the selected maximum has zero CPU ADG regret, and the
+ADG/drawdown diagnostic checks have no feasibility flips. Strict passes remain 2/16
+and 6/16 for EMA and 0/16 for TM; EMA seed 43 retains three ADG and two drawdown
+pair-order disagreements. Automatic width again has zero eligible tuning samples.
+
+The run starts with an empty CuPy cache using the earlier recipe. The first strategy
+case takes 34.40 seconds for EMA and 46.98 for TM; second-seed cases reuse that cache.
+Native first-use runs still follow direct warmup. These timings do not measure a cold
+CUDA context or native-first compiler path, enabled HSL, or optional-history resource cost.
+
+A requested-metric TM seed-43 cohort exposed weighted ADG values
+`0.021492166751842533` and `0.021492166751842512` at batch sizes 16 versus 1+15.
+The difference is `2.08e-17`, or six float64 rounding units. A controlled replay
+verifies identical daily equity summaries, timestamps, fill counts and drawdowns; only
+the float64 reduction result differs. The CUDA regression preserves those exact raw
+inputs and bounds metric rounding. Material changes, missing metrics, changed
+liquidation, non-finite disagreements and errors outside the stated bound still fail
+with bounded per-metric diagnostics. This observation does not widen CPU parity gates.
+
+
+## Optional metric cohort measurements
+
+The integrated implementation also runs eleven requested metrics, including per-step
+recovery and weighted-volume captures. Reproduce the four strategy/seed cohorts with:
+
+```sh
+passivbot tool gpu-cohort-benchmark --seeds 7 43 --widths 16 auto --warm-runs 3 \
+  --adg-floor 0 --drawdown-ceiling 0.01 --metrics \
+  drawdown_worst_mean_1pct_strategy_eq drawdown_worst_mean_1pct_ema_strategy_eq \
+  fills_gap_p95_hours adg_strategy_eq_w strategy_eq_recovery_days_mean \
+  strategy_eq_recovery_days_p95 strategy_eq_recovery_days_mean_worst_1pct \
+  volume_pct_per_day_avg_w --limit fills_gap_p95_hours greater_than 0.05 \
+  --limit strategy_eq_recovery_days_p95 greater_than 0.05 \
+  --limit drawdown_worst_mean_1pct_ema_strategy_eq greater_than 0.01 \
+  --report optional-cohort.json
+```
+
+Median warm cohort seconds on the same GPU/runtime:
+
+| Strategy | Seed | CPU serial | Direct GPU | Native width 16 | Automatic |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| EMA Anchor | 7 | 1.116 | 0.704 | 0.699 | 0.709 |
+| EMA Anchor | 43 | 1.122 | 0.702 | 0.713 | 0.719 |
+| Trailing Martingale | 7 | 8.986 | 2.531 | 2.539 | 2.547 |
+| Trailing Martingale | 43 | 9.203 | 2.515 | 2.525 | 2.533 |
+
+All native/direct comparisons satisfy the stated machine-scale policy. TM seed 43
+reports one six-unit weighted-ADG difference in each native mode, so those modes
+explicitly report nonexact agreement. Other cases are exact. Core CPU/GPU comparison
+rows and the ADG/drawdown ranking match the preceding refresh exactly. These five
+diagnostic limits produce no feasibility flips in the tested cohorts; that does not
+prove decisions near other thresholds or ranking with recovery/volume objectives.
+Automatic width still has zero eligible tuning samples.
+
+Added CPU/GPU metrics remain unassessed without explicit policies. EMA seed 7/43
+maximum fill-gap p95 errors are three/two minutes; maximum worst-one-percent mean
+recovery errors are about 93/58 minutes (CPU tail means about 3.38/5.55 days in those
+candidates). Maximum absolute weighted-volume errors are approximately 0.00012/0.00624
+for EMA and 0.319/0.153 for TM. These residuals need materiality assessment; they are
+not resolved by allowing tiny float64 GPU-reference rounding. HSL is disabled here,
+so its EMA tail is trivially zero and provides no HSL-controller or tail acceptance.
+
+Per-service Torch peak allocated memory is roughly 4.86 MiB with requested histories.
+A separate observer samples the whole benchmark process tree every 0.2 seconds and
+global GPU memory every second: sampled peak RSS is 1,040 MiB, and global GPU usage
+ranges from 344 to 1,029 MiB. Runtime/compiler and existing device use are included;
+these sampled whole-run values are not per-service bounds and can miss transients.
+The compiler cache is already warm, native runs still follow direct warmup, and this
+small fixed-cohort experiment does not close larger-suite resource, cold-native,
+default tuning or repeated-seed search-quality acceptance.

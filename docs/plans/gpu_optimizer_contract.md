@@ -1425,3 +1425,29 @@ Completion requires:
 - Automatic review caught a renamed HSL member in a generated selection probe.
   Correct it to `scale_hsl_budget`; the exact selection-phase regression compiles
   and passes on CUDA. Production source is unchanged by this review correction.
+
+
+### 2026-10-06 — Requested-metric cohorts and numerical reference checks
+
+- PR #1911 integrated master into development after addressing the generated HSL
+  probe finding, completed final-head automatic review, author sign-off and all
+  required CI. Development retains the reviewed tree; master receives no redesign.
+- Extend the standalone cohort tool with requested GPU metrics, resolved explicit
+  tolerance policies and repeatable canonical scalar limits. Keep the three core
+  comparisons and ADG/drawdown ranking; added objectives are not silently treated
+  as covered ranking dimensions. Undefined policies remain unassessed.
+- Refresh four public seven-day cohorts on the integrated simulator. Core comparison
+  rows, ranking and tested limit outcomes remain unchanged. Optional recovery and
+  weighted-volume captures are measured separately; broader materiality, HSL-tail,
+  suite resources and completed-work tuning remain open.
+- A 16-versus-1+15 TM replay retains identical raw daily summaries, timestamps,
+  fills and drawdowns but differs by six float64 units in weighted ADG. Allow at most
+  eight float64 units only in the tool's native/direct GPU reference check; report
+  each accepted discrepancy and distinguish exact agreement. Preserve CPU/GPU
+  policies, identity/liquidation checks and failure on larger/non-finite differences.
+- Validation passes 122 affected comparison/cohort Python and CUDA checks, plus the
+  new exact-raw-replay batch-shape regression. Seven-day requested-metric cohorts
+  pass execution with explicit numerical observations; CPU/GPU parity is not declared
+  generally accepted. Documentation and final source checks precede publication.
+- This tool slice requires completed exact-head automatic/author review and successful
+  required CI before development integration. Overall legacy-retirement gates stay open.
