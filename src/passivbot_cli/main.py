@@ -150,6 +150,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "compare offline CPU/GPU backtest metrics (requires full install)",
         requires_full=True,
     ),
+    "gpu-cohort-benchmark": CommandSpec(
+        "tools.gpu_cohort_benchmark",
+        "measure offline CPU/GPU cohorts and native CUDA service latency (requires full install)",
+        requires_full=True,
+    ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",
         "summarize local live monitor events and text logs",
