@@ -383,6 +383,11 @@ The supported slice is intentionally narrow:
   executable minimum cost. Filtering occurs before Forager selection and one-way side arbitration;
   held positions remain managed. An unaffordable coin does not permanently block other flat slots,
   and EMA selection refreshes cost eligibility each candle when filtering is enabled.
+  Multicoin admission uses float32 arithmetic. Inputs inside the same float32 rounding
+  cell can straddle the CPU float64 minimum-cost boundary and produce different admission
+  decisions. The parity tool reports such discontinuities without widening metric tolerances.
+  Boundary coverage checks affordable equality and cases on both sides; it does not impose
+  a conservative exclusion margin that would also reject affordable equality.
   The single-coin screening proxy compares against its highest executable minimum over the prepared
   window, rounds that threshold upward, and discounts the projected float32 product so boundary
   rounding cannot turn a just-below-threshold proxy projection into an admission. To remain

@@ -324,3 +324,14 @@ Completion requires:
   23 CUDA admission regressions and 37 parity-tool tests pass. Ten asynchronous-service
   and temporal-replay cases pass, including partial tails and 3/28/64-coin layouts after
   removing the obsolete serialized state. Source-only parity tests: 30 pass, seven skips.
+- Reviewed minimum-cost rounding explicitly: with two markets at price 100 and minimum
+  cost 5, initial quantity 0.01 admits in both engines; its immediately lower float64
+  neighbor is rejected on CPU but rounds to the same admitted GPU payload. Cases 0.01%
+  below/above the boundary agree. Retain native float32 admission and expose ambiguous
+  threshold discontinuities, rather than adding a screening-style conservative margin
+  that would also reject affordable equality. This is a bounded input-quantization
+  limitation; its potentially large metric effect remains a mismatch in reports.
+- Added paired boundary coverage for both strategies. These tests require agreement at
+  equality and outside the ambiguous rounding cell, and truthful mismatch reporting
+  when an ambiguous input produces different simulation paths. No global tolerance or
+  implicit CPU fallback is introduced.
