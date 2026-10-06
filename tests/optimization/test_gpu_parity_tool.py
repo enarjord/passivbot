@@ -55,7 +55,7 @@ def test_prepared_inputs_reject_market_exchange_mismatch(tmp_path):
     paths, _config, markets, _candles = _prepared_fixture_files(tmp_path)
     markets["COIN01"]["exchange"] = "bybit"
     paths[1].write_text(json.dumps(markets))
-    with pytest.raises(ValueError, match="market exchange"):
+    with pytest.raises(ValueError, match="candle exchange"):
         gpu_parity.prepared_inputs(_prepared_options(paths))
 
 
@@ -82,7 +82,7 @@ def test_prepared_inputs_preserve_combined_exchange_sources(tmp_path, forced):
     if forced:
         markets["COIN01"]["exchange"] = "bybit"
         paths[1].write_text(json.dumps(markets))
-        with pytest.raises(ValueError, match="market exchange.*coin_sources"):
+        with pytest.raises(ValueError, match="candle exchange.*coin_sources"):
             gpu_parity.prepared_inputs(_prepared_options(paths, "--exchange", "combined"))
 
 
@@ -98,6 +98,44 @@ def test_prepared_inputs_reject_other_declared_exchange_and_missing_market_venue
     paths[1].write_text(json.dumps(markets))
     with pytest.raises(ValueError, match="market exchange"):
         gpu_parity.prepared_inputs(_prepared_options(paths))
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_prepared_inputs_preserve_independent_settings_source_and_producer_fallback(tmp_path, fallback):
+    paths, config, markets, candles = _prepared_fixture_files(tmp_path)
+    config["backtest"].update(
+        exchanges=["binance", "bybit"], coins={"combined": ["COIN00", "COIN01"]},
+        coin_sources={"COIN01": "binanceusdm"},
+        market_settings_sources={"COIN01": "okx"},
+    )
+    markets["COIN01"].update(exchange="binance" if fallback else "okx", ohlcv_source="binance")
+    paths[0].write_text(json.dumps(config))
+    paths[1].write_text(json.dumps(markets))
+    prepared = gpu_parity.prepared_inputs(_prepared_options(paths, "--exchange", "combined"))
+    assert prepared[2]["COIN01"] == markets["COIN01"]
+    np.testing.assert_array_equal(prepared[1], candles)
+
+
+@pytest.mark.parametrize("problem", ["forced_candles", "unconfigured_candles", "settings"])
+def test_prepared_inputs_validate_candle_and_settings_venues_independently(tmp_path, problem):
+    paths, config, markets, _candles = _prepared_fixture_files(tmp_path)
+    config["backtest"].update(
+        exchanges=["binance", "bybit"], coins={"combined": ["COIN00", "COIN01"]},
+        coin_sources={"COIN01": "binance"}, market_settings_sources={"COIN01": "okx"},
+    )
+    markets["COIN01"].update(exchange="binance", ohlcv_source="bybit")
+    message = "candle exchange.*coin_sources"
+    if problem == "settings":
+        markets["COIN01"].update(exchange="bybit", ohlcv_source="binance")
+        message = "market exchange.*market_settings_sources"
+    elif problem == "unconfigured_candles":
+        config["backtest"]["coin_sources"] = {}
+        markets["COIN01"].update(exchange="okx", ohlcv_source="okx")
+        message = "candle exchange.*data sources"
+    paths[0].write_text(json.dumps(config))
+    paths[1].write_text(json.dumps(markets))
+    with pytest.raises(ValueError, match=message):
+        gpu_parity.prepared_inputs(_prepared_options(paths, "--exchange", "combined"))
 
 
 @pytest.mark.parametrize("problem", ["coin_order", "config_exchange", "market_exchange"])

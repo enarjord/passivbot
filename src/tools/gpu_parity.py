@@ -146,7 +146,9 @@ def prepared_inputs(args):
         raise ValueError("fixture-only options cannot be used with --config: " + ", ".join(specified))
     import numpy as np
     from config import load_input_config, prepare_config
+    from hlcv_preparation import _filter_forced_sources_for_coins, _filter_market_settings_sources_for_coins
     from optimization.warmup import _apply_config_overrides
+    from utils import to_standard_exchange_name
 
     if not args.dataset or not args.markets:
         raise ValueError("--config requires --dataset and --markets")
@@ -165,7 +167,7 @@ def prepared_inputs(args):
         config = prepare_config(
             config, raw_snapshot=deepcopy(config), verbose=False, target="canonical", runtime=None
         )
-    exchanges = config["backtest"]["exchanges"]
+    exchanges = [to_standard_exchange_name(value) for value in config["backtest"]["exchanges"]]
     expected_exchange = "combined" if len(exchanges) > 1 else exchanges[0]
     if args.exchange != expected_exchange:
         raise ValueError("prepared exchange must match effective config.backtest.exchanges "
@@ -193,16 +195,34 @@ def prepared_inputs(args):
     if timestamps.shape != (len(hlcvs),) or btc.shape != timestamps.shape:
         raise ValueError("dataset timestamps/BTC prices must align with candle rows")
     markets = json.loads(Path(args.markets).read_text())
-    allowed_sources = set(exchanges)
-    forced_sources = config["backtest"].get("coin_sources", {})
+    forced_sources, settings_sources = {}, {}
     if args.exchange == "combined":
-        allowed_sources.update(forced_sources.values())
+        forced_sources = {
+            coin: to_standard_exchange_name(venue) for coin, venue in
+            _filter_forced_sources_for_coins(config["backtest"].get("coin_sources", {}), ordered).items()
+        }
+        settings_sources = {
+            coin: to_standard_exchange_name(venue) for coin, venue in
+            _filter_market_settings_sources_for_coins(
+                config["backtest"].get("market_settings_sources", {}), ordered
+            ).items()
+        }
     for coin in ordered:
         market_exchange = markets[coin].get("exchange")
-        if market_exchange not in allowed_sources:
-            raise ValueError(f"prepared market exchange for {coin} must match config data sources")
-        if args.exchange == "combined" and coin in forced_sources and market_exchange != forced_sources[coin]:
-            raise ValueError(f"prepared market exchange for {coin} must match config.backtest.coin_sources")
+        if not isinstance(market_exchange, str) or not market_exchange:
+            raise ValueError(f"prepared market exchange for {coin} is required")
+        market_exchange = to_standard_exchange_name(market_exchange)
+        candle_exchange = to_standard_exchange_name(markets[coin].get("ohlcv_source", market_exchange))
+        allowed_candles = {forced_sources[coin]} if coin in forced_sources else set(exchanges)
+        if candle_exchange not in allowed_candles:
+            field = "coin_sources" if coin in forced_sources else "exchanges/data sources"
+            raise ValueError(f"prepared candle exchange for {coin} must match config.backtest.{field}")
+        # Combined preparation may use a separate settings venue, or explicitly
+        # fall back to the candle venue when that settings source is unavailable
+        # or has a different denomination. Preserve this producer-resolved input.
+        allowed_settings = {settings_sources.get(coin, candle_exchange), candle_exchange}
+        if market_exchange not in allowed_settings:
+            raise ValueError(f"prepared market exchange for {coin} must match config.backtest.market_settings_sources")
     return config, hlcvs, markets, btc, timestamps
 
 

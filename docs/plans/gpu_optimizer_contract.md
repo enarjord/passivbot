@@ -421,3 +421,12 @@ Completion requires:
   with 16 device skips. CLI regressions prove invalid identities fail before simulation,
   and a valid prepared nondefault-venue input reproduces its synthetic CPU/GPU metrics.
   Documentation checks have zero errors and two existing size warnings.
+- Current-head auto review caught a further distinction: `exchange` identifies market
+  settings while `ohlcv_source` identifies candles when they differ. Validate candle
+  assignments against configured/forced data sources and settings independently against
+  `market_settings_sources`; preserve the producer's documented settings-to-candle
+  fallback. Reuse offline source-key reconciliation and normalize venue names. Added
+  valid independent/fallback and incorrect candle/settings-source regressions before
+  changing the guards. This review finding is addressed before integration.
+- After source-role correction, 70 CUDA comparator/tool tests pass; source-only checks
+  pass 54 with 16 device skips. No simulator or tolerance-policy changes in this slice.

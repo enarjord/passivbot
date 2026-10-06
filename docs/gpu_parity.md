@@ -47,9 +47,12 @@ when preparing the NPZ. Object/pickle arrays are rejected. If the raw config dec
 is the normal prepared market-settings mapping, including quantity/price steps,
 minima, fees, valid indices, warmup, explicit per-coin `exchange` and
 `__meta__.requested_start_ts`. `--exchange` must match the effective config's sole
-exchange, or be `combined` for multiple exchanges. Market venues must belong to those
-data sources; combined datasets also honor explicit `backtest.coin_sources`. The
-Binance default does not infer or relabel a prepared dataset's exchange.
+exchange, or be `combined` for multiple exchanges. Candle venues use `ohlcv_source`,
+falling back to the market `exchange` when absent, and must match the configured data
+sources and explicit combined `backtest.coin_sources`. Market settings may independently
+use `backtest.market_settings_sources`. Combined preparation's documented fallback to
+the candle venue is accepted as already resolved metadata; the tool does not fetch or
+substitute settings. The Binance default does not infer or relabel a prepared exchange.
 
 Preserve effective candidate/scenario settings and dataset preparation metadata.
 Fixture switches (`--sides`, `--coins`, `--bars`, `--seed`, `--hsl`, `--unstuck`,
