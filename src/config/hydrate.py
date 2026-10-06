@@ -244,6 +244,24 @@ def apply_non_live_adjustments(
             result["live"].get("filter_by_min_effective_cost", False)
         )
 
+    normalize_optimizer_settings(
+        result,
+        verbose=verbose,
+        tracker=tracker,
+        raw_optimize_limits=raw_optimize_limits,
+        raw_optimize_limits_present=raw_optimize_limits_present,
+    )
+
+
+def normalize_optimizer_settings(
+    result: dict,
+    *,
+    verbose: bool = True,
+    tracker=None,
+    raw_optimize_limits: Any = None,
+    raw_optimize_limits_present: Optional[bool] = None,
+) -> None:
+    """Normalize optimizer policy without resolving dates or coin-list files."""
     result["optimize"]["scoring"] = [
         spec.to_config() for spec in extract_objective_specs(result)
     ]

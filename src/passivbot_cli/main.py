@@ -272,6 +272,9 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "streamline-json": CommandSpec(
         "tools.streamline_json", "reformat config or result JSON"
     ),
+    "clean-config": CommandSpec(
+        "tools.clean_config", "clean/export configs or format JSON with explicit output paths"
+    ),
     "trailing-inspect": CommandSpec(
         "tools.trailing_inspect",
         "explain trailing_martingale entry and close thresholds",
