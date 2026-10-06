@@ -361,3 +361,9 @@ Completion requires:
   admission/asynchronous-service/temporal-reuse cases, including 3/28/64-coin layouts.
   Source-only comparator/tool tests: 38 pass, nine device skips. Documentation checks
   report no errors and two existing context-size warnings.
+- Review corrections: label the original large parity gaps as historical and record
+  the repeated matrix's current residual differences. Reject Boolean absolute/relative
+  tolerance values before simulation, because JSON `true` must not become an allowed
+  absolute error of 1. Four policy-field regressions and a CLI pre-execution check pass;
+  the combined CUDA comparator/tool suite now passes 60 tests (source-only: 43 pass,
+  seventeen device skips).

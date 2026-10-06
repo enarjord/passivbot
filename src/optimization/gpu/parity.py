@@ -13,6 +13,8 @@ class MetricTolerance:
 
     def __post_init__(self):
         for value in (self.absolute, self.relative):
+            if isinstance(value, bool):
+                raise TypeError("metric tolerances must be numeric, not boolean")
             if not math.isfinite(value) or value < 0:
                 raise ValueError("metric tolerances must be finite and non-negative")
         if not isinstance(self.matching_infinity, bool):

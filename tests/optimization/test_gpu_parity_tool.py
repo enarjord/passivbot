@@ -84,6 +84,23 @@ def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys):
     assert report["error"]["message"] == "device launch failed"
 
 
+def test_main_rejects_boolean_policy_before_simulation(monkeypatch, capsys, tmp_path):
+    from types import SimpleNamespace
+    import sys
+    monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
+        validate_gpu_metric_names=lambda names: names,
+    ))
+    def simulation_forbidden(*_args, **_kwargs):
+        pytest.fail("invalid numeric policy must not start a comparison")
+    monkeypatch.setattr(gpu_parity, "run_comparison", simulation_forbidden)
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"fills_per_day": {"absolute": True, "relative": False}}))
+    assert gpu_parity.main(["--fixture", "ema_anchor", "--tolerances", str(policy)]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "input_failed"
+    assert report["error"]["type"] == "TypeError"
+
+
 def test_cli_help_does_not_need_optional_gpu_runtime(capsys):
     with pytest.raises(SystemExit) as completed:
         gpu_parity.main(["--help"])
