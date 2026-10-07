@@ -2379,3 +2379,25 @@ Completion requires:
   optimal-width claim follows. Keep demand-limited tuning and cutover gates open.
 - Require final cancellation/capacity and real CUDA optimizer interrupt/resume
   checks, current-head author/automatic review and CI before integration.
+
+### 2026-10-07 — Isolate CPU request preparation
+
+- Move the unchanged NumPy synthetic candle generator out of the legacy benchmark
+  and share it with parity fixtures. Import the GPU device helper only when packing
+  device tensors, leaving canonical parameter transport and candidate planning
+  independent of execution modules.
+- Four fresh-process cases prepare actual requests for both strategies, with coin
+  HSL enabled/disabled and unstuck enabled, while GPU imports and CPU simulations
+  are forbidden. The prior fixture and model dependencies independently reproduce
+  failures under those guards. Representative short/long fixture arrays retain
+  identical bytes. Preparation checks alone do not certify CPU entry points or
+  authorize retirement.
+- Add six permanent CPU compatibility cases: both strategies generate actual
+  backtest exports and PNG plots; both CPU optimizers start and resume two real
+  workers for each strategy. Install the GPU-import guard at interpreter startup
+  so it applies to forkserver/spawn workers as well as fork, without changing the
+  platform's default context. Preparation, planning, offline tooling, packing-cache
+  and documentation checks additionally cover affected consumers. Single-coin
+  CUDA packing, worker-owned multicoin execution and CPU-forbidden optimizer
+  interruption/resume pass for both strategies. Require current-head author/
+  automatic review and CI before development integration.

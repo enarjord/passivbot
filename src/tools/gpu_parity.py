@@ -66,7 +66,7 @@ def fixture_inputs(args):
     from config import prepare_config
     from config.schema import get_template_config
     from config.hsl import generated_template
-    from tools.gpu_proxy_benchmark import _synthetic_hlcvs
+    from tools.synthetic_backtest_data import synthetic_hlcvs
 
     args = argparse.Namespace(**vars(args))
     for name, default in FIXTURE_DEFAULTS.items():
@@ -75,7 +75,7 @@ def fixture_inputs(args):
     if not 1 <= args.coins <= 64 or not 61 <= args.bars <= 100_000:
         raise ValueError("fixtures require 1..64 coins and 61..100000 bars")
     coins = [f"COIN{i:02d}" for i in range(args.coins)]
-    hlcvs, timestamps = _synthetic_hlcvs(args.bars, args.coins, args.seed)
+    hlcvs, timestamps = synthetic_hlcvs(args.bars, args.coins, args.seed)
     # The canonical backtest end date has UTC-day precision. Align the synthetic
     # exclusive endpoint to midnight so both engines see exactly the same span,
     # including small fixtures which do not contain a whole number of days.

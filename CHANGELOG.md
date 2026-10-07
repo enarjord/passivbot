@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Prepare native GPU requests and offline parity fixtures without importing GPU
+  runtime or legacy benchmark modules. Synthetic candle generation is shared by
+  the comparison tools without changing fixture values.
+
 - Native CUDA optimization can fill the first backtest dispatch with queued compatible
   requests after worker-owned data preparation discovers its safe capacity, avoiding
   a forced single-candidate simulation for every new dataset.
