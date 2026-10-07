@@ -471,6 +471,25 @@ inline int hsl_report_tier(thread const HslState& h) {
     return h.enabled && (h.red_active_now || h.halted) ? 3 : 0;
 }
 
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+// The public portfolio EMA series observes the maximum current signal on each
+// bar. Reducing each side's tail first would discard their joint time ordering.
+inline float observed_multicoin_hsl_ema(
+    thread const HslState& aggregate, thread const HslState* coins,
+    int coin_count, int effective_n_positions
+) {
+    if (effective_n_positions <= 0) return 0.0f;
+    if (aggregate.signal_mode != HSL_SIGNAL_COIN) {
+        return aggregate.enabled ? fabs(aggregate.drawdown_ema) : 0.0f;
+    }
+    float value = 0.0f;
+    for (int c = 0; c < coin_count; ++c) {
+        if (coins[c].enabled) value = fmax(value, fabs(coins[c].drawdown_ema));
+    }
+    return value;
+}
+#endif
+
 // Reporting runs after forced closes and never advances the trading controller.
 // A negative tier means this side has no enabled reporting scope.
 inline int record_multicoin_hsl_report(

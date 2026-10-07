@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- GPU shared-account backtests now reduce portfolio HSL EMA tails from simultaneous
+  bar signals, preserving stresses on different sides instead of taking the maximum
+  of separately reduced side tails.
+
 - Shared GPU raw strategy ADG, MDG, growth-quality and risk-adjusted growth
   metrics use raw daily equity closes and minima, retaining terminal losses beyond
   account liquidation clamping. Capture only requested daily summaries and preserve

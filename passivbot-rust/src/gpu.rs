@@ -790,12 +790,12 @@ mod tests {
         assert!(!source.contains("multicoin_min_cost_rejection_possible"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
-        assert!(source.contains("constant int SCALAR_COLS = 61"));
-        assert!(source.contains("constant int SCALAR_COLS = 63"));
-        assert!(source.contains("constant int SCALAR_COLS = 67"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 68"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 72"));
+        assert!(source.contains("constant int SCALAR_COLS = 62"));
+        assert!(source.contains("constant int SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 68"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 67"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 69"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 73"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
@@ -1259,12 +1259,12 @@ mod tests {
         assert!(source.contains("filter_by_min_effective_cost, account.balance"));
         assert!(!source.contains("min_cost_exact_open_uncertain"));
         assert!(!source.contains("multicoin_min_cost_rejection_possible"));
-        assert!(source.contains("constant int SCALAR_COLS = 61"));
-        assert!(source.contains("constant int SCALAR_COLS = 63"));
-        assert!(source.contains("constant int SCALAR_COLS = 67"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 68"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 72"));
+        assert!(source.contains("constant int SCALAR_COLS = 62"));
+        assert!(source.contains("constant int SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 68"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 67"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 69"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 73"));
         assert_eq!(
             source
                 .matches("struct TrailingMartingaleMulticoinSideState")

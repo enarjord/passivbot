@@ -92,16 +92,20 @@ def test_compact_account_results_precede_aliases_and_raw_replacements(monkeypatc
 
 
 def _runner_context(strategy, sides, *, requested=(), chunked=False,
-                    raw_growth=False, raw_risk=False, btc_risk=False):
+                    raw_growth=False, raw_risk=False, btc_risk=False, hsl_tail=False, shock=False):
     from test_gpu_mps import _multicoin_exposure_fixture
     from optimization.gpu.mps_kernel import (
         MpsEmaAnchorMulticoinRunner, MpsEmaAnchorMulticoinFusedRunner,
         MpsTrailingMartingaleMulticoinRunner, MpsTrailingMartingaleMulticoinFusedRunner,
     )
     count = 1513
+    closes = np.tile([100., 120.], (count, 1))
+    if shock:
+        closes[100:700, 0] *= .7
+        closes[200:800, 1] *= 1.3
     _, row, run, data = _multicoin_exposure_fixture(
         strategy, "long" if sides == "both" else sides,
-        count=count, requested_start_index=31, return_context=True,
+        count=count, requested_start_index=31, return_context=True, closes=closes,
     )
     cls = {
         ("ema_anchor", False): MpsEmaAnchorMulticoinRunner,
@@ -109,10 +113,21 @@ def _runner_context(strategy, sides, *, requested=(), chunked=False,
         ("trailing_martingale", False): MpsTrailingMartingaleMulticoinRunner,
         ("trailing_martingale", True): MpsTrailingMartingaleMulticoinFusedRunner,
     }[strategy, sides == "both"]
+    if shock:
+        from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS if strategy == "ema_anchor" else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        for key, value in {"hsl_enabled": 1, "hsl_signal_mode": 2,
+                           "hsl_red_threshold": .01, "hsl_ema_span_minutes": 2.5,
+                           "hsl_cooldown_minutes_after_red": 5, "hsl_slot_count": 2,
+                           "hsl_restart_policy": 0}.items():
+            row[keys.index(key)] = value
     kwargs = dict(weighted_equity_metrics=requested, recovery_distribution_enabled=True,
+                  hsl_ema_tail_enabled=hsl_tail,
                   raw_strategy_growth_enabled=raw_growth, raw_strategy_risk_enabled=raw_risk,
                   btc_risk_enabled=btc_risk,
                   btc_prices=np.full(count, 30000.0) if btc_risk else None)
+    if shock:
+        kwargs["pnl_lookback_bars"] = 1440
     if sides != "both":
         kwargs["side"] = sides
     if chunked:

@@ -83,6 +83,7 @@ from optimization.gpu.model import (
 )
 
 CORE_OUTPUT_KEYS = {
+    "hsl_drawdown_ema_mean_worst_1pct_portfolio",
     *WEIGHTED_EQUITY_METRICS,
     "raw_strategy_day_max_dd",
     "raw_strategy_day_end_eq",
@@ -3389,6 +3390,12 @@ class MpsMulticoinProxy:
                 "raw_strategy_day_end_eq", "raw_strategy_day_min_eq"
             }.issubset(output):
                 raise RuntimeError("GPU raw strategy-equity daily summaries are missing")
+            if (
+                "drawdown_worst_mean_1pct_ema_strategy_eq" in self.needed_metrics
+                and (fused_runner is not None or len(self.sides) == 1)
+                and "hsl_drawdown_ema_mean_worst_1pct_portfolio" not in output
+            ):
+                raise RuntimeError("GPU portfolio HSL EMA-tail summary is missing")
             missing_weighted = set(self.weighted_equity_metrics) - set(output)
             if missing_weighted:
                 raise RuntimeError(

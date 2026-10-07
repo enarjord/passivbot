@@ -29,17 +29,17 @@ constant int DAILY_COLS = 12 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVB
 constant int DAILY_COLS = 9 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-constant int SCALAR_COLS = 67;
-constant int FUSED_SCALAR_COLS = 72;
+constant int SCALAR_COLS = 68;
+constant int FUSED_SCALAR_COLS = 73;
 #elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-constant int SCALAR_COLS = 65;
-constant int FUSED_SCALAR_COLS = 70;
+constant int SCALAR_COLS = 66;
+constant int FUSED_SCALAR_COLS = 71;
 #elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-constant int SCALAR_COLS = 63;
-constant int FUSED_SCALAR_COLS = 68;
+constant int SCALAR_COLS = 64;
+constant int FUSED_SCALAR_COLS = 69;
 #else
-constant int SCALAR_COLS = 61;
-constant int FUSED_SCALAR_COLS = 66;
+constant int SCALAR_COLS = 62;
+constant int FUSED_SCALAR_COLS = 67;
 #endif
 constant int GAP_BINS = 512;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -494,6 +494,7 @@ struct TrailingMartingaleMulticoinSideState {
     HslStrategyEquityStats hsl_strategy_eq;
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     HslDrawdownEmaTailStats hsl_ema_tail;
+    HslDrawdownEmaTailStats hsl_portfolio_ema_tail;
 #endif
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
@@ -2713,6 +2714,7 @@ inline void init_trailing_martingale_multicoin_side_state(
     side.hsl_strategy_eq = init_hsl_strategy_equity_stats();
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     side.hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
+    side.hsl_portfolio_ema_tail = init_hsl_drawdown_ema_tail_stats();
 #endif
     side.entry_deferred_twel_gate = false;
     side.max_tradable_seen = 0;
@@ -5198,6 +5200,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
     int liquidation_day = -1;
     HslTimeObservation hsl_time = init_hsl_time_observation();
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    HslDrawdownEmaTailStats portfolio_hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
+#endif
 
     int current_day = 0;
     bool day_touched = false;
@@ -5655,6 +5660,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 , short_side.hsl_ema_tail
 #endif
             );
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+            update_hsl_drawdown_ema_tail_stats(portfolio_hsl_ema_tail, fmax(
+                observed_multicoin_hsl_ema(long_side.hsl, long_side.coin_hsl,
+                    C, long_effective_n_positions),
+                observed_multicoin_hsl_ema(short_side.hsl, short_side.coin_hsl,
+                    C, short_effective_n_positions)));
+#endif
             if (long_tier >= 0 || short_tier >= 0) {
                 record_hsl_time_observation(hsl_time, float(k), max(long_tier, short_tier));
             }
@@ -5936,6 +5948,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         fills.pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = fills.held_count;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 3] =
+        hsl_drawdown_ema_mean_worst_1pct(portfolio_hsl_ema_tail);
+#endif
     scalars[scalar_offset + FUSED_SCALAR_COLS - 2] = fills.held_sum_sq_min *
         (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
     scalars[scalar_offset + FUSED_SCALAR_COLS - 1] = gap_sum_squared_hours;
@@ -6694,6 +6710,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 , side.hsl_ema_tail
 #endif
             );
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+            update_hsl_drawdown_ema_tail_stats(side.hsl_portfolio_ema_tail,
+                observed_multicoin_hsl_ema(hsl, coin_hsl, C, effective_n_positions));
+#endif
             if (sampled_tier >= 0) {
                 record_hsl_time_observation(hsl_time, float(k), sampled_tier);
             }
@@ -6997,6 +7017,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    scalars[scalar_offset + SCALAR_COLS - 3] =
+        hsl_drawdown_ema_mean_worst_1pct(side.hsl_portfolio_ema_tail);
+#endif
     scalars[scalar_offset + SCALAR_COLS - 2] = held_sum_sq_min *
         (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
     scalars[scalar_offset + SCALAR_COLS - 1] = gap_sum_squared_hours;

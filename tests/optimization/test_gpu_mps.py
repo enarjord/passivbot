@@ -61,6 +61,7 @@ from optimization.gpu.model import (
     build_mps_multicoin_data,
 )
 from optimization.gpu.mps_kernel import (
+    MPS_MULTICOIN_FUSED_SCALAR_COLS,
     MpsEmaAnchorMulticoinRunner,
     MpsEmaAnchorRunner,
     MpsEmaAnchorMulticoinFusedRunner,
@@ -379,7 +380,9 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     daily = torch.zeros((1, 1, 9), dtype=torch.float32)
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.arange(72, dtype=torch.float32).reshape(1, 72)
+    scalars = torch.arange(MPS_MULTICOIN_FUSED_SCALAR_COLS, dtype=torch.float32).reshape(
+        1, MPS_MULTICOIN_FUSED_SCALAR_COLS
+    )
     gaps = torch.zeros((1, GAP_BINS), dtype=torch.int32)
 
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
@@ -401,6 +404,9 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     assert torch.equal(output["hsl_drawdown_raw_max_short"], scalars[:, 67])
     assert torch.equal(output["hsl_drawdown_raw_mean_worst_1pct_long"], scalars[:, 68])
     assert torch.equal(output["hsl_drawdown_raw_mean_worst_1pct_short"], scalars[:, 69])
+    assert torch.equal(
+        output["hsl_drawdown_ema_mean_worst_1pct_portfolio"], scalars[:, 70]
+    )
 
 
 def test_hsl_ema_tail_source_variant_is_opt_in_and_guarded():
@@ -9611,7 +9617,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         raw_tail_enabled=True,
     )
     assert "kernel void passivbot_ema_anchor_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 72" in source
+    assert "constant int FUSED_SCALAR_COLS = 73" in source
 
     count = 512
     coin_count = 3
@@ -9744,7 +9750,11 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 72), dtype=torch.float32, device=gpu_device())
+    scalars = torch.zeros(
+        (batch_size, MPS_MULTICOIN_FUSED_SCALAR_COLS),
+        dtype=torch.float32,
+        device=gpu_device(),
+    )
     gaps = torch.zeros((batch_size, GAP_BINS), dtype=torch.int32, device=gpu_device())
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device=gpu_device()
@@ -9902,6 +9912,10 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         runner_output["hsl_drawdown_raw_mean_worst_1pct_short"],
         scalars[valid_indices, 69],
     )
+    torch.testing.assert_close(
+        runner_output["hsl_drawdown_ema_mean_worst_1pct_portfolio"],
+        scalars[valid_indices, 70],
+    )
     assert runner_output["alive"].cpu().tolist() == [
         True,
         True,
@@ -9964,6 +9978,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         "long": dict(zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, metric_rows[0][:width])),
         "short": dict(zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, metric_rows[0][width:])),
     }
+    proxy.weighted_equity_metrics = ()
     proxy.fused_runner = runner
     proxy.runners = {}
     candidates = [
@@ -9992,16 +10007,27 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     def reduce_service_output(output, *args, **kwargs):
         seen_hsl_triggers["long"] = output["hsl_triggers_long"].clone()
         seen_hsl_triggers["short"] = output["hsl_triggers_short"].clone()
+        seen_hsl_triggers["raw_long"] = output["hsl_drawdown_raw_max_long"].clone()
+        seen_hsl_triggers["raw_short"] = output["hsl_drawdown_raw_max_short"].clone()
+        seen_hsl_triggers["portfolio_ema"] = output[
+            "hsl_drawdown_ema_mean_worst_1pct_portfolio"
+        ].clone()
         return compute_objectives(output, *args, **kwargs)
 
     proxy._compute_objectives = reduce_service_output
     service_results = proxy.evaluate(candidates)
     assert (seen_hsl_triggers["long"] + seen_hsl_triggers["short"] > 0.0).all()
     assert all(item["hard_stop_triggers"] > 0.0 for item in service_results)
+    # Unified mode reports portfolio events without attributing them to a side.
+    assert [item["hard_stop_triggers"] for item in service_results] == pytest.approx(
+        (seen_hsl_triggers["long"] + seen_hsl_triggers["short"]).tolist()
+    )
+    assert service_results[0]["hard_stop_triggers_long"] == 0
+    assert service_results[0]["hard_stop_triggers_short"] == 0
     assert all(
         item["hard_stop_triggers"]
         == item["hard_stop_triggers_long"] + item["hard_stop_triggers_short"]
-        for item in service_results
+        for item in service_results[1:]
     )
     assert all(item["hard_stop_time_in_red_pct"] > 0.0 for item in service_results)
     assert all(
@@ -10016,19 +10042,21 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         )
         for item in service_results
     )
-    assert all(
-        item["drawdown_worst_mean_1pct_ema_strategy_eq"]
-        == max(
-            item["drawdown_worst_mean_1pct_ema_strategy_eq_long"],
-            item["drawdown_worst_mean_1pct_ema_strategy_eq_short"],
-        )
-        and item["drawdown_worst_mean_1pct_ema_strategy_eq"] > 0.0
-        for item in service_results
-    )
+    assert [
+        item["drawdown_worst_mean_1pct_ema_strategy_eq"] for item in service_results
+    ] == pytest.approx(seen_hsl_triggers["portfolio_ema"].tolist())
+    assert (seen_hsl_triggers["portfolio_ema"] > 0.0).all()
+    for side in ("long", "short"):
+        # A profitable side can have zero raw drawdown when unified HSL closes
+        # both sides early. Verify the factual replay summary, not positivity.
+        assert [
+            item[f"drawdown_worst_strategy_eq_{side}"] for item in service_results
+        ] == pytest.approx(seen_hsl_triggers[f"raw_{side}"].tolist())
+        assert (seen_hsl_triggers[f"raw_{side}"] >= 0.0).all()
     assert all(
         item["drawdown_worst_strategy_eq_long"] > 0.0
         and item["drawdown_worst_strategy_eq_short"] > 0.0
-        for item in service_results
+        for item in service_results[1:]
     )
     assert all(
         item["peak_recovery_hours_strategy_eq_long"] >= 0.0
@@ -10061,7 +10089,11 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 72), dtype=torch.float32, device=gpu_device())
+    override_scalars = torch.zeros(
+        (1, MPS_MULTICOIN_FUSED_SCALAR_COLS),
+        dtype=torch.float32,
+        device=gpu_device(),
+    )
     override_gaps = torch.zeros((1, GAP_BINS), dtype=torch.int32, device=gpu_device())
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device=gpu_device()
@@ -10211,7 +10243,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         raw_tail_enabled=True,
     )
     assert "kernel void passivbot_trailing_martingale_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 72" in source
+    assert "constant int FUSED_SCALAR_COLS = 73" in source
 
     count = 512
     coin_count = 3
@@ -10371,7 +10403,11 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 72), dtype=torch.float32, device=gpu_device())
+    scalars = torch.zeros(
+        (batch_size, MPS_MULTICOIN_FUSED_SCALAR_COLS),
+        dtype=torch.float32,
+        device=gpu_device(),
+    )
     gaps = torch.zeros((batch_size, GAP_BINS), dtype=torch.int32, device=gpu_device())
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device=gpu_device()
@@ -10521,6 +10557,10 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     torch.testing.assert_close(
         runner_output["hsl_drawdown_raw_max_short"], scalars[valid_indices, 67]
     )
+    torch.testing.assert_close(
+        runner_output["hsl_drawdown_ema_mean_worst_1pct_portfolio"],
+        scalars[valid_indices, 70],
+    )
     assert runner_output["alive"].cpu().tolist() == [
         True,
         True,
@@ -10594,6 +10634,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
             zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, metric_rows[0][width:])
         ),
     }
+    proxy.weighted_equity_metrics = ()
     proxy.fused_runner = runner
     proxy.runners = {}
     candidates = [
@@ -10622,6 +10663,9 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     def reduce_service_output(output, *args, **kwargs):
         seen_hsl_triggers["long"] = output["hsl_triggers_long"].clone()
         seen_hsl_triggers["short"] = output["hsl_triggers_short"].clone()
+        seen_hsl_triggers["portfolio_ema"] = output[
+            "hsl_drawdown_ema_mean_worst_1pct_portfolio"
+        ].clone()
         seen_hsl_triggers["samples"] = output["hsl_tier_samples_total"].clone()
         return compute_objectives(output, *args, **kwargs)
 
@@ -10645,15 +10689,10 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         )
         for item in service_results
     )
-    assert all(
-        item["drawdown_worst_mean_1pct_ema_strategy_eq"]
-        == max(
-            item["drawdown_worst_mean_1pct_ema_strategy_eq_long"],
-            item["drawdown_worst_mean_1pct_ema_strategy_eq_short"],
-        )
-        and item["drawdown_worst_mean_1pct_ema_strategy_eq"] > 0.0
-        for item in service_results
-    )
+    assert [
+        item["drawdown_worst_mean_1pct_ema_strategy_eq"] for item in service_results
+    ] == pytest.approx(seen_hsl_triggers["portfolio_ema"].tolist())
+    assert (seen_hsl_triggers["portfolio_ema"] > 0.0).all()
     assert all(
         item["drawdown_worst_strategy_eq_long"] > 0.0
         and item["drawdown_worst_strategy_eq_short"] > 0.0
@@ -10698,7 +10737,11 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 72), dtype=torch.float32, device=gpu_device())
+    override_scalars = torch.zeros(
+        (1, MPS_MULTICOIN_FUSED_SCALAR_COLS),
+        dtype=torch.float32,
+        device=gpu_device(),
+    )
     override_gaps = torch.zeros((1, GAP_BINS), dtype=torch.int32, device=gpu_device())
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device=gpu_device()

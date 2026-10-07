@@ -62,6 +62,15 @@ unsupported topology changes require a separately prepared dataset. The request 
 dataset IDs are caller-owned, run-local identities. The optimizer owns persistent
 content/evaluation fingerprints, precision stamps and resume compatibility separately.
 
+Portfolio `drawdown_worst_mean_1pct_ema_strategy_eq` observes the maximum enabled
+HSL scope signal on each completed reporting bar before reducing its worst 1%.
+Shared replay returns one compact portfolio-tail scalar; combining already reduced
+long/short tails loses their joint clock. Requested EMA tails use bounded histograms
+and remain compiled away when absent. Single-side temporal replay retains the
+observation summary across dispatches. The retained directional single-coin proxy
+still uses its historical side-tail reduction; native optimization requires the
+observed portfolio summary and rejects a missing payload.
+
 ## CPU completion scoring
 
 `optimization.native_results` collects identified scenario/exchange results for one

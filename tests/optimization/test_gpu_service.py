@@ -1365,7 +1365,7 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
         ),
     ],
 )
-@pytest.mark.parametrize("missing_summary", ["none", "raw", "growth", "calmar", "weighted"])
+@pytest.mark.parametrize("missing_summary", ["none", "raw", "growth", "calmar", "weighted", "portfolio_ema"])
 def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     param_keys, candidate_key, missing_summary
 ):
@@ -1385,6 +1385,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         "growth": {"adg_strategy_eq"},
         "calmar": {"calmar_ratio_strategy_eq"},
         "weighted": {"adg_strategy_eq_w"},
+        "portfolio_ema": {"drawdown_worst_mean_1pct_ema_strategy_eq"},
     }[missing_summary]
     proxy.weighted_equity_metrics = (
         ("adg_strategy_eq_w",) if missing_summary == "weighted" else ()
@@ -1442,6 +1443,11 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
 
     if missing_summary == "growth":
         with pytest.raises(RuntimeError, match="raw strategy-equity daily summaries are missing"):
+            proxy.evaluate(candidates)
+        return
+
+    if missing_summary == "portfolio_ema":
+        with pytest.raises(RuntimeError, match="portfolio HSL EMA-tail summary is missing"):
             proxy.evaluate(candidates)
         return
 
