@@ -1658,8 +1658,9 @@ Completion requires:
 ### 2026-10-07 — Remove deferred EMA selection
 
 - PR #1917 contains the validated HSL-ordering/terminal-reporting slice. Its
-  current-head automatic and author reviews complete without findings; required
-  CI remains a merge prerequisite. Keep the separate selection fix local.
+  current-head automatic and author reviews complete without findings. All three
+  required CI jobs pass; it merges into development at
+  `5f4b8284e8c229d503df0b6008c314784b46b75e`. Keep the separate selection fix local.
 - Baseline CUDA ranking probes reproduce stale flat selection on both EMA sides
   without a fill or eligibility transition; corresponding TM probes pass. The
   earlier native control reproduces the material short-only metric gap with HSL
@@ -1672,8 +1673,13 @@ Completion requires:
   native CPU/GPU comparisons across both directional sides, fused execution and
   disabled/coin/pside/unified HSL. Add four CPU-forbidden EMA optimizer CLI cases
   using starting seeds, prompt persistence, suite screening, interruption and resume.
-  Device validation remains pending. Rust passes
-  330 tests (one ignored) and default-feature checks for the current selection diff.
+  All twelve native parity cases pass against the source-verified CUDA build,
+  with the single baseline numerical bound documented below. All 203 focused CUDA
+  cases pass: twelve native comparisons and 191 replay/selection cases. All 36 real
+  optimizer CLI cases pass, including
+  four new EMA cases, with CPU simulations/pools forbidden and prompt results/
+  Pareto, screening, interruption and resume verified. Rust passes 330 tests
+  (one ignored) and default-feature checks for the current selection diff.
 
 - Original-source and corrected-kernel controls produce identical assessed metrics
   for the disabled-HSL long fixture. CPU/GPU ADG is 0.0053993594/0.0053984714:
@@ -1686,3 +1692,14 @@ Completion requires:
   disabled-HSL replay remains in scope; extending enabled HSL to coarser candles
   is not an initial cutover requirement. Sparse controller probes do not certify
   that unsupported simulation combination.
+
+- The broader replay run exposes four outdated EMA coin-HSL isolation assertions:
+  they expected both symbols flat after only one symbol stops. Four offline CPU
+  controls, with packed active parameters verified, retain the healthy coin on
+  both sides and for either stopped coin, matching corrected GPU replay. Require
+  one healthy open position for both strategies and preserve every stop-count,
+  panic-accounting and packed-slot invariance check. All fourteen isolated episode/
+  directional-smoke cases pass after correcting the six outdated assertions. The
+  final 203-case run passes with the same verified Rust/kernel bytes. Six
+  documentation tests pass; require clean publication, completed exact-head automatic/
+  author review and all three CI jobs before integrating this slice into development.

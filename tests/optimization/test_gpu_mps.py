@@ -6851,7 +6851,10 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
         expected_open_positions = 0.0
     else:
         assert (output["coin_fill_counts"][:, shock_coin] >= 2.0).all().item()
-        expected_open_positions = 1.0 if strategy_kind == "trailing_martingale" else 0.0
+        # A stopped coin cannot suppress the healthy flat coin's next entry.
+        # CPU replay and both GPU strategies leave that unaffected coin open.
+        assert (output["coin_fill_counts"][:, 1 - shock_coin] >= 1.0).all().item()
+        expected_open_positions = 1.0
     assert (output["open_positions"] == expected_open_positions).all().item()
     assert output["hsl_trigger_drawdown_sum"][0].item() == pytest.approx(
         output["hsl_trigger_drawdown_sum"][1].item()
@@ -7921,7 +7924,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "day_min_balance" in source
     assert "coin_override_or" in source
     assert "const float score_hysteresis = fmax(run_settings[4], 0.0f)" in source
-    assert "incumbent[c] = selected[c] && psize[c] <= 0.0f" in source
+    assert "incumbent[c] = side.entry_qty[c] > 0.0f && psize[c] <= 0.0f" in source
     assert "if (!selected[c] || incumbent[c] || !survivor[c]) continue" in source
     assert "score[challenger] - score[incumbent_coin]" in source
     count = 512
