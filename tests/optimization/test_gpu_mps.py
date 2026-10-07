@@ -3683,10 +3683,10 @@ def test_mps_single_coin_invalid_tail_matches_forced_delist_boundary(
         assert output["hsl_tier_samples_total"].item() == pytest.approx(
             expected_hsl_samples.item()
         )
-        # The delisting close itself is the RED terminal sample; once flat,
-        # subsequent bars are cooldown, not retained panic.
+        # A RED terminal close with restart_policy=never remains halted after
+        # flattening. Reporting counts that halt without retaining panic orders.
         assert output[f"hsl_triggers_{side}"].item() == 1.0
-        assert output["hsl_tier_samples_red"].item() == 0.0
+        assert output["hsl_tier_samples_red"].item() == count - last_valid - 1
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")

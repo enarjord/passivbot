@@ -57,3 +57,42 @@ kernel void hsl_elapsed_probe(constant float* rows, device float* output,
         rows, output, count, threads=1
     )
     assert output.cpu().tolist() == expected + expected
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_terminal_elapsed_advance_preserves_preceding_red_state(strategy):
+    torch = pytest.importorskip("torch")
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip("GPU required")
+    import passivbot_rust
+    from optimization.gpu.runtime import compile_shader, gpu_device
+
+    source = ("#define PASSIVBOT_HSL_CAPACITY 1\n#define PASSIVBOT_HSL_TREE_SIZE 1\n"
+              "#define PASSIVBOT_HSL_LOOKBACK 0\n"
+              + getattr(passivbot_rust, f"mps_{strategy}_multicoin_source_py")()
+              + r"""
+kernel void terminal_elapsed_probe(device float* output, uint b [[thread_position_in_grid]]) {
+    HslTimeObservation state = init_hsl_time_observation();
+    record_hsl_time_observation(state, 2, 0);
+    record_hsl_time_observation(state, 3, 3);
+    // A terminal mark has no new tier, but its elapsed interval remains RED.
+    advance_hsl_time_observation(state, 4);
+    advance_hsl_time_observation(state, 4);
+    output[0] = state.observed_steps;
+    output[1] = state.red_steps;
+    output[2] = state.was_red ? 1 : 0;
+    // A terminal fill at the preceding close has no additional interval.
+    HslTimeObservation at_fill = init_hsl_time_observation();
+    record_hsl_time_observation(at_fill, 2, 0);
+    record_hsl_time_observation(at_fill, 3, 3);
+    advance_hsl_time_observation(at_fill, 3);
+    output[3] = at_fill.observed_steps;
+    output[4] = at_fill.red_steps;
+}
+""")
+    device = gpu_device()
+    output = torch.zeros(5, dtype=torch.float32, device=device)
+    compile_shader(source, mps_coin_capacity=1, cuda_coin_capacity=1).terminal_elapsed_probe(
+        output, threads=1
+    )
+    assert output.cpu().tolist() == [2, 1, 1, 1, 0]

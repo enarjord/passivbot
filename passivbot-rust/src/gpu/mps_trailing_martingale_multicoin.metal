@@ -5374,6 +5374,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             accumulate_tm_multicoin_side_unrealized_pnl(
                 short_side, bars, coin_settings, k, C, true, 0.0f)
         );
+        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
+            || (any_fill && hsl_equity <= liquidation_floor);
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
         bool can_sample_hsl = (long_can_generate || short_can_generate)
@@ -5731,6 +5733,12 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 );
             }
             if (liquidated) {
+#if !PASSIVBOT_HSL_DISABLED
+                // Normal bar reports are at k+1 in CPU time; a terminal fill
+                // is at k. Our relative clock therefore uses k or k-1.
+                advance_hsl_time_observation(
+                    hsl_time, float(k) - (hsl_report_at_fill_boundary ? 1.0f : 0.0f));
+#endif
                 alive = false;
                 liquidation_day = day_index;
             }
@@ -6413,6 +6421,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         const float hsl_unrealized = accumulate_tm_multicoin_side_unrealized_pnl(
             side, bars, coin_settings, k, C, short_side, 0.0f
         );
+        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
+            || (any_fill && balance + hsl_unrealized <= liquidation_floor);
         const bool has_hsl_position = tm_multicoin_side_has_position(side, C);
         const bool hsl_has_blocking_orders = tm_multicoin_side_has_blocking_orders(
             side, config, bars, coin_settings, k, C
@@ -6676,6 +6686,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 );
             }
             if (liquidated) {
+#if !PASSIVBOT_HSL_DISABLED
+                // Normal bar reports are at k+1 in CPU time; a terminal fill
+                // is at k. Our relative clock therefore uses k or k-1.
+                advance_hsl_time_observation(
+                    hsl_time, float(k) - (hsl_report_at_fill_boundary ? 1.0f : 0.0f));
+#endif
                 alive = false;
                 liquidation_day = day_index;
             }

@@ -771,8 +771,9 @@ inline HslTimeObservation init_hsl_time_observation() {
     return observation;
 }
 
-inline void record_hsl_time_observation(
-    thread HslTimeObservation& observation, float step, int tier
+// A terminal accounting boundary advances time without inventing a fresh tier.
+inline void advance_hsl_time_observation(
+    thread HslTimeObservation& observation, float step
 ) {
     if (observation.last_step >= 0.0f) {
         const float elapsed = fmax(step - observation.last_step, 0.0f);
@@ -780,6 +781,12 @@ inline void record_hsl_time_observation(
         if (observation.was_red) observation.red_steps += elapsed;
     }
     observation.last_step = fmax(observation.last_step, step);
+}
+
+inline void record_hsl_time_observation(
+    thread HslTimeObservation& observation, float step, int tier
+) {
+    advance_hsl_time_observation(observation, step);
     observation.was_red = tier == 3;
 }
 

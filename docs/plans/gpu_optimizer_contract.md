@@ -1766,3 +1766,89 @@ Completion requires:
   pass. Verify final tracked bytes and the loaded Rust artifact before publication;
   required automatic/author review and three CI jobs remain development merge gates.
   Full metric/resource/performance acceptance and legacy retirement remain open.
+
+
+### 2026-10-07 — Preserve elapsed HSL reporting through liquidation
+
+- PR #1919 automatic review identified a valid terminal-accounting gap: a liquidation
+  fails the ordinary HSL reporting admission guard, dropping the last elapsed interval.
+  Keep the finding unresolved until the corrected head passes device checks and review.
+- Split clock advancement from tier observation. Terminal accounting advances using
+  the preceding RED state without observing a new controller signal. Capture whether
+  CPU would stop at the post-fill boundary before next-order/forced-delisting work:
+  terminal fills use that earlier timestamp; ordinary bar-close liquidation uses the
+  close timestamp. Apply the same reporting-only rule to directional/fused EMA and TM.
+  Disabled-HSL variants omit these updates; trading and controller decisions are unchanged.
+- Eight real CPU/native regressions pass across both strategies, long/fused operation
+  and limit/market panic policies. The seven-bar fixture establishes an entry at bar 3,
+  RED at bar 4, then gaps from 99.5 to 20 at bar 5. Limit panic liquidation retains
+  one RED interval out of three observed intervals; terminal market panic fills retain
+  zero additional elapsed intervals. All four limit cases fail on the original source.
+  Two additional device probes check terminal advancement, duplicate timestamps and
+  preservation of the preceding RED state. The full current-source reporting slice
+  passes 69 cases, including cooldown controls and twelve native EMA scope comparisons.
+  All 169 disabled/terminal/temporal controls pass after the baseline-backed assertion
+  correction below. All 36 native optimizer CLI lifecycle cases pass with CPU
+  simulation APIs and CPU worker-pool construction forbidden, including bootstrap,
+  scenario screening, prompt persistence, interruption and checkpoint resumption.
+- Rust validation passes 330 tests with one ignored test and default-feature test
+  compilation. Rebuild and verify the actual extension before CUDA validation. Complete
+  current-head author/automatic review and all three CI jobs remain merge requirements.
+
+### 2026-10-07 — Measure controller-enabled scenario search
+
+- These measurements use the elapsed-reporting implementation before the liquidation
+  clock correction. Preserve that scope when comparing subsequent runs.
+- Repeat the earlier eight-coin, 10,080-minute, three-scenario EMA search with coin HSL
+  enabled, data seed 43 and optimizer seed 12. Apply deterministic 30% downward/upward
+  shocks to coins 0/1 at bars 4,320/7,200. Request RED-time through a diagnostic limit.
+  Canonical adaptive bounds adjust the nominal seed HSL values: this is an evolving
+  policy workload, not a fixed 0.002-threshold policy benchmark.
+- Cold/warm runs complete 160 full records and 192 screens, retaining 26 Pareto members.
+  Canonically decoded complete candidate/metric records and Pareto membership agree
+  exactly. Canonical effective input identities also agree; raw configuration hashes
+  differ only in transformation-log bookkeeping. All 160 records contain RED-time,
+  nine report a nonzero value, and the maximum is 0.0958371. Unrequested trigger/restart
+  metrics cannot establish event counts.
+- Elapsed time is 259.505/156.501 seconds; caller CPU is 23.553/26.095 seconds, including
+  16.748/18.749 seconds of candidate preparation. Whole-process CPU is 147.860/47.134
+  seconds. Peak RSS is 1.91/1.08 GB; Torch peak allocation is 39.20 MB and final allocation
+  is zero. Session storage is 1.75 MB, excluding compilation/packing caches.
+- CPU consumption groups remain singletons despite cadence limits of 76/84. Actual GPU
+  dispatches are distinct: both runs issue 29 batches of 1–62 requests. The nominal
+  automatic width is 64 and tuning receives no eligible windows. Keep default tuning
+  and repeated-seed comparison acceptance open. A fixed-policy followup must fix the
+  relevant search bounds explicitly; compare smaller initial widths on this workload
+  before choosing a different default.
+
+
+### 2026-10-07 — Prepare complete metric-surface comparison
+
+- Verify CPU reference availability for all 157 canonical GPU-supported metric names,
+  across both strategies and long/short/fused configurations. Use two coins, seed 43,
+  enabled coin HSL and unstuck, threshold 0.002, span 2.5 and cooldown 5, with shocks
+  at bars 1,440/1,800. This reference work is outside optimization.
+- The 28,800-minute fixture returns finite values for every requested metric in all
+  six cases. A 2,880-minute fixture exposes null weighted exponential-fit values for
+  USD/BTC through the CPU serialization boundary: short suffixes lack fit samples.
+  Use the longer fixture to assess actual metric coverage; do not treat short-fixture
+  missing/sentinel values as numerical matches or substitute fabricated finite values.
+- Full native GPU comparison starts after the current-source reporting, replay
+  controls and CPU-forbidden optimizer CLI checks pass. Requested metrics without an
+  established tolerance remain unassessed; reference availability is not GPU parity.
+
+
+### 2026-10-07 — Reconcile retained single-coin reporting controls
+
+- The expanded control slice identifies four stale retained single-coin delisting
+  assertions. All four fail identically on development and corrected exported shaders,
+  with every returned tensor/scalar exactly equal. Under restart policy `never`, the
+  RED terminal close remains halted; reporting includes all 1,400 subsequent samples,
+  while positions are flat and each side has exactly one trigger. Replace the old
+  panic-tier-based zero expectation with the factual reporting duration. Keep exact
+  fill, loss, position, balance and trigger assertions; no simulation changes. The
+  complete 169-case affected control slice passes with the unchanged compiled runtime.
+- CPU compatibility coverage passes 128 backend/search/analysis/artifact/plot tests;
+  the browser-logic test additionally passes where its JavaScript runtime is available.
+  Backend/search tests use identified fake evaluators; the separate six-case real CPU
+  reference audit supplies actual simulation evidence. These are distinct claims.
