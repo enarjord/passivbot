@@ -13,7 +13,8 @@ import pytest
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
-                                                                    screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False):
+                                                                    screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
+                                                                    strategy_kind="trailing_martingale"):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -25,7 +26,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     from tools.gpu_parity import build_parser, fixture_inputs
 
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
-        "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
+        "--fixture", strategy_kind, "--sides", "both", "--coins", "3", "--bars", "512",
     ]))
     config["optimize"].update(backend="gpu_native", population_size=4, iters=8, seed=12)
     if generated_seed:
@@ -39,11 +40,12 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     if screening:
         config["optimize"]["gpu"]["screening"] = dict(scenarios=["base"], min_survivors=1, survival_fraction=0.5)
     config["optimize"]["bounds"] = {}
+    quantity_key = "base_qty_pct" if strategy_kind == "ema_anchor" else "entry_initial_qty_pct"
     for side in ("long", "short"):
         for key in ("n_positions", "total_wallet_exposure_limit"):
             value = config["bot"][side]["risk"][key]
             config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
-        config["optimize"]["bounds"][f"{side}_entry_initial_qty_pct"] = [0.01, 0.05]
+        config["optimize"]["bounds"][f"{side}_{quantity_key}"] = [0.01, 0.05]
     if anchors:
         config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0, 1]
     if coupled:
@@ -76,7 +78,10 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     seeds_path.mkdir()
     for index, value in enumerate((0.012, 0.03)):
         seed_config = deepcopy(config)
-        seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = value
+        if strategy_kind == "ema_anchor":
+            seed_config["bot"]["long"]["strategy"]["ema_anchor"]["base_qty_pct"] = value
+        else:
+            seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = value
         if anchors:
             seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if index == 0 else 1
         if coupled:
@@ -267,4 +272,16 @@ async def test_native_generated_seed_session_resumes_with_scaled_hsl_without_cpu
 ):
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, suite, interrupted, True, scaled_hsl=True, generated_seed=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suite", [False, True])
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_native_ema_cli_cuda_preserves_results_and_resumes_without_cpu(
+    monkeypatch, tmp_path, suite, interrupted,
+):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, interrupted, True, screening=suite,
+        strategy_kind="ema_anchor",
     )

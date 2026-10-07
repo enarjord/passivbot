@@ -98,9 +98,6 @@ struct EmaMulticoinSideState {
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     HslDrawdownEmaTailStats hsl_ema_tail;
 #endif
-    ulong coin_hsl_entry_blocked_mask;
-    ulong one_way_initial_blocked_mask;
-    ulong candle_eligibility_mask;
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
     float ema2[MAX_COINS];
@@ -138,9 +135,7 @@ struct EmaMulticoinSideState {
     bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
     bool entry_candidate[MAX_COINS];
-    bool selection_initialized;
     int max_tradable_seen;
-    int previous_effective_n_positions;
     float alpha0_coin[MAX_COINS];
     float alpha1_coin[MAX_COINS];
     float alpha2_coin[MAX_COINS];
@@ -463,12 +458,7 @@ inline void init_ema_multicoin_side_state(
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     side.hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
 #endif
-    side.coin_hsl_entry_blocked_mask = 0ul;
-    side.one_way_initial_blocked_mask = 0ul;
-    side.candle_eligibility_mask = 0ul;
-    side.selection_initialized = false;
     side.max_tradable_seen = 0;
-    side.previous_effective_n_positions = 0;
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < coin_count ? coin_settings[c * COIN_COLS + 9] : 0.0f;
         float seed_volume = c < coin_count ? coin_settings[c * COIN_COLS + 10] : 0.0f;
@@ -908,8 +898,7 @@ inline void update_ema_multicoin_side_selection(
     float balance
 ) {
     thread HslState* coin_hsl = side.coin_hsl;
-    thread ulong& coin_hsl_entry_blocked_mask =
-        side.coin_hsl_entry_blocked_mask;
+    ulong coin_hsl_entry_blocked_mask = 0ul;
     thread float* ema0 = side.ema0;
     thread float* ema1 = side.ema1;
     thread float* ema2 = side.ema2;
@@ -921,57 +910,30 @@ inline void update_ema_multicoin_side_selection(
     thread bool* incumbent = side.incumbent;
     thread bool* survivor = side.survivor;
 
-    // Exact Rust ranks flat candidates every minute. Re-ranking only after
-    // state changes keeps the proxy inexpensive; independent exact
-    // validations and drift gates police this approximation.
-    bool coin_hsl_eligibility_changed = false;
+    // Current ranking inputs and outstanding entries determine flat selection
+    // on every bar. Held positions remain selected regardless of their score.
     if (config.coin_hsl_mode) {
-        ulong blocked_mask = 0ul;
         for (int c = 0; c < coin_count; ++c) {
             if (hsl_mode(coin_hsl[c], false) != 0) {
-                blocked_mask |= 1ul << ulong(c);
+                coin_hsl_entry_blocked_mask |= 1ul << ulong(c);
             }
         }
-        coin_hsl_eligibility_changed =
-            blocked_mask != coin_hsl_entry_blocked_mask;
-        coin_hsl_entry_blocked_mask = blocked_mask;
     }
-    bool one_way_eligibility_changed = one_way_initial_blocked_mask
-        != side.one_way_initial_blocked_mask;
-    side.one_way_initial_blocked_mask = one_way_initial_blocked_mask;
-    ulong candle_eligibility_mask = 0ul;
     int current_tradable_count = 0;
-    bool flat_selected_became_ineligible = false;
     for (int c = 0; c < coin_count; ++c) {
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
-        bool eligible_now = k >= int(coin_settings[coin_offset + 8])
+        if (k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
-            && finite_positive(bars[bar_offset + 2]);
-        if (eligible_now) {
-            candle_eligibility_mask |= 1ul << ulong(c);
-            if (coin_override_or(coin_overrides, c, 11, -1.0f) != 0.0f) {
-                current_tradable_count += 1;
-            }
-        } else if (selected[c] && psize[c] <= 0.0f) {
-            flat_selected_became_ineligible = true;
+            && finite_positive(bars[bar_offset + 2])
+            && coin_override_or(coin_overrides, c, 11, -1.0f) != 0.0f) {
+            current_tradable_count += 1;
         }
     }
-    bool candle_eligibility_changed = side.selection_initialized
-        && candle_eligibility_mask != side.candle_eligibility_mask;
-    side.candle_eligibility_mask = candle_eligibility_mask;
-    bool reselect = !side.selection_initialized || any_fill
-        || filter_by_min_effective_cost
-        || coin_hsl_eligibility_changed
-        || one_way_eligibility_changed
-        || candle_eligibility_changed
-        || flat_selected_became_ineligible
-        || effective_n_positions != side.previous_effective_n_positions;
-    if (!reselect) return;
 
     int active_count = 0;
     for (int c = 0; c < coin_count; ++c) {
-        incumbent[c] = selected[c] && psize[c] <= 0.0f;
+        incumbent[c] = side.entry_qty[c] > 0.0f && psize[c] <= 0.0f;
         selected[c] = psize[c] > 0.0f;
         if (selected[c]) active_count += 1;
         survivor[c] = false;
@@ -1061,8 +1023,7 @@ inline void update_ema_multicoin_side_selection(
     if (config.adaptive.score_weight > 0.0f) {
         for (int c = 0; c < coin_count; ++c) {
             if (survivor[c] && !isfinite(side.adaptive[c].score)) {
-                // Eligibility already changed: retry until all retained scores warm up.
-                side.selection_initialized = false;
+                // Retry next bar until all retained ranking scores are available.
                 return;
             }
         }
@@ -1187,8 +1148,6 @@ inline void update_ema_multicoin_side_selection(
             }
         }
     }
-    side.selection_initialized = true;
-    side.previous_effective_n_positions = effective_n_positions;
 }
 
 // Preselect one side's best eligible candidate without creating an order.

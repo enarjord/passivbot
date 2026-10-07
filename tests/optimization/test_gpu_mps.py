@@ -1179,8 +1179,8 @@ kernel void passivbot_ema_multicoin_side_state_isolation_probe(
     short_side.hsl.enabled = false;
     long_side.coin_hsl[0].triggers = 5.0f;
     short_side.coin_hsl[0].triggers = 6.0f;
-    long_side.coin_hsl_entry_blocked_mask = 7ul;
-    short_side.coin_hsl_entry_blocked_mask = 8ul;
+    long_side.entry_qty[0] = 7.0f;
+    short_side.entry_qty[0] = 8.0f;
     output[0] = long_side.psize[0];
     output[1] = short_side.psize[0];
     output[2] = float(long_side.entry_tick[0]);
@@ -1190,8 +1190,8 @@ kernel void passivbot_ema_multicoin_side_state_isolation_probe(
     output[6] = long_side.coin_hsl[0].triggers
         + short_side.coin_hsl[0].triggers;
     output[7] = float(
-        long_side.coin_hsl_entry_blocked_mask
-            + short_side.coin_hsl_entry_blocked_mask
+        long_side.entry_qty[0]
+            + short_side.entry_qty[0]
     );
 }
 """
@@ -2825,15 +2825,11 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     short_config.offset = 0.0f;
     long_config.n_positions = 1;
     short_config.n_positions = 1;
-    long_side.selection_initialized = false;
-    short_side.selection_initialized = false;
-    long_side.previous_effective_n_positions = 0;
-    short_side.previous_effective_n_positions = 0;
-    long_side.one_way_initial_blocked_mask = 0ul;
-    short_side.one_way_initial_blocked_mask = 0ul;
     for (int c = 0; c < 3; ++c) {
         long_side.psize[c] = 0.0f;
         short_side.psize[c] = 0.0f;
+        long_side.entry_qty[c] = 0.0f;
+        short_side.entry_qty[c] = 0.0f;
         long_side.selected[c] = false;
         short_side.selected[c] = false;
         long_side.incumbent[c] = false;
@@ -2874,10 +2870,6 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         output[c] = long_side.selected[c] ? 1.0f : 0.0f;
         output[3 + c] = short_side.selected[c] ? 1.0f : 0.0f;
     }
-    output[6] = long_side.selection_initialized ? 1.0f : 0.0f;
-    output[7] = short_side.selection_initialized ? 1.0f : 0.0f;
-    output[8] = float(long_side.previous_effective_n_positions);
-    output[9] = float(short_side.previous_effective_n_positions);
     // Opposite-held eligibility changes outside the side's own fills.
     // The mask transition must evict the blocked incumbent and promote next.
     update_ema_multicoin_side_selection(
@@ -2885,13 +2877,12 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         1, 3, true, false, 1, 0.0f, 4ul, false, 0.0f
     );
     for (int c = 0; c < 3; ++c) {
-        output[10 + c] = short_side.selected[c] ? 1.0f : 0.0f;
+        output[6 + c] = short_side.selected[c] ? 1.0f : 0.0f;
     }
-    output[13] = float(short_side.one_way_initial_blocked_mask);
-    output[14] = float(long_selection_blocked_mask);
-    output[15] = float(short_selection_blocked_mask);
-    output[16] = float(long_order_blocked_mask);
-    output[17] = float(short_order_blocked_mask);
+    output[9] = float(long_selection_blocked_mask);
+    output[10] = float(short_selection_blocked_mask);
+    output[11] = float(long_order_blocked_mask);
+    output[12] = float(short_order_blocked_mask);
 
     // No fill or mask transition occurs at k=2, but coin zero has reached
     // its tail. The validity transition must evict the flat incumbent.
@@ -2900,7 +2891,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         2, 3, false, false, 1, 0.0f, 0ul, false, 0.0f
     );
     for (int c = 0; c < 3; ++c) {
-        output[19 + c] = long_side.selected[c] ? 1.0f : 0.0f;
+        output[14 + c] = long_side.selected[c] ? 1.0f : 0.0f;
     }
 
     // With an existing position, the caller cannot prove a positive exact
@@ -2910,8 +2901,6 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     long_config.allowance_pct = 0.0f;
     long_config.scale_hsl_budget = false;
     long_config.base_qty_pct = 1.0f;
-    long_side.selection_initialized = false;
-    long_side.previous_effective_n_positions = 0;
     for (int c = 0; c < 3; ++c) {
         long_side.psize[c] = c == 0 ? 1.0f : 0.0f;
         long_side.selected[c] = false;
@@ -2922,7 +2911,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         long_side, long_config, bars, coin_settings, coin_overrides,
         1, 3, false, true, 1, 0.0f, 0ul, true, 0.0f
     );
-    output[18] = long_side.selected[1] || long_side.selected[2] ? 1.0f : 0.0f;
+    output[13] = long_side.selected[1] || long_side.selected[2] ? 1.0f : 0.0f;
 }
 """
 
@@ -2945,7 +2934,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         dtype=torch.float32,
         device=gpu_device(),
     )
-    output = torch.zeros(22, dtype=torch.float32, device=gpu_device())
+    output = torch.zeros(17, dtype=torch.float32, device=gpu_device())
 
     library = compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -2956,28 +2945,11 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     synchronize()
 
     assert output.cpu().tolist() == [
-        1.0,
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 7.0,
         0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        0.0,
-        1.0,
-        0.0,
-        4.0,
-        0.0,
-        0.0,
-        0.0,
-        7.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
+        0.0, 1.0, 0.0,
     ]
 
 
@@ -5823,6 +5795,7 @@ def test_mps_multicoin_fused_hsl_restarts_during_all_coins_ended_tail(
     "strategy_kind, change",
     [
         ("ema_anchor", "candle"),
+        ("ema_anchor", "ranking"),
         ("trailing_martingale", "candle"),
         ("trailing_martingale", "ranking"),
     ],
@@ -5923,18 +5896,20 @@ kernel void passivbot_multicoin_candidate_recovery_probe(
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("prior_entry", [False, True])
-def test_mps_tm_hysteresis_requires_prior_entry_order(side, prior_entry):
+def test_mps_multicoin_hysteresis_requires_prior_entry_order(strategy_kind, side, prior_entry):
     import passivbot_rust
 
     runner, row, _, data = _multicoin_exposure_fixture(
-        "trailing_martingale",
+        strategy_kind,
         side,
         count=4,
         return_context=True,
     )
-    keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    keys = (EMA_ANCHOR_MULTICOIN_PARAM_KEYS if strategy_kind == "ema_anchor"
+            else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)
     row[keys.index("n_positions")] = 1.0
     probe = r"""
 kernel void passivbot_tm_incumbent_probe(
@@ -5980,9 +5955,15 @@ kernel void passivbot_tm_incumbent_probe(
     output[3] = state.selected[1];
 }
 """
+    if strategy_kind == "ema_anchor":
+        probe = (probe.replace("load_trailing_martingale_", "load_ema_")
+                 .replace("init_trailing_martingale_", "init_ema_")
+                 .replace("TrailingMartingale", "Ema")
+                 .replace("trailing_martingale", "ema_anchor")
+                 .replace("update_tm_", "update_ema_"))
     output = torch.zeros(4, dtype=torch.float32, device=gpu_device())
     library = compile_shader(
-        passivbot_rust.mps_trailing_martingale_multicoin_source_py() + probe
+        getattr(passivbot_rust, f"mps_{strategy_kind}_multicoin_source_py")() + probe
     )
     library.passivbot_tm_incumbent_probe(
         data["bars"],
@@ -6172,7 +6153,6 @@ kernel void passivbot_ema_multicoin_tail_twel_probe(
     output[5] = accumulate_ema_multicoin_side_unrealized_pnl(
         side, bars, coin_settings, 1, 2, short_side, 0.0f
     );
-    side.selection_initialized = false;
     side.psize[1] = 0.0f;
     side.selected[0] = false;
     side.selected[1] = false;

@@ -816,9 +816,6 @@ mod tests {
         assert!(source.contains("forced_normal_count"));
         assert!(source.contains("retains the separate dynamic-WEL denominator"));
         assert!(source.contains("if (!survivor[c] || !forced_normal) continue;"));
-        assert!(source.contains("flat_selected_became_ineligible"));
-        assert!(source.contains("candle_eligibility_changed"));
-        assert!(source.contains("candle_eligibility_mask"));
         assert_eq!(
             source.matches("if (!managed_candidate) continue;").count(),
             3
@@ -878,7 +875,6 @@ mod tests {
                 .count(),
             2
         );
-        assert!(source.contains("side.previous_effective_n_positions = effective_n_positions"));
         assert!(source.contains("EmaMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));
         assert!(source.contains("thread HslState* coin_hsl = side.coin_hsl"));
@@ -900,7 +896,6 @@ mod tests {
                 .count(),
             1
         );
-        assert!(source.contains("coin_hsl_eligibility_changed"));
         assert!(source.contains("coin_hsl_entry_blocked_mask"));
         assert!(source.contains("market_execution ? taker_fee : maker_fee"));
         assert!(source.contains("const bool market_orders_allowed = run_settings[9] > 0.5f"));
@@ -955,7 +950,7 @@ mod tests {
             source.contains("if (alive && !post_fill_balance_depleted && past_activation_guard)")
         );
         assert!(source.contains("const float score_hysteresis = fmax(run_settings[4], 0.0f)"));
-        assert!(source.contains("incumbent[c] = selected[c] && psize[c] <= 0.0f"));
+        assert!(source.contains("incumbent[c] = side.entry_qty[c] > 0.0f && psize[c] <= 0.0f"));
         assert!(source.contains("if (!selected[c] || incumbent[c] || !survivor[c]) continue"));
         assert!(source.contains("score[challenger] - score[incumbent_coin]"));
         assert!(source.contains("allowed_wallet_exposure_limit"));
