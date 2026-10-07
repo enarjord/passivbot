@@ -1993,3 +1993,40 @@ Completion requires:
 - The PR remains unmerged until the corrected head passes automatic review and all
   required CI. Side-equity, weighted reductions and longer history-expiry trajectories
   remain independent acceptance work; general parity policies are unchanged.
+
+
+### 2026-10-07 — Align shared EMA entry allocation with Rust
+
+- Source-isolated comparisons of the accepted shared shaders and the pending
+  side-equity reporting correction preserve identical portfolio drawdown and fill
+  rates on three two-coin, 3,000-bar seed-43 shock fixtures. Their original
+  CPU/GPU trading differences predate the reporting correction.
+- A bounded trace identifies a semantic mismatch: shared GPU EMA clips each
+  position at its nominal coin allocation; Rust EMA uses that allocation for clip
+  sizing and inventory shift, with portfolio TWEL admission applied separately.
+  At step 1600 the long-only CPU fills .072 while GPU fills .017. Removing only
+  the extra coin cap restores all 1,237 fill counts and per-bar sizes within half
+  a quantity step; drawdown absolute error falls from .00144623 to 7.88e-8.
+- Preserve global TWEL admission, optional exposure repair, cooldown, one-way
+  initial blocking and scoped HSL. The compiled allocation regression checks both
+  sides crossing the nominal coin limit, portfolio clipping/rejection, an explicitly
+  disabled portfolio gate and HSL entry blocking. It fails on the accepted shader.
+- The CPU ideal-orders reference retains market long entries of 1.002 and .997
+  units under a .2 portfolio ceiling; update the old GPU expectation from 1.998
+  to 1.999 total. Short entries remain .998 each. This changes the expected strategy
+  result rather than loosening its comparison tolerance.
+- In the corrected shared long/short shock replay, a .004696 balance difference
+  around 1010.69 crosses a nearest-step boundary at step 1453: 49.5000197 CPU
+  quantity steps versus 49.4997897 GPU. A .050/.049 clip difference later changes
+  two of 2,395 fills. Drawdown differs by 2.23e-7 and daily growth by 7.52e-6.
+  Keep a fixture-local 0.1% fill-rate and 1e-5 absolute growth bound; long/short-only
+  fill rates and all drawdown checks remain strict. The standalone parity tool's
+  general policies remain unchanged; this is not broad trajectory certification.
+- Side-equity sampling and weighted suffix reductions remain independent work.
+  Keep the legacy optimizer until the overall acceptance gates are met.
+- Validation of this isolated correction passes 331 Rust tests (one ignored),
+  default-feature compilation and rebuilt-extension identity checks; six allocation
+  and market-entry regressions, 13 HSL ordering cases, 12 selected replay controls,
+  four native optimizer CLI/suite/interruption/resume cases and six documentation
+  tests. The final replay expectations are checked against actual Rust ideal orders.
+  Automatic review and required CI must clear the current head before merging.
