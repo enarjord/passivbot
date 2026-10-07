@@ -754,11 +754,10 @@ inline bool ema_multicoin_side_has_blocking_orders(
     return false;
 }
 
-// Advance the complete dual-side HSL topology after both directional order
-// phases have run against the same account. Unified and pside modes use the
-// shared account controller. Coin mode keeps one controller per coin/pside,
-// while its sampled tier is the maximum across the full portfolio, matching
-// exact Rust reporting. Mixed signal modes fail closed.
+// Advance the complete dual-side HSL topology after both directional fill
+// phases and before either side constructs the next orders. Unified and pside
+// modes use the shared account controller; coin mode has one per coin/pside.
+// Mixed signal modes fail closed. Reporting is sampled separately after delisting.
 inline bool update_ema_multicoin_dual_side_hsl(
     thread EmaMulticoinSideState& long_side,
     thread const EmaMulticoinSideConfig& long_config,
@@ -772,15 +771,10 @@ inline bool update_ema_multicoin_dual_side_hsl(
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
     int k,
-    int day_index,
     int coin_count,
     float starting_balance,
-    float interval_ms,
-    thread bool& sample_enabled,
-    thread int& sampled_tier
+    float interval_ms
 ) {
-    sample_enabled = false;
-    sampled_tier = 0;
     if (long_side.hsl.signal_mode != short_side.hsl.signal_mode) return false;
     if (long_config.coin_hsl_mode != short_config.coin_hsl_mode) return false;
     if (!ema_multicoin_side_held_marks_are_valid(
@@ -813,15 +807,6 @@ inline bool update_ema_multicoin_dual_side_hsl(
     if (long_config.coin_hsl_mode) {
         const bool long_active = long_effective_n_positions > 0;
         const bool short_active = short_effective_n_positions > 0;
-        bool long_strategy_eq_enabled = false;
-        bool short_strategy_eq_enabled = false;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-        float long_drawdown_ema_sample = 0.0f;
-        float short_drawdown_ema_sample = 0.0f;
-#endif
-        float portfolio_equity = joint_portfolio_equity(
-            account, long_unrealized, short_unrealized
-        );
         for (int c = 0; c < coin_count; ++c) {
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * coin_count + c) * 4;
@@ -871,21 +856,6 @@ inline bool update_ema_multicoin_dual_side_hsl(
                     long_side.psize[c] > 0.0f,
                     long_coin_has_blocking_orders, float(k), interval_ms
                 );
-                sample_enabled = sample_enabled
-                    || long_side.coin_hsl[c].enabled;
-                long_strategy_eq_enabled = long_strategy_eq_enabled
-                    || long_side.coin_hsl[c].enabled;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                if (long_side.coin_hsl[c].enabled) {
-                    long_drawdown_ema_sample = fmax(
-                        long_drawdown_ema_sample,
-                        fabs(long_side.coin_hsl[c].drawdown_ema)
-                    );
-                }
-#endif
-                sampled_tier = max(
-                    sampled_tier, hsl_report_tier(long_side.coin_hsl[c])
-                );
             }
             if (short_active) {
                 short_side.coin_hsl[c].slot_count = float(
@@ -902,73 +872,12 @@ inline bool update_ema_multicoin_dual_side_hsl(
                     short_side.psize[c] > 0.0f,
                     short_coin_has_blocking_orders, float(k), interval_ms
                 );
-                sample_enabled = sample_enabled
-                    || short_side.coin_hsl[c].enabled;
-                short_strategy_eq_enabled = short_strategy_eq_enabled
-                    || short_side.coin_hsl[c].enabled;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                if (short_side.coin_hsl[c].enabled) {
-                    short_drawdown_ema_sample = fmax(
-                        short_drawdown_ema_sample,
-                        fabs(short_side.coin_hsl[c].drawdown_ema)
-                    );
-                }
-#endif
-                sampled_tier = max(
-                    sampled_tier, hsl_report_tier(short_side.coin_hsl[c])
-                );
             }
         }
-        if (long_strategy_eq_enabled) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-            update_hsl_drawdown_ema_tail_stats(
-                long_side.hsl_ema_tail, long_drawdown_ema_sample
-            );
-#endif
-            update_hsl_strategy_equity_stats(
-                long_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_long + long_unrealized,
-                day_index
-            );
-        }
-        if (short_strategy_eq_enabled) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-            update_hsl_drawdown_ema_tail_stats(
-                short_side.hsl_ema_tail, short_drawdown_ema_sample
-            );
-#endif
-            update_hsl_strategy_equity_stats(
-                short_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_short + short_unrealized,
-                day_index
-            );
-        }
-        return true;
+        return valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, coin_count)
+            && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, coin_count);
     }
 
-    const bool unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
-    const bool long_strategy_eq_enabled = long_side.hsl.enabled
-        && !long_side.hsl.halted;
-    const bool short_strategy_eq_enabled = short_side.hsl.enabled
-        && !short_side.hsl.halted;
-    if (long_strategy_eq_enabled) {
-        update_hsl_strategy_equity_stats(
-            long_side.hsl_strategy_eq,
-            starting_balance + (
-                unified ? account.realized_pnl_total : account.realized_pnl_long
-            ) + (unified ? long_unrealized + short_unrealized : long_unrealized),
-            day_index
-        );
-    }
-    if (short_strategy_eq_enabled) {
-        update_hsl_strategy_equity_stats(
-            short_side.hsl_strategy_eq,
-            starting_balance + (
-                unified ? account.realized_pnl_total : account.realized_pnl_short
-            ) + (unified ? long_unrealized + short_unrealized : short_unrealized),
-            day_index
-        );
-    }
     if (!update_joint_pside_hsl(
             long_side.hsl, short_side.hsl, account, starting_balance,
             long_unrealized, short_unrealized,
@@ -978,23 +887,8 @@ inline bool update_ema_multicoin_dual_side_hsl(
         )) {
         return false;
     }
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    if (long_strategy_eq_enabled) {
-        update_hsl_drawdown_ema_tail_stats(
-            long_side.hsl_ema_tail, long_side.hsl.drawdown_ema
-        );
-    }
-    if (short_strategy_eq_enabled) {
-        update_hsl_drawdown_ema_tail_stats(
-            short_side.hsl_ema_tail, short_side.hsl.drawdown_ema
-        );
-    }
-#endif
-    sample_enabled = long_side.hsl.enabled || short_side.hsl.enabled;
-    sampled_tier = joint_hsl_report_tier(
-        long_side.hsl, short_side.hsl
-    );
-    return true;
+    return valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, coin_count)
+        && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, coin_count);
 }
 
 inline void update_ema_multicoin_side_selection(
@@ -3259,7 +3153,72 @@ inline void passivbot_ema_anchor_multicoin_impl(
         const bool can_generate = alive && effective_n_positions > 0
             && side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started || can_generate;
-        bool has_hsl_position = ema_multicoin_side_has_position(side, C);
+        // Refresh HSL after fills, before forager selection and next orders.
+#if !PASSIVBOT_HSL_DISABLED
+        const bool hsl_strategy_eq_eligible = hsl.enabled && !hsl.halted;
+        const float hsl_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
+            side, bars, coin_settings, k, C, short_side, 0.0f
+        );
+        const bool has_hsl_position = ema_multicoin_side_has_position(side, C);
+        const bool hsl_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
+            side, config, bars, coin_settings, k, C
+        );
+#endif
+        // Held positions have valid valuation candles; unavailable tails are unheld.
+        // Missing held-position prices were rejected before this bar's fills.
+#if !PASSIVBOT_HSL_DISABLED
+        if (can_generate && alive
+            && balance > 0.0f && balance + hsl_unrealized > liquidation_floor) {
+            if (coin_hsl_mode) {
+                for (int c = 0; c < C; ++c) {
+                    int coin_offset = c * COIN_COLS;
+                    int bar_offset = (k * C + c) * 4;
+                    float close = bars[bar_offset + 2];
+                    bool valid = k >= int(coin_settings[coin_offset + 6])
+                        && k <= int(coin_settings[coin_offset + 7])
+                        && finite_positive(close);
+                    bool mark_valid = k >= int(coin_settings[coin_offset + 6])
+                        && k <= int(coin_settings[coin_offset + 7])
+                        && isfinite(close);
+                    float coin_hsl_unrealized = psize[c] > 0.0f
+                        && mark_valid
+                        ? psize[c] * coin_settings[coin_offset + 4]
+                            * (short_side ? pprice[c] - close : close - pprice[c])
+                        : 0.0f;
+                    int coin_mode = hsl_mode(coin_hsl[c], psize[c] > 0.0f);
+                    bool coin_hsl_has_blocking_orders = valid && coin_mode != 3 && (
+                        entry_qty[c] > 0.0f || close_qty[c] > 0.0f
+                            || secondary_close_qty[c] > 0.0f
+                    );
+                    coin_hsl[c].slot_count = float(effective_n_positions);
+                    coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
+                        config.scale_hsl_budget, config.twel, effective_n_positions,
+                        coin_overrides, c, 11, 12, config.allowance_pct
+                    );
+                    update_hsl(
+                        coin_hsl[c], balance, starting_balance,
+                        coin_realized_pnl[c], coin_hsl_unrealized,
+                        psize[c] > 0.0f, coin_hsl_has_blocking_orders,
+                        float(k), interval_ms
+                    );
+                }
+            } else {
+                update_hsl(
+                    hsl, balance, starting_balance,
+                    realized_pnl_cumsum_last, hsl_unrealized,
+                    has_hsl_position, hsl_has_blocking_orders,
+                    float(k), interval_ms
+                );
+            }
+
+        }
+#endif
+#if !PASSIVBOT_HSL_DISABLED
+        if (!valid_hsl_multicoin_hsl(hsl, coin_hsl, C)) {
+            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+            return;
+        }
+#endif
 #if PASSIVBOT_HSL_DISABLED
         int current_hsl_mode = 0;
 #else
@@ -3328,20 +3287,14 @@ inline void passivbot_ema_anchor_multicoin_impl(
 
         float unrealized = 0.0f;
         float position_cost = 0.0f;
-        bool has_open_position = false;
-        bool has_blocking_orders = false;
         for (int c = 0; c < C; ++c) {
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
             float close = bars[bar_offset + 2];
-            bool valid = k >= int(coin_settings[coin_offset + 6])
-                && k <= int(coin_settings[coin_offset + 7])
-                && finite_positive(close);
             bool mark_valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
                 && isfinite(close);
             if (psize[c] > 0.0f) {
-                has_open_position = true;
                 position_cost += psize[c] * pprice[c]
                     * coin_settings[coin_offset + 4];
                 if (mark_valid) {
@@ -3349,111 +3302,20 @@ inline void passivbot_ema_anchor_multicoin_impl(
                         * (short_side ? pprice[c] - close : close - pprice[c]);
                 }
             }
-#if PASSIVBOT_HSL_DISABLED
-            int coin_mode = 0;
-#else
-            int coin_mode = coin_hsl_mode
-                ? hsl_mode(coin_hsl[c], psize[c] > 0.0f)
-                : current_hsl_mode;
-#endif
-            if (valid && coin_mode != 3 && (
-                    entry_qty[c] > 0.0f || close_qty[c] > 0.0f
-                        || secondary_close_qty[c] > 0.0f
-                )) {
-                has_blocking_orders = true;
-            }
         }
         float equity = balance + unrealized;
-        // Held positions have valid valuation candles; unavailable tails are unheld.
-        // Missing held-position prices were rejected before this bar's fills.
 #if !PASSIVBOT_HSL_DISABLED
-        if (can_generate && alive
-            && balance > 0.0f && equity > liquidation_floor) {
-            int sampled_hsl_tier = 0;
+        if (can_generate && alive && balance > 0.0f && equity > liquidation_floor) {
+            int sampled_tier = record_multicoin_hsl_report(
+                hsl, coin_hsl, C, effective_n_positions, hsl_strategy_eq_eligible,
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-            float sampled_hsl_drawdown_ema = 0.0f;
+                side.hsl_ema_tail,
 #endif
-            bool hsl_sample_enabled = !coin_hsl_mode && hsl.enabled;
-            const bool hsl_strategy_eq_sample_enabled = coin_hsl_mode
-                ? false : hsl.enabled && !hsl.halted;
-            if (coin_hsl_mode) {
-                for (int c = 0; c < C; ++c) {
-                    hsl_sample_enabled = hsl_sample_enabled || coin_hsl[c].enabled;
-                    int coin_offset = c * COIN_COLS;
-                    int bar_offset = (k * C + c) * 4;
-                    float close = bars[bar_offset + 2];
-                    bool valid = k >= int(coin_settings[coin_offset + 6])
-                        && k <= int(coin_settings[coin_offset + 7])
-                        && finite_positive(close);
-                    bool mark_valid = k >= int(coin_settings[coin_offset + 6])
-                        && k <= int(coin_settings[coin_offset + 7])
-                        && isfinite(close);
-                    float coin_unrealized = psize[c] > 0.0f
-                        && mark_valid
-                        ? psize[c] * coin_settings[coin_offset + 4]
-                            * (short_side ? pprice[c] - close : close - pprice[c])
-                        : 0.0f;
-                    int coin_mode = hsl_mode(coin_hsl[c], psize[c] > 0.0f);
-                    bool coin_has_blocking_orders = valid && coin_mode != 3 && (
-                        entry_qty[c] > 0.0f || close_qty[c] > 0.0f
-                            || secondary_close_qty[c] > 0.0f
-                    );
-                    coin_hsl[c].slot_count = float(effective_n_positions);
-                    coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
-                        config.scale_hsl_budget, config.twel, effective_n_positions,
-                        coin_overrides, c, 11, 12, config.allowance_pct
-                    );
-                    update_hsl(
-                        coin_hsl[c], balance, starting_balance,
-                        coin_realized_pnl[c], coin_unrealized,
-                        psize[c] > 0.0f, coin_has_blocking_orders,
-                        float(k), interval_ms
-                    );
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                    if (coin_hsl[c].enabled) {
-                        sampled_hsl_drawdown_ema = fmax(
-                            sampled_hsl_drawdown_ema,
-                            fabs(coin_hsl[c].drawdown_ema)
-                        );
-                    }
-#endif
-                    sampled_hsl_tier = max(sampled_hsl_tier, hsl_report_tier(coin_hsl[c]));
-                }
-            } else {
-                update_hsl(
-                    hsl, balance, starting_balance,
-                    realized_pnl_cumsum_last, unrealized,
-                    has_open_position, has_blocking_orders,
-                    float(k), interval_ms
-                );
-                sampled_hsl_tier = hsl_report_tier(hsl);
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                sampled_hsl_drawdown_ema = fabs(hsl.drawdown_ema);
-#endif
-            }
-            if ((coin_hsl_mode && effective_n_positions > 0 && hsl_sample_enabled)
-                || hsl_strategy_eq_sample_enabled) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                update_hsl_drawdown_ema_tail_stats(
-                    side.hsl_ema_tail, sampled_hsl_drawdown_ema
-                );
-#endif
-                update_hsl_strategy_equity_stats(
-                    side.hsl_strategy_eq,
-                    starting_balance + realized_pnl_cumsum_last + unrealized,
-                    day_index
-                );
-            }
-            if (hsl_sample_enabled) {
+                side.hsl_strategy_eq,
+                starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
+            if (sampled_tier >= 0) {
                 hsl_tier_samples_total += 1.0f;
-
-
-                hsl_tier_samples_red += sampled_hsl_tier == 3 ? 1.0f : 0.0f;
-            }
-            if (coin_hsl_mode) {
-                for (int c = 0; c < C; ++c) {
-                }
-            } else {
+                hsl_tier_samples_red += sampled_tier == 3 ? 1.0f : 0.0f;
             }
         }
 #endif
@@ -4216,6 +4078,42 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         equity_started = equity_started
             || long_can_generate || short_can_generate;
 
+        // Observe current HSL before its consumers construct the next orders.
+#if !PASSIVBOT_HSL_DISABLED
+        const float hsl_equity = joint_portfolio_equity(
+            account,
+            accumulate_ema_multicoin_side_unrealized_pnl(
+                long_side, bars, coin_settings, k, C, false, 0.0f),
+            accumulate_ema_multicoin_side_unrealized_pnl(
+                short_side, bars, coin_settings, k, C, true, 0.0f)
+        );
+        // Held positions have valid valuation candles; unavailable tails are unheld.
+        // Missing held-position prices were rejected before this bar's fills.
+        bool can_sample_hsl = (long_can_generate || short_can_generate)
+            && alive
+            && joint_portfolio_can_generate(
+                account, hsl_equity, liquidation_floor
+            );
+        const bool long_hsl_strategy_eq_eligible =
+            long_side.hsl.enabled && !long_side.hsl.halted;
+        const bool short_hsl_strategy_eq_eligible =
+            short_side.hsl.enabled && !short_side.hsl.halted;
+        if (can_sample_hsl) {
+            bool hsl_valid = update_ema_multicoin_dual_side_hsl(
+                long_side, long_config, long_effective_n_positions,
+                short_side, short_config, short_effective_n_positions,
+                account, bars, coin_settings,
+                long_coin_overrides, short_coin_overrides, k, C,
+                starting_balance, interval_ms
+            );
+            if (!hsl_valid) {
+                scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
+                return;
+            }
+        }
+
+#endif
+
         const bool long_has_position =
             ema_multicoin_side_has_position(long_side, C);
         const bool short_has_position =
@@ -4405,40 +4303,39 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         float equity = joint_portfolio_equity(
             account, long_unrealized, short_unrealized
         );
-        // Held positions have valid valuation candles; unavailable tails are unheld.
-        // Missing held-position prices were rejected before this bar's fills.
-        bool can_sample_hsl = (long_can_generate || short_can_generate)
-            && alive
-            && joint_portfolio_can_generate(
-                account, equity, liquidation_floor
-            );
-        bool hsl_validation_failed = false;
-        if (can_sample_hsl) {
-            bool sample_enabled = false;
-            int sampled_tier = 0;
-            bool hsl_valid = update_ema_multicoin_dual_side_hsl(
-                long_side, long_config, long_effective_n_positions,
-                short_side, short_config, short_effective_n_positions,
-                account, bars, coin_settings,
-                long_coin_overrides, short_coin_overrides, k, day_index, C,
-                starting_balance, interval_ms,
-                sample_enabled, sampled_tier
-            );
-            if (!hsl_valid) {
-                account.balance = 0.0f;
-                alive = false;
-                liquidation_day = day_index;
-                hsl_validation_failed = true;
-            } else if (sample_enabled) {
+#if !PASSIVBOT_HSL_DISABLED
+        if (can_sample_hsl && joint_portfolio_can_generate(
+                account, equity, liquidation_floor)) {
+            const bool unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+            int long_tier = record_multicoin_hsl_report(
+                long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions,
+                long_hsl_strategy_eq_eligible,
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                long_side.hsl_ema_tail,
+#endif
+                long_side.hsl_strategy_eq,
+                starting_balance + (unified
+                    ? account.realized_pnl_total : account.realized_pnl_long)
+                    + (unified ? long_unrealized + short_unrealized : long_unrealized),
+                day_index);
+            int short_tier = record_multicoin_hsl_report(
+                short_side.hsl, short_side.coin_hsl, C, short_effective_n_positions,
+                short_hsl_strategy_eq_eligible,
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                short_side.hsl_ema_tail,
+#endif
+                short_side.hsl_strategy_eq,
+                starting_balance + (unified
+                    ? account.realized_pnl_total : account.realized_pnl_short)
+                    + (unified ? long_unrealized + short_unrealized : short_unrealized),
+                day_index);
+            if (long_tier >= 0 || short_tier >= 0) {
                 hsl_tier_samples_total += 1.0f;
-
-
-                hsl_tier_samples_red +=
-                    sampled_tier == 3 ? 1.0f : 0.0f;
+                hsl_tier_samples_red += max(long_tier, short_tier) == 3 ? 1.0f : 0.0f;
             }
         }
-
-        bool active = equity_started && (alive || hsl_validation_failed);
+#endif
+        bool active = equity_started && alive;
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);

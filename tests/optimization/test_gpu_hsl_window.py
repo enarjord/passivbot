@@ -151,7 +151,7 @@ kernel void hsl_controller_probe(
     device int* times [[buffer(4)]], device float* realized [[buffer(5)]],
     device float* output [[buffer(6)]], uint b [[thread_position_in_grid]]
 ) {
-    HslController h = hsl_controller_init(tree, 64, 1, policy[0]);
+    HslController h = hsl_controller_init(tree, int(policy[6]), int(policy[7]), policy[0]);
     for (int i = 0; i < int(policy[4]); ++i) {
         bool valid = hsl_observe(h, tree, times, realized,
             flags[i*3], int(policy[5]), inputs[i*3], inputs[i*3+1], inputs[i*3+2],
@@ -174,10 +174,15 @@ def run_controller(events, span, never, lookback=100):
     flags = torch.tensor(
         [[e[0], e[4], e[5]] for e in events], device=device, dtype=torch.int32
     )
-    policy = torch.tensor([span, 0.1, 10, never, len(events), lookback], device=device)
-    tree = torch.empty((18, 32), device=device, dtype=torch.uint8)
-    times = torch.empty(64, device=device, dtype=torch.int32)
-    realized = torch.empty(64, device=device)
+    from optimization.gpu.mps_kernel import _hsl_layout
+
+    capacity = min(lookback + 2, len(events) + 2)
+    tree_size, storage_nodes = _hsl_layout(capacity)
+    policy = torch.tensor([span, 0.1, 10, never, len(events), lookback,
+                           capacity, tree_size], device=device)
+    tree = torch.empty((storage_nodes, 32), device=device, dtype=torch.uint8)
+    times = torch.empty(capacity, device=device, dtype=torch.int32)
+    realized = torch.empty(capacity, device=device)
     output = torch.empty((len(events), 3), device=device)
     controller_library().hsl_controller_probe(
         values, flags, policy, tree, times, realized, output, threads=1
@@ -276,3 +281,59 @@ def test_ninety_day_history_layout_is_compact_and_aligned():
     assert nodes * 32 + capacity * 8 < 2_300_000
     # 64 coins, both sides, fit within the same 512 MiB candidate budget.
     assert 128 * (nodes * 32 + capacity * 8) < 512 * 1024 * 1024
+
+
+@pytest.mark.parametrize("terminal_minute", [1, 2, 63, 64, 65, 125, 200])
+@pytest.mark.parametrize("lookback", [1, 60, 64, 129])
+@pytest.mark.parametrize("interval", [1, 7])
+@pytest.mark.parametrize("never", [False, True])
+def test_terminal_before_latest_mark_matches_chronological_facts(terminal_minute, never, lookback, interval):
+    # The next-order mark is provisional when a same-bar forced close supplies
+    # an earlier factual terminal fill. A very high discarded mark would create
+    # a false peak if the rewind merely changed the timestamp.
+    events = [(0, 1000, 0, 0, False, False)] + [
+        (minute, 1000, 0, float((minute % 7) * 10), True, False)
+        for minute in range(1, terminal_minute + 1)
+    ]
+    terminal = (terminal_minute, 600, -400, 0, False, True)
+    later = [(terminal_minute + 1, 600, -400, 0, False, False),
+             (terminal_minute + 10, 600, -400, 0, False, False)]
+    def scaled(rows):
+        return [(minute * interval, *values) for minute, *values in rows]
+
+    chronological = run_controller(scaled([*events, terminal, *later]), 3.5, never,
+                                   lookback=lookback * interval)
+    with_provisional = run_controller(scaled([
+        *events, (terminal_minute + 1, 1000, 0, 5000, True, False),
+        terminal, *later,
+    ]), 3.5, never, lookback=lookback * interval)
+    assert (chronological[:, 0] >= 0).all()
+    assert (with_provisional[:, 0] >= 0).all()
+    np.testing.assert_allclose(with_provisional[-3:], chronological[-3:],
+                               rtol=2e-5, atol=2e-6)
+
+    import passivbot_rust
+
+    points = [dict(timestamp=minute * 60000, pnl=pnl, upnl=upnl,
+                   exposed=exposed, flatten=terminal)
+              for minute, _budget, pnl, upnl, exposed, terminal in scaled([*events, terminal])]
+    now = terminal_minute * interval * 60000
+    reference = json.loads(passivbot_rust.hsl_controller(json.dumps(dict(
+        episodes=[dict(points=points)],
+        now=now, start=now - lookback * interval * 60000, budget=600,
+        span=3.5, threshold=0.1, cooldown_ms=600000,
+        restart="never" if never else "always",
+    ))))[-1]
+    action = {"normal": 0, "halted": 1, "panic": 3}[reference["action"]]
+    np.testing.assert_allclose(chronological[-3],
+                               [action, reference["raw"], reference["ema"]],
+                               rtol=2e-5, atol=2e-6)
+
+
+@pytest.mark.parametrize("terminal,minute", [(False, 1), (True, 0)])
+def test_unrelated_out_of_order_observations_remain_invalid(terminal, minute):
+    events = [(0, 1000, 0, 0, False, False),
+              (1, 1000, 0, -20, True, False),
+              (2, 1000, 0, -500, True, False),
+              (minute, 600, -400, 0, False, terminal)]
+    assert run_controller(events, 3.5, False)[-1, 0] == -1

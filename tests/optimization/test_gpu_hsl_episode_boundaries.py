@@ -1,4 +1,4 @@
-"""Exercise the checked-in Metal episode boundary code on Apple MPS."""
+"""Exercise the shared GPU episode boundary code on CUDA and Apple MPS."""
 
 from functools import lru_cache
 from pathlib import Path
@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 torch = pytest.importorskip("torch")
+from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
 pytestmark = pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+    not (torch.backends.mps.is_available() or torch.cuda.is_available()),
+    reason="GPU unavailable"
 )
 
 _GPU = Path(__file__).resolve().parents[2] / "passivbot-rust" / "src" / "gpu"
@@ -40,6 +42,7 @@ def _source(name):
         "#define PASSIVBOT_HSL_CAPACITY 64\n"
         "#define PASSIVBOT_HSL_TREE_SIZE 1\n"
         "#define PASSIVBOT_HSL_LOOKBACK 1440\n"
+        "#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 1\n"
         + (_GPU / "mps_hsl.metal").read_text()
         + source
     )
@@ -89,7 +92,7 @@ kernel void episode_boundary_probe(
 
 @lru_cache(maxsize=None)
 def _library(name):
-    return torch.mps.compile_shader(_source(name) + _PROBE)
+    return compile_shader(_source(name) + _PROBE)
 
 
 def _run(
@@ -102,11 +105,11 @@ def _run(
     never=False,
 ):
     params = torch.tensor(
-        [1, 0.1, 1, 60, 2 if never else 0, mode, 1], dtype=torch.float32, device="mps"
+        [1, 0.1, 1, 60, 2 if never else 0, mode, 1], dtype=torch.float32, device=gpu_device()
     )
-    trees = torch.empty((36, 32), dtype=torch.uint8, device="mps")
-    rows = torch.empty(256, dtype=torch.int32, device="mps")
-    output = torch.zeros(12, dtype=torch.float32, device="mps")
+    trees = torch.empty((36, 32), dtype=torch.uint8, device=gpu_device())
+    rows = torch.empty(256, dtype=torch.int32, device=gpu_device())
+    output = torch.zeros(12, dtype=torch.float32, device=gpu_device())
     _library(name).episode_boundary_probe(
         params,
         trees,
@@ -118,7 +121,7 @@ def _run(
         int(short_owner),
         threads=1,
     )
-    torch.mps.synchronize()
+    synchronize()
     return output.cpu().tolist()
 
 
@@ -182,11 +185,11 @@ def test_terminal_cash_exhaustion_leaves_liquidation_to_kernel(name, mode, balan
         "output[7] = owner.hsl_valid; output[8] = owner.hsl.last_observed; return;\n"
         "    if (finished) {",
     )
-    library = torch.mps.compile_shader(_source(name) + probe)
-    params = torch.tensor([1, 0.1, 1, 60, 0, mode, 1], device="mps")
-    trees = torch.empty((36, 32), dtype=torch.uint8, device="mps")
-    rows = torch.empty(256, dtype=torch.int32, device="mps")
-    output = torch.zeros(12, device="mps")
+    library = compile_shader(_source(name) + probe)
+    params = torch.tensor([1, 0.1, 1, 60, 0, mode, 1], device=gpu_device())
+    trees = torch.empty((36, 32), dtype=torch.uint8, device=gpu_device())
+    rows = torch.empty(256, dtype=torch.int32, device=gpu_device())
+    output = torch.zeros(12, device=gpu_device())
     library.episode_boundary_probe(
         params, trees, rows, output, 0, 0, 1000.0 - balance, 0, threads=1
     )
@@ -239,11 +242,11 @@ kernel void loss_report_probe(constant float* params, device HslNode* trees,
     output[7] = h.panic_close_loss_sum;
 }
 """
-    library = torch.mps.compile_shader(_source(_KERNELS[0]) + probe)
-    params = torch.tensor([1, 0.1, 1, 60, 0, 2, 1], device="mps")
-    trees = torch.empty((36, 32), dtype=torch.uint8, device="mps")
-    rows = torch.empty(256, dtype=torch.int32, device="mps")
-    result = torch.zeros(12, device="mps")
+    library = compile_shader(_source(_KERNELS[0]) + probe)
+    params = torch.tensor([1, 0.1, 1, 60, 0, 2, 1], device=gpu_device())
+    trees = torch.empty((36, 32), dtype=torch.uint8, device=gpu_device())
+    rows = torch.empty(256, dtype=torch.int32, device=gpu_device())
+    result = torch.zeros(12, device=gpu_device())
     library.loss_report_probe(
         params,
         trees,
@@ -252,7 +255,7 @@ kernel void loss_report_probe(constant float* params, device HslNode* trees,
         ["flat", "green", "censored"].index(finish),
         threads=1,
     )
-    torch.mps.synchronize()
+    synchronize()
     values = result.cpu().tolist()
     assert values[:2] == pytest.approx([0.025, 1])
     assert values[2] == {"flat": 1, "green": 0, "censored": 3}[finish]

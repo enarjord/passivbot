@@ -241,6 +241,9 @@ struct HslController {
     float raw;
     float ema;
     int last_observed;
+    int mark_head;
+    int mark_count;
+    int mark_observed;
     int episode_seed;
     int flat_minute;
     int action; // 0 normal, 1 cooldown, 3 current panic
@@ -262,6 +265,8 @@ inline HslController hsl_controller_init(
     h.window = hsl_init(tree, capacity, tree_size, span);
     h.origin = h.last_realized = h.raw = h.ema = 0.0f;
     h.last_observed = h.episode_seed = h.flat_minute = -1;
+    h.mark_head = h.mark_count = 0;
+    h.mark_observed = -1;
     h.action = 0;
     h.exposed = h.completed = h.scalar_ready = false;
     h.scalar_offset = h.scalar_peak = h.scalar_raw = h.scalar_ema = h.scalar_baseline = 0.0f;
@@ -286,10 +291,49 @@ inline bool hsl_observe(
     int minute, int lookback, float budget, float realized, float upnl,
     bool exposed, bool terminal, float threshold, float cooldown, bool never_restart
 ) {
-    if (minute < h.last_observed || !(budget > 0.0f) || !isfinite(budget)
+    if (!(budget > 0.0f) || !isfinite(budget)
         || !isfinite(realized) || !isfinite(upnl) || (terminal && exposed)
         || !(threshold > 0.0f && threshold <= 1.0f) || !isfinite(cooldown)
         || cooldown < 0.0f || lookback < 1 || !(h.window.alpha > 0.0f)) return false;
+    if (minute < h.last_observed) {
+        // Forced delisting follows order construction. Its factual fill is at
+        // the bar start, before the mark used to construct those orders.
+        // Retract only that latest provisional observation, including coarser
+        // candle intervals, before observing the terminal
+        // fill; ordinary out-of-order observations remain invalid. The caller's
+        // lookback + 2 capacity preserves the preceding window during append.
+        if (!(terminal && !exposed && h.exposed
+                && minute >= h.mark_observed
+                && h.window.last_minute == h.last_observed
+                && h.mark_count < h.window.capacity)) return false;
+        h.window.head = h.mark_head;
+        h.window.count = h.mark_count;
+        h.last_observed = h.mark_observed;
+        h.scalar_ready = false;
+        int last = (h.window.head + h.window.count - 1) % h.window.capacity;
+        if (h.window.count == 0 || times[last] > minute) {
+            // First observed exposure: its flat seed and closing fill share
+            // this factual minute, without an invented preceding EMA step.
+            h.window.count = 0;
+            h.window.last_minute = -1;
+            h.window.block_prefix = hsl_empty_node();
+            h.episode_seed = minute;
+            if (!hsl_record(h, tree, times, realized_rows,
+                    minute, h.origin, 0.0f)) return false;
+        } else {
+            h.window.last_minute = times[last];
+            h.window.block_prefix = hsl_empty_node();
+            device float2* rows = hsl_samples(tree, h.window.tree_size);
+            for (int slot = (last / 64) * 64; slot < last; ++slot) {
+                h.window.block_prefix = hsl_join(h.window.block_prefix,
+                    hsl_sample(rows[slot], h.window.alpha));
+            }
+            HslNode block = hsl_join(h.window.block_prefix,
+                hsl_sample(rows[last], h.window.alpha));
+            tree[h.window.tree_size + last / 64] = block;
+            if (last % 64 == 63) hsl_set(tree, h.window.tree_size, last / 64, block);
+        }
+    }
     int start = minute - lookback;
     if ((exposed || terminal) && !h.exposed) {
         // A new exposure, even during cooldown, discards the completed episode.
@@ -303,6 +347,11 @@ inline bool hsl_observe(
         h.episode_seed = max(start, h.last_observed >= 0 ? h.last_observed : minute);
         if (!hsl_record(h, tree, times, realized_rows,
                 h.episode_seed, h.origin, 0.0f)) return false;
+    }
+    if (minute > h.last_observed) {
+        h.mark_head = h.window.head;
+        h.mark_count = h.window.count;
+        h.mark_observed = h.last_observed;
     }
     bool clipped = h.window.count > 0 && times[h.window.head] < start;
     hsl_expire(h.window, tree, times, start);

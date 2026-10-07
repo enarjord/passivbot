@@ -843,8 +843,7 @@ mod tests {
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains("net_position_cost -= short_side.psize[c]"));
         assert!(source.contains("float twe_abs = fabs(net_position_cost / account.balance)"));
-        assert!(source.contains("account.balance = 0.0f"));
-        assert!(source.contains("alive || hsl_validation_failed"));
+        assert!(source.contains("scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;"));
         assert!(source.contains("select_ema_multicoin_unstuck_coin("));
         assert!(source.contains("int forced_unstuck_coin"));
         assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));
@@ -1339,7 +1338,7 @@ mod tests {
         assert!(source.contains("const TrailingMartingaleMulticoinSideConfig long_config ="));
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains("net_position_cost -= short_side.psize[c]"));
-        assert!(source.contains("alive || hsl_validation_failed"));
+        assert!(source.contains("scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;"));
         assert!(source.contains("select_tm_multicoin_unstuck_coin("));
         assert!(source.contains("int forced_unstuck_coin"));
         assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));

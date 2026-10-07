@@ -436,6 +436,49 @@ inline int hsl_report_tier(thread const HslState& h) {
     return h.enabled && (h.red_active_now || h.halted) ? 3 : 0;
 }
 
+// Reporting runs after forced closes and never advances the trading controller.
+// A negative tier means this side has no enabled reporting scope.
+inline int record_multicoin_hsl_report(
+    thread HslState& aggregate, thread HslState* coins, int coin_count,
+    int effective_n_positions, bool strategy_eq_eligible,
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    thread HslDrawdownEmaTailStats& ema_tail,
+#endif
+    thread HslStrategyEquityStats& strategy_eq,
+    float equity, int day_index
+) {
+    bool enabled = aggregate.enabled;
+    int tier = hsl_report_tier(aggregate);
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    float drawdown_ema = fabs(aggregate.drawdown_ema);
+#endif
+    if (aggregate.signal_mode == HSL_SIGNAL_COIN) {
+        enabled = false;
+        tier = 0;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+        drawdown_ema = 0.0f;
+#endif
+        if (effective_n_positions > 0) {
+            for (int c = 0; c < coin_count; ++c) {
+                enabled = enabled || coins[c].enabled;
+                tier = max(tier, hsl_report_tier(coins[c]));
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                if (coins[c].enabled)
+                    drawdown_ema = fmax(drawdown_ema, fabs(coins[c].drawdown_ema));
+#endif
+            }
+        }
+        strategy_eq_eligible = enabled;
+    }
+    if (strategy_eq_eligible) {
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+        update_hsl_drawdown_ema_tail_stats(ema_tail, drawdown_ema);
+#endif
+        update_hsl_strategy_equity_stats(strategy_eq, equity, day_index);
+    }
+    return enabled ? tier : -1;
+}
+
 inline HslState load_hsl(
     constant float* params,
     int po,
