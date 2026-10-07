@@ -122,3 +122,59 @@ def test_native_hsl_lifecycle_metrics_match_cpu(strategy, mode, sides):
     )
     assert report["metrics"]["hard_stop_triggers_per_year"]["cpu"] > 0
     assert report["passed"], report["metrics"]
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("sides", ["long", "both"])
+@pytest.mark.parametrize("terminal_fill", [False, True], ids=["open-panic", "open-halt"])
+def test_native_unfinished_hsl_duration_uses_final_reporting_time(strategy, mode, sides, terminal_fill):
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    from config.hsl import generated_template
+    from test_gpu_entry_sizing_parity import _fixture
+    from optimization.gpu.parity import MetricTolerance
+    from tools.gpu_parity import run_comparison
+
+    inputs = list(_fixture("long", 2, "initial"))
+    config = generated_template(inputs[0], mode)
+    inputs[0] = config
+    config["live"].update(strategy_kind=strategy, hedge_mode=sides == "both",
+                          pnls_max_lookback_days=1.0)
+    policy = dict(red_threshold=.002, ema_span_minutes=1,
+                  cooldown_minutes_after_red=10000,
+                  restart_after_red_policy="always",
+                  panic_close_order_type="market" if terminal_fill else "limit")
+    for side in ("long", "short"):
+        bot = config["bot"][side]
+        enabled = side == "long" or sides == "both"
+        bot["risk"].update(n_positions=2 if enabled else 0,
+                           total_wallet_exposure_limit=(5.0 if side == "long" else .001) if enabled else 0)
+        bot["hsl"].update(enabled=enabled, **policy)
+        bot["strategy"]["ema_anchor"]["base_qty_pct"] = .8
+        bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = .8
+    if mode == "unified":
+        config["bot"]["hsl"].update(enabled=True, **policy)
+    # Entry at 3; RED is observed at the close of 4. The limit panic cannot
+    # cross the next gap, while the market panic flattens into a long cooldown.
+    # Row 6 is lookahead: both remain RED at the final simulated close of 5.
+    # Neither history nor cooldown expires.
+    inputs[1][4, :, :3] = [100, 99, 99.5]
+    terminal_mark = 98.5 if terminal_fill else 93.0
+    inputs[1][5:, :, :3] = [terminal_mark + .1, terminal_mark - .1, terminal_mark]
+    metrics = ["hard_stop_duration_minutes_mean", "hard_stop_duration_minutes_max"]
+    report = run_comparison(
+        tuple(inputs), "bybit", metrics,
+        {name: MetricTolerance(1e-6, 0) for name in metrics},
+        diagnostics=True, gpu_engine="native",
+    )
+    assert not report["diagnostics"]["gpu"]["native_result"]["liquidated"]
+    remaining_long = report["diagnostics"]["cpu"]["absolute_position_quantity"]["long"]
+    if terminal_fill:
+        assert remaining_long == pytest.approx(0)
+    else:
+        assert remaining_long > 0
+    for name in metrics:
+        assert report["metrics"][name]["cpu"] == pytest.approx(1)
+    assert report["passed"], report["metrics"]

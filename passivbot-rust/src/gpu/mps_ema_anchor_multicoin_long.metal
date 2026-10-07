@@ -3502,7 +3502,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             coin_hsl, C, short_side,
             hsl_time.observed_steps,
             hsl_time.red_steps,
-            last_eq_k,
+            hsl_report_end_step(hsl_time),
             scalars,
             scalar_offset + 32
         );
@@ -3511,7 +3511,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             hsl, short_side,
             hsl_time.observed_steps,
             hsl_time.red_steps,
-            last_eq_k,
+            hsl_report_end_step(hsl_time),
             scalars,
             scalar_offset + 32
         );
@@ -4551,14 +4551,14 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             long_side.coin_hsl, short_side.coin_hsl, C,
             hsl_time.observed_steps,
             hsl_time.red_steps,
-            last_eq_k, scalars, scalar_offset + 32
+            hsl_report_end_step(hsl_time), scalars, scalar_offset + 32
         );
     } else {
         write_dual_side_hsl_outputs(
             long_side.hsl, short_side.hsl,
             hsl_time.observed_steps,
             hsl_time.red_steps,
-            last_eq_k, scalars, scalar_offset + 32
+            hsl_report_end_step(hsl_time), scalars, scalar_offset + 32
         );
     }
     scalars[scalar_offset + 57] = ema_multicoin_entry_initial_balance_pct(

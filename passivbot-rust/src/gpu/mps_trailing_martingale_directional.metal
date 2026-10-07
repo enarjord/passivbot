@@ -4770,16 +4770,22 @@ inline void passivbot_single_coin_impl(
     HslState short_report = short_hsl;
     finish_hsl_panic_loss(long_report);
     finish_hsl_panic_loss(short_report);
+    // A normal terminal sample reaches bar close. A terminal fill remains at
+    // the fill timestamp unless an ensuing HSL observation reached that close.
+    float report_end_k = last_eq_k >= 0.0f
+        ? fmax(last_eq_k + (!alive && last_fill_k == last_eq_k ? 0.0f : 1.0f),
+            float(max(long_hsl.hsl.last_observed, short_hsl.hsl.last_observed)))
+        : -1.0f;
     float long_terminal_count = (long_hsl.red_active_now || long_hsl.halted)
-        && long_hsl.current_halt_start_k >= 0.0f && last_eq_k >= 0.0f
+        && long_hsl.current_halt_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
     float short_terminal_count = (short_hsl.red_active_now || short_hsl.halted)
-        && short_hsl.current_halt_start_k >= 0.0f && last_eq_k >= 0.0f
+        && short_hsl.current_halt_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
     float long_terminal_duration = long_terminal_count > 0.0f
-        ? fmax(last_eq_k - long_hsl.current_halt_start_k, 0.0f) : 0.0f;
+        ? fmax(report_end_k - long_hsl.current_halt_start_k, 0.0f) : 0.0f;
     float short_terminal_duration = short_terminal_count > 0.0f
-        ? fmax(last_eq_k - short_hsl.current_halt_start_k, 0.0f) : 0.0f;
+        ? fmax(report_end_k - short_hsl.current_halt_start_k, 0.0f) : 0.0f;
     float terminal_count = long_terminal_count + short_terminal_count;
     scalars[so + 18] = long_hsl.enabled ? 1.0f : 0.0f;
     scalars[so + 19] = short_hsl.enabled ? 1.0f : 0.0f;
@@ -4802,13 +4808,13 @@ inline void passivbot_single_coin_impl(
         + short_hsl.trigger_drawdown_sum;
     scalars[so + 30] = long_hsl.trigger_drawdown_count
         + short_hsl.trigger_drawdown_count;
-    float long_open_exit = long_hsl.current_red_start_k >= 0.0f && last_eq_k >= 0.0f
+    float long_open_exit = long_hsl.current_red_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
-    float short_open_exit = short_hsl.current_red_start_k >= 0.0f && last_eq_k >= 0.0f
+    float short_open_exit = short_hsl.current_red_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
     scalars[so + 31] = long_hsl.flatten_time_sum_steps + short_hsl.flatten_time_sum_steps
-        + (long_open_exit > 0.0f ? fmax(last_eq_k - long_hsl.current_red_start_k, 0.0f) : 0.0f)
-        + (short_open_exit > 0.0f ? fmax(last_eq_k - short_hsl.current_red_start_k, 0.0f) : 0.0f);
+        + (long_open_exit > 0.0f ? fmax(report_end_k - long_hsl.current_red_start_k, 0.0f) : 0.0f)
+        + (short_open_exit > 0.0f ? fmax(report_end_k - short_hsl.current_red_start_k, 0.0f) : 0.0f);
     scalars[so + 32] = long_hsl.flatten_time_count + short_hsl.flatten_time_count
         + long_open_exit + short_open_exit;
     scalars[so + 33] = long_hsl.restart_retrigger_count

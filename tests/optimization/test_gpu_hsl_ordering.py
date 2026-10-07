@@ -191,10 +191,14 @@ def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill
     candles[4, :, :3] = [100, 99, 99.5]
     candles[5:, :, :3] = [21, 19, 20]
     metric = "hard_stop_time_in_red_pct"
-    report = run_comparison(tuple(inputs), "bybit", (metric,),
-                            {metric: MetricTolerance(1e-8, 1e-6)},
+    durations = ("hard_stop_duration_minutes_mean", "hard_stop_duration_minutes_max")
+    metrics = (metric, *durations)
+    report = run_comparison(tuple(inputs), "bybit", metrics,
+                            {name: MetricTolerance(1e-8, 1e-6) for name in metrics},
                             diagnostics=True, gpu_engine="native")
     expected = 0 if terminal_fill else 1 / 3
     assert report["diagnostics"]["gpu"]["native_result"]["liquidated"]
     assert report["metrics"][metric]["cpu"] == pytest.approx(expected)
+    for name in durations:
+        assert report["metrics"][name]["cpu"] == pytest.approx(0 if terminal_fill else 1)
     assert report["passed"], report["metrics"]

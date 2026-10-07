@@ -820,6 +820,12 @@ inline void record_hsl_time_observation(
     observation.was_red = tier == 3;
 }
 
+// Convert the relative reporting clock to controller minute coordinates.
+// Normal observations are bar closes; terminal fills retain their earlier time.
+inline float hsl_report_end_step(thread const HslTimeObservation& observation) {
+    return observation.last_step >= 0.0f ? observation.last_step + 1.0f : -1.0f;
+}
+
 // Keep every HSL scalar reduction in one contract. Existing one-side kernels
 // and future fused dual-side kernels therefore share identical sum/max/count
 // and conditional-min semantics.
@@ -892,7 +898,7 @@ inline void accumulate_hsl_output(
     thread HslOutputAggregate& output,
     thread HslState& h,
     bool short_side,
-    float last_equity_k
+    float report_end_k
 ) {
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     // Include a censored unfinished panic segment in the final report.
@@ -917,10 +923,10 @@ inline void accumulate_hsl_output(
     output.panic_loss_drawdown_count += report.panic_loss_drawdown_count;
     if (!h.enabled) return;
     float terminal_count = (h.red_active_now || h.halted)
-        && h.current_halt_start_k >= 0.0f && last_equity_k >= 0.0f
+        && h.current_halt_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
     float terminal_duration = terminal_count > 0.0f
-        ? fmax(last_equity_k - h.current_halt_start_k, 0.0f) : 0.0f;
+        ? fmax(report_end_k - h.current_halt_start_k, 0.0f) : 0.0f;
     if (short_side) {
         output.enabled_short = 1.0f;
         output.triggers_short += h.triggers;
@@ -944,10 +950,10 @@ inline void accumulate_hsl_output(
     output.duration_count += h.halt_duration_count + terminal_count;
     output.trigger_drawdown_sum += h.trigger_drawdown_sum;
     output.trigger_drawdown_count += h.trigger_drawdown_count;
-    float open_exit_count = h.current_red_start_k >= 0.0f && last_equity_k >= 0.0f
+    float open_exit_count = h.current_red_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
     output.flatten_time_sum += h.flatten_time_sum_steps + (open_exit_count > 0.0f
-        ? fmax(last_equity_k - h.current_red_start_k, 0.0f) : 0.0f);
+        ? fmax(report_end_k - h.current_red_start_k, 0.0f) : 0.0f);
     output.flatten_time_count += h.flatten_time_count + open_exit_count;
     output.restart_retrigger_count += h.restart_retrigger_count;
     output.halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
@@ -955,7 +961,7 @@ inline void accumulate_hsl_output(
     (void)output;
     (void)h;
     (void)short_side;
-    (void)last_equity_k;
+    (void)report_end_k;
 #endif
 }
 
@@ -996,14 +1002,14 @@ inline void write_one_side_hsl_outputs(
     bool short_side,
     float tier_samples_total,
     float tier_samples_red,
-    float last_equity_k,
+    float report_end_k,
     device float* scalars,
     int scalar_offset
 ) {
     HslOutputAggregate output = init_hsl_output_aggregate(
         tier_samples_total, tier_samples_red
     );
-    accumulate_hsl_output(output, h, short_side, last_equity_k);
+    accumulate_hsl_output(output, h, short_side, report_end_k);
     write_hsl_output_aggregate(output, scalars, scalar_offset);
 }
 
@@ -1013,7 +1019,7 @@ inline void write_one_side_coin_hsl_outputs(
     bool short_side,
     float tier_samples_total,
     float tier_samples_red,
-    float last_equity_k,
+    float report_end_k,
     device float* scalars,
     int scalar_offset
 ) {
@@ -1022,7 +1028,7 @@ inline void write_one_side_coin_hsl_outputs(
     );
     for (int c = 0; c < controller_count; ++c) {
         accumulate_hsl_output(
-            output, controllers[c], short_side, last_equity_k
+            output, controllers[c], short_side, report_end_k
         );
     }
     write_hsl_output_aggregate(output, scalars, scalar_offset);
@@ -1033,15 +1039,15 @@ inline void write_dual_side_hsl_outputs(
     thread HslState& short_hsl,
     float tier_samples_total,
     float tier_samples_red,
-    float last_equity_k,
+    float report_end_k,
     device float* scalars,
     int scalar_offset
 ) {
     HslOutputAggregate output = init_hsl_output_aggregate(
         tier_samples_total, tier_samples_red
     );
-    accumulate_hsl_output(output, long_hsl, false, last_equity_k);
-    accumulate_hsl_output(output, short_hsl, true, last_equity_k);
+    accumulate_hsl_output(output, long_hsl, false, report_end_k);
+    accumulate_hsl_output(output, short_hsl, true, report_end_k);
     write_hsl_output_aggregate(output, scalars, scalar_offset);
 }
 
@@ -1051,7 +1057,7 @@ inline void write_dual_side_coin_hsl_outputs(
     int controller_count,
     float tier_samples_total,
     float tier_samples_red,
-    float last_equity_k,
+    float report_end_k,
     device float* scalars,
     int scalar_offset
 ) {
@@ -1059,8 +1065,8 @@ inline void write_dual_side_coin_hsl_outputs(
         tier_samples_total, tier_samples_red
     );
     for (int c = 0; c < controller_count; ++c) {
-        accumulate_hsl_output(output, long_controllers[c], false, last_equity_k);
-        accumulate_hsl_output(output, short_controllers[c], true, last_equity_k);
+        accumulate_hsl_output(output, long_controllers[c], false, report_end_k);
+        accumulate_hsl_output(output, short_controllers[c], true, report_end_k);
     }
     write_hsl_output_aggregate(output, scalars, scalar_offset);
 }

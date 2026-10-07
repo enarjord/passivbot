@@ -1932,3 +1932,26 @@ Completion requires:
   lose their full strict-recovery horizon. Separate ordinary equity sampling from
   HSL eligibility in the next change; retain protection ablation and CPU reference
   definitions. Weighted-ratio and long-trajectory assessments remain separate.
+
+### 2026-10-07 — Censored HSL reporting endpoints
+
+- Automatic review of PR #1921 identified a real endpoint defect: unfinished RED
+  snapshots subtracted the bar-open equity index from a bar-close episode start.
+  Derive the final reporting coordinate from the existing elapsed-observation clock.
+  Normal terminal marks reach bar close; liquidation during a fill retains its fill
+  timestamp. Apply that convention to shared and retained directional outputs without
+  adding replay state or changing controller decisions.
+- Twenty-four controlled native comparisons cover both strategies, long/shared sides,
+  coin/pside/unified scopes and open limit panic versus flattened market cooldown.
+  Actual CPU fill traces confirm the intended terminal exposure. All original-source
+  cases report zero minutes against the CPU's one minute. The corrected source passes
+  all 24; eight actual fill/mark liquidation comparisons also pass. The seven-row
+  fixture's final row is lookahead, so its final simulated close is row five.
+- The corrected source additionally passes 77 reporting/selection/loss checks and
+  331 Rust tests (one ignored), with default-feature compilation and rebuilt-extension
+  verification. Replay controls and CPU-forbidden optimizer checks are pending.
+- A separate 3,000-minute seed-43 shock experiment with a 10,000-minute cooldown
+  and one-day retained history still exposes closed-episode/history-expiry duration
+  discrepancies of one to 55 minutes. It does not isolate the endpoint defect and
+  is not accepted by the short controlled regression. Preserve it as a distinct
+  trajectory/reporting gap for subsequent diagnosis; general parity policy is unchanged.
