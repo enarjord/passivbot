@@ -208,6 +208,11 @@ inline float hsl_strategy_equity_drawdown_mean_worst_1pct(
         + (stats.current_drawdown_day >= 0 ? 1.0f : 0.0f);
     if (!(sample_count > 0.0f)) return 0.0f;
     float worst_n = fmax(floor(sample_count * 0.01f), 1.0f);
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    // Native tail requests already retain the maximum. A one-day tail is
+    // exactly that maximum; averaging its histogram bin biases the result.
+    if (worst_n == 1.0f) return stats.drawdown_max;
+#endif
     float remaining = worst_n;
     float total = 0.0f;
     int current_bin = stats.current_drawdown_day >= 0
@@ -470,12 +475,10 @@ inline int hsl_report_tier(thread const HslState& h) {
 // A negative tier means this side has no enabled reporting scope.
 inline int record_multicoin_hsl_report(
     thread HslState& aggregate, thread HslState* coins, int coin_count,
-    int effective_n_positions, bool strategy_eq_eligible,
+    int effective_n_positions, bool ema_eligible
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    thread HslDrawdownEmaTailStats& ema_tail,
+    , thread HslDrawdownEmaTailStats& ema_tail
 #endif
-    thread HslStrategyEquityStats& strategy_eq,
-    float equity, int day_index
 ) {
     bool enabled = aggregate.enabled;
     int tier = hsl_report_tier(aggregate);
@@ -498,13 +501,12 @@ inline int record_multicoin_hsl_report(
 #endif
             }
         }
-        strategy_eq_eligible = enabled;
+        ema_eligible = enabled;
     }
-    if (strategy_eq_eligible) {
+    if (ema_eligible) {
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
         update_hsl_drawdown_ema_tail_stats(ema_tail, drawdown_ema);
 #endif
-        update_hsl_strategy_equity_stats(strategy_eq, equity, day_index);
     }
     return enabled ? tier : -1;
 }
