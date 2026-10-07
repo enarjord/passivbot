@@ -86,6 +86,32 @@
         "initial_fill": [],
         "sparse_fills": [],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.0,
+        "adg_strategy_eq": 0.0,
+        "adg_time_integrated_strategy_eq": 0.0,
+        "calmar_ratio_strategy_eq": 0.0,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.0,
+        "omega_ratio_strategy_eq": 0.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": 0.0,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.0
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.0,
+        "adg_strategy_eq": 0.0,
+        "adg_time_integrated_strategy_eq": 0.0,
+        "calmar_ratio_strategy_eq": 0.0,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.0,
+        "omega_ratio_strategy_eq": 0.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": 0.0,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.0
       }
     },
     {
@@ -179,6 +205,32 @@
           0
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.0,
+        "adg_strategy_eq": 0.0,
+        "adg_time_integrated_strategy_eq": 0.0,
+        "calmar_ratio_strategy_eq": 0.0,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.0,
+        "omega_ratio_strategy_eq": 0.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": 0.0,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.0
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.0,
+        "adg_strategy_eq": 0.0,
+        "adg_time_integrated_strategy_eq": 0.0,
+        "calmar_ratio_strategy_eq": 0.0,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.0,
+        "omega_ratio_strategy_eq": 0.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": 0.0,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.0
       }
     },
     {
@@ -273,6 +325,32 @@
           0
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.0999999999999999,
+        "adg_strategy_eq": 0.02469507659595993,
+        "adg_time_integrated_strategy_eq": 0.0999999999999999,
+        "calmar_ratio_strategy_eq": 24695076595.95993,
+        "expected_shortfall_1pct_strategy_eq": 0.1,
+        "mdg_strategy_eq": 0.1,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 1.0,
+        "sharpe_ratio_strategy_eq": 0.3279344228724765,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 24695076595.95993
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.0999999999999999,
+        "adg_strategy_eq": 0.02469507659595993,
+        "adg_time_integrated_strategy_eq": 0.0999999999999999,
+        "calmar_ratio_strategy_eq": 24695076595.95993,
+        "expected_shortfall_1pct_strategy_eq": 0.1,
+        "mdg_strategy_eq": 0.1,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 1.0,
+        "sharpe_ratio_strategy_eq": 0.3279344228724765,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 24695076595.95993
       }
     },
     {
@@ -368,6 +446,32 @@
           0
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.004987562112088923,
+        "adg_strategy_eq": 0.012075810048145286,
+        "adg_time_integrated_strategy_eq": 0.0514210946729658,
+        "calmar_ratio_strategy_eq": 0.1475932339217757,
+        "expected_shortfall_1pct_strategy_eq": 0.08181818181818182,
+        "mdg_strategy_eq": 0.009090909090909094,
+        "omega_ratio_strategy_eq": 1.2222222222222223,
+        "positive_gain_participation_strategy_eq": 0.5,
+        "sharpe_ratio_strategy_eq": 0.13276236653116577,
+        "sortino_ratio_strategy_eq": 0.1475932339217757,
+        "sterling_ratio_strategy_eq": 0.1475932339217757
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.004987562112088923,
+        "adg_strategy_eq": 0.012075810048145286,
+        "adg_time_integrated_strategy_eq": 0.0514210946729658,
+        "calmar_ratio_strategy_eq": 0.1475932339217757,
+        "expected_shortfall_1pct_strategy_eq": 0.08181818181818182,
+        "mdg_strategy_eq": 0.009090909090909094,
+        "omega_ratio_strategy_eq": 1.2222222222222223,
+        "positive_gain_participation_strategy_eq": 0.5,
+        "sharpe_ratio_strategy_eq": 0.13276236653116577,
+        "sortino_ratio_strategy_eq": 0.1475932339217757,
+        "sterling_ratio_strategy_eq": 0.1475932339217757
       }
     },
     {
@@ -465,6 +569,32 @@
           1
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.0415804373065589,
+        "adg_strategy_eq": 0.0194265469082735,
+        "adg_time_integrated_strategy_eq": 0.03766288828904799,
+        "calmar_ratio_strategy_eq": 0.23743557332334278,
+        "expected_shortfall_1pct_strategy_eq": 0.08181818181818182,
+        "mdg_strategy_eq": 0.1,
+        "omega_ratio_strategy_eq": 2.6743674367436743,
+        "positive_gain_participation_strategy_eq": 0.6622472598081476,
+        "sharpe_ratio_strategy_eq": 0.20623009446549231,
+        "sortino_ratio_strategy_eq": 0.23743557332334278,
+        "sterling_ratio_strategy_eq": 0.23743557332334278
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.0415804373065589,
+        "adg_strategy_eq": 0.0194265469082735,
+        "adg_time_integrated_strategy_eq": 0.03766288828904799,
+        "calmar_ratio_strategy_eq": 0.23743557332334278,
+        "expected_shortfall_1pct_strategy_eq": 0.08181818181818182,
+        "mdg_strategy_eq": 0.1,
+        "omega_ratio_strategy_eq": 2.6743674367436743,
+        "positive_gain_participation_strategy_eq": 0.6622472598081476,
+        "sharpe_ratio_strategy_eq": 0.20623009446549231,
+        "sortino_ratio_strategy_eq": 0.23743557332334278,
+        "sterling_ratio_strategy_eq": 0.23743557332334278
       }
     },
     {
@@ -574,6 +704,32 @@
           5
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.06726885931119558,
+        "adg_strategy_eq": 0.03341794844502832,
+        "adg_time_integrated_strategy_eq": 0.06730636030334869,
+        "calmar_ratio_strategy_eq": 0.050126922667542484,
+        "expected_shortfall_1pct_strategy_eq": 0.03,
+        "mdg_strategy_eq": 0.0782608695652174,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 0.9520986004253641,
+        "sharpe_ratio_strategy_eq": 1.0490614364504967,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.050126922667542484
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.06726885931119558,
+        "adg_strategy_eq": 0.03341794844502832,
+        "adg_time_integrated_strategy_eq": 0.06730636030334869,
+        "calmar_ratio_strategy_eq": 0.050126922667542484,
+        "expected_shortfall_1pct_strategy_eq": 0.03,
+        "mdg_strategy_eq": 0.0782608695652174,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 0.9520986004253641,
+        "sharpe_ratio_strategy_eq": 1.0490614364504967,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.050126922667542484
       }
     },
     {
@@ -687,6 +843,32 @@
           6
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.03675809298100438,
+        "adg_strategy_eq": 0.02228531706191883,
+        "adg_time_integrated_strategy_eq": 0.0376024149816296,
+        "calmar_ratio_strategy_eq": 0.05199907314447727,
+        "expected_shortfall_1pct_strategy_eq": 0.4,
+        "mdg_strategy_eq": 0.036709606803064745,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 0.998373621829335,
+        "sharpe_ratio_strategy_eq": 0.05035143610413851,
+        "sortino_ratio_strategy_eq": 0.055713292654797075,
+        "sterling_ratio_strategy_eq": 0.05199907314447727
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.03675809298100438,
+        "adg_strategy_eq": 0.02228531706191883,
+        "adg_time_integrated_strategy_eq": 0.0376024149816296,
+        "calmar_ratio_strategy_eq": 0.05199907314447727,
+        "expected_shortfall_1pct_strategy_eq": 0.4,
+        "mdg_strategy_eq": 0.036709606803064745,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 0.998373621829335,
+        "sharpe_ratio_strategy_eq": 0.05035143610413851,
+        "sortino_ratio_strategy_eq": 0.055713292654797075,
+        "sterling_ratio_strategy_eq": 0.05199907314447727
       }
     },
     {
@@ -784,6 +966,32 @@
           1
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": -0.14409383349505134,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": -0.09906451052784779,
+        "expected_shortfall_1pct_strategy_eq": 1.495049504950495,
+        "mdg_strategy_eq": -0.08181818181818182,
+        "omega_ratio_strategy_eq": 0.06341686169301901,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": -0.18161126419201898,
+        "sortino_ratio_strategy_eq": -0.13609916110453252,
+        "sterling_ratio_strategy_eq": -0.09906451052784779
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": -0.14409383349505134,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": -0.09906451052784779,
+        "expected_shortfall_1pct_strategy_eq": 1.495049504950495,
+        "mdg_strategy_eq": -0.08181818181818182,
+        "omega_ratio_strategy_eq": 0.06341686169301901,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": -0.18161126419201898,
+        "sortino_ratio_strategy_eq": -0.13609916110453252,
+        "sterling_ratio_strategy_eq": -0.09906451052784779
       }
     },
     {
@@ -883,6 +1091,32 @@
           2
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": null,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": null,
+        "expected_shortfall_1pct_strategy_eq": 0.5,
+        "mdg_strategy_eq": 1.0,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": null,
+        "sortino_ratio_strategy_eq": null,
+        "sterling_ratio_strategy_eq": null
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": null,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": null,
+        "expected_shortfall_1pct_strategy_eq": 0.5,
+        "mdg_strategy_eq": 1.0,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": null,
+        "sortino_ratio_strategy_eq": null,
+        "sterling_ratio_strategy_eq": null
       }
     },
     {
@@ -988,6 +1222,32 @@
           4
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": null,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": null,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.0,
+        "omega_ratio_strategy_eq": 0.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": null,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": null
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": null,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": null,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.0,
+        "omega_ratio_strategy_eq": 0.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": null,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": null
       }
     },
     {
@@ -1097,6 +1357,32 @@
           5
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.0,
+        "adg_strategy_eq": 0.0,
+        "adg_time_integrated_strategy_eq": 0.0,
+        "calmar_ratio_strategy_eq": 0.0,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.0,
+        "omega_ratio_strategy_eq": 0.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": 0.0,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.0
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.0,
+        "adg_strategy_eq": 0.0,
+        "adg_time_integrated_strategy_eq": 0.0,
+        "calmar_ratio_strategy_eq": 0.0,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.0,
+        "omega_ratio_strategy_eq": 0.0,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": 0.0,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.0
       }
     },
     {
@@ -1196,6 +1482,32 @@
           2
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": 1.166240842748072,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": 58.312042137403594,
+        "expected_shortfall_1pct_strategy_eq": 0.02,
+        "mdg_strategy_eq": 0.1,
+        "omega_ratio_strategy_eq": 100.49999999999999,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": 1.307259253714246,
+        "sortino_ratio_strategy_eq": 58.312042137403594,
+        "sterling_ratio_strategy_eq": 58.312042137403594
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": 1.1662408474832393,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": 58.312043397440945,
+        "expected_shortfall_1pct_strategy_eq": 0.0199999996490334,
+        "mdg_strategy_eq": 0.099999998245167,
+        "omega_ratio_strategy_eq": 100.50000135525273,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": 1.3072592520881774,
+        "sortino_ratio_strategy_eq": 58.312043397440945,
+        "sterling_ratio_strategy_eq": 58.312043397440945
       }
     },
     {
@@ -1295,6 +1607,32 @@
           2
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": null,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": null,
+        "expected_shortfall_1pct_strategy_eq": 0.2,
+        "mdg_strategy_eq": 0.3333333333333333,
+        "omega_ratio_strategy_eq": 6.085470085470085,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": null,
+        "sortino_ratio_strategy_eq": null,
+        "sterling_ratio_strategy_eq": null
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": -1.0,
+        "adg_strategy_eq": null,
+        "adg_time_integrated_strategy_eq": -1.0,
+        "calmar_ratio_strategy_eq": null,
+        "expected_shortfall_1pct_strategy_eq": 0.2,
+        "mdg_strategy_eq": 0.3333333333333333,
+        "omega_ratio_strategy_eq": 6.085470085470085,
+        "positive_gain_participation_strategy_eq": 0.0,
+        "sharpe_ratio_strategy_eq": null,
+        "sortino_ratio_strategy_eq": null,
+        "sterling_ratio_strategy_eq": null
       }
     },
     {
@@ -1628,6 +1966,32 @@
           80
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.0050551469288111096,
+        "adg_strategy_eq": 0.006140401016424324,
+        "adg_time_integrated_strategy_eq": 0.0087140946529249,
+        "calmar_ratio_strategy_eq": 0.020610708590986026,
+        "expected_shortfall_1pct_strategy_eq": 0.2979008182717382,
+        "mdg_strategy_eq": 0.004608294930875576,
+        "omega_ratio_strategy_eq": 1.6002285653932729,
+        "positive_gain_participation_strategy_eq": 0.16706443126372514,
+        "sharpe_ratio_strategy_eq": 0.030669939428319835,
+        "sortino_ratio_strategy_eq": 0.020711562623453944,
+        "sterling_ratio_strategy_eq": 0.020612232796296627
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.00505514693580252,
+        "adg_strategy_eq": 0.006140401044462118,
+        "adg_time_integrated_strategy_eq": 0.008714094654954277,
+        "calmar_ratio_strategy_eq": 0.020610709938062983,
+        "expected_shortfall_1pct_strategy_eq": 0.2979008138399525,
+        "mdg_strategy_eq": 0.004608294930875576,
+        "omega_ratio_strategy_eq": 1.6002285636241314,
+        "positive_gain_participation_strategy_eq": 0.16706443136499513,
+        "sharpe_ratio_strategy_eq": 0.030669939722044383,
+        "sortino_ratio_strategy_eq": 0.02071156280091343,
+        "sterling_ratio_strategy_eq": 0.02061223319705684
       }
     },
     {
@@ -3221,6 +3585,32 @@
           500
         ],
         "no_fills": []
+      },
+      "expected_raw_full": {
+        "adg_rolling_hmean_strategy_eq": 0.14315538323889065,
+        "adg_strategy_eq": 0.03517036840292387,
+        "adg_time_integrated_strategy_eq": 0.14315538323889065,
+        "calmar_ratio_strategy_eq": 0.16500355774923842,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.14315538323889046,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 1.0,
+        "sharpe_ratio_strategy_eq": 1.0,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.16500355774923842
+      },
+      "expected_raw_full_f32": {
+        "adg_rolling_hmean_strategy_eq": 0.14315540361993864,
+        "adg_strategy_eq": 0.035170373325072335,
+        "adg_time_integrated_strategy_eq": 0.14315540361993864,
+        "calmar_ratio_strategy_eq": 0.1650035954683909,
+        "expected_shortfall_1pct_strategy_eq": 0.0,
+        "mdg_strategy_eq": 0.14315540361993873,
+        "omega_ratio_strategy_eq": 1000.0,
+        "positive_gain_participation_strategy_eq": 1.0,
+        "sharpe_ratio_strategy_eq": 1.0,
+        "sortino_ratio_strategy_eq": 0.0,
+        "sterling_ratio_strategy_eq": 0.1650035954683909
       }
     }
   ]

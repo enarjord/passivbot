@@ -133,6 +133,20 @@ fn weighted_equity_shared_references_match_current_producers() {
                 ],
                 &case[expected_raw],
             );
+            let expected_full = if quantized { "expected_raw_full_f32" } else { "expected_raw_full" };
+            assert_metrics(name, &[
+                ("adg_rolling_hmean_strategy_eq", raw.adg_rolling_hmean_strategy_eq),
+                ("adg_strategy_eq", raw.adg_strategy_eq),
+                ("adg_time_integrated_strategy_eq", raw.adg_time_integrated_strategy_eq),
+                ("calmar_ratio_strategy_eq", raw.calmar_ratio_strategy_eq),
+                ("expected_shortfall_1pct_strategy_eq", raw.expected_shortfall_1pct_strategy_eq),
+                ("mdg_strategy_eq", raw.mdg_strategy_eq),
+                ("omega_ratio_strategy_eq", raw.omega_ratio_strategy_eq),
+                ("positive_gain_participation_strategy_eq", raw.positive_gain_participation_strategy_eq),
+                ("sharpe_ratio_strategy_eq", raw.sharpe_ratio_strategy_eq),
+                ("sortino_ratio_strategy_eq", raw.sortino_ratio_strategy_eq),
+                ("sterling_ratio_strategy_eq", raw.sterling_ratio_strategy_eq),
+            ], &case[expected_full]);
             for (variant, fill_indices) in case["fill_indices"].as_object().unwrap() {
                 let fills: Vec<Fill> = fill_indices
                     .as_array()

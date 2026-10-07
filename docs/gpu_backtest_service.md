@@ -291,6 +291,16 @@ inputs must fit the existing 45% free-VRAM budget; scratch and other allocations
 still fail and propagate. This is a bounded device-residency foundation, not a complete
 host/disk admission budget or adaptive multi-device scheduler.
 
+Shared multicoin replay also separates unweighted raw strategy equity from account
+reporting. Requested raw ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected
+shortfall and the three gain-quality metrics use daily raw equity closes/minima,
+including terminal loss marks. Calmar/Sterling additionally request raw daily
+worst drawdowns. Two f32 daily columns add eight bytes per candidate per calendar
+day; these columns and their replay updates compile away when unused. USD account
+metrics and account exposure normalization keep their original source. Native
+single-coin requests use this shared path; legacy directional single-coin screening
+retains its existing reducer. CUDA validation does not establish Metal acceptance.
+
 Shared CUDA replay captures factual raw strategy and account equity separately when
 weighted ADG, MDG, Sharpe, Sortino, Omega, Calmar or Sterling metrics require them.
 Account weighted ADG/MDG per exposure use the account curve before normalization;

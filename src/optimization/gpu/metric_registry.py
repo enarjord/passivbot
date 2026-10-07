@@ -15,6 +15,17 @@ RAW_STRATEGY_RISK_METRICS = frozenset({
     "strategy_eq_underwater_pct_mean",
 })
 
+RAW_STRATEGY_EQUITY_METRICS = frozenset({
+    f"{stem}_strategy_eq" for stem in (
+        "adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio",
+        "calmar_ratio", "sterling_ratio", "expected_shortfall_1pct",
+        "adg_rolling_hmean", "adg_time_integrated", "positive_gain_participation",
+    )
+})
+RAW_STRATEGY_DRAWDOWN_CONSUMERS = RAW_STRATEGY_RISK_METRICS | frozenset({
+    "calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq",
+})
+
 WEIGHTED_EQUITY_STEMS = (
     "adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio",
     "calmar_ratio", "sterling_ratio",

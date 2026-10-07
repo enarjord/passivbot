@@ -1,6 +1,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifndef PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+#define PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED 0
+#endif
+
 #ifndef PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
 #define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 0
 #endif
@@ -20,9 +24,9 @@ constant int GATE_REENTRY_OVERRIDE_COL = 41;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 42;
 constant int COIN_COLS = 13;
 #if PASSIVBOT_BTC_RISK_ENABLED
-constant int DAILY_COLS = 12 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED;
+constant int DAILY_COLS = 12 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #else
-constant int DAILY_COLS = 9 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED;
+constant int DAILY_COLS = 9 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
 constant int SCALAR_COLS = 67;
@@ -5163,6 +5167,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     float raw_strategy_peak = -INFINITY;
     float raw_strategy_day_dd = 0.0f;
 #endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+    float raw_strategy_day_end = 0.0f;
+    float raw_strategy_day_min = INFINITY;
+#endif
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
@@ -5239,6 +5247,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
                 daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
 #endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+#endif
                 daily[output + 3] = fills.day_volume;
                 daily[output + 4] = day_has_fill;
                 daily[output + 5] = day_min_balance;
@@ -5256,6 +5268,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             day_dd = 0.0f;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
             raw_strategy_day_dd = 0.0f;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+            raw_strategy_day_end = 0.0f;
+            raw_strategy_day_min = INFINITY;
 #endif
             fills.day_volume = 0.0f;
             day_has_fill = 0.0f;
@@ -5652,12 +5668,16 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             update_hsl_strategy_equity_stats(short_side.hsl_strategy_eq,
                 starting_balance + account.realized_pnl_short + short_unrealized, day_index);
 #endif
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
             const float raw_strategy_equity = starting_balance + account.realized_pnl_long
                 + account.realized_pnl_short + long_unrealized + short_unrealized;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
             update_raw_strategy_risk(
                 raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+            raw_strategy_day_end = raw_strategy_equity;
+            raw_strategy_day_min = fmin(raw_strategy_day_min, raw_strategy_equity);
 #endif
 #endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
@@ -5793,6 +5813,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         daily[output + 2] = day_dd;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
         daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
 #endif
         daily[output + 3] = fills.day_volume;
         daily[output + 4] = day_has_fill;
@@ -6080,6 +6104,10 @@ struct TrailingMartingaleMulticoinReplayState {
     float raw_strategy_peak;
     float raw_strategy_day_dd;
 #endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+    float raw_strategy_day_end;
+    float raw_strategy_day_min;
+#endif
     float max_dd;
     float total_wallet_exposure_max;
     float total_wallet_exposure_mean;
@@ -6274,6 +6302,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float raw_strategy_peak = -INFINITY;
     float raw_strategy_day_dd = 0.0f;
 #endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+    float raw_strategy_day_end = 0.0f;
+    float raw_strategy_day_min = INFINITY;
+#endif
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
@@ -6332,6 +6364,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
         raw_strategy_peak = replay_states[b].raw_strategy_peak;
         raw_strategy_day_dd = replay_states[b].raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        raw_strategy_day_end = replay_states[b].raw_strategy_day_end;
+        raw_strategy_day_min = replay_states[b].raw_strategy_day_min;
 #endif
         max_dd = replay_states[b].max_dd;
         total_wallet_exposure_max = replay_states[b].total_wallet_exposure_max;
@@ -6404,6 +6440,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
                 daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
 #endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+#endif
                 daily[output + 3] = day_volume;
                 daily[output + 4] = day_has_fill;
                 daily[output + 5] = day_min_balance;
@@ -6421,6 +6461,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             day_dd = 0.0f;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
             raw_strategy_day_dd = 0.0f;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+            raw_strategy_day_end = 0.0f;
+            raw_strategy_day_min = INFINITY;
 #endif
             day_volume = 0.0f;
             day_has_fill = 0.0f;
@@ -6663,12 +6707,16 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             update_hsl_strategy_equity_stats(side.hsl_strategy_eq,
                 starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
 #endif
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
             const float raw_strategy_equity = starting_balance
                 + realized_pnl_cumsum_last + unrealized;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
             update_raw_strategy_risk(
                 raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+            raw_strategy_day_end = raw_strategy_equity;
+            raw_strategy_day_min = fmin(raw_strategy_day_min, raw_strategy_equity);
 #endif
 #endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
@@ -6806,6 +6854,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         replay_states[b].raw_strategy_peak = raw_strategy_peak;
         replay_states[b].raw_strategy_day_dd = raw_strategy_day_dd;
 #endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        replay_states[b].raw_strategy_day_end = raw_strategy_day_end;
+        replay_states[b].raw_strategy_day_min = raw_strategy_day_min;
+#endif
         replay_states[b].max_dd = max_dd;
         replay_states[b].total_wallet_exposure_max = total_wallet_exposure_max;
         replay_states[b].total_wallet_exposure_mean = total_wallet_exposure_mean;
@@ -6853,6 +6905,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         daily[output + 2] = day_dd;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
         daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
 #endif
         daily[output + 3] = day_volume;
         daily[output + 4] = day_has_fill;
