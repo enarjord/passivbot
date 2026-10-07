@@ -1,6 +1,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifndef PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 0
+#endif
+
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 47;
 constant int COIN_COLS = 13;
@@ -10,9 +14,9 @@ constant int ADAPTIVE_OVERRIDE_START = 28;
 constant int HSL_OVERRIDE_START = 19;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 25;
 #if PASSIVBOT_BTC_RISK_ENABLED
-constant int DAILY_COLS = 12;
+constant int DAILY_COLS = 12 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED;
 #else
-constant int DAILY_COLS = 9;
+constant int DAILY_COLS = 9 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
 constant int SCALAR_COLS = 67;
@@ -2956,6 +2960,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     bool alive = true;
     bool equity_started = false;
     float run_peak = -INFINITY;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+    float raw_strategy_peak = -INFINITY;
+    float raw_strategy_day_dd = 0.0f;
+#endif
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
@@ -3027,6 +3035,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 daily[output + 0] = day_end;
                 daily[output + 1] = day_min;
                 daily[output + 2] = day_dd;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+                daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
                 daily[output + 3] = day_volume;
                 daily[output + 4] = day_has_fill;
                 daily[output + 5] = day_min_balance;
@@ -3042,6 +3053,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_end = 0.0f;
             day_min = INFINITY;
             day_dd = 0.0f;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+            raw_strategy_day_dd = 0.0f;
+#endif
             day_volume = 0.0f;
             day_has_fill = 0.0f;
             day_min_balance = INFINITY;
@@ -3270,6 +3284,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
             update_hsl_strategy_equity_stats(side.hsl_strategy_eq,
                 starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
 #endif
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+            const float raw_strategy_equity = starting_balance
+                + realized_pnl_cumsum_last + unrealized;
+            update_raw_strategy_risk(
+                raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+#endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
             if (any_fill) {
@@ -3386,6 +3406,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
         daily[output + 0] = day_end;
         daily[output + 1] = day_min;
         daily[output + 2] = day_dd;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+        daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
         daily[output + 3] = day_volume;
         daily[output + 4] = day_has_fill;
         daily[output + 5] = day_min_balance;
@@ -3843,6 +3866,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
     float run_peak = -INFINITY;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+    float raw_strategy_peak = -INFINITY;
+    float raw_strategy_day_dd = 0.0f;
+#endif
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
@@ -3912,6 +3939,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 daily[output + 0] = day_end;
                 daily[output + 1] = day_min;
                 daily[output + 2] = day_dd;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+                daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
                 daily[output + 3] = fills.day_volume;
                 daily[output + 4] = day_has_fill;
                 daily[output + 5] = day_min_balance;
@@ -3927,6 +3957,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             day_end = 0.0f;
             day_min = INFINITY;
             day_dd = 0.0f;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+            raw_strategy_day_dd = 0.0f;
+#endif
             fills.day_volume = 0.0f;
             day_has_fill = 0.0f;
             day_min_balance = INFINITY;
@@ -4291,6 +4324,12 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             update_hsl_strategy_equity_stats(short_side.hsl_strategy_eq,
                 starting_balance + account.realized_pnl_short + short_unrealized, day_index);
 #endif
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+            const float raw_strategy_equity = starting_balance + account.realized_pnl_long
+                + account.realized_pnl_short + long_unrealized + short_unrealized;
+            update_raw_strategy_risk(
+                raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+#endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
             if (any_fill) {
@@ -4412,6 +4451,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         daily[output + 0] = day_end;
         daily[output + 1] = day_min;
         daily[output + 2] = day_dd;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+        daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
         daily[output + 3] = fills.day_volume;
         daily[output + 4] = day_has_fill;
         daily[output + 5] = day_min_balance;

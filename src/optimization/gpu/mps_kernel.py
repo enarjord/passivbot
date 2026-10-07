@@ -1072,6 +1072,7 @@ def _ema_anchor_multicoin_shader_library(
     unstuck_pnl_lookback_bars: int = 0,
     unstuck_pnl_capacity: int = 0,
     weighted_volume_enabled: bool = False,
+    raw_strategy_risk_enabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1086,6 +1087,8 @@ def _ema_anchor_multicoin_shader_library(
     # controllers and their per-candle scans are compiled away.
     source = _with_hsl_disabled(source, hsl_disabled)
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
+    if raw_strategy_risk_enabled:
+        source = "#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 1\n" + source
     if weighted_volume_enabled:
         source = "#define PASSIVBOT_WEIGHTED_VOLUME_ENABLED 1\n" + source
     source = _with_dynamic_wel_by_tradability(source, dynamic_wel_by_tradability)
@@ -1124,6 +1127,7 @@ def _trailing_martingale_multicoin_shader_library(
     unstuck_pnl_capacity: int = 0,
     loss_gate_disabled: bool = False,
     weighted_volume_enabled: bool = False,
+    raw_strategy_risk_enabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1144,6 +1148,8 @@ def _trailing_martingale_multicoin_shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
+    if raw_strategy_risk_enabled:
+        source = "#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 1\n" + source
     if weighted_volume_enabled:
         source = "#define PASSIVBOT_WEIGHTED_VOLUME_ENABLED 1\n" + source
     source = _with_dynamic_wel_by_tradability(source, dynamic_wel_by_tradability)
@@ -2183,6 +2189,7 @@ class MpsEmaAnchorMulticoinRunner:
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
+        raw_strategy_risk_enabled: bool = False,
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
@@ -2202,6 +2209,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.hsl_raw_tail_enabled = bool(hsl_raw_tail_enabled)
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         self.weighted_volume_enabled = bool(weighted_volume_enabled)
+        self.raw_strategy_risk_enabled = bool(raw_strategy_risk_enabled)
         self.dynamic_wel_by_tradability = bool(dynamic_wel_by_tradability)
         fused = self.scalar_cols == MPS_MULTICOIN_FUSED_SCALAR_COLS
         self.long_enabled = fused or side == "long"
@@ -2287,7 +2295,10 @@ class MpsEmaAnchorMulticoinRunner:
         self.btc_prices_enabled = (
             self.btc_risk_enabled or self.equity_balance_diff_enabled
         )
-        self.daily_cols = MPS_MULTICOIN_DAILY_COLS + (3 if self.btc_risk_enabled else 0)
+        self.daily_cols = (
+            MPS_MULTICOIN_DAILY_COLS + (3 if self.btc_risk_enabled else 0)
+            + int(self.raw_strategy_risk_enabled)
+        )
         self.recovery_stride = 1 if self.recovery_distribution_enabled else 0
         self.n_recovery_samples = (
             max(
@@ -2584,6 +2595,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.unstuck_pnl_lookback_bars,
             self.unstuck_pnl_capacity,
             self.weighted_volume_enabled,
+            self.raw_strategy_risk_enabled,
         )
 
     def _hsl_history_bytes_per_candidate(self):
@@ -2595,6 +2607,7 @@ class MpsEmaAnchorMulticoinRunner:
     def _history_bytes_per_candidate(self):
         return (
             self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
+            + (4 * self.n_days if self.raw_strategy_risk_enabled else 0)
             + (_recovery_history_bytes(self.n_recovery_samples)
                if self.recovery_distribution_enabled else 0)
             + (_volume_history_bytes(self.n)
@@ -2871,6 +2884,8 @@ class MpsEmaAnchorMulticoinRunner:
             self.last_profile = {}
             wait_for_cuda_stream()
         output = self._decode(daily, scalars, gaps)
+        if self.raw_strategy_risk_enabled:
+            output["raw_strategy_day_max_dd"] = daily[:, :, -1]
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(
             _decode_entry_interval_outputs(entry_interval_stats, entry_interval_counts)
@@ -2924,6 +2939,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
+        raw_strategy_risk_enabled: bool = False,
         hedge_mode: bool = True,
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
@@ -2951,6 +2967,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
+            raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,
@@ -3176,6 +3193,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
+        raw_strategy_risk_enabled: bool = False,
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
@@ -3214,6 +3232,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
+            raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,
@@ -3267,6 +3286,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.unstuck_pnl_capacity,
             self.loss_gate_specialization and not self.loss_gate_enabled,
             self.weighted_volume_enabled,
+            self.raw_strategy_risk_enabled,
         )
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -3447,6 +3467,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
+        raw_strategy_risk_enabled: bool = False,
         hedge_mode: bool = True,
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
@@ -3474,6 +3495,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
+            raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,

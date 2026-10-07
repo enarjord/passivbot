@@ -2,15 +2,8 @@
 import pytest
 
 
-@pytest.mark.parametrize('strategy', ['ema_anchor', 'trailing_martingale'])
-@pytest.mark.parametrize('sides', ['long', 'short', 'both'])
-@pytest.mark.parametrize('hsl', ['disabled', 'coin', 'pside', 'unified'])
-def test_native_side_equity_metrics_independent_of_hsl(strategy, sides, hsl):
-    torch = pytest.importorskip('torch')
-    if not torch.cuda.is_available():
-        pytest.skip('CUDA required')
-    from optimization.gpu.parity import MetricTolerance
-    from tools.gpu_parity import build_parser, fixture_inputs, run_comparison
+def _side_equity_inputs(strategy, sides, hsl):
+    from tools.gpu_parity import build_parser, fixture_inputs
     inputs = fixture_inputs(build_parser().parse_args([
         '--fixture', strategy, '--sides', sides, '--coins', '2',
         '--bars', '3000', '--seed', '43', '--hsl', hsl,
@@ -28,6 +21,19 @@ def test_native_side_equity_metrics_independent_of_hsl(strategy, sides, hsl):
             )
     inputs[1][1500:, 0, :3] *= .7
     inputs[1][1800:, 1, :3] *= 1.3
+    return inputs
+
+
+@pytest.mark.parametrize('strategy', ['ema_anchor', 'trailing_martingale'])
+@pytest.mark.parametrize('sides', ['long', 'short', 'both'])
+@pytest.mark.parametrize('hsl', ['disabled', 'coin', 'pside', 'unified'])
+def test_native_side_equity_metrics_independent_of_hsl(strategy, sides, hsl):
+    torch = pytest.importorskip('torch')
+    if not torch.cuda.is_available():
+        pytest.skip('CUDA required')
+    from optimization.gpu.parity import MetricTolerance
+    from tools.gpu_parity import run_comparison
+    inputs = _side_equity_inputs(strategy, sides, hsl)
     metrics = [
         f'{name}_strategy_eq_{side}'
         for side in ('long', 'short')

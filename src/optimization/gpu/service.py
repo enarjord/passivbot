@@ -25,6 +25,7 @@ from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import proxy_batches
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
+    RAW_STRATEGY_RISK_METRICS,
     ENTRY_INTERVAL_METRICS,
     EQUITY_BALANCE_DIFF_METRICS,
     HARD_STOP_PROXY_METRICS,
@@ -77,6 +78,7 @@ from optimization.gpu.model import (
 )
 
 CORE_OUTPUT_KEYS = {
+    "raw_strategy_day_max_dd",
     "volume_pct_per_day_avg_w",
     "btc_day_end_eq",
     "btc_day_min_eq",
@@ -956,6 +958,7 @@ def mps_requested_metric_features(
             metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
         ),
         "weighted_volume": "volume_pct_per_day_avg_w" in metrics,
+        "raw_strategy_risk": bool(metrics & RAW_STRATEGY_RISK_METRICS),
         "hsl_ema_tail": bool(metrics & _HSL_EMA_TAIL_METRICS),
         "hsl_raw_drawdown": bool(
             metrics & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
@@ -2921,6 +2924,9 @@ class MpsMulticoinProxy:
                 self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
             "weighted_volume_enabled": "volume_pct_per_day_avg_w" in self.needed_metrics,
+            "raw_strategy_risk_enabled": bool(
+                self.needed_metrics & RAW_STRATEGY_RISK_METRICS
+            ),
             "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
             "btc_prices": (
                 btc_values
@@ -3352,6 +3358,11 @@ class MpsMulticoinProxy:
                         torch=torch,
                     )
                 )
+            if (
+                self.needed_metrics & RAW_STRATEGY_RISK_METRICS
+                and "raw_strategy_day_max_dd" not in output
+            ):
+                raise RuntimeError("GPU raw strategy-risk summary is missing")
             objectives = self._compute_objectives(
                 output, self.run, self.metrics_data, needed=self.needed_metrics
             )

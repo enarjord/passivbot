@@ -387,6 +387,45 @@ scenario switches and cold compilation. Torch-only memory excludes driver/CuPy,
 host RSS and disk. Full-optimizer CPU cost, large-suite resources, search quality and
 an optimal dispatch width remain separate acceptance work.
 
+## Portfolio raw strategy risk and account risk
+
+The CPU export distinguishes actual portfolio strategy equity from account equity,
+which is clamped at the liquidation floor. Shared GPU replay keeps those meanings
+separate for `drawdown_worst_strategy_eq`,
+`drawdown_worst_mean_1pct_strategy_eq` and `strategy_eq_underwater_pct_mean`.
+A requested-only daily maximum-drawdown column includes raw realized net cashflows
+and marked UPNL, including the actual terminal mark. Ordinary USD account risk
+retains its original summaries. This correction does not establish raw growth,
+weighted ratios or recovery parity.
+
+`test_gpu_portfolio_equity_sampling.py` covers eight actual fill/mark liquidation
+cases across both strategies and long/shared portfolios, independent two-/200-day
+risk reductions and inactive padding, and eight directional ablation cases with
+BTC risk disabled/enabled. Those 26 checks pass with the source-verified runtime.
+Raw liquidation-risk absolute error is below 2.4e-7. Enabling the column preserves
+all other ablation outputs exactly. Eight temporal replay checks additionally
+preserve every output across chunk boundaries, including partial raw daily state.
+
+The additional daily column costs four bytes per observed day per candidate and
+participates in dispatch scratch admission. Its state, capture and allocation
+compile away when unrequested. Missing a requested raw summary fails before metric
+processing. Only compact metrics pass through the native optimizer boundary.
+The final shock matrix passes all 48 cases: 24 portfolio raw-risk cases and the
+24 existing side-equity cases after extracting their shared public fixture. Its
+49 comparison reports cover 241 metric pairs, including a second account-only
+request that verifies exact raw-capture on/off account output in the shared EMA
+coin-HSL case. That case retains a pre-existing 2.985e-6 account drawdown residual
+under a fixture-local 3.1e-6 absolute bound. The shared TM disabled-HSL fixture
+retains its existing one-basis-point bound; corrected portfolio raw error is below
+4.0e-5. The other 23 raw-risk cases and general parity policies stay strict.
+
+Validation also passes 331 Rust tests (one ignored), default-feature compilation,
+1,039 affected Python checks, four fused-routing/missing-summary checks, 183
+replay/ablation/isolation controls and 36 CPU-forbidden optimizer lifecycle cases.
+Six documentation checks pass. The compiled extension and all 923 source-manifest
+files are verified. Current-head author/automatic review and CI remain required
+before development integration; these checks do not close broader retirement gates.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account

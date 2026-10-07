@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Shared GPU replay reports portfolio raw strategy drawdown, daily worst tail and
+  underwater mean independently of account liquidation clamping, preserving ordinary
+  USD account metrics and requested-feature ablation.
+
 - Sample shared GPU side strategy-equity metrics independently of HSL protection,
   retaining each side's net PnL in unified mode and the recovery horizon of an
   inactive side. Use the exact maximum when the worst drawdown tail contains

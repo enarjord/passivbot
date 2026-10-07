@@ -2079,3 +2079,55 @@ Completion requires:
 - Require completed current-head author/automatic review and all required CI before
   development integration. Weighted/raw portfolio reduction and broader performance,
   CPU preservation and legacy retirement acceptance remain open.
+
+### 2026-10-07 — Distinguish portfolio strategy and account reductions
+
+- Extend the eight public native fill/mark liquidation comparisons with portfolio
+  raw drawdown, daily worst tail and underwater mean. All 24 raw-risk comparisons
+  differ: CPU retains drawdown of approximately 3.157–3.210 while shared GPU
+  summaries report the clamped account curve at approximately 0.951. Ordinary
+  `drawdown_worst_usd` matches in all eight. Preserve account summary meaning;
+  changing its terminal value globally would introduce an account-analysis defect.
+- Shared EMA and trailing-martingale kernels retain requested-only raw daily
+  maximum drawdown alongside account summaries. The three explicit portfolio
+  raw-risk metrics consume this column; ordinary USD risk keeps account semantics.
+  The column costs four bytes per observed day per candidate, enters dispatch
+  scratch admission and compiles away when unrequested. No per-step history is
+  transferred. A missing required summary is an error, not an account fallback.
+- Eight actual fill/mark liquidation comparisons pass after this correction,
+  with maximum raw-risk absolute error below 2.4e-7. Eight directional ablation
+  cases across both strategies and BTC-risk settings preserve every other output
+  exactly. Eight trailing-martingale temporal replay cases preserve all outputs
+  exactly across chunk boundaries, including raw peak and partial-day state.
+  These checks do not certify raw growth, weighted or recovery metrics.
+- CPU exports distinguish ordinary account analysis from explicit strategy-equity
+  analysis. Ordinary weighted account ratios recompute each suffix's peak. Raw
+  strategy weighted Calmar/Sterling instead slice the full-curve drawdown series,
+  retaining its peak convention. Both reconstruct suffix daily minima; whole-day
+  reuse may include observations before the cutoff. Validate each family against
+  its actual Rust producer before sharing a reducer. A reference limited to ordinary
+  analysis does not certify explicit strategy metrics or make USD names aliases.
+- Prefer requested-only compact raw daily risk alongside existing account outputs.
+  Reserve resident histories for metrics that actually require chronology; include
+  storage and reduction scratch in dispatch admission and tuning. Keep these
+  details inside the execution service and keep compact results at the CPU boundary.
+- The 24 ordinary shock cases exercise both strategies, long/short/shared sides
+  and disabled, coin, pside and unified HSL. All 72 new raw-risk comparisons pass
+  their explicit policies. Keep the existing one-basis-point bound for the shared
+  TM disabled-HSL fixture; its corrected raw-risk error is below 4.0e-5. The other
+  23 raw-risk cases remain strict; existing side-metric policies are unchanged.
+- The new account check exposes a pre-existing 2.985e-6 USD drawdown residual in
+  the shared EMA coin-HSL fixture. Accepted shader replay and current raw capture
+  on/off return exactly the same account value. Use a fixture-local 3.1e-6 absolute
+  bound for that account metric alone (about .031 basis points); preserve strict
+  raw-risk checks and add actual on/off account-metric equality. General standalone
+  parity policies are unchanged. Final matrix validation passes all 48 cases.
+- Final validation passes 26 focused risk/liquidation/ablation checks, eight exact
+  temporal checks, 183 broader controls, 36 CPU-forbidden optimizer lifecycle
+  cases, four missing-summary/routing checks and the full 48-case shock matrix.
+  The matrix contains 49 complete reports and 241 metric pairs. Source-verified
+  Rust tests pass 331 cases (one ignored), default-feature compilation and 1,039
+  affected Python checks pass, and six documentation checks pass. Verify the final
+  publication tree and wait for completed current-head author/automatic review and
+  required CI before development integration. Raw growth/recovery/weighted metrics,
+  representative resource/performance checks and legacy retirement remain open.

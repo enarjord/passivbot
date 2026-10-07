@@ -2454,6 +2454,18 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     for alias, source in _USD_STRATEGY_EQ_ALIASES.items():
         if alias in requested:
             objectives[alias] = objectives[source]
+    # USD names retain account analysis above. Explicit strategy risk consumes
+    # the unclamped raw curve; these are distinct at liquidation.
+    if "raw_strategy_day_max_dd" in out:
+        raw_daily_dd = out["raw_strategy_day_max_dd"].to(torch.float64)
+        raw_daily_dd = torch.where(active, raw_daily_dd, torch.zeros_like(raw_daily_dd))
+        objectives["drawdown_worst_strategy_eq"] = raw_daily_dd.max(dim=1).values
+        objectives["drawdown_worst_mean_1pct_strategy_eq"] = (
+            _mean_worst_one_pct_largest(raw_daily_dd, active)
+        )
+        objectives["strategy_eq_underwater_pct_mean"] = (
+            raw_daily_dd.sum(dim=1) / active.sum(dim=1).clamp(min=1)
+        )
     objectives.update(_btc_account_metrics(out, run, data, requested))
     if needed is None:
         return objectives
