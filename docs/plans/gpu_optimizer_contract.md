@@ -1653,3 +1653,53 @@ Completion requires:
   portability, rejection coverage and the evidence ledger changed after the broad
   runs. Require a clean commit, completed exact-head automatic/author review and
   all three required CI jobs before integrating this slice into development.
+
+
+### 2026-10-07 — Remove deferred EMA selection
+
+- PR #1917 contains the validated HSL-ordering/terminal-reporting slice. Its
+  current-head automatic and author reviews complete without findings. All three
+  required CI jobs pass; it merges into development at
+  `5f4b8284e8c229d503df0b6008c314784b46b75e`. Keep the separate selection fix local.
+- Baseline CUDA ranking probes reproduce stale flat selection on both EMA sides
+  without a fill or eligibility transition; corresponding TM probes pass. The
+  earlier native control reproduces the material short-only metric gap with HSL
+  enabled and disabled. Do not reinterpret that shortcut as numerical tolerance.
+- Refresh selection from current indicators/eligibility every bar, retaining held
+  positions. Remove three cached eligibility masks, initialization and previous-slot
+  fields plus their invalidation logic. Hysteresis incumbency follows outstanding
+  entry orders, as CPU and TM already do; previous selection alone has no authority.
+- Extend current-ranking and incumbent-order probes to EMA and add twelve real
+  native CPU/GPU comparisons across both directional sides, fused execution and
+  disabled/coin/pside/unified HSL. Add four CPU-forbidden EMA optimizer CLI cases
+  using starting seeds, prompt persistence, suite screening, interruption and resume.
+  All twelve native parity cases pass against the source-verified CUDA build,
+  with the single baseline numerical bound documented below. All 203 focused CUDA
+  cases pass: twelve native comparisons and 191 replay/selection cases. All 36 real
+  optimizer CLI cases pass, including
+  four new EMA cases, with CPU simulations/pools forbidden and prompt results/
+  Pareto, screening, interruption and resume verified. Rust passes 330 tests
+  (one ignored) and default-feature checks for the current selection diff.
+
+- Original-source and corrected-kernel controls produce identical assessed metrics
+  for the disabled-HSL long fixture. CPU/GPU ADG is 0.0053993594/0.0053984714:
+  absolute difference 0.000000888, relative about 0.0164%. Fill frequency is identical,
+  neither run has HSL events, and worst drawdown differs by 0.000000177. Accept
+  ADG absolute tolerance 0.000001 for this checked-in fixture only; preserve all
+  other gates and the standalone parity tool's default measurement policy. This
+  bounded baseline discrepancy does not explain the material short-ranking defect.
+- Existing public GPU policy requires minute candles when HSL is enabled. Coarser
+  disabled-HSL replay remains in scope; extending enabled HSL to coarser candles
+  is not an initial cutover requirement. Sparse controller probes do not certify
+  that unsupported simulation combination.
+
+- The broader replay run exposes four outdated EMA coin-HSL isolation assertions:
+  they expected both symbols flat after only one symbol stops. Four offline CPU
+  controls, with packed active parameters verified, retain the healthy coin on
+  both sides and for either stopped coin, matching corrected GPU replay. Require
+  one healthy open position for both strategies and preserve every stop-count,
+  panic-accounting and packed-slot invariance check. All fourteen isolated episode/
+  directional-smoke cases pass after correcting the six outdated assertions. The
+  final 203-case run passes with the same verified Rust/kernel bytes. Six
+  documentation tests pass; require clean publication, completed exact-head automatic/
+  author review and all three CI jobs before integrating this slice into development.

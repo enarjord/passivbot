@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Refresh shared GPU EMA flat-coin rankings every bar and derive hysteresis priority
+  from outstanding entry orders, removing deferred-selection caches.
+
 - Refresh scoped HSL before constructing the next orders in shared GPU backtests,
   correcting delayed panic closes. Keep equity and HSL reporting after forced
   delisting, preserve factual terminal times, and retain disabled-feature ablation.
