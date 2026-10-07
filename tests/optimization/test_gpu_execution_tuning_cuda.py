@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 import gc
 import weakref
+from threading import Event
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
@@ -99,6 +100,7 @@ def test_prepared_service_bounds_actual_dispatch_and_releases_inactive_runners(m
         monkeypatch.setattr(cls, "__init__", initialize)
     original_evaluate = replay_module.MpsMulticoinProxy.evaluate_results
     observed, references = [], []
+    submitted = Event()
     def evaluate(self, candidates):
         observed.append(len(candidates))
         return original_evaluate(self, candidates)
@@ -106,6 +108,7 @@ def test_prepared_service_bounds_actual_dispatch_and_releases_inactive_runners(m
     original_ceiling = CudaBacktestService._dispatch_ceiling
     def ceiling(replay):
         references.append(weakref.ref(replay.fused_runner))
+        assert submitted.wait(10)
         return original_ceiling(replay)
     monkeypatch.setattr(CudaBacktestService, "_dispatch_ceiling", staticmethod(ceiling))
     manager = SharedArrayManager()
@@ -120,8 +123,9 @@ def test_prepared_service_bounds_actual_dispatch_and_releases_inactive_runners(m
             service.register_dataset("a", dataset)
             service.register_dataset("b", dataset)
             futures = [service.submit(BacktestRequest(str(i), "a", {})) for i in range(7)]
+            submitted.set()
             results = [future.result(timeout=120) for future in futures]
-            assert observed == [1, 2, 2, 2]
+            assert observed == [2, 2, 2, 1]
             assert all(result.metrics == results[0].metrics for result in results)
             assert references[0]() is not None
             next_result = service.submit(BacktestRequest("b", "b", {})).result(timeout=120)

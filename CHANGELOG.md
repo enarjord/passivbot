@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native CUDA optimization can fill the first backtest dispatch with queued compatible
+  requests after worker-owned data preparation discovers its safe capacity, avoiding
+  a forced single-candidate simulation for every new dataset.
+
 - GPU shared-account backtests now reduce portfolio HSL EMA tails from simultaneous
   bar signals, preserving stresses on different sides instead of taking the maximum
   of separately reduced side tails.

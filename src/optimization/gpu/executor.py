@@ -230,6 +230,24 @@ class GpuBacktestService:
                 del self._outstanding[entry.request.request_id]
             self._condition.notify_all()
 
+    def _batch_width(self, dataset_id):
+        width = (self.batch_size if self._batch_policy is None
+                 else self._batch_policy.width(dataset_id, self.batch_size))
+        if isinstance(width, bool) or not isinstance(width, int) or not 1 <= width <= self.batch_size:
+            raise ValueError("GPU batch policy width must respect the dispatch ceiling")
+        return width
+
+    def _claim_batch(self, dataset_id, width, batch):
+        """Claim compatible queued work under the admission condition."""
+        remaining_queue = deque()
+        while self._queue:
+            entry = self._queue.popleft()
+            if entry.request.dataset_id != dataset_id or len(batch) >= width:
+                remaining_queue.append(entry)
+            elif entry.future.set_running_or_notify_cancel():
+                batch.append(entry)
+        self._queue = remaining_queue
+
     def _next_batch(self) -> list[_Pending]:
         with self._condition:
             while True:
@@ -238,10 +256,7 @@ class GpuBacktestService:
                         return []
                     self._condition.wait()
                 dataset_id = self._queue[0].request.dataset_id
-                width = (self.batch_size if self._batch_policy is None
-                         else self._batch_policy.width(dataset_id, self.batch_size))
-                if isinstance(width, bool) or not isinstance(width, int) or not 1 <= width <= self.batch_size:
-                    raise ValueError("GPU batch policy width must respect the dispatch ceiling")
+                width = self._batch_width(dataset_id)
                 started = time.monotonic()
                 deadline = (None if self._coalescing is not None
                             else started + self.max_batch_delay)
@@ -260,14 +275,7 @@ class GpuBacktestService:
                     if not self._queue:
                         break
                 batch = []
-                remaining_queue = deque()
-                while self._queue:
-                    entry = self._queue.popleft()
-                    if entry.request.dataset_id != dataset_id or len(batch) >= width:
-                        remaining_queue.append(entry)
-                    elif entry.future.set_running_or_notify_cancel():
-                        batch.append(entry)
-                self._queue = remaining_queue
+                self._claim_batch(dataset_id, width, batch)
                 if batch:
                     return batch
 
@@ -318,6 +326,14 @@ class GpuBacktestService:
                     if not callable(getattr(replay, "evaluate", None)):
                         raise TypeError("dataset factory must yield a replay implementing evaluate(candidates)")
                     self._replays[dataset_id] = replay
+                    # Preparation can discover the physical ceiling while more
+                    # requests arrive. Fill this first dispatch from queued work
+                    # instead of simulating the initial ownership claim alone.
+                    with self._condition:
+                        width = self._batch_width(dataset_id)
+                        if width < len(batch):
+                            raise ValueError("prepared dispatch ceiling is below claimed work")
+                        self._claim_batch(dataset_id, width, batch)
                 replay = self._replays[dataset_id]
                 timed = self._batch_policy is not None or self._coalescing is not None
                 started = time.perf_counter() if timed else 0.0
