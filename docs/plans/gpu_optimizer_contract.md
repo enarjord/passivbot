@@ -1960,3 +1960,36 @@ Completion requires:
   discrepancies of one to 55 minutes. It does not isolate the endpoint defect and
   is not accepted by the short controlled regression. Preserve it as a distinct
   trajectory/reporting gap for subsequent diagnosis; general parity policy is unchanged.
+
+
+### 2026-10-07 — Review follow-up: scope and accounting boundaries
+
+- The next automatic review found three reporting defects. On the published source,
+  both shared shader round-trip probes miss the new trigger/restart when renewed
+  exposure opens and flattens during cooldown. The six-case Rust reporting reference
+  passes; align GPU reporting with the controller's exposed-or-terminal boundary.
+- Two native unified comparisons preserve total trigger/restart counts but incorrectly
+  attribute their restart rate to long. Transport each candidate's actual packed scope
+  into metric reduction, keep portfolio totals, and exclude unified events from
+  directional counters. Scope metadata stays inside the GPU execution service.
+- Two retained single-coin forced-delisting comparisons report one minute against
+  Rust's two; the two corresponding native shared comparisons already match. Record
+  the accounting endpoint before forced delisting can be mistaken for an ordinary
+  liquidation fill. Carry one explicit endpoint scalar through TM temporal replay;
+  do not change order construction or controller decisions.
+- The corrected source passes 331 Rust tests (one ignored), default-feature
+  compilation and rebuilt-extension identity checks; 64 selected reducer/service
+  cases, 58 lifecycle/endpoint/liquidation cases, 57 reporting/selection/loss cases,
+  181 replay/ablation controls and all 36 CPU-forbidden optimizer lifecycle cases.
+  TM temporal replay includes the new endpoint scalar. Six documentation checks pass.
+- Reusing the eight ordinary fill/mark liquidation fixtures with the retained engine
+  and duration-only requests yields four matches and four one-minute discrepancies.
+  Four long-side comparisons against the exact published shaders reproduce identical
+  metrics and positions: retained EMA makes an additional entry and retained TM misses
+  the CPU's market panic close. These are existing simulation differences, not caused
+  by the endpoint correction; do not change reporting to conceal different trades.
+  All eight native counterparts pass. Keep the retained-engine limitation distinct
+  from native acceptance and from the corrected forced-delisting endpoint.
+- The PR remains unmerged until the corrected head passes automatic review and all
+  required CI. Side-equity, weighted reductions and longer history-expiry trajectories
+  remain independent acceptance work; general parity policies are unchanged.

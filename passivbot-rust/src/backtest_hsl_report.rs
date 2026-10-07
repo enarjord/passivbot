@@ -686,6 +686,7 @@ mod tests {
             (1, 1, 0.0, 1.0, 1.0, 1.0),
             (2, 1, 1.0, 2.5, 3.0, 2.0),
             (1, 0, 0.0, 2.0, 2.0, 2.0),
+            (2, 1, 1.0, 2.5, 3.0, 1.0),
         ];
         for (mode, expected) in expected.into_iter().enumerate() {
             let key = (Some(LONG), Some(0));
@@ -733,6 +734,11 @@ mod tests {
                     observe(3, Action::Panic, &[]);
                     observe(4, Action::Halted, &["flat"]);
                     observe(5, Action::Panic, &["restart"]);
+                    7
+                }
+                5 => {
+                    observe(4, Action::Halted, &["flat"]);
+                    observe(5, Action::Halted, &["restart", "red", "flat"]);
                     7
                 }
                 _ => 4,

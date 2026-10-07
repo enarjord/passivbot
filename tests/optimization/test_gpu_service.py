@@ -1410,6 +1410,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     proxy.runners = {}
 
     def reduce(output, *args, **kwargs):
+        assert output["hsl_unified_scope"].tolist() == [True, False]
         return {
             "hard_stop_triggers": output["hsl_triggers_long"]
             + output["hsl_triggers_short"]
@@ -1417,8 +1418,10 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
 
     proxy._compute_objectives = reduce
     candidates = [
-        {f"long_{candidate_key}": 0.25, f"short_{candidate_key}": 0.5},
-        {f"long_{candidate_key}": 0.75, f"short_{candidate_key}": 1.0},
+        {f"long_{candidate_key}": 0.25, f"short_{candidate_key}": 0.5,
+         "long_hsl_signal_mode": 0, "short_hsl_signal_mode": 0},
+        {f"long_{candidate_key}": 0.75, f"short_{candidate_key}": 1.0,
+         "long_hsl_signal_mode": 2, "short_hsl_signal_mode": 2},
     ]
 
     assert proxy.evaluate(candidates) == [

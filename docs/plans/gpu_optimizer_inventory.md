@@ -114,9 +114,15 @@ resource gates. The lifecycle foundation does not itself certify metric authorit
 - The all-157-metric audit produces finite output for six long shock cases but is not
   full parity acceptance. Normalized HSL loss now uses the existing produced panic-loss
   sum. Lifecycle replacement covers open RED, GREEN restart, retriggers and censored
-  durations. Its 20 focused cases, 65 reporting cases, 169 controls and 36 CPU-forbidden
-  optimizer cases pass; all seven assessed HSL metrics match in six long comparisons.
-  Non-HSL GPU metrics remain exactly unchanged; this does not certify full cutover.
+  durations. The review correction passes 58 lifecycle/endpoint cases, 57 broader
+  reporting cases, 181 replay/ablation controls and 36 CPU-forbidden optimizer cases.
+  Unified portfolio events no longer populate directional restart counters, and retained
+  forced-delisting endpoints are distinguished from ordinary-fill liquidation.
+  Four additional retained ordinary-liquidation comparisons still differ by one minute:
+  identical published/current shader metrics and positions expose existing extra-entry
+  or missing market-panic behavior. All eight native counterparts pass. Do not confuse
+  retained-engine trading differences with reporting-clock acceptance. The earlier seven
+  assessed HSL metrics match in six long comparisons; full cutover remains unaccepted.
 - Per-side strategy-equity summaries are coupled to HSL eligibility in
   `record_multicoin_hsl_report`, whereas CPU side curves are recorded independently.
   The inactive-side constant-curve audit returns the full strict-recovery horizon on

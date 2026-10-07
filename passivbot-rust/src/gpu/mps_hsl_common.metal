@@ -433,7 +433,7 @@ inline void observe_hsl(
     bool reporting_red = prior != 0;
     // Renewed exposure ends the preceding terminal cooldown before the new
     // episode is assessed, even when the new exposure is immediately RED.
-    if (prior == 1 && exposed) {
+    if (prior == 1 && (exposed || terminal)) {
         restart_hsl_report(h, minute);
         reporting_red = false;
     }

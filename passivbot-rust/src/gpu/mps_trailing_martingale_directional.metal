@@ -1882,6 +1882,7 @@ struct TrailingMartingaleSingleCoinReplayState {
     float account_recovery_max_min;
     float first_eq_k;
     float last_eq_k;
+    float hsl_report_end_k;
     bool eq_started;
 #if PASSIVBOT_BTC_RISK_ENABLED
     BtcRiskState btc_risk;
@@ -2099,6 +2100,7 @@ inline void passivbot_single_coin_impl(
     float account_recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
+    float hsl_report_end_k = -1.0f;
     bool eq_started = false;
 #if PASSIVBOT_BTC_RISK_ENABLED
     BtcRiskState btc_risk = init_btc_risk_state();
@@ -2227,6 +2229,7 @@ inline void passivbot_single_coin_impl(
         account_recovery_max_min = state.account_recovery_max_min;
         first_eq_k = state.first_eq_k;
         last_eq_k = state.last_eq_k;
+        hsl_report_end_k = state.hsl_report_end_k;
         eq_started = state.eq_started;
 #if PASSIVBOT_BTC_RISK_ENABLED
         btc_risk = state.btc_risk;
@@ -3945,6 +3948,18 @@ inline void passivbot_single_coin_impl(
         }
 #endif
 
+        // Rust checks liquidation after ordinary fills, before forced delisting.
+        // Capture that boundary before a forced close adds a fill to this bar.
+        const bool ordinary_fill = long_close_fill || long_entry_fill
+            || short_close_fill || short_entry_fill;
+        const float ordinary_fill_equity = balance
+            + (long_side.psize > 0.0f
+                ? long_side.psize * c_mult * (close - long_side.pprice) : 0.0f)
+            + (short_side.psize > 0.0f
+                ? short_side.psize * c_mult * (short_side.pprice - close) : 0.0f);
+        const bool hsl_report_at_fill_boundary = eq_started
+            && (balance <= 0.0f || (ordinary_fill && ordinary_fill_equity <= liq_floor));
+
         // Exact Rust generates this candle's bundles first, then force-closes and
         // clears both bundles.  Closing here and suppressing only that dead order
         // generation is equivalent while retaining `gen` for equity/HSL sampling.
@@ -4515,6 +4530,7 @@ inline void passivbot_single_coin_impl(
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = kf;
             last_eq_k = kf;
+            hsl_report_end_k = kf + (hsl_report_at_fill_boundary ? 0.0f : 1.0f);
             if (any_fill) {
                 int active_fill_day = elapsed_fill_day_bucket(
                     kf, first_eq_k, interval_ms
@@ -4664,6 +4680,7 @@ inline void passivbot_single_coin_impl(
         state.account_recovery_max_min = account_recovery_max_min;
         state.first_eq_k = first_eq_k;
         state.last_eq_k = last_eq_k;
+        state.hsl_report_end_k = hsl_report_end_k;
         state.eq_started = eq_started;
 #if PASSIVBOT_BTC_RISK_ENABLED
         state.btc_risk = btc_risk;
@@ -4770,10 +4787,10 @@ inline void passivbot_single_coin_impl(
     HslState short_report = short_hsl;
     finish_hsl_panic_loss(long_report);
     finish_hsl_panic_loss(short_report);
-    // A normal terminal sample reaches bar close. A terminal fill remains at
-    // the fill timestamp unless an ensuing HSL observation reached that close.
-    float report_end_k = last_eq_k >= 0.0f
-        ? fmax(last_eq_k + (!alive && last_fill_k == last_eq_k ? 0.0f : 1.0f),
+    // Keep the actual accounting boundary: an ordinary-fill liquidation stops
+    // at fill time; forced-delisting liquidation reaches the bar-close sample.
+    float report_end_k = hsl_report_end_k >= 0.0f
+        ? fmax(hsl_report_end_k,
             float(max(long_hsl.hsl.last_observed, short_hsl.hsl.last_observed)))
         : -1.0f;
     float long_terminal_count = (long_hsl.red_active_now || long_hsl.halted)
