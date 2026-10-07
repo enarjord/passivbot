@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 
 from config.validate import validate_limit_order_fill_buffer_pct
-from optimization.gpu.runtime import gpu_device
 
 GAP_BINS = 512
 GAP_MAX_MINUTES = 4_000_000.0
@@ -833,6 +832,8 @@ def build_mps_data(
     runtime.
     """
 
+    from optimization.gpu.runtime import gpu_device
+
     try:
         import torch
     except (
@@ -1023,6 +1024,8 @@ def build_mps_multicoin_data(
     order-book touch comparisons are encoded from the original float64 data as
     integer ticks, avoiding the most consequential float32 boundary collapse.
     """
+
+    from optimization.gpu.runtime import gpu_device
 
     try:
         import torch
