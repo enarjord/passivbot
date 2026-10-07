@@ -14,7 +14,7 @@ import pytest
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
                                                                     screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
-                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False):
+                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -52,6 +52,10 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         ]
         config["optimize"]["limits"].append(dict(
             metric="expected_shortfall_1pct_strategy_eq", penalize_if="greater_than", value=1.0,
+        ))
+    if portfolio_ema:
+        config["optimize"]["scoring"].append(dict(
+            metric="drawdown_worst_mean_1pct_ema_strategy_eq", goal="min",
         ))
     config["optimize"]["gpu"].update(batch_size=None if automatic else 2, checkpoint_interval_seconds=0)
     if screening:
@@ -325,4 +329,16 @@ async def test_native_raw_equity_cli_persists_interrupts_and_resumes_without_cpu
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, suite, True, True, screening=suite,
         strategy_kind=strategy_kind, raw_equity=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite", [False, True])
+async def test_native_portfolio_ema_cli_interrupts_and_resumes_without_cpu(
+    monkeypatch, tmp_path, strategy_kind, suite,
+):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, True, True, screening=suite,
+        strategy_kind=strategy_kind, scaled_hsl=True, portfolio_ema=True,
     )

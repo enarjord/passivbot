@@ -55,18 +55,18 @@ from optimization.gpu.model import (
 MPS_DAILY_COLS = 8
 MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 32
-MPS_MULTICOIN_BASE_SCALAR_COLS = 61
-MPS_MULTICOIN_EMA_TAIL_SCALAR_COLS = 63
-MPS_MULTICOIN_RAW_DRAWDOWN_SCALAR_COLS = 65
-MPS_MULTICOIN_SCALAR_COLS = 67
+MPS_MULTICOIN_BASE_SCALAR_COLS = 62
+MPS_MULTICOIN_EMA_TAIL_SCALAR_COLS = 64
+MPS_MULTICOIN_RAW_DRAWDOWN_SCALAR_COLS = 66
+MPS_MULTICOIN_SCALAR_COLS = 68
 MPS_DIRECTIONAL_BASE_SCALAR_COLS = 66
 MPS_DIRECTIONAL_EMA_TAIL_SCALAR_COLS = 68
 MPS_DIRECTIONAL_RAW_DRAWDOWN_SCALAR_COLS = 70
 MPS_DIRECTIONAL_SCALAR_COLS = 72
-MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS = 66
-MPS_MULTICOIN_FUSED_EMA_TAIL_SCALAR_COLS = 68
-MPS_MULTICOIN_FUSED_RAW_DRAWDOWN_SCALAR_COLS = 70
-MPS_MULTICOIN_FUSED_SCALAR_COLS = 72
+MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS = 67
+MPS_MULTICOIN_FUSED_EMA_TAIL_SCALAR_COLS = 69
+MPS_MULTICOIN_FUSED_RAW_DRAWDOWN_SCALAR_COLS = 71
+MPS_MULTICOIN_FUSED_SCALAR_COLS = 73
 # A 30-day coin-HSL lookback can legitimately contain slightly more than
 # 2,048 completed round trips for high-cadence single-coin candidates. Metal
 # coalesces every realized-PnL component from one candle into one ring event,
@@ -704,9 +704,10 @@ def _scale_tm_multicoin_coin_overrides(
     )
 
 
-def _scalar_column_or_zero(scalars, index: int):
-    # The final two scalars hold the duration and fill-gap squared sums.
-    if scalars.shape[1] - 2 > index:
+def _scalar_column_or_zero(scalars, index: int, *, reserved_columns: int = 2):
+    # Shared replay reserves the portfolio tail plus two timing moments;
+    # retained directional single-coin replay reserves only the moments.
+    if scalars.shape[1] - reserved_columns > index:
         return scalars[:, index]
     return torch.zeros_like(scalars[:, 0])
 
@@ -1443,12 +1444,25 @@ def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
         "hsl_drawdown_ema_max_short": scalars[:, 56],
         "hsl_strategy_eq_recovery_max_ms_long": scalars[:, 57],
         "hsl_strategy_eq_recovery_max_ms_short": scalars[:, 58],
-        "hsl_drawdown_ema_mean_worst_1pct_long": _scalar_column_or_zero(scalars, 59),
-        "hsl_drawdown_ema_mean_worst_1pct_short": _scalar_column_or_zero(scalars, 60),
-        "hsl_drawdown_raw_max_long": _scalar_column_or_zero(scalars, 61),
-        "hsl_drawdown_raw_max_short": _scalar_column_or_zero(scalars, 62),
-        "hsl_drawdown_raw_mean_worst_1pct_long": _scalar_column_or_zero(scalars, 63),
-        "hsl_drawdown_raw_mean_worst_1pct_short": _scalar_column_or_zero(scalars, 64),
+        "hsl_drawdown_ema_mean_worst_1pct_portfolio": scalars[:, -3],
+        "hsl_drawdown_ema_mean_worst_1pct_long": _scalar_column_or_zero(
+            scalars, 59, reserved_columns=3
+        ),
+        "hsl_drawdown_ema_mean_worst_1pct_short": _scalar_column_or_zero(
+            scalars, 60, reserved_columns=3
+        ),
+        "hsl_drawdown_raw_max_long": _scalar_column_or_zero(
+            scalars, 61, reserved_columns=3
+        ),
+        "hsl_drawdown_raw_max_short": _scalar_column_or_zero(
+            scalars, 62, reserved_columns=3
+        ),
+        "hsl_drawdown_raw_mean_worst_1pct_long": _scalar_column_or_zero(
+            scalars, 63, reserved_columns=3
+        ),
+        "hsl_drawdown_raw_mean_worst_1pct_short": _scalar_column_or_zero(
+            scalars, 64, reserved_columns=3
+        ),
     }
     if btc_risk_enabled:
         output.update(_decode_btc_risk_outputs(daily, active_days, 9))
@@ -1469,18 +1483,22 @@ def _decode_multicoin_fused_outputs(daily, scalars, gaps, *, btc_risk_enabled=Fa
             "hsl_strategy_eq_recovery_max_ms_long": scalars[:, 62],
             "hsl_strategy_eq_recovery_max_ms_short": scalars[:, 63],
             "hsl_drawdown_ema_mean_worst_1pct_long": _scalar_column_or_zero(
-                scalars, 64
+                scalars, 64, reserved_columns=3
             ),
             "hsl_drawdown_ema_mean_worst_1pct_short": _scalar_column_or_zero(
-                scalars, 65
+                scalars, 65, reserved_columns=3
             ),
-            "hsl_drawdown_raw_max_long": _scalar_column_or_zero(scalars, 66),
-            "hsl_drawdown_raw_max_short": _scalar_column_or_zero(scalars, 67),
+            "hsl_drawdown_raw_max_long": _scalar_column_or_zero(
+                scalars, 66, reserved_columns=3
+            ),
+            "hsl_drawdown_raw_max_short": _scalar_column_or_zero(
+                scalars, 67, reserved_columns=3
+            ),
             "hsl_drawdown_raw_mean_worst_1pct_long": _scalar_column_or_zero(
-                scalars, 68
+                scalars, 68, reserved_columns=3
             ),
             "hsl_drawdown_raw_mean_worst_1pct_short": _scalar_column_or_zero(
-                scalars, 69
+                scalars, 69, reserved_columns=3
             ),
         }
     )

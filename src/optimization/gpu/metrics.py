@@ -1666,7 +1666,7 @@ def _hard_stop_raw_drawdown_metrics(out: dict) -> dict:
 
 
 def _hard_stop_ema_tail_metrics(out: dict) -> dict:
-    """Reduce bounded per-side HSL EMA tails using Rust's public contract."""
+    """Expose observed portfolio and side EMA tails from compact replay outputs."""
 
     required = {
         "hsl_drawdown_ema_mean_worst_1pct_long",
@@ -1680,7 +1680,13 @@ def _hard_stop_ema_tail_metrics(out: dict) -> dict:
     long_tail = out["hsl_drawdown_ema_mean_worst_1pct_long"].to(torch.float64)
     short_tail = out["hsl_drawdown_ema_mean_worst_1pct_short"].to(torch.float64)
     return {
-        "drawdown_worst_mean_1pct_ema_strategy_eq": long_tail.maximum(short_tail),
+        # Retained directional single-coin proxy lacks a joint observation.
+        # Native service requires the portfolio output at its replay boundary.
+        "drawdown_worst_mean_1pct_ema_strategy_eq": (
+            out["hsl_drawdown_ema_mean_worst_1pct_portfolio"].to(torch.float64)
+            if "hsl_drawdown_ema_mean_worst_1pct_portfolio" in out
+            else long_tail.maximum(short_tail)
+        ),
         "drawdown_worst_mean_1pct_ema_strategy_eq_long": long_tail,
         "drawdown_worst_mean_1pct_ema_strategy_eq_short": short_tail,
     }

@@ -2273,3 +2273,44 @@ Completion requires:
   Remaining recovery, other weighted/BTC families, representative performance and
   legacy retirement remain separate acceptance work. CUDA checks do not establish
   Metal device acceptance.
+
+
+### 2026-10-07 — Observed portfolio HSL EMA tails
+
+- The current six-case, 20-day public HSL/unstuck audit returns all 157 canonical
+  metrics without missing or non-finite values. Only 66 comparisons have explicit
+  policies; the remaining 876 pairs are unassessed, not passes. Full metric
+  acceptance, representative resource/performance measurements and legacy retirement
+  remain open.
+- Rust's public portfolio EMA tail uses the per-bar maximum enabled scope signal.
+  The GPU proxy instead took the maximum of the two reduced side tails. These
+  operations differ: a controlled 200-bar Rust case returns 0.9 overall, 0.6 long,
+  and 0.45 short. This is an aggregation defect rather than f32 noise.
+- Shared replay captures a bounded joint observation summary and returns one
+  additional scalar. Single-side temporal replay retains it in its existing state;
+  fused replay observes both sides on the same bar. Unrequested EMA tails still
+  compile away. Native result reduction requires the factual portfolio payload;
+  the retained directional single-coin proxy keeps its older reduction.
+- Repeating all 942 metric pairs with this change alters only the two dual-side
+  portfolio EMA tails. TM relative error falls from 46.34% to .145%; EMA falls from
+  2.76% to 2.25%. All other 940 GPU metrics are identical. Existing side-tail
+  histogram approximation and other replay differences are not accepted by this
+  narrow correction. General parity-tool policies stay unchanged.
+- Current-source Rust passes 332 tests with one existing ignore and default-feature
+  compile coverage. All 24 new CUDA/reducer regressions pass, including controlled
+  scope observations, optional scalar ownership, exact non-tail shock ablation,
+  temporal partial histories and both public twenty-day comparisons.
+- The affected caller corpus passes 1,159 cases across its full run and selected
+  rechecks. Four old dispatch mocks were corrected for the existing optional
+  weighted-equity argument. Two 60-second future observation timeouts pass on
+  unchanged rechecks; they do not establish a cold-compile latency guarantee.
+- Ten final decoder and fused HSL-mode smoke checks pass. Direct smoke buffers now
+  use the current scalar-width constant, mock initialization includes unrequested
+  weighted metrics, and service assertions verify the joint portfolio summary,
+  unified event attribution and factual raw side drawdowns.
+- Four actual CUDA optimizer interruption/resumption cases pass with CPU simulation
+  forbidden, covering both strategies and standalone/scenario-screened suites.
+  Six documentation tests pass; checks report no errors. Require current-head
+  author/automatic review and all required CI before development integration.
+  General metric policies, representative performance and legacy retirement remain
+  open; these CUDA checks do not establish Apple Metal device acceptance.

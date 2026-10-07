@@ -1713,7 +1713,7 @@ def test_hard_stop_raw_drawdown_metrics_fail_closed_without_outputs():
         )
 
 
-def test_hard_stop_ema_tail_reduction_matches_rust_side_max_contract():
+def test_retained_directional_proxy_ema_tail_uses_legacy_side_max():
     from optimization.gpu.metrics import _hard_stop_ema_tail_metrics
 
     metrics = _hard_stop_ema_tail_metrics(
@@ -1732,6 +1732,19 @@ def test_hard_stop_ema_tail_reduction_matches_rust_side_max_contract():
     assert metrics[
         "drawdown_worst_mean_1pct_ema_strategy_eq_short"
     ].tolist() == pytest.approx([0.09, 0.21])
+
+
+def test_hard_stop_ema_tail_uses_observed_portfolio_summary():
+    from optimization.gpu.metrics import _hard_stop_ema_tail_metrics
+
+    metrics = _hard_stop_ema_tail_metrics({
+        "hsl_drawdown_ema_mean_worst_1pct_portfolio": torch.tensor([0.9]),
+        "hsl_drawdown_ema_mean_worst_1pct_long": torch.tensor([0.6]),
+        "hsl_drawdown_ema_mean_worst_1pct_short": torch.tensor([0.45]),
+    })
+    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq"].item() == pytest.approx(0.9)
+    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq_long"].item() == pytest.approx(0.6)
+    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq_short"].item() == pytest.approx(0.45)
 
 
 def test_hard_stop_ema_tail_metrics_fail_closed_without_directional_outputs():

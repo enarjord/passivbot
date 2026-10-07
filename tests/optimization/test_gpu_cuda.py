@@ -1097,6 +1097,7 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, w
         entry_interval_enabled=False,
         recovery_distribution_enabled=False,
         weighted_volume_enabled=weighted_volume,
+        weighted_equity_cols=0,
         max_dispatch_candidate_bars=None,
         hsl_capacity=0,
         unstuck_pnl_capacity=0,
@@ -1109,7 +1110,7 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, w
     )
     buffers = [object() for _ in range(12)]
     mps_kernel.MpsTrailingMartingaleMulticoinRunner._dispatch(
-        runner, library, *buffers, batch_size=65
+        runner, library, *buffers, weighted_equity_samples=None, batch_size=65
     )
     assert len(calls) == 1
     assert len(calls[0][0]) == 17 + int(weighted_volume)

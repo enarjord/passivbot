@@ -6141,6 +6141,30 @@ mod tests {
 
         assert!((actual.drawdown_worst_mean_1pct_strategy_eq - 0.85).abs() < 1e-9);
         assert!((legacy_tail_aligned.drawdown_worst_mean_1pct_strategy_eq - 0.50).abs() < 1e-9);
+
+        // Public overall EMA tails retain simultaneous signal observations.
+        // The two largest stresses occur on different sides and different bars:
+        // tail(max(long, short)) = 0.9, but max(tail(long), tail(short)) = 0.6.
+        bt.equities.timestamps_ms = (0..200).map(|k| k * 60_000).collect();
+        bt.strategy_equity_series = vec![100.0; 200];
+        for side in [LONG, SHORT] {
+            bt.strategy_equity_series_pside[side] = vec![100.0; 200];
+            bt.strategy_equity_timestamps_ms_pside[side] = bt.equities.timestamps_ms.clone();
+        }
+        bt.hsl_report.signal_emas = [vec![0.0; 200], vec![0.0; 200], vec![0.0; 200]];
+        bt.hsl_report.signal_emas[1][0] = 1.0;
+        bt.hsl_report.signal_emas[1][1] = 0.2;
+        bt.hsl_report.signal_emas[2][2] = 0.8;
+        bt.hsl_report.signal_emas[2][3] = 0.1;
+        for k in 0..200 {
+            bt.hsl_report.signal_emas[0][k] = bt.hsl_report.signal_emas[1][k]
+                .max(bt.hsl_report.signal_emas[2][k]);
+        }
+        let observed = bt.hsl_strategy_metrics();
+        assert!((observed.overall.drawdown_worst_mean_1pct_ema_strategy_eq - 0.9).abs() < 1e-12);
+        assert!((observed.long.drawdown_worst_mean_1pct_ema_strategy_eq - 0.6).abs() < 1e-12);
+        assert!((observed.short.drawdown_worst_mean_1pct_ema_strategy_eq - 0.45).abs() < 1e-12);
+
     }
 
     #[test]

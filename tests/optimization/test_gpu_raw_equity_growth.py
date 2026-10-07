@@ -125,11 +125,15 @@ def test_temporal_raw_growth_preserves_partial_days(side):
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("btc_risk", [False, True])
 def test_daily_decoder_uses_explicit_feature_ownership(fused, btc_risk):
-    from optimization.gpu.mps_kernel import _decode_outputs, _decode_multicoin_fused_outputs
+    from optimization.gpu.mps_kernel import (
+        _decode_outputs, _decode_multicoin_fused_outputs,
+        MPS_MULTICOIN_SCALAR_COLS, MPS_MULTICOIN_FUSED_SCALAR_COLS,
+    )
     # Raw closes/minima/risk make twelve daily columns without any BTC metrics.
     # Shape cannot identify optional column ownership.
     daily = torch.arange(15, dtype=torch.float32).reshape(1, 1, 15)
-    scalars = torch.zeros((1, 72), dtype=torch.float32)
+    width = MPS_MULTICOIN_FUSED_SCALAR_COLS if fused else MPS_MULTICOIN_SCALAR_COLS
+    scalars = torch.zeros((1, width), dtype=torch.float32)
     decode = _decode_multicoin_fused_outputs if fused else _decode_outputs
     actual = decode(daily, scalars, torch.zeros((1, 128)), btc_risk_enabled=btc_risk)
     btc = {"btc_day_end_eq", "btc_day_min_eq", "btc_day_max_dd"}
