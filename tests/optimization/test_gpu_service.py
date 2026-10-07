@@ -1364,8 +1364,9 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
         ),
     ],
 )
+@pytest.mark.parametrize("missing_raw_summary", [False, True])
 def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
-    param_keys, candidate_key
+    param_keys, candidate_key, missing_raw_summary
 ):
     torch = pytest.importorskip("torch")
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
@@ -1377,7 +1378,8 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     proxy.metrics_data = {"ts0": 1_000.0}
     proxy.run = SimpleNamespace()
     proxy.sides = ["long", "short"]
-    proxy.needed_metrics = {"hard_stop_triggers"}
+    proxy.needed_metrics = ({"drawdown_worst_strategy_eq"} if missing_raw_summary
+                            else {"hard_stop_triggers"})
     proxy.param_keys = param_keys
     proxy.base_params = {
         side: {
@@ -1423,6 +1425,11 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         {f"long_{candidate_key}": 0.75, f"short_{candidate_key}": 1.0,
          "long_hsl_signal_mode": 2, "short_hsl_signal_mode": 2},
     ]
+
+    if missing_raw_summary:
+        with pytest.raises(RuntimeError, match="raw strategy-risk summary is missing"):
+            proxy.evaluate(candidates)
+        return
 
     assert proxy.evaluate(candidates) == [
         {"hard_stop_triggers": 4.0},

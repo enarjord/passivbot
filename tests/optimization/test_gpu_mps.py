@@ -4951,6 +4951,7 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
         side=side,
         collect_coin_fill_counts=True,
         recovery_distribution_enabled=features,
+        raw_strategy_risk_enabled=True,
         entry_interval_enabled=features,
         hsl_ema_tail_enabled=features,
         hsl_raw_drawdown_enabled=features,

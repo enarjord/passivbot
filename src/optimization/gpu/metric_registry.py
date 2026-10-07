@@ -9,6 +9,12 @@ import hjson
 # Metric-name groups that toggle opt-in MPS proxy features. Keep this metadata
 # Torch-free so backend preflight and ordinary CPU-only installs can prove the
 # dispatch contract without importing the optional GPU runtime.
+RAW_STRATEGY_RISK_METRICS = frozenset({
+    "drawdown_worst_strategy_eq",
+    "drawdown_worst_mean_1pct_strategy_eq",
+    "strategy_eq_underwater_pct_mean",
+})
+
 BTC_INTRADAY_RISK_METRICS = frozenset(
     {
         "calmar_ratio_btc",

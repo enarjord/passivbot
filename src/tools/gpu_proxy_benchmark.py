@@ -9,6 +9,8 @@ import time
 
 import numpy as np
 
+from optimization.gpu.metric_registry import RAW_STRATEGY_RISK_METRICS
+
 from optimization.gpu.runtime import gpu_device
 from optimization.gpu.model import (
     adaptive_params,
@@ -419,6 +421,7 @@ def _build_case(
         runs[0],
         data,
         side="long",
+        raw_strategy_risk_enabled=bool(set(needed_metrics) & RAW_STRATEGY_RISK_METRICS),
         coin_overrides=overrides,
         **(
             {"max_dispatch_candidate_bars": MAX_DISPATCH_CANDIDATE_BARS}

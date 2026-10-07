@@ -8,6 +8,17 @@
 #define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS 0
 #endif
 
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+// Observational raw portfolio risk; account liquidation values remain separate.
+inline void update_raw_strategy_risk(
+    float equity, thread float& peak, thread float& daily_worst
+) {
+    peak = fmax(peak, equity);
+    daily_worst = fmax(daily_worst,
+        (peak - equity) / fmax(fabs(peak), 1.0e-12f));
+}
+#endif
+
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
 }

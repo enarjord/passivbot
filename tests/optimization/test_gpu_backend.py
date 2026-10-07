@@ -871,6 +871,8 @@ def test_apple_mps_chip_probe_does_not_depend_on_shell_path(monkeypatch):
     (
         ("entry_interval_hours_p95", {"entry_interval"}),
         ("volume_pct_per_day_avg_w", {"weighted_volume"}),
+        ("drawdown_worst_strategy_eq", {"raw_strategy_risk"}),
+        ("drawdown_worst_usd", set()),
         (
             "strategy_eq_recovery_days_p99",
             {"strategy_eq_recovery_distribution"},

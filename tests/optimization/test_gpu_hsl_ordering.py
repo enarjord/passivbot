@@ -161,17 +161,9 @@ def test_invalid_hsl_propagates_from_native_service(monkeypatch, strategy):
         library.cache_clear()
 
 
-@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("sides", ["long", "both"])
-@pytest.mark.parametrize("terminal_fill", [False, True], ids=["mark", "panic-fill"])
-def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill):
-    torch = pytest.importorskip("torch")
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA required")
+def _liquidation_inputs(strategy, sides, terminal_fill):
     from config.hsl import generated_template
     from test_gpu_entry_sizing_parity import _fixture
-    from tools.gpu_parity import run_comparison
-    from optimization.gpu.parity import MetricTolerance
 
     inputs = list(_fixture("long", 1, "initial"))
     config = generated_template(inputs[0], "coin")
@@ -192,6 +184,19 @@ def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill
     # the gap; a market panic liquidates at the earlier factual fill boundary.
     candles[4, :, :3] = [100, 99, 99.5]
     candles[5:, :, :3] = [21, 19, 20]
+    return tuple(inputs)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "both"])
+@pytest.mark.parametrize("terminal_fill", [False, True], ids=["mark", "panic-fill"])
+def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill):
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    from tools.gpu_parity import run_comparison
+    from optimization.gpu.parity import MetricTolerance
+    inputs = _liquidation_inputs(strategy, sides, terminal_fill)
     metric = "hard_stop_time_in_red_pct"
     durations = ("hard_stop_duration_minutes_mean", "hard_stop_duration_minutes_max")
     side_equity = tuple(
