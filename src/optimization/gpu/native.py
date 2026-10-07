@@ -108,8 +108,9 @@ class CudaBacktestService:
                     interrupt_check=self._interrupt_check, prepared_data_cache=self._prepared_cache,
                 )
                 try:
-                    # Discover physical limits after claiming just one cold
-                    # request. Preparation and mutable runners remain worker-owned.
+                    # Discover physical limits after claiming one ownership request.
+                    # The executor fills the first dispatch up to the prepared
+                    # ceiling before simulation. Runners remain worker-owned.
                     self._residency.activate(replay)
                     self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
                     self._batch_policy.width(dataset_id, self._batch_size)

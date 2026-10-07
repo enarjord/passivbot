@@ -502,6 +502,43 @@ requests are offered; no eligible tuning window completes. This does not prove a
 optimal width. Reported Torch allocations exclude driver/CuPy, host RSS and disk.
 General parity policies and broader acceptance gates remain unchanged.
 
+## Prepared first-dispatch measurement
+
+The service now discovers a prepared dataset's physical capacity on its owning
+worker, then fills the initial dispatch from already queued compatible requests.
+It preserves the initial ownership claim, excludes cancelled requests, adds no
+arrival wait and keeps the prepared work/scratch ceiling. This removes a forced
+single-candidate simulation before the queue can use the discovered capacity.
+
+A paired CUDA measurement uses EMA Anchor, both sides, sixteen coins, 28,800 bars,
+fixture seed 43, coin HSL and unstuck. Set both sides' RED threshold to .002, EMA
+span to 2.5 minutes and cooldown to five minutes. Multiply coin zero's OHLC from
+bar 8,640 by .7 and coin one's from bar 17,280 by 1.3. Submit 64 candidates with
+both sides' base quantity `.01 + index * .0005`. Request weighted raw ADG, weighted
+account Calmar, raw recovery p95/drawdown, weighted long ADG and short MDG per
+exposure, weighted volume, time in RED, joint portfolio EMA tail and completion
+ratio. Use auto width, pending capacity 128 and zero accumulation delay.
+
+For each version, evaluate the cohort twice in one service. Hold first preparation
+until all 64 requests are queued, then release it; this isolates prepared-capacity
+dispatch from differences in arrival timing. Use separate processes with the same
+input/parameter identities and verified Rust runtime. The baseline changes only
+the executor back to the development source before this scheduling change. Shader
+caches remain populated; imports and fixture generation are outside the timer.
+
+| Executor | First cohort seconds | Second cohort seconds | Actual dispatch counts |
+| --- | ---: | ---: | --- |
+| Before | 119.959 | 54.764 | 1, 63, 64 |
+| Prepared first dispatch | 55.956 | 54.801 | 64, 64 |
+
+All ten metric values and liquidation status match exactly for all 64 candidates
+between versions and between repeats. The first cohort is 53.35% shorter in this
+controlled comparison; warm throughput is essentially unchanged. The new service
+records one eligible warm full-width timing sample, whereas the baseline records
+none. Neither completes a tuning window. This is one saturated service workload,
+not a cold-cache or full-optimizer speedup claim. Demand-limited tuning and broader
+resource/performance acceptance remain open.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account

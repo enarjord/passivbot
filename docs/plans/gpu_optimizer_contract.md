@@ -2358,3 +2358,24 @@ Completion requires:
   new Rust shape checks the same 1e-10 absolute / 1e-12 relative tolerance as Python,
   while preserving the existing other-family checks. Require fresh source validation
   and completed current-head review/CI before integration.
+
+### 2026-10-07 — Fill the first dispatch after worker-owned preparation
+
+- Shape-reference PR #1928 completed fresh author/automatic review, addressed both
+  automatic findings and passed Rust/Python 3.12/Python 3.14 CI before development
+  integration. Master remains unchanged.
+- The full optimizer resource trace exposed thirteen one-candidate dispatches for
+  newly prepared datasets. Their replay times can exceed subsequent large batches;
+  discovering safe capacity does not require simulating that ownership claim alone.
+- Reuse the executor's queue-claim logic after the factory discovers capacity. Fill
+  only from already queued compatible requests, respect cancellation and the physical
+  bound, and retain oldest-dataset scheduling. No new orchestration/tuner state,
+  simulations, precision changes or CPU fallback are introduced.
+- The paired twenty-day, sixteen-coin EMA measurement in the acceptance record
+  returns identical metrics/terminal status for all 64 requests. First-cohort time
+  changes from 119.959 to 55.956 seconds; repeat times remain 54.764/54.801 seconds.
+  Populated shader caches and gated submission are explicit measurement limits.
+  One warm full-width sample now reaches the tuner; no completed tuning window or
+  optimal-width claim follows. Keep demand-limited tuning and cutover gates open.
+- Require final cancellation/capacity and real CUDA optimizer interrupt/resume
+  checks, current-head author/automatic review and CI before integration.

@@ -97,6 +97,115 @@ def test_invalid_policy_width_fails_before_constructing_or_running_replay(width)
     assert not replay.calls
 
 
+def test_first_dispatch_uses_prepared_capacity_without_repeating_or_reordering_work():
+    from optimization.gpu.execution_tuning import ExecutionBatchTuner
+
+    policy = ExecutionBatchTuner(initial=8, enabled=False)
+    preparing, release = Event(), Event()
+    replay, other = Replay(), Replay()
+
+    @contextmanager
+    def factory():
+        preparing.set()
+        assert release.wait(3)
+        policy.constrain("market", 2)
+        yield replay
+
+    service = GpuBacktestService(batch_size=8, max_pending=16, max_batch_delay=0,
+                                 batch_policy=policy)
+    service.register_dataset_factory("market", factory)
+    service.register_dataset("other", other)
+    try:
+        first = service.submit(request(0))
+        assert preparing.wait(3)
+        cancelled = service.submit(request(1))
+        remaining = [service.submit(request(i, dataset)) for i, dataset in
+                     ((2, "other"), (3, "market"), (4, "market"))]
+        assert cancelled.cancel()
+        release.set()
+        assert [future.result(timeout=3).metrics for future in [first, *remaining]] == [
+            {"gain": i} for i in (0, 2, 3, 4)
+        ]
+    finally:
+        release.set()
+        service.close()
+    assert [[item["value"] for item in batch] for batch in replay.calls] == [[0, 3], [4]]
+    assert other.calls == [[{"value": 2}]]
+    assert cancelled.cancelled()
+
+
+def test_cancel_pending_during_preparation_does_not_fill_first_dispatch():
+    from optimization.gpu.execution_tuning import ExecutionBatchTuner
+
+    policy = ExecutionBatchTuner(initial=8, enabled=False)
+    preparing, release, cancelled = Event(), Event(), Event()
+    replay = Replay()
+
+    @contextmanager
+    def factory():
+        preparing.set()
+        assert release.wait(3)
+        policy.constrain("market", 2)
+        yield replay
+
+    service = GpuBacktestService(batch_size=8, max_pending=16, max_batch_delay=0,
+                                 batch_policy=policy)
+    service.register_dataset_factory("market", factory)
+    closer = None
+    try:
+        first = service.submit(request(0))
+        assert preparing.wait(3)
+        pending = service.submit(request(1))
+        pending.add_done_callback(lambda _future: cancelled.set())
+        closer = Thread(target=lambda: service.close(cancel_pending=True))
+        closer.start()
+        assert cancelled.wait(3)
+        assert pending.cancelled()
+        release.set()
+        assert first.result(timeout=3).metrics == {"gain": 0}
+    finally:
+        release.set()
+        if closer is not None:
+            closer.join(3)
+            assert not closer.is_alive()
+        service.close()
+    assert replay.calls == [[{"value": 0}]]
+
+
+@pytest.mark.parametrize("prepared_width", [0, 1, 9, True])
+def test_invalid_prepared_capacity_fails_claimed_work_without_simulation(prepared_width):
+    class Policy:
+        prepared = False
+
+        def width(self, *_args):
+            return prepared_width if self.prepared else 2
+
+        def observe(self, *_args, **_kwargs):
+            pytest.fail("invalid capacity must not supply execution evidence")
+
+    policy, replay = Policy(), Replay()
+    exited = Event()
+
+    @contextmanager
+    def factory():
+        policy.prepared = True
+        try:
+            yield replay
+        finally:
+            exited.set()
+
+    with GpuBacktestService(batch_size=8, max_batch_delay=0, batch_policy=policy) as service:
+        service.register_dataset_factory("market", factory)
+        # Make two requests available before the owner can claim either.
+        with service._condition:
+            futures = [service.submit(request(i)) for i in range(2)]
+        for future in futures:
+            with pytest.raises(ValueError, match="dispatch ceiling"):
+                future.result(timeout=3)
+    assert exited.is_set()
+    assert not replay.calls
+
+
 @pytest.mark.parametrize("malformed", [False, True])
 def test_failed_producer_work_never_supplies_tuning_evidence(malformed):
     failure = RuntimeError("producer failed")

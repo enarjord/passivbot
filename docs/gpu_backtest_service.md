@@ -239,8 +239,10 @@ work may dispatch immediately when its stream has stalled. Full queues, complete
 closing and cancellation retain their existing dispatch/drain behavior. This advisory
 state is service-local; it changes neither submitted simulations nor saved search state.
 
-The first request for an unprepared dataset claims one candidate, prepares and discovers
-its physical dispatch limit on the GPU owner, and returns that completion. Subsequent
+The first request for an unprepared dataset claims one candidate, then prepares and discovers
+its physical dispatch limit on the GPU owner. Before simulation, the worker fills that
+first dispatch with already queued compatible requests up to the prepared limit. It does
+not wait for more arrivals during this fill; cancelled queued work stays excluded. Subsequent
 batches use that limit. This prevents several serial scratch/work splits from delaying
 the return of an oversized outer batch. Preparation retains no inactive runner references;
 switching datasets can release their tensors and mutable scratch.
