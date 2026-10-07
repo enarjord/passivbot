@@ -71,6 +71,17 @@ def _unsupported(value):
     raise TypeError(f"Unsupported prepared metadata type: {type(value).__name__}")
 
 
+def materialized_dataset_identity(coins, hlcvs, btc_usd, timestamps, mss):
+    """Fingerprint the materialized inputs of a standalone backtest or suite slice."""
+    return {
+        "coins": list(coins),
+        "hlcvs": _array_identity(hlcvs),
+        "btc_usd": _array_identity(btc_usd),
+        "timestamps": _array_identity(timestamps),
+        "market_settings_sha256": _metadata_identity(mss, coins),
+    }
+
+
 def build_prepared_dataset_identity(
     *, config, hlcvs_specs, btc_usd_specs, msss, timestamps, scenario_contexts=()
 ):

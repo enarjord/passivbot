@@ -43,6 +43,25 @@ Optimization requires the full install profile:
 pip install -e ".[full]"
 ```
 
+## Session identity and output names
+
+Optimizer sessions use the [shared session naming format](backtesting.md#backtest-results)
+under `optimize_results/`. Small suites include their actual coin names and the number of
+prepared scenarios. The deterministic setup fingerprint includes effective settings after CLI
+overrides, fixed evaluation policy, optimizer bounds/objectives/backend settings, resolved dates,
+actual prepared data and evaluator implementation, and selected starting-config contents in
+consumption order. Starting configs are frozen in a bounded-memory disk snapshot before hashing
+and execution; filenames, old metrics and output paths are not seed identity.
+
+An unspecified `optimize.seed` is resolved to a concrete random seed before a fresh search.
+It is recorded in `session.json` and saved candidates. New sessions with different actual seeds
+have different setup fingerprints. An explicit seed can be used to compare otherwise equivalent
+setups. `--resume` retains the original output directory and restores its recorded seed when the
+input seed is unspecified; existing checkpoint/evaluation compatibility checks still apply.
+Legacy sessions without `session.json` keep their original seed policy. Fresh runs always get a
+new random run ID, even when their setup fingerprints match. Full SHA-256 setup fingerprints,
+run IDs and canonical setup inputs are available in `session.json`.
+
 ## Running Optimization
 
 ```bash

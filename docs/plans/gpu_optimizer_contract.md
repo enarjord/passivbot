@@ -1480,3 +1480,25 @@ Completion requires:
   cases pass. Two broad HSL fixtures initially failed because manual service objects
   omitted the unchanged `hsl_signal_mode` contract. Correct their initialization and
   rerun both successfully without relaxing their trading, controller or metric assertions.
+
+
+### 2026-10-06 — Refresh development with shared session artifacts
+
+- PR #1914 integrated after clear exact-head automatic/author review and successful
+  required CI. Integrate master `cf3809c3d3b837861b7e8fdf5903c4fce8ceaadf`,
+  including PR #1913's readable session names, setup manifests, starting-config
+  snapshots and explicit suite artifact paths. PR #1905's bounded allowance and
+  scaled coin-HSL policy remain included through the earlier master integration.
+- Resolve only the overlapping changelog entries; retain both branches' entries.
+  Preserve native CPU preparation, GPU-only bootstrap/resume, checkpoint-owned
+  anchors, coupled scenario spans, screening and prompt result/Pareto persistence.
+- Extend native CLI coverage to check session manifests, selected-seed counts and
+  unchanged output directories/manifests on resume. Add four generated-seed cases
+  spanning standalone/suite and ordinary/interrupted runs with scaled HSL enabled;
+  forbid CPU simulation and CPU worker-pool creation throughout.
+- Validation passes 530 focused Python/CUDA checks, including 32 native CLI lifecycle
+  cases. Rust passes 330 tests (one ignored) and default-feature checks; the rebuilt
+  extension is source-verified. Six documentation checks pass. No additional
+  simulator or numerical-policy change is introduced by this refresh.
+- Require completed current-head automatic/author review and all required CI before
+  development integration. Master receives no optimizer redesign changes.

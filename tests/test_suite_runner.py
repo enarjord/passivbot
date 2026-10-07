@@ -1172,7 +1172,18 @@ def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, t
 
     async def run_scenario(scenario, *args, **kwargs):
         observed.append(scenario.exchanges)
-        return ScenarioResult(scenario, {}, {"stats": {}}, 0.0, None)
+        output = args[6] / scenario.label
+        output.mkdir()
+        (output / "config.json").write_text("{}")
+        return ScenarioResult(
+            scenario,
+            {},
+            {"stats": {}},
+            0.0,
+            output,
+            "2026-01-01T00:00:00.000Z",
+            "2026-01-01T00:00:01.000Z",
+        )
 
     for name in ("load_markets", "format_approved_ignored_coins",
                  "reject_cross_exchange_market_identifier_collisions"):
@@ -1183,9 +1194,40 @@ def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, t
     monkeypatch.setattr(suite, "apply_scenario", lambda *a, **kw: (config, ["BTC"]))
     monkeypatch.setattr(suite, "_compute_effective_coin_exchange", lambda *a: {"BTC": "bybit"})
     monkeypatch.setattr(suite, "run_backtest_scenario", run_scenario)
+    monkeypatch.setattr(
+        suite,
+        "_suite_session_inputs",
+        lambda *a: (
+            [],
+            [config],
+            ["BTC"],
+            ["bybit"],
+        ),
+    )
+    monkeypatch.setattr(
+        suite, "evaluation_implementation_identity", lambda: {"test": True}
+    )
     asyncio.run(suite.run_backtest_suite_async(
         config, suite_cfg, disable_plotting=True, suite_output_root=tmp_path,
     ))
+    summary = json.loads((tmp_path / "suite_summary.json").read_text())
+    assert summary["layout_version"] == 2
+    assert summary["per_scenario"]["external"]["output_path"] == "external"
+    assert summary["per_scenario"]["external"]["artifacts"] == {
+        "config.json": "external/config.json",
+    }
+    assert (
+        summary["per_scenario"]["external"]["started_at"] == "2026-01-01T00:00:00.000Z"
+    )
+    with pytest.raises(FileExistsError, match="empty"):
+        asyncio.run(
+            suite.run_backtest_suite_async(
+                config,
+                suite_cfg,
+                disable_plotting=True,
+                suite_output_root=tmp_path,
+            )
+        )
     saved = json.loads((tmp_path / "config.json").read_text())
     resumed, _ = build_scenarios(saved["backtest"], base_exchanges=saved["backtest"]["exchanges"])
     assert observed == [["bybit"]]

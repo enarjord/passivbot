@@ -13,7 +13,7 @@ import pytest
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
-                                                                    screening=False, anchors=False, coupled=False, scaled_hsl=False):
+                                                                    screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -28,6 +28,10 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
     ]))
     config["optimize"].update(backend="gpu_native", population_size=4, iters=8, seed=12)
+    if generated_seed:
+        import session_artifacts
+        config["optimize"]["seed"] = None
+        monkeypatch.setattr(session_artifacts.secrets, "randbits", lambda _bits: 12)
     config["optimize"]["scoring"] = [dict(metric="adg_strategy_eq", goal="max"),
                                       dict(metric="drawdown_worst_strategy_eq", goal="min")]
     config["optimize"]["limits"] = [dict(metric="backtest_completion_ratio", penalize_if="less_than", value=0.99)]
@@ -154,6 +158,13 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     results = list((tmp_path / "optimize_results").iterdir())
     assert len(results) == 1
     directory = results[0]
+    manifest_bytes = (directory / "session.json").read_bytes()
+    manifest = json.loads(manifest_bytes)
+    assert manifest["seed"] == 12
+    assert manifest["setup"]["config"]["optimize"]["backend"] == "gpu_native"
+    assert manifest["starting_configs"]["count"] == 2
+    assert manifest["setup"]["starting_configs"] == manifest["starting_configs"]
+    assert "setup-" in directory.name and "run-" in directory.name
     def records():
         with (directory / "all_results.bin").open("rb") as source:
             return list(msgpack.Unpacker(source, raw=False, strict_map_key=False))
@@ -177,6 +188,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     with pytest.raises(SystemExit) as resumed:
         await optimize.main()
     assert resumed.value.code == 0
+    assert list((tmp_path / "optimize_results").iterdir()) == [directory]
+    assert (directory / "session.json").read_bytes() == manifest_bytes
     assert len(records()) == (8 if screening else 12)
     if scaled_hsl:
         expanded = {}
@@ -243,4 +256,15 @@ async def test_native_scaled_coin_hsl_cli_cuda_preserves_policy_and_resumes_with
 ):
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, suite, interrupted, True, scaled_hsl=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suite", [False, True])
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_native_generated_seed_session_resumes_with_scaled_hsl_without_cpu(
+    monkeypatch, tmp_path, suite, interrupted,
+):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, interrupted, True, scaled_hsl=True, generated_seed=True,
     )
