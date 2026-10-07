@@ -196,6 +196,23 @@ fn weighted_equity_shared_references_match_current_producers() {
                     ],
                     &case[expected_account][variant],
                 );
+                let expected_shape = if quantized {
+                    "expected_account_shape_f32"
+                } else {
+                    "expected_account_shape"
+                };
+                assert_metrics(
+                    name,
+                    &[
+                        ("equity_choppiness_usd", account.equity_choppiness),
+                        ("equity_jerkiness_usd", account.equity_jerkiness),
+                        ("exponential_fit_error_usd", account.exponential_fit_error),
+                        ("equity_choppiness_w_usd", account.equity_choppiness_w),
+                        ("equity_jerkiness_w_usd", account.equity_jerkiness_w),
+                        ("exponential_fit_error_w_usd", account.exponential_fit_error_w),
+                    ],
+                    &case[expected_shape][variant],
+                );
             }
         }
     }

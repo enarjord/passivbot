@@ -124,10 +124,31 @@ resource gates. The lifecycle foundation does not itself certify metric authorit
   or missing market-panic behavior. All eight native counterparts pass. Do not confuse
   retained-engine trading differences with reporting-clock acceptance. The earlier seven
   assessed HSL metrics match in six long comparisons; full cutover remains unaccepted.
-- Per-side strategy-equity summaries are coupled to HSL eligibility in
-  `record_multicoin_hsl_report`, whereas CPU side curves are recorded independently.
-  The inactive-side constant-curve audit returns the full strict-recovery horizon on
-  CPU and zero on GPU. Six HSL-disabled diagnostics also confirm zero active-side
-  raw drawdown/recovery despite nonzero CPU values. Separate ordinary strategy
-  summaries from protection telemetry while preserving protection ablation. Weighted-ratio and
-  remaining long-trajectory differences still require independent assessment.
+- Ordinary side-equity reporting formerly depended on HSL signal eligibility.
+  Shared replay now records factual raw cashflows and UPNL on the account-equity
+  clock independently of protection. Constant inactive curves retain their complete
+  recovery horizon. The side-risk matrix, including HSL-disabled and unified cases,
+  covers that correction; two TM long drawdowns retain documented fixture-local
+  one-basis-point bounds. Arbitrary trading trajectories remain unaccepted.
+- Requested weighted raw/account capture now follows the corresponding Rust curves
+  and suffix definitions; unweighted raw growth uses compact factual daily summaries.
+  Controlled and same-curve references establish those reductions, while ordinary
+  replay differences retain explicit fixture-local limits. Preserve that distinction
+  when assessing shape, histogram-tail and long-trajectory differences below.
+
+## Current account-shape evidence
+
+The shared controlled Rust fixture now covers the six account-equity shape fields
+at both input precisions and three fill variants. CPU/CUDA reductions and fixed-price
+BTC routing pass all 2,160 comparisons. The twenty-day TM short diagnostic in the
+[acceptance record](gpu_optimizer_acceptance.md#controlled-account-equity-shape-references)
+finds matching clocks and daily capture; actual Rust reductions of identical curves
+agree within 1e-12. Its 5.205% weighted-jerkiness replay difference amplifies an
+equity-curve deviation below .059%. Keep that replay/materiality debt separate from
+the now-tested shape definitions; no general tolerance policy is widened.
+
+The related four-cohort assessment preserves ADG/weighted-jerkiness fronts and
+pair ordering, but re-ranking all shape axes changes two EMA fit fronts and nine
+pair relations. A choppiness gap reaches 29.524% symmetric relative error. Strong
+reference calculations do not guarantee stable thresholds near a singular ratio
+or close objective ties. Keep these observations visible in practical acceptance.

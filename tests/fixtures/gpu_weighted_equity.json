@@ -112,6 +112,58 @@
         "sharpe_ratio_strategy_eq": 0.0,
         "sortino_ratio_strategy_eq": 0.0,
         "sterling_ratio_strategy_eq": 0.0
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        }
       }
     },
     {
@@ -231,6 +283,58 @@
         "sharpe_ratio_strategy_eq": 0.0,
         "sortino_ratio_strategy_eq": 0.0,
         "sterling_ratio_strategy_eq": 0.0
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 0.0,
+          "equity_choppiness_w_usd": 0.0,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 0.0,
+          "equity_choppiness_w_usd": 0.0,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 0.0,
+          "equity_choppiness_w_usd": 0.0,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 0.0,
+          "equity_choppiness_w_usd": 0.0,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -351,6 +455,58 @@
         "sharpe_ratio_strategy_eq": 0.3279344228724765,
         "sortino_ratio_strategy_eq": 0.0,
         "sterling_ratio_strategy_eq": 24695076595.95993
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.3333333333333333,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 3.944304526105059e-31,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.3333333333333333,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 3.944304526105059e-31,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.3333333333333333,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 3.944304526105059e-31,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.3333333333333333,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 3.944304526105059e-31,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -472,6 +628,58 @@
         "sharpe_ratio_strategy_eq": 0.13276236653116577,
         "sortino_ratio_strategy_eq": 0.1475932339217757,
         "sterling_ratio_strategy_eq": 0.1475932339217757
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 19.0,
+          "equity_choppiness_w_usd": 3.8,
+          "equity_jerkiness_usd": 0.1832797427652733,
+          "equity_jerkiness_w_usd": 0.036655948553054665,
+          "exponential_fit_error_usd": 0.001813425516139236,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 19.0,
+          "equity_choppiness_w_usd": 3.8,
+          "equity_jerkiness_usd": 0.1832797427652733,
+          "equity_jerkiness_w_usd": 0.036655948553054665,
+          "exponential_fit_error_usd": 0.001813425516139236,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 19.0,
+          "equity_choppiness_w_usd": 3.8,
+          "equity_jerkiness_usd": 0.1832797427652733,
+          "equity_jerkiness_w_usd": 0.036655948553054665,
+          "exponential_fit_error_usd": 0.001813425516139236,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 19.0,
+          "equity_choppiness_w_usd": 3.8,
+          "equity_jerkiness_usd": 0.1832797427652733,
+          "equity_jerkiness_w_usd": 0.036655948553054665,
+          "exponential_fit_error_usd": 0.001813425516139236,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -595,6 +803,58 @@
         "sharpe_ratio_strategy_eq": 0.20623009446549231,
         "sortino_ratio_strategy_eq": 0.23743557332334278,
         "sterling_ratio_strategy_eq": 0.23743557332334278
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 2.3846153846153846,
+          "equity_choppiness_w_usd": 0.4835164835164835,
+          "equity_jerkiness_usd": 0.1888620936048589,
+          "equity_jerkiness_w_usd": 0.026980299086408414,
+          "exponential_fit_error_usd": 0.0018068309502549153,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 2.3846153846153846,
+          "equity_choppiness_w_usd": 0.4835164835164835,
+          "equity_jerkiness_usd": 0.1888620936048589,
+          "equity_jerkiness_w_usd": 0.026980299086408414,
+          "exponential_fit_error_usd": 0.0018068309502549153,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 2.3846153846153846,
+          "equity_choppiness_w_usd": 0.4835164835164835,
+          "equity_jerkiness_usd": 0.1888620936048589,
+          "equity_jerkiness_w_usd": 0.026980299086408414,
+          "exponential_fit_error_usd": 0.0018068309502549153,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 2.3846153846153846,
+          "equity_choppiness_w_usd": 0.4835164835164835,
+          "equity_jerkiness_usd": 0.1888620936048589,
+          "equity_jerkiness_w_usd": 0.026980299086408414,
+          "exponential_fit_error_usd": 0.0018068309502549153,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -730,6 +990,58 @@
         "sharpe_ratio_strategy_eq": 1.0490614364504967,
         "sortino_ratio_strategy_eq": 0.0,
         "sterling_ratio_strategy_eq": 0.050126922667542484
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.3,
+          "equity_jerkiness_usd": 0.030953444967272155,
+          "equity_jerkiness_w_usd": 0.0030953444967272157,
+          "exponential_fit_error_usd": 4.797945973943615e-05,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.3,
+          "equity_jerkiness_usd": 0.030953444967272155,
+          "equity_jerkiness_w_usd": 0.0030953444967272157,
+          "exponential_fit_error_usd": 4.797945973943615e-05,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.3,
+          "equity_jerkiness_usd": 0.030953444967272155,
+          "equity_jerkiness_w_usd": 0.0030953444967272157,
+          "exponential_fit_error_usd": 4.797945973943615e-05,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.3,
+          "equity_jerkiness_usd": 0.030953444967272155,
+          "equity_jerkiness_w_usd": 0.0030953444967272157,
+          "exponential_fit_error_usd": 4.797945973943615e-05,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -869,6 +1181,58 @@
         "sharpe_ratio_strategy_eq": 0.05035143610413851,
         "sortino_ratio_strategy_eq": 0.055713292654797075,
         "sterling_ratio_strategy_eq": 0.05199907314447727
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.4,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 1.1879751147550113e-06,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.4,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 1.1879751147550113e-06,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.4,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 1.1879751147550113e-06,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.4,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 1.1879751147550113e-06,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -992,6 +1356,58 @@
         "sharpe_ratio_strategy_eq": -0.18161126419201898,
         "sortino_ratio_strategy_eq": -0.13609916110453252,
         "sterling_ratio_strategy_eq": -0.09906451052784779
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.1333333333333333,
+          "equity_choppiness_w_usd": 0.30476190476190473,
+          "equity_jerkiness_usd": 1.4146212378422642,
+          "equity_jerkiness_w_usd": 0.2020887482631806,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.1333333333333333,
+          "equity_choppiness_w_usd": 0.30476190476190473,
+          "equity_jerkiness_usd": 1.4146212378422642,
+          "equity_jerkiness_w_usd": 0.2020887482631806,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.1333333333333333,
+          "equity_choppiness_w_usd": 0.30476190476190473,
+          "equity_jerkiness_usd": 1.4146212378422642,
+          "equity_jerkiness_w_usd": 0.2020887482631806,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.1333333333333333,
+          "equity_choppiness_w_usd": 0.30476190476190473,
+          "equity_jerkiness_usd": 1.4146212378422642,
+          "equity_jerkiness_w_usd": 0.2020887482631806,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -1117,6 +1533,58 @@
         "sharpe_ratio_strategy_eq": null,
         "sortino_ratio_strategy_eq": null,
         "sterling_ratio_strategy_eq": null
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.4,
+          "equity_choppiness_w_usd": 0.33999999999999997,
+          "equity_jerkiness_usd": 0.9535714285714286,
+          "equity_jerkiness_w_usd": 0.15535714285714286,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.4,
+          "equity_choppiness_w_usd": 0.33999999999999997,
+          "equity_jerkiness_usd": 0.9535714285714286,
+          "equity_jerkiness_w_usd": 0.15535714285714286,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.4,
+          "equity_choppiness_w_usd": 0.33999999999999997,
+          "equity_jerkiness_usd": 0.9535714285714286,
+          "equity_jerkiness_w_usd": 0.15535714285714286,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.4,
+          "equity_choppiness_w_usd": 0.33999999999999997,
+          "equity_jerkiness_usd": 0.9535714285714286,
+          "equity_jerkiness_w_usd": 0.15535714285714286,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -1248,6 +1716,58 @@
         "sharpe_ratio_strategy_eq": null,
         "sortino_ratio_strategy_eq": 0.0,
         "sterling_ratio_strategy_eq": null
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": null,
+          "equity_choppiness_w_usd": null,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": null,
+          "equity_choppiness_w_usd": null,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": null,
+          "equity_choppiness_w_usd": null,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": null,
+          "equity_choppiness_w_usd": null,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -1383,6 +1903,58 @@
         "sharpe_ratio_strategy_eq": 0.0,
         "sortino_ratio_strategy_eq": 0.0,
         "sterling_ratio_strategy_eq": 0.0
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": null,
+          "equity_choppiness_w_usd": null,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 0.0,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": null,
+          "equity_choppiness_w_usd": null,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 0.0,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": null,
+          "equity_choppiness_w_usd": null,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 0.0,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": null,
+          "equity_choppiness_w_usd": null,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 0.0,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -1508,6 +2080,58 @@
         "sharpe_ratio_strategy_eq": 1.3072592520881774,
         "sortino_ratio_strategy_eq": 58.312043397440945,
         "sterling_ratio_strategy_eq": 58.312043397440945
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.020100502512563,
+          "equity_choppiness_w_usd": 0.30201005025125627,
+          "equity_jerkiness_usd": 2.0696480938416424,
+          "equity_jerkiness_w_usd": 0.21664222873900293,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.020100502512563,
+          "equity_choppiness_w_usd": 0.30201005025125627,
+          "equity_jerkiness_usd": 2.0696480938416424,
+          "equity_jerkiness_w_usd": 0.21664222873900293,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0201005022387812,
+          "equity_choppiness_w_usd": 0.30201005022387817,
+          "equity_jerkiness_usd": 2.0696480960444337,
+          "equity_jerkiness_w_usd": 0.21664222883235934,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0201005022387812,
+          "equity_choppiness_w_usd": 0.30201005022387817,
+          "equity_jerkiness_usd": 2.0696480960444337,
+          "equity_jerkiness_w_usd": 0.21664222883235934,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -1633,6 +2257,58 @@
         "sharpe_ratio_strategy_eq": null,
         "sortino_ratio_strategy_eq": null,
         "sterling_ratio_strategy_eq": null
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.5454545454545454,
+          "equity_choppiness_w_usd": 0.35454545454545455,
+          "equity_jerkiness_usd": 0.565149505666747,
+          "equity_jerkiness_w_usd": 0.10266879672052084,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.5454545454545454,
+          "equity_choppiness_w_usd": 0.35454545454545455,
+          "equity_jerkiness_usd": 0.565149505666747,
+          "equity_jerkiness_w_usd": 0.10266879672052084,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.5454545454545454,
+          "equity_choppiness_w_usd": 0.35454545454545455,
+          "equity_jerkiness_usd": 0.565149505666747,
+          "equity_jerkiness_w_usd": 0.10266879672052084,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.5454545454545454,
+          "equity_choppiness_w_usd": 0.35454545454545455,
+          "equity_jerkiness_usd": 0.565149505666747,
+          "equity_jerkiness_w_usd": 0.10266879672052084,
+          "exponential_fit_error_usd": null,
+          "exponential_fit_error_w_usd": null
+        }
       }
     },
     {
@@ -1992,6 +2668,58 @@
         "sharpe_ratio_strategy_eq": 0.030669939722044383,
         "sortino_ratio_strategy_eq": 0.02071156280091343,
         "sterling_ratio_strategy_eq": 0.02061223319705684
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 17.62081784386617,
+          "equity_choppiness_w_usd": 26.215117232544845,
+          "equity_jerkiness_usd": 0.19046871366235793,
+          "equity_jerkiness_w_usd": 0.19755442828335582,
+          "exponential_fit_error_usd": 0.01888184382357103,
+          "exponential_fit_error_w_usd": 0.016608028985221422
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 17.62081784386617,
+          "equity_choppiness_w_usd": 26.215117232544845,
+          "equity_jerkiness_usd": 0.19046871366235793,
+          "equity_jerkiness_w_usd": 0.19755442828335582,
+          "exponential_fit_error_usd": 0.01888184382357103,
+          "exponential_fit_error_w_usd": 0.016608028985221422
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 17.620817787142048,
+          "equity_choppiness_w_usd": 26.215117169731172,
+          "equity_jerkiness_usd": 0.1904687129211011,
+          "equity_jerkiness_w_usd": 0.197554428270701,
+          "exponential_fit_error_usd": 0.018881843651870345,
+          "exponential_fit_error_w_usd": 0.016608028915204583
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 17.620817787142048,
+          "equity_choppiness_w_usd": 26.215117169731172,
+          "equity_jerkiness_usd": 0.1904687129211011,
+          "equity_jerkiness_w_usd": 0.197554428270701,
+          "exponential_fit_error_usd": 0.018881843651870345,
+          "exponential_fit_error_w_usd": 0.016608028915204583
+        }
       }
     },
     {
@@ -3611,6 +4339,58 @@
         "sharpe_ratio_strategy_eq": 1.0,
         "sortino_ratio_strategy_eq": 0.0,
         "sterling_ratio_strategy_eq": 0.1650035954683909
+      },
+      "expected_account_shape": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.1,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 3.944304526105059e-31,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.1,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 3.944304526105059e-31,
+          "exponential_fit_error_w_usd": null
+        }
+      },
+      "expected_account_shape_f32": {
+        "initial_fill": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.1,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 3.944304526105059e-31,
+          "exponential_fit_error_w_usd": null
+        },
+        "no_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 1.0,
+          "equity_jerkiness_usd": 1.0,
+          "equity_jerkiness_w_usd": 1.0,
+          "exponential_fit_error_usd": 1.0,
+          "exponential_fit_error_w_usd": 1.0
+        },
+        "sparse_fills": {
+          "equity_choppiness_usd": 1.0,
+          "equity_choppiness_w_usd": 0.1,
+          "equity_jerkiness_usd": 0.0,
+          "equity_jerkiness_w_usd": 0.0,
+          "exponential_fit_error_usd": 3.944304526105059e-31,
+          "exponential_fit_error_w_usd": null
+        }
       }
     }
   ]

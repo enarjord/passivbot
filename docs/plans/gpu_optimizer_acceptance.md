@@ -426,6 +426,81 @@ Six documentation checks pass. The compiled extension and all 923 source-manifes
 files are verified. Current-head author/automatic review and CI remain required
 before development integration; these checks do not close broader retirement gates.
 
+## Controlled account-equity shape references
+
+`test_gpu_equity_shape.py` exercises the actual `compute_objectives` entry point for
+unweighted and weighted choppiness, jerkiness and exponential fit error. Fifteen
+public equity-only curves cover empty/no-fill inputs, flat and varying curves,
+partial days, UTC boundaries and suffixes. The shared JSON fixture supplies actual
+Rust producer values for f64 and f32-quantized input curves, with initial, sparse
+and absent fills. The existing Rust producer test rechecks all added values.
+
+CPU and CUDA each check the six USD fields and the six corresponding BTC fields
+with a constant BTC price of one. All 2,160 comparisons pass with `pytest.approx(abs=1e-10, rel=1e-12)`,
+with explicit nonfinite expectations. This covers BTC
+metric routing with an identical curve; it does not establish variable-price
+conversion or full simulator parity. The three focused Python files pass 178
+checks. Current-source Rust passes 332 tests with one existing ignore, default-feature
+compilation succeeds and the rebuilt extension matches the source fingerprint.
+
+A separate twenty-day public-fixture diagnostic uses `trailing_martingale`, short,
+two coins, seed 43, coin HSL and unstuck. Set both sides' HSL red threshold to .002,
+EMA span to 2.5 minutes and RED cooldown to five minutes. Multiply coin zero's
+OHLC prices from minute 1,440 by .7 and coin one's from minute 1,800 by 1.3. Request
+all 157 metrics so feature specialization matches the broader audit. CPU/GPU
+equity timestamps agree, and GPU daily closes exactly match UTC closes from its
+captured account curve. On original CPU, f32-quantized CPU and actual GPU curves,
+the six reductions agree with the actual Rust producer within 1e-12 absolute.
+
+The replay curves still differ by at most .961 account units, or .05869% relative.
+Weighted jerkiness is .0012049606 on CPU and .0012711257 on GPU, a 5.205% relative
+gap. Quantizing the CPU curve alone yields .0012049736, so output quantization
+alone does not explain the gap. Small replay differences are amplified by this
+second-derivative metric. This diagnosis identifies no shape-reduction or daily
+capture defect. It does not accept the remaining replay gap: candidate ranking,
+limit decisions and practical materiality need assessment before a general policy.
+
+## Shape-objective cohort measurements
+
+Use the public `gpu_cohort_benchmark` cohort and measurement helpers with both
+strategies, seeds 43/47, short, two coins, 28,800 bars, coin HSL, unstuck, sixteen
+candidates and one warm repeat. Apply the HSL settings and price shocks above to
+both the prepared fixture and every candidate before packing. Keep the helper's
+candidate sweep: initial/base quantity `.01 + index * .001` and EMA span
+`5 + index * 1.25`. Request the three default metrics and all six USD shape fields;
+rank ADG/max against weighted jerkiness/min. Run service widths 4, 16 and auto.
+
+All four cohorts produce identical CPU/GPU fronts, zero pair-order changes on
+both selected objectives, and zero CPU regret at each GPU-selected best candidate.
+There are 120 candidate pairs per cohort. All 384 native-service results match
+same-candidate direct GPU metrics and liquidation identity exactly.
+
+Reusing those captured metric vectors, rank ADG against each of the six shape
+fields independently. Twenty-two of the 24 fronts agree. EMA seed 43 adds member
+14 on weighted fit error; EMA seed 47 omits member 10 on unweighted fit error.
+Nine of 2,880 shape-axis pair relations change, including four TM choppiness
+near-ties with CPU regret of 2.22e-16. The other axes have zero best-candidate CPU
+regret. Weighted jerkiness error stays below 1.987% in these swept cohorts, but
+one EMA choppiness comparison is 614.013 versus 871.233 (29.524% symmetric relative
+error). Choppiness divides total variation by absolute net change and can amplify
+small replay differences near flat endpoints. Preserve these failures and front
+changes; good selected-objective ranking is not acceptance of arbitrary tight limits.
+
+| Strategy / seed | CPU serial cohort seconds | GPU direct warm seconds | Native width 4 / 16 / auto warm seconds |
+| --- | ---: | ---: | ---: |
+| EMA / 43 | 2.250 | .875 | 2.835 / .904 / .885 |
+| EMA / 47 | 2.581 | .883 | 2.877 / .883 / .891 |
+| TM / 43 | 28.126 | 3.518 | 12.764 / 3.518 / 3.518 |
+| TM / 47 | 28.216 | 3.520 | 12.773 / 3.523 / 3.524 |
+
+CPU timing includes serial preparation and simulation; GPU/native rows measure
+sixteen completed requests after warmup. Native first use follows direct GPU runs,
+and caches are not cleared. These are cohort measurements, not full optimization
+or cold compiler benchmarks. Auto dispatch starts at width 64 but only sixteen
+requests are offered; no eligible tuning window completes. This does not prove an
+optimal width. Reported Torch allocations exclude driver/CuPy, host RSS and disk.
+General parity policies and broader acceptance gates remain unchanged.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account

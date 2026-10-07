@@ -2314,3 +2314,39 @@ Completion requires:
   author/automatic review and all required CI before development integration.
   General metric policies, representative performance and legacy retirement remain
   open; these CUDA checks do not establish Apple Metal device acceptance.
+
+
+### 2026-10-07 — Controlled shape definitions and replay materiality
+
+- Portfolio EMA-tail PR #1927 completed exact-head author and automatic review with
+  no findings and all three required CI jobs passing before development integration.
+  Master remains unchanged; its current HSL changes are already incorporated.
+- Extend the existing public equity-only fixture using actual Rust producer values
+  for unweighted/weighted choppiness, jerkiness and exponential fit error. Fifteen
+  curves, f64/f32 input precision and three fill variants cover the six USD fields.
+  The same fixture checks fixed-price BTC metric routing without claiming variable
+  conversion coverage. CPU/CUDA together pass 2,160 comparisons; all 178 focused
+  Python checks pass. Current-source Rust passes 332 tests with one existing ignore,
+  default-feature compilation and a verified rebuilt extension.
+- Diagnose the largest weighted-jerkiness residual using a public twenty-day TM short
+  HSL shock fixture. CPU/GPU clocks agree and GPU daily closes match its captured
+  curve exactly. Actual Rust reductions of CPU, quantized CPU and GPU curves match
+  the corresponding Python reductions within 1e-12. A .05869% maximum curve deviation
+  accompanies a 5.205% weighted-jerkiness metric gap; rounding the CPU output curve
+  alone does not reproduce it. Keep replay/materiality acceptance open and evaluate
+  candidate ranking rather than accepting a percentage from a single case.
+- Four sixteen-candidate, twenty-day short HSL shock cohorts (both strategies, seeds
+  43/47) preserve ADG/weighted-jerkiness fronts and all pair relations with zero
+  best-candidate CPU regret. All 384 async service results match direct GPU outputs
+  exactly across widths 4/16/auto. Reassessing all six shape axes finds two EMA fit
+  front changes and nine pair-relation changes, including numerical TM ties. One
+  choppiness gap reaches 29.524% symmetrically. Preserve these findings; no universal
+  replay tolerance or limit acceptance follows from selected-objective agreement.
+- Native width 16/auto warm cohorts take about .88-.90 seconds for EMA and 3.52
+  seconds for TM; width 4 takes 2.83-2.88 and 12.76-12.77 seconds. CPU serial cohorts
+  take 2.25-2.58 and 28.13-28.22 seconds. These measurements follow warmup, include
+  only sixteen requests per run and do not complete an adaptive tuning window.
+  Cold compilation, full optimizer and external-resource acceptance remain open.
+- This slice adds test/reference evidence only. Keep general parity policies, runtime
+  behavior and all broader performance, numerical acceptance and retirement gates
+  unchanged. Require current-head author/automatic review and CI before integration.
