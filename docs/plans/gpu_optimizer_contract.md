@@ -2052,11 +2052,9 @@ Completion requires:
   coin, pside and unified HSL. Disabled/unified shared trailing-martingale long
   drawdown residuals remain visible at 5.35e-5 and 5.94e-6 respectively. Do not
   change general parity policies or treat this partial matrix as acceptance.
-- The focused run passes 55 checks and fails only those two side drawdown cases;
-  all 29 HSL ordering cases and four compiled two-/199-day tail probes pass.
-  Rust passes 331 tests (one ignored), default-feature compilation passes and the
-  rebuilt runtime is source-verified. Replay controls and CPU-forbidden optimizer
-  lifecycle checks did not run after the focused failure.
+- The initial strict run passes 55 checks and fails only those two side drawdown
+  cases; all 29 HSL ordering cases and four compiled two-/199-day tail probes pass.
+  Keep the numerical assessment below explicit rather than changing general policies.
 - Keep recursive grid sizing as separate semantic work: Rust refreshes initial
   sizing from its simulated order-book price; the GPU helper currently retains the
   original generation price. Correcting that policy does not establish arbitrary
@@ -2068,3 +2066,16 @@ Completion requires:
   and the other 22 scenario comparisons strict, and leave general parity policies
   unchanged. This bounds practical risk in these fixtures without declaring the
   separate recursive sizing mismatch corrected or certifying arbitrary trajectories.
+- Final validation passes 36 side-metric/tail/liquidation regressions, with 32
+  complete comparison reports, including all eight extended actual fill/mark
+  liquidation cases. Side strategy metrics retain the raw terminal mark while
+  account equity is clamped. The runtime and all 922 source-manifest files are
+  verified; production source is unchanged by the fixture-local policy.
+- Rust passes 331 tests (one ignored), default-feature compilation passes, 183
+  replay/ablation/isolation controls pass and all 36 CPU-forbidden optimizer
+  lifecycle cases pass. Six documentation checks pass. Update the canonical HSL
+  contract to separate ordinary equity performance from protection and distinguish
+  retained CPU-validated screening from experimental native GPU-only optimization.
+- Require completed current-head author/automatic review and all required CI before
+  development integration. Weighted/raw portfolio reduction and broader performance,
+  CPU preservation and legacy retirement acceptance remain open.

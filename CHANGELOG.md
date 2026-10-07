@@ -8,7 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Sample shared GPU side strategy-equity metrics independently of HSL protection,
   retaining each side's net PnL in unified mode and the recovery horizon of an
-  inactive side. Use the exact maximum for a one-day worst drawdown tail.
+  inactive side. Use the exact maximum when the worst drawdown tail contains
+  one daily observation.
 
 - Match CPU EMA Anchor entry sizing in shared GPU backtests: use per-coin allocation
   to size clips while retaining portfolio exposure admission and HSL blocking.

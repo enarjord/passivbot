@@ -93,7 +93,15 @@ for new signal semantics; reevaluate configurations.
 
 Require shared reference/unit tests, source-verified native caller tests, offline fake-live
 cycles, restart and history-repair cases, current RED recovery, terminal cooldown and
-HSL-disabled trace parity. GPU values are screening estimates; exact Rust validation owns
-retained candidates. Cache loss/rebuild must preserve intent. Performance acceptance compares
+HSL-disabled trace parity. Ordinary strategy-equity performance uses net realized fill
+cashflows and marked UPNL over the factual accounting horizon, independently of HSL
+enablement or permission. Unified protection does not combine the ordinary long and short
+performance curves. Include actual terminal marks even when account equity is clamped.
+
+The retained GPU screening optimizer validates candidates with CPU Rust backtests. The
+experimental `gpu_native` optimizer uses GPU metrics directly and performs no CPU backtests
+during optimization; independent source-verified parity tooling checks its numerical and
+metric contract before replacement acceptance. Cache loss/rebuild must preserve intent.
+Performance acceptance compares
 trading traces before timings and includes disabled HSL. Live trials require separate approval;
 offline tests do not establish exchange execution correctness.
