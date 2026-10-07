@@ -43,10 +43,11 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
         inputs[1][1500:, 0, :3] *= 0.7
         inputs[1][1800:, 1, :3] *= 1.3
     metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
-               "hard_stop_triggers_per_year", "hard_stop_restarts_per_year")
+               "hard_stop_triggers_per_year", "hard_stop_restarts_per_year", "hard_stop_time_in_red_pct")
     policies = {**DEFAULT_TOLERANCES,
                 "hard_stop_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_restarts_per_year": MetricTolerance(1e-6, 1e-6)}
+                "hard_stop_restarts_per_year": MetricTolerance(1e-6, 1e-6),
+                "hard_stop_time_in_red_pct": MetricTolerance(1e-8, 1e-5)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     assert report["metrics"]["hard_stop_triggers_per_year"]["cpu"] > 0
     assert report["passed"], report["metrics"]

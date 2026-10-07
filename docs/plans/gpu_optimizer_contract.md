@@ -1717,3 +1717,26 @@ Completion requires:
 - Add explicit duration/boundary probes and strict native EMA time-in-red coverage.
   Keep this follow-up local until current-source CUDA, disabled controls, temporal
   chunking, lifecycle and CPU-forbidden CLI evidence is complete.
+
+- Before this reporting correction, repeat the full three-scenario EMA search on
+  the integrated selection source: eight coins, 10,080 minute bars, data seed 43,
+  optimizer seed 12, population 64, 256 iterations, two starting configs and
+  base-screening survival fraction 0.5. Both cold/warm runs complete 160 full
+  candidate records and 192 screens, retaining 51 Pareto members. Decode the
+  incremental result stream with the canonical reader before comparison: complete
+  candidate/metric records match exactly across runs. Raw message objects are
+  overlays and must not be compared as complete configurations.
+- Cold/warm elapsed time is 156.676/54.147 seconds; caller CPU is 23.034/22.970
+  seconds, including 16.484/16.362 seconds of candidate preparation. Scoring and
+  evolution remain small. Default GPU tuning receives no eligible windows in
+  this underfilled search; CPU cadence limits reach 76/89 but actual groups stay
+  singletons. Neither establishes an optimal batch width or consumption cadence.
+- Peak process RSS is 1.91/1.08 GB, peak Torch allocation 8.44/8.53 MB, final Torch
+  allocation zero, and session storage 2.68 MB. Sampled whole-device use includes
+  unrelated allocations. Measurements exclude compilation/packing caches from
+  session storage; other seeds and representative comparisons remain open.
+- All nine enabled side/scope EMA cases fail strict time-in-red parity on the
+  original sample-based reporting source; all three disabled controls pass.
+  Preserve this regression evidence independently of the forthcoming corrected
+  source run. Rust passes 330 tests (one ignored), default-feature checks and six
+  documentation tests for the local elapsed-observation implementation.
