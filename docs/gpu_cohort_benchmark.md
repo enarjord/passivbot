@@ -23,14 +23,15 @@ unstuck default off; explicit toggles prepare additional workloads but do not
 guarantee controller transitions. No production configuration is accepted.
 
 The JSON report includes fixture/candidate and implementation fingerprints,
-per-candidate strict CPU/GPU metric comparisons, two-objective Pareto membership,
-pair-order disagreements including ties, and CPU ADG regret of the GPU-selected
-maximum. Optional diagnostic limits use canonical feasibility calculations; these
-are explicit measurement thresholds, not the constraints of a production search.
+per-candidate strict CPU/GPU metric comparisons, Pareto membership for the requested
+objective vector, pair-order disagreements including ties, and CPU regret at each
+GPU-selected objective extreme. Optional diagnostic limits use canonical feasibility
+calculations; these are explicit measurement thresholds, not the constraints of a
+production search.
 Missing or non-finite objectives leave ranking unassessed.
 
 `--metrics` adds requested GPU work to the three core metrics; it does not replace
-ADG/drawdown ranking or fills/day comparisons. This enables measurements of opt-in
+the selected ranking vector or fills/day comparisons. This enables measurements of opt-in
 histories/reductions and their resource cost. Repeat `--limit METRIC MODE VALUE` to
 add canonical scalar diagnostic checks; modes are `less_than` and `greater_than`.
 Limit metrics are automatically requested from both simulators. The convenience
@@ -43,7 +44,26 @@ the report; the policy file path is omitted. Added metrics have no tolerance unl
 one is provided or already has a provisional parity policy. Undefined policies remain
 `unassessed`; they never become matches. Strict numerical comparisons and canonical
 feasibility are separate, so an allowed error can still produce a limit flip.
-Additional metric comparisons/limits do not extend the two-objective ranking test.
+Ranking defaults to maximizing ADG and minimizing drawdown. Repeat
+`--objective METRIC min|max` to replace that vector explicitly. Objective metrics
+are automatically requested; aliases are canonicalized and conflicting directions
+are rejected. Adding `--metrics` or diagnostic limits alone does not change ranking.
+
+For the fill-gap three-objective experiment:
+
+```sh
+passivbot tool gpu-cohort-benchmark --seeds 7 43 --widths 16 auto \
+  --objective adg_strategy_eq max --objective drawdown_worst_strategy_eq min \
+  --objective fills_gap_p95_hours min
+```
+
+`ranking.objectives` and the recipe record the resolved directions. Fronts compare
+raw metrics without constraint penalties or survivor selection. `gpu_best_candidates`
+identifies each GPU-selected axis extreme, with the first candidate selected on ties.
+`cpu_regret_at_gpu_best` measures its CPU disadvantage against the best CPU value
+on that axis. These axis diagnostics do not certify whole-search quality. The existing
+ADG regret/selection fields remain when maximizing ADG is an objective. Missing or
+non-finite values on any requested axis leave ranking unassessed.
 
 Native service results must retain the direct GPU metric keys and liquidation status
 exactly. Finite metric differences may be at most eight float64 rounding units, using
