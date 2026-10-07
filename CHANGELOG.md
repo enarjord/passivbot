@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Match CPU EMA Anchor entry sizing in shared GPU backtests: use per-coin allocation
+  to size clips while retaining portfolio exposure admission and HSL blocking.
+
 - Count GPU HSL lifecycle metrics from observed RED and restart transitions, including
   GREEN recovery, retriggers and unfinished panic durations. Preserve unified portfolio
   attribution and factual fill, mark and forced-delisting reporting endpoints.

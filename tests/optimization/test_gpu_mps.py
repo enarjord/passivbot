@@ -9169,7 +9169,9 @@ def test_mps_ema_multicoin_market_entry_cap_uses_market_touch(side):
 
     size_key = "psize" if side == "long" else "short_psize"
     assert promoted["fill_count"].item() == 2.0
-    expected_size = 1.998 if side == "long" else 1.996
+    # Rust retains the full 1.002 long clip on one coin and portfolio-clips
+    # the other to .997 at the market touch. Short clips are .998 each.
+    expected_size = 1.999 if side == "long" else 1.996
     assert promoted[size_key].item() == pytest.approx(expected_size)
     assert promoted["total_wallet_exposure_max"].item() == pytest.approx(
         expected_size * 100.0 / 1_000.0

@@ -1710,9 +1710,6 @@ inline void generate_ema_multicoin_side_orders(
         side.effective_cooldown[c] = coin_cooldown_min;
         bool cooldown = !isfinite(coin_cooldown_min) || coin_cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
             && float(k) < last_increase_k[c] + coin_cooldown_min;
-        float cost_we = psize[c] > 0.0f && balance > 0.0f
-            ? psize[c] * pprice[c] * c_mult / balance : 0.0f;
-        float position_cap = allowed_coin_wel - 1.0e-7f;
         float coin_base_qty_pct = coin_override_or(
             coin_overrides, c, 0, base_qty_pct
         );
@@ -1721,7 +1718,7 @@ inline void generate_ema_multicoin_side_orders(
             || (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul;
         if (selected[c] && initial_entry_allowed
             && !cooldown && entry_price > 0.0f && balance > 0.0f
-            && cost_we < position_cap && coin_base_qty_pct > 0.0f) {
+            && coin_base_qty_pct > 0.0f) {
             float base_qty = fmax(minimum, round_step(
                 balance * allowed_coin_wel * coin_base_qty_pct
                     / fmax(entry_price * c_mult, 1.0e-12f),
@@ -1735,19 +1732,9 @@ inline void generate_ema_multicoin_side_orders(
                 && quantity < market_entry_minimum) {
                 quantity = market_entry_minimum;
             }
-            float headroom = (
-                position_cap * balance - psize[c] * pprice[c] * c_mult
-            ) / fmax(entry_exposure_price * c_mult, 1.0e-12f);
-            bool over = (
-                psize[c] * pprice[c] + quantity * entry_exposure_price
-            ) * c_mult
-                / fmax(balance, 1.0e-9f) >= position_cap;
-            if (over) {
-                float capped = floor_step(headroom, qty_step);
-                quantity = capped > 0.0f
-                        && capped + 1.0e-6f >= effective_entry_minimum
-                    ? capped : 0.0f;
-            }
+            // Rust EMA clips use WEL for sizing and inventory shift. Entry
+            // admission belongs to the portfolio TWEL gate below; there is
+            // no separate per-coin headroom clamp in this strategy.
             entry_qty[c] = quantity;
             entry_tick[c] = candidate_entry_tick;
             entry_market[c] = candidate_entry_market && quantity > 0.0f;
