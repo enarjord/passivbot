@@ -2870,6 +2870,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
     device float2* volume_samples,
 #endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -3284,11 +3287,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
             update_hsl_strategy_equity_stats(side.hsl_strategy_eq,
                 starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
 #endif
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
             const float raw_strategy_equity = starting_balance
                 + realized_pnl_cumsum_last + unrealized;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
             update_raw_strategy_risk(
                 raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+#endif
 #endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
@@ -3303,6 +3308,16 @@ inline void passivbot_ema_anchor_multicoin_impl(
             }
             bool liquidated = balance <= 0.0f || equity <= liquidation_floor;
             float effective_equity = liquidated ? liquidation_floor : equity;
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+            record_weighted_equity_sample(
+                weighted_equity_samples, int(b), T, k - int(first_eq_k),
+#if PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
+                raw_strategy_equity,
+#else
+                0.0f,
+#endif
+                effective_equity);
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
             if (recovery_stride > 0 && recovery_start_k < 0) {
                 recovery_start_k = k;
@@ -3761,6 +3776,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #endif
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
     device float2* volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -4324,11 +4342,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             update_hsl_strategy_equity_stats(short_side.hsl_strategy_eq,
                 starting_balance + account.realized_pnl_short + short_unrealized, day_index);
 #endif
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
             const float raw_strategy_equity = starting_balance + account.realized_pnl_long
                 + account.realized_pnl_short + long_unrealized + short_unrealized;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
             update_raw_strategy_risk(
                 raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+#endif
 #endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
@@ -4345,6 +4365,16 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 || equity <= liquidation_floor;
             float effective_equity = liquidated
                 ? liquidation_floor : equity;
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+            record_weighted_equity_sample(
+                weighted_equity_samples, int(b), T, k - int(first_eq_k),
+#if PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
+                raw_strategy_equity,
+#else
+                0.0f,
+#endif
+                effective_equity);
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
             if (recovery_stride > 0 && recovery_start_k < 0) {
                 recovery_start_k = k;
@@ -4673,6 +4703,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
     device float2* volume_samples,
 #endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4697,6 +4730,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #endif
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
         volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+        weighted_equity_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4733,6 +4769,9 @@ kernel void passivbot_ema_anchor_multicoin(
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
     device float2* volume_samples,
 #endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4758,6 +4797,9 @@ kernel void passivbot_ema_anchor_multicoin(
 #endif
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
         volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+        weighted_equity_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4794,6 +4836,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
     device float2* volume_samples,
 #endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -4818,6 +4863,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #endif
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
         volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+        weighted_equity_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0

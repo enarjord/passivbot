@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "backtest_weighted_equity_reference.rs"]
+mod weighted_equity_reference;
+
 #[path = "backtest_hsl_analysis.rs"]
 mod hsl_analysis;
 #[path = "backtest_hsl_cache.rs"]

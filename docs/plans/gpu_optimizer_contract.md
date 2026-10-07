@@ -2131,3 +2131,96 @@ Completion requires:
   publication tree and wait for completed current-head author/automatic review and
   required CI before development integration. Raw growth/recovery/weighted metrics,
   representative resource/performance checks and legacy retirement remain open.
+
+## Weighted equity history foundation (2026-10-07)
+
+- PR #1924 is merged into development after completed current-head automatic and
+  author review and all required CI checks. Its merged tree matches the reviewed
+  head. Master remains unchanged by this work.
+- Keep two factual curves explicit. Raw strategy weighted Calmar/Sterling retain
+  the full-curve peak and divide suffix contributions by ten. Ordinary account
+  analysis resets peaks inside each suffix and averages its nonempty suffixes.
+  No-fill accounts retain Rust defaults, but a suffix without new fills still
+  consumes its changing equity. The seven equity-only weighted families therefore
+  need actual total fill eligibility, not another per-step fill history.
+- Add an unconnected resident-sample reducer and shared public controlled fixtures.
+  A Rust test checks both actual producers against the same references for f64
+  and f32-quantized inputs; GPU tests use those references on CPU Torch and CUDA.
+  Cover short/empty histories, discarded peaks, partial UTC days, 240-day tails,
+  negative terminal equity, zero/near-zero starts, sparse/absent fills, independent
+  clocks, unused padding and interleaved views. Requested subsets skip unused
+  reductions. This is reducer evidence, not simulator or optimizer acceptance.
+  Source-verified validation passes 332 Rust tests (one existing ignored),
+  default-feature test compilation, 153 Python checks including CPU/CUDA reference
+  reductions, and six documentation checks.
+- Controlled f64 comparisons agree across 840 CPU-Torch/CUDA metric pairs.
+  Ordinary-scale f32 fixtures differ from the original f64 reference by at most
+  2.29e-7 relatively. An artificial account near 1e-12 instead amplifies f32 input
+  rounding into roughly 99.97% Calmar/Sterling differences. Check the reducer
+  against matching quantized Rust inputs without weakening practical simulator
+  parity policies; do not claim that f32 is uniformly harmless near singular
+  metric denominators.
+- Measure the actual reducer on resident interleaved f32 histories, separately
+  from trading throughput. With 28,800 observations and batches 1/16/64, all seven
+  families take about 30–45 ms per curve; MDG alone takes about 7–9 ms. Maximum
+  measured Torch scratch above both resident input curves is about 107.4 MB at
+  batch 64. These figures exclude external driver/CuPy allocations and do not
+  establish whole-optimizer performance or a final admission bound.
+- Next connect separately specialized raw/account capture to the existing service.
+  Reduce inside the runner before it combines history sub-batches, so compact
+  results accumulate without retaining all candidate histories. Budget capture,
+  reduction scratch and daily work together; keep owned calendar dimensions and
+  avoid device-derived host shape discovery. Preserve existing recovery capture
+  meanings and account/per-exposure aliases. Validate temporal boundaries,
+  liquidation, HSL modes, capture on/off behavior and real CPU/GPU replay before
+  publication. This foundation alone enables no weighted capture during optimization.
+
+### Weighted capture integration
+
+- Connect separately specialized factual raw/account histories to shared CUDA
+  runners and the native service. Request dependencies include weighted account
+  ADG/MDG per exposure. Retain account aliases before installing explicit raw
+  values. Missing requested compact metrics fail rather than fall back to a daily
+  screening approximation. Retained Metal and legacy directional single-coin
+  screening keep their existing reducer paths.
+- Restore relative f32 clocks to their integer bar grid before adding the absolute
+  UTC origin. Capture each factual equity observation, including liquidation, and
+  reduce actual suffixes before combining history sub-batches. Preserve independent
+  recovery-history semantics and request-owned calendar dimensions.
+- Include requested curve storage, sequential reduction scratch, daily work and
+  compact results in scratch admission. Raw/account capture separately compiles
+  away when absent. A physical dispatch retains only its current weighted sample
+  buffer; combined results contain compact metric vectors.
+- Eighteen capture ablations across both strategies and all side combinations
+  preserve every previous output exactly. Temporal replay, mixed candidate ending
+  times, repeated-run clearing and bounded sub-batch controls pass. Eight actual
+  CPU/GPU fill/mark liquidations across midnight pass all 120 requested weighted
+  and account-exposure pairs with unchanged strict comparison policies.
+- Both native service admission tests and all four weighted optimizer interruption,
+  persistence and resumption cases pass with CPU simulations forbidden. The suite
+  cases retain scenario screening. Affected service, backend, tuning and benchmark
+  checks pass 1,012 cases (one existing skip), and six documentation checks pass.
+- Across 24 ordinary public shock fixtures, actual Rust producers match reductions
+  of original CPU, f32-quantized CPU and captured GPU curves in all 1,008 metric
+  comparisons. The largest reducer absolute difference is below 9.1e-11. Native
+  compact results and original CPU analysis both match their corresponding Rust
+  references. This distinguishes reduction correctness from replay acceptance.
+- Strict 1e-6 absolute plus 1e-4 relative comparisons fail in 23 of those short
+  shock fixtures. Quantization alone changes long TM coin-HSL Sortino by .1314%;
+  existing executable-quantity differences and accumulated replay rounding explain
+  additional input-curve differences. Worst observed equity relative difference is
+  .0234%, weighted growth absolute difference is .163 basis points, and weighted
+  ratio relative difference is .8437%. Use documented fixture-local family bounds;
+  retain strict liquidation and controlled-producer policies and unchanged general
+  comparison tools. These tests do not certify arbitrary trading trajectories.
+- Actual directional two-coin replay with 28,800 observations, both curves and all
+  fourteen metrics uses at most about 122.4 MB capture plus Torch scratch at batch
+  64, within its 162.6 MB weighted reservation. Warm shared EMA replay changes from
+  about .44 to .54 seconds; TM from about .71 to .80 seconds. These synthetic
+  measurements exclude external driver/CuPy allocations and do not establish whole
+  optimizer throughput acceptance. Requested-only capture is the foundation for
+  future reductions; tuning accounts for its real cost rather than treating it free.
+- All 24 ordinary weighted shock regressions and eight exact shared shock capture
+  ablations pass. Author/current-head automatic review and required CI remain open.
+  Broader raw growth/recovery/other weighted families, representative
+  optimizer performance and legacy retirement remain separate acceptance work.

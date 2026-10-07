@@ -14,7 +14,7 @@ import pytest
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
                                                                     screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
-                                                                    strategy_kind="trailing_martingale"):
+                                                                    strategy_kind="trailing_martingale", weighted_equity=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -26,7 +26,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     from tools.gpu_parity import build_parser, fixture_inputs
 
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
-        "--fixture", strategy_kind, "--sides", "both", "--coins", "3", "--bars", "512",
+        "--fixture", strategy_kind, "--sides", "both", "--coins", "3", "--bars",
+        "3000" if weighted_equity else "512",
     ]))
     config["optimize"].update(backend="gpu_native", population_size=4, iters=8, seed=12)
     if generated_seed:
@@ -36,6 +37,14 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     config["optimize"]["scoring"] = [dict(metric="adg_strategy_eq", goal="max"),
                                       dict(metric="drawdown_worst_strategy_eq", goal="min")]
     config["optimize"]["limits"] = [dict(metric="backtest_completion_ratio", penalize_if="less_than", value=0.99)]
+    if weighted_equity:
+        config["optimize"]["scoring"] = [
+            dict(metric="adg_strategy_eq_w", goal="max"),
+            dict(metric="calmar_ratio_w_usd", goal="max"),
+        ]
+        config["optimize"]["limits"].append(dict(
+            metric="mdg_w_per_exposure_long_usd", penalize_if="greater_than", value=1.0,
+        ))
     config["optimize"]["gpu"].update(batch_size=None if automatic else 2, checkpoint_interval_seconds=0)
     if screening:
         config["optimize"]["gpu"]["screening"] = dict(scenarios=["base"], min_survivors=1, survival_fraction=0.5)
@@ -284,4 +293,16 @@ async def test_native_ema_cli_cuda_preserves_results_and_resumes_without_cpu(
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, suite, interrupted, True, screening=suite,
         strategy_kind="ema_anchor",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite", [False, True])
+async def test_native_weighted_equity_cli_persists_interrupts_and_resumes_without_cpu(
+    monkeypatch, tmp_path, strategy_kind, suite,
+):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, True, True, screening=suite,
+        strategy_kind=strategy_kind, weighted_equity=True,
     )

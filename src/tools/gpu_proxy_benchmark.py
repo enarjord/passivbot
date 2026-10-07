@@ -9,7 +9,7 @@ import time
 
 import numpy as np
 
-from optimization.gpu.metric_registry import RAW_STRATEGY_RISK_METRICS
+from optimization.gpu.metric_registry import RAW_STRATEGY_RISK_METRICS, weighted_equity_capture_metrics
 
 from optimization.gpu.runtime import gpu_device
 from optimization.gpu.model import (
@@ -422,6 +422,9 @@ def _build_case(
         data,
         side="long",
         raw_strategy_risk_enabled=bool(set(needed_metrics) & RAW_STRATEGY_RISK_METRICS),
+        weighted_equity_metrics=(
+            weighted_equity_capture_metrics(needed_metrics) if gpu_device() == "cuda" else ()
+        ),
         coin_overrides=overrides,
         **(
             {"max_dispatch_candidate_bars": MAX_DISPATCH_CANDIDATE_BARS}
@@ -431,6 +434,7 @@ def _build_case(
     )
     matrix = _parameter_matrix(param_keys, candidates, seed)
     proxy = MpsMulticoinProxy.__new__(MpsMulticoinProxy)
+    proxy.weighted_equity_metrics = tuple(sorted(runner.weighted_equity_metrics))
     proxy.hsl_signal_mode = "coin"
 
     proxy.batch_size = candidates
