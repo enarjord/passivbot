@@ -8,6 +8,30 @@
 #define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS 0
 #endif
 
+#ifndef PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
+#define PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED 0
+#endif
+#ifndef PASSIVBOT_WEIGHTED_ACCOUNT_EQUITY_ENABLED
+#define PASSIVBOT_WEIGHTED_ACCOUNT_EQUITY_ENABLED 0
+#endif
+#define PASSIVBOT_WEIGHTED_EQUITY_COLS (PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED + PASSIVBOT_WEIGHTED_ACCOUNT_EQUITY_ENABLED)
+
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+// Packed factual observations, independent of HSL and recovery sample ownership.
+inline void record_weighted_equity_sample(
+    device float* samples, int candidate, int capacity, int index,
+    float raw_equity, float account_equity
+) {
+    const int offset = (candidate * capacity + index) * PASSIVBOT_WEIGHTED_EQUITY_COLS;
+#if PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
+    samples[offset] = raw_equity;
+#endif
+#if PASSIVBOT_WEIGHTED_ACCOUNT_EQUITY_ENABLED
+    samples[offset + PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED] = account_equity;
+#endif
+}
+#endif
+
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
 // Observational raw portfolio risk; account liquidation values remain separate.
 inline void update_raw_strategy_risk(

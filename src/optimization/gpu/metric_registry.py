@@ -15,6 +15,31 @@ RAW_STRATEGY_RISK_METRICS = frozenset({
     "strategy_eq_underwater_pct_mean",
 })
 
+WEIGHTED_EQUITY_STEMS = (
+    "adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio",
+    "calmar_ratio", "sterling_ratio",
+)
+WEIGHTED_RAW_EQUITY_METRICS = frozenset(
+    f"{stem}_strategy_eq_w" for stem in WEIGHTED_EQUITY_STEMS
+)
+WEIGHTED_ACCOUNT_EQUITY_METRICS = frozenset(
+    f"{stem}_w_usd" for stem in WEIGHTED_EQUITY_STEMS
+)
+WEIGHTED_EQUITY_METRICS = WEIGHTED_RAW_EQUITY_METRICS | WEIGHTED_ACCOUNT_EQUITY_METRICS
+_WEIGHTED_ACCOUNT_EXPOSURE_SOURCES = {
+    f"{stem}_w_per_exposure_{side}_usd": f"{stem}_w_usd"
+    for stem in ("adg", "mdg") for side in ("long", "short")
+}
+
+
+def weighted_equity_capture_metrics(metrics):
+    """Factual curves needed by direct weighted metrics and account derivatives."""
+    metrics = set(metrics)
+    return frozenset(metrics & WEIGHTED_EQUITY_METRICS) | frozenset(
+        source for name, source in _WEIGHTED_ACCOUNT_EXPOSURE_SOURCES.items()
+        if name in metrics
+    )
+
 BTC_INTRADAY_RISK_METRICS = frozenset(
     {
         "calmar_ratio_btc",

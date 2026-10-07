@@ -291,6 +291,23 @@ inputs must fit the existing 45% free-VRAM budget; scratch and other allocations
 still fail and propagate. This is a bounded device-residency foundation, not a complete
 host/disk admission budget or adaptive multi-device scheduler.
 
+Shared CUDA replay captures factual raw strategy and account equity separately when
+weighted ADG, MDG, Sharpe, Sortino, Omega, Calmar or Sterling metrics require them.
+Account weighted ADG/MDG per exposure use the account curve before normalization;
+explicit `*_strategy_eq_w` names use the raw curve. Each suffix reconstructs its
+partial UTC days from actual observations. Raw Calmar/Sterling retain full-curve
+peaks, while account ratios reset their peak at each suffix. Account eligibility
+uses actual fill counts. Liquidation preserves the raw terminal mark separately
+from clamped account equity.
+
+These requested-only f32 histories remain on the execution device and reduce with
+f64 arithmetic before history sub-batches combine. Only compact metrics reach the
+caller. Admission accounts for history storage and reduction working space; raw
+and account capture each compile away when unused. Existing recovery-history
+semantics stay separate. This path currently requires CUDA: retained Metal replay
+and legacy directional single-coin screening still use their existing reducers.
+Other weighted metric families have separate parity and implementation requirements.
+
 Admission bounds queued plus running work. The oldest waiting request chooses the next
 dataset; compatible queued requests form a bounded microbatch in their original relative
 order. Other datasets retain their relative queue order, preventing starvation by newly

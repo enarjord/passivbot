@@ -6,6 +6,14 @@ import time
 import numpy as np
 import torch
 
+from optimization.gpu.metric_registry import (
+    WEIGHTED_EQUITY_METRICS, WEIGHTED_RAW_EQUITY_METRICS,
+    WEIGHTED_ACCOUNT_EQUITY_METRICS,
+)
+from optimization.gpu.weighted_equity import (
+    weighted_equity_from_samples, weighted_equity_history_bytes,
+)
+
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import record_replay_chunk
 from optimization.gpu.runtime import (
@@ -1073,6 +1081,8 @@ def _ema_anchor_multicoin_shader_library(
     unstuck_pnl_capacity: int = 0,
     weighted_volume_enabled: bool = False,
     raw_strategy_risk_enabled: bool = False,
+    weighted_raw_equity_enabled: bool = False,
+    weighted_account_equity_enabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1087,6 +1097,10 @@ def _ema_anchor_multicoin_shader_library(
     # controllers and their per-candle scans are compiled away.
     source = _with_hsl_disabled(source, hsl_disabled)
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
+    if weighted_raw_equity_enabled:
+        source = "#define PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED 1\n" + source
+    if weighted_account_equity_enabled:
+        source = "#define PASSIVBOT_WEIGHTED_ACCOUNT_EQUITY_ENABLED 1\n" + source
     if raw_strategy_risk_enabled:
         source = "#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 1\n" + source
     if weighted_volume_enabled:
@@ -1128,6 +1142,8 @@ def _trailing_martingale_multicoin_shader_library(
     loss_gate_disabled: bool = False,
     weighted_volume_enabled: bool = False,
     raw_strategy_risk_enabled: bool = False,
+    weighted_raw_equity_enabled: bool = False,
+    weighted_account_equity_enabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1148,6 +1164,10 @@ def _trailing_martingale_multicoin_shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
+    if weighted_raw_equity_enabled:
+        source = "#define PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED 1\n" + source
+    if weighted_account_equity_enabled:
+        source = "#define PASSIVBOT_WEIGHTED_ACCOUNT_EQUITY_ENABLED 1\n" + source
     if raw_strategy_risk_enabled:
         source = "#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 1\n" + source
     if weighted_volume_enabled:
@@ -2190,6 +2210,7 @@ class MpsEmaAnchorMulticoinRunner:
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
+        weighted_equity_metrics=(),
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
@@ -2210,6 +2231,20 @@ class MpsEmaAnchorMulticoinRunner:
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         self.weighted_volume_enabled = bool(weighted_volume_enabled)
         self.raw_strategy_risk_enabled = bool(raw_strategy_risk_enabled)
+        self.weighted_equity_metrics = frozenset(weighted_equity_metrics)
+        if self.weighted_equity_metrics - WEIGHTED_EQUITY_METRICS:
+            raise ValueError("unsupported resident weighted equity metrics")
+        if self.weighted_equity_metrics and gpu_device(torch) != "cuda":
+            raise ValueError("resident weighted equity capture currently requires CUDA")
+        self.weighted_raw_equity_enabled = bool(
+            self.weighted_equity_metrics & WEIGHTED_RAW_EQUITY_METRICS
+        )
+        self.weighted_account_equity_enabled = bool(
+            self.weighted_equity_metrics & WEIGHTED_ACCOUNT_EQUITY_METRICS
+        )
+        self.weighted_equity_cols = int(self.weighted_raw_equity_enabled) + int(
+            self.weighted_account_equity_enabled
+        )
         self.dynamic_wel_by_tradability = bool(dynamic_wel_by_tradability)
         fused = self.scalar_cols == MPS_MULTICOIN_FUSED_SCALAR_COLS
         self.long_enabled = fused or side == "long"
@@ -2413,6 +2448,7 @@ class MpsEmaAnchorMulticoinRunner:
         self._buffers: dict[int, tuple[torch.Tensor, ...]] = {}
         self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._volume_buffers: dict[int, torch.Tensor] = {}
+        self._weighted_equity_buffers: dict[int, torch.Tensor] = {}
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
         self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
         self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
@@ -2521,6 +2557,7 @@ class MpsEmaAnchorMulticoinRunner:
         entry_interval_counts,
         recovery_samples,
         volume_samples,
+        weighted_equity_samples,
         *,
         batch_size: int,
     ) -> None:
@@ -2552,6 +2589,8 @@ class MpsEmaAnchorMulticoinRunner:
             kernel_args += (recovery_samples,)
         if self.weighted_volume_enabled:
             kernel_args += (volume_samples,)
+        if self.weighted_equity_cols:
+            kernel_args += (weighted_equity_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
@@ -2596,6 +2635,8 @@ class MpsEmaAnchorMulticoinRunner:
             self.unstuck_pnl_capacity,
             self.weighted_volume_enabled,
             self.raw_strategy_risk_enabled,
+            self.weighted_raw_equity_enabled,
+            self.weighted_account_equity_enabled,
         )
 
     def _hsl_history_bytes_per_candidate(self):
@@ -2608,6 +2649,9 @@ class MpsEmaAnchorMulticoinRunner:
         return (
             self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
             + (4 * self.n_days if self.raw_strategy_risk_enabled else 0)
+            + weighted_equity_history_bytes(
+                self.n, self.n_days, self.weighted_equity_metrics
+            )
             + (_recovery_history_bytes(self.n_recovery_samples)
                if self.recovery_distribution_enabled else 0)
             + (_volume_history_bytes(self.n)
@@ -2723,6 +2767,57 @@ class MpsEmaAnchorMulticoinRunner:
             self._recovery_buffers[batch_size].fill_(float("nan"))
         return self._recovery_buffers[batch_size]
 
+    def _weighted_equity_sample_buffer(self, batch_size):
+        if not self.weighted_equity_cols:
+            return None
+        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+            raise ValueError("GPU weighted equity exceeds its scratch budget")
+        if batch_size not in self._weighted_equity_buffers:
+            self._weighted_equity_buffers = {
+                batch_size: torch.empty(
+                    (batch_size, self.n, self.weighted_equity_cols),
+                    dtype=torch.float32, device=gpu_device(),
+                )
+            }
+        samples = self._weighted_equity_buffers[batch_size]
+        samples.fill_(float("nan"))
+        return samples
+
+    def _reduce_weighted_equity(self, samples, output):
+        if not self.weighted_equity_cols:
+            return {}
+        interval = self.run_config.interval_ms
+        first = output["first_eq_ts"].to(torch.float64)
+        last = output["last_eq_ts"].to(torch.float64)
+        observed = torch.isfinite(first)
+        if bool((observed != torch.isfinite(last)).any()):
+            raise RuntimeError("GPU weighted equity observation clocks disagree")
+        # Relative f32 millisecond clocks can lose low bits over long histories.
+        # Restore their integer bar grid before adding the absolute UTC origin.
+        first_step = torch.round(torch.where(observed, first, 0) / interval)
+        last_step = torch.round(torch.where(observed, last, 0) / interval)
+        counts = torch.where(observed, last_step - first_step + 1, 0).to(torch.long)
+        timestamps = first_step * interval + self.run_config.first_ts_ms
+        kwargs = dict(
+            first_timestamps_ms=timestamps, sample_counts=counts,
+            interval_ms=interval, n_days=self.n_days,
+        )
+        metrics = {}
+        if self.weighted_raw_equity_enabled:
+            metrics.update(weighted_equity_from_samples(
+                samples[:, :, 0], curve="raw_strategy",
+                requested=self.weighted_equity_metrics & WEIGHTED_RAW_EQUITY_METRICS,
+                **kwargs,
+            ))
+        if self.weighted_account_equity_enabled:
+            metrics.update(weighted_equity_from_samples(
+                samples[:, :, int(self.weighted_raw_equity_enabled)], curve="account",
+                fill_counts=output["fill_count"],
+                requested=self.weighted_equity_metrics & WEIGHTED_ACCOUNT_EQUITY_METRICS,
+                **kwargs,
+            ))
+        return metrics
+
     def _volume_sample_buffer(self, batch_size: int):
         if not self.weighted_volume_enabled:
             return None
@@ -2816,6 +2911,7 @@ class MpsEmaAnchorMulticoinRunner:
             else None
         )
         volume_samples = self._volume_sample_buffer(batch_size)
+        weighted_equity_samples = self._weighted_equity_sample_buffer(batch_size)
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
         entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
             batch_size
@@ -2862,6 +2958,7 @@ class MpsEmaAnchorMulticoinRunner:
             entry_interval_counts,
             recovery_samples,
             volume_samples,
+            weighted_equity_samples,
             batch_size=batch_size,
         )
         if profile:
@@ -2886,6 +2983,7 @@ class MpsEmaAnchorMulticoinRunner:
         output = self._decode(daily, scalars, gaps)
         if self.raw_strategy_risk_enabled:
             output["raw_strategy_day_max_dd"] = daily[:, :, -1]
+        output.update(self._reduce_weighted_equity(weighted_equity_samples, output))
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(
             _decode_entry_interval_outputs(entry_interval_stats, entry_interval_counts)
@@ -2940,6 +3038,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
+        weighted_equity_metrics=(),
         hedge_mode: bool = True,
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
@@ -2968,6 +3067,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
+            weighted_equity_metrics=weighted_equity_metrics,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,
@@ -3071,6 +3171,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         entry_interval_counts,
         recovery_samples,
         volume_samples,
+        weighted_equity_samples,
         *,
         batch_size: int,
     ) -> None:
@@ -3103,6 +3204,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (recovery_samples,)
         if self.weighted_volume_enabled:
             kernel_args += (volume_samples,)
+        if self.weighted_equity_cols:
+            kernel_args += (weighted_equity_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
@@ -3194,6 +3297,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
+        weighted_equity_metrics=(),
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
@@ -3233,6 +3337,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
+            weighted_equity_metrics=weighted_equity_metrics,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,
@@ -3287,6 +3392,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.loss_gate_specialization and not self.loss_gate_enabled,
             self.weighted_volume_enabled,
             self.raw_strategy_risk_enabled,
+            self.weighted_raw_equity_enabled,
+            self.weighted_account_equity_enabled,
         )
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -3305,6 +3412,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         entry_interval_counts,
         recovery_samples,
         volume_samples,
+        weighted_equity_samples,
         *,
         batch_size: int,
     ) -> None:
@@ -3339,6 +3447,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (recovery_samples,)
         if self.weighted_volume_enabled:
             kernel_args += (volume_samples,)
+        if self.weighted_equity_cols:
+            kernel_args += (weighted_equity_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
@@ -3468,6 +3578,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
+        weighted_equity_metrics=(),
         hedge_mode: bool = True,
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
@@ -3496,6 +3607,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
+            weighted_equity_metrics=weighted_equity_metrics,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,
@@ -3589,6 +3701,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         entry_interval_counts,
         recovery_samples,
         volume_samples,
+        weighted_equity_samples,
         *,
         batch_size: int,
     ) -> None:
@@ -3624,6 +3737,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             kernel_args += (recovery_samples,)
         if self.weighted_volume_enabled:
             kernel_args += (volume_samples,)
+        if self.weighted_equity_cols:
+            kernel_args += (weighted_equity_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:

@@ -1324,6 +1324,7 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     proxy.run = SimpleNamespace()
     proxy.sides = ["long"]
     proxy.needed_metrics = {"hard_stop_panic_close_loss_sum"}
+    proxy.weighted_equity_metrics = ()
     proxy._parameter_matrix = lambda candidates, side=None: np.zeros(
         (len(candidates), 0)
     )
@@ -1364,9 +1365,9 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
         ),
     ],
 )
-@pytest.mark.parametrize("missing_raw_summary", [False, True])
+@pytest.mark.parametrize("missing_summary", ["none", "raw", "weighted"])
 def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
-    param_keys, candidate_key, missing_raw_summary
+    param_keys, candidate_key, missing_summary
 ):
     torch = pytest.importorskip("torch")
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
@@ -1378,8 +1379,14 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     proxy.metrics_data = {"ts0": 1_000.0}
     proxy.run = SimpleNamespace()
     proxy.sides = ["long", "short"]
-    proxy.needed_metrics = ({"drawdown_worst_strategy_eq"} if missing_raw_summary
-                            else {"hard_stop_triggers"})
+    proxy.needed_metrics = {
+        "none": {"hard_stop_triggers"},
+        "raw": {"drawdown_worst_strategy_eq"},
+        "weighted": {"adg_strategy_eq_w"},
+    }[missing_summary]
+    proxy.weighted_equity_metrics = (
+        ("adg_strategy_eq_w",) if missing_summary == "weighted" else ()
+    )
     proxy.param_keys = param_keys
     proxy.base_params = {
         side: {
@@ -1426,8 +1433,13 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
          "long_hsl_signal_mode": 2, "short_hsl_signal_mode": 2},
     ]
 
-    if missing_raw_summary:
+    if missing_summary == "raw":
         with pytest.raises(RuntimeError, match="raw strategy-risk summary is missing"):
+            proxy.evaluate(candidates)
+        return
+
+    if missing_summary == "weighted":
+        with pytest.raises(RuntimeError, match="weighted equity summary is missing"):
             proxy.evaluate(candidates)
         return
 
@@ -3344,6 +3356,7 @@ def _suite_batch_proxy():
     )
     proxy.coin_override_contract = {"coins": ["A", "B"]}
     proxy.needed_metrics = {"adg_strategy_eq"}
+    proxy.weighted_equity_metrics = ()
     proxy.couple_unstuck_emas = False
     proxy.batch_size = 1024
     proxy.max_dispatch_candidate_bars = 500000000

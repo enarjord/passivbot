@@ -21,6 +21,8 @@ from optimization.gpu.metric_registry import (
     HARD_STOP_LIFECYCLE_METRICS,
     HARD_STOP_PANIC_LOSS_METRICS,
     HARD_STOP_PROXY_METRICS,
+    WEIGHTED_RAW_EQUITY_METRICS,
+    WEIGHTED_ACCOUNT_EQUITY_METRICS,
     reject_exact_only_gpu_metric_names,
 )
 
@@ -2084,6 +2086,20 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     daily_min_changes, min_change_mask = _pct_change(day_min_eq, active)
     sharpe, sortino = _sharpe_sortino(daily_min_changes, min_change_mask, adg)
     expected_shortfall = _mean_worst_one_pct_abs(daily_min_changes, min_change_mask)
+    supplied_account_sources = {
+        _USD_STRATEGY_EQ_ALIASES[name]
+        for name in WEIGHTED_ACCOUNT_EQUITY_METRICS if name in out
+    }
+    account_sources_needed = {
+        _USD_STRATEGY_EQ_ALIASES[name]
+        for name in WEIGHTED_ACCOUNT_EQUITY_METRICS if name in requested
+    } | {
+        source for name, (source, _side) in _USD_PER_EXPOSURE_METRICS.items()
+        if name in requested
+    }
+    weighted_requested = requested_sources - supplied_account_sources - (
+        (set(out) & WEIGHTED_RAW_EQUITY_METRICS) - account_sources_needed
+    )
     weighted_metrics = _weighted_strategy_eq_metrics(
         day_end_eq,
         day_min_eq,
@@ -2093,8 +2109,8 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         out["last_eq_ts"],
         data["ts0"],
         run.interval_ms,
-        requested_sources,
-    )
+        weighted_requested,
+    ) if weighted_requested & WEIGHTED_STRATEGY_EQ_METRICS else {}
     weighted_daily_series_metrics = {}
     weighted_daily_requested = requested & WEIGHTED_DAILY_SERIES_METRICS
     if "volume_pct_per_day_avg_w" in requested and "volume_pct_per_day_avg_w" in out:
@@ -2440,6 +2456,12 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(weighted_pnl_metrics)
     objectives.update(equity_shape_metrics)
     objectives.update(gain_quality_metrics)
+    # The retained internal strategy names also back USD account aliases. Install
+    # corrected account reductions before exposure normalization/aliasing; raw
+    # strategy results replace only their explicit names after those consumers.
+    for name in WEIGHTED_ACCOUNT_EQUITY_METRICS:
+        if name in out:
+            objectives[_USD_STRATEGY_EQ_ALIASES[name]] = out[name].to(torch.float64)
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
         if name not in requested:
             continue
@@ -2454,6 +2476,9 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     for alias, source in _USD_STRATEGY_EQ_ALIASES.items():
         if alias in requested:
             objectives[alias] = objectives[source]
+    for name in WEIGHTED_RAW_EQUITY_METRICS:
+        if name in out:
+            objectives[name] = out[name].to(torch.float64)
     # USD names retain account analysis above. Explicit strategy risk consumes
     # the unclamped raw curve; these are distinct at liquidation.
     if "raw_strategy_day_max_dd" in out:

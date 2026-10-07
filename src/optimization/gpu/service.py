@@ -26,6 +26,10 @@ from optimization.gpu.autotune import proxy_batches
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
     RAW_STRATEGY_RISK_METRICS,
+    WEIGHTED_RAW_EQUITY_METRICS,
+    WEIGHTED_ACCOUNT_EQUITY_METRICS,
+    WEIGHTED_EQUITY_METRICS,
+    weighted_equity_capture_metrics,
     ENTRY_INTERVAL_METRICS,
     EQUITY_BALANCE_DIFF_METRICS,
     HARD_STOP_PROXY_METRICS,
@@ -78,6 +82,7 @@ from optimization.gpu.model import (
 )
 
 CORE_OUTPUT_KEYS = {
+    *WEIGHTED_EQUITY_METRICS,
     "raw_strategy_day_max_dd",
     "volume_pct_per_day_avg_w",
     "btc_day_end_eq",
@@ -946,6 +951,7 @@ def mps_requested_metric_features(
     """Name opt-in MPS metric paths required by a proxy metric surface."""
 
     metrics = set(needed_metrics)
+    weighted_capture = weighted_equity_capture_metrics(metrics)
     features = {
         "btc_analysis": any(_metric_uses_btc_analysis(metric) for metric in metrics),
         "btc_intraday_risk": bool(metrics & BTC_INTRADAY_RISK_METRICS),
@@ -959,6 +965,8 @@ def mps_requested_metric_features(
         ),
         "weighted_volume": "volume_pct_per_day_avg_w" in metrics,
         "raw_strategy_risk": bool(metrics & RAW_STRATEGY_RISK_METRICS),
+        "weighted_raw_equity": bool(weighted_capture & WEIGHTED_RAW_EQUITY_METRICS),
+        "weighted_account_equity": bool(weighted_capture & WEIGHTED_ACCOUNT_EQUITY_METRICS),
         "hsl_ema_tail": bool(metrics & _HSL_EMA_TAIL_METRICS),
         "hsl_raw_drawdown": bool(
             metrics & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
@@ -2518,6 +2526,12 @@ class MpsMulticoinProxy:
         )
 
         self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        # Authoritative chronological reductions currently use CUDA's f64
+        # working arithmetic. Retained Metal screening keeps its daily proxy
+        # reductions until a separately validated Metal reducer is available.
+        self.weighted_equity_metrics = tuple(sorted(
+            weighted_equity_capture_metrics(self.needed_metrics)
+        )) if gpu_device(torch) == "cuda" else ()
 
         from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
@@ -2927,6 +2941,7 @@ class MpsMulticoinProxy:
             "raw_strategy_risk_enabled": bool(
                 self.needed_metrics & RAW_STRATEGY_RISK_METRICS
             ),
+            "weighted_equity_metrics": self.weighted_equity_metrics,
             "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
             "btc_prices": (
                 btc_values
@@ -3363,6 +3378,11 @@ class MpsMulticoinProxy:
                 and "raw_strategy_day_max_dd" not in output
             ):
                 raise RuntimeError("GPU raw strategy-risk summary is missing")
+            missing_weighted = set(self.weighted_equity_metrics) - set(output)
+            if missing_weighted:
+                raise RuntimeError(
+                    "GPU weighted equity summary is missing: " + ", ".join(sorted(missing_weighted))
+                )
             objectives = self._compute_objectives(
                 output, self.run, self.metrics_data, needed=self.needed_metrics
             )

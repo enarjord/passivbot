@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce shared CUDA weighted equity ADG, MDG, Sharpe, Sortino, Omega, Calmar and
+  Sterling metrics from factual raw strategy and account histories, including
+  partial-day suffixes and liquidation. Keep histories on the GPU, return compact
+  results, and include requested capture/reduction memory in batch admission.
+
 - Shared GPU replay reports portfolio raw strategy drawdown, daily worst tail and
   underwater mean independently of account liquidation clamping, preserving ordinary
   USD account metrics and requested-feature ablation.
