@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Refresh scoped HSL before constructing the next orders in shared GPU backtests,
+  correcting delayed panic closes. Keep equity and HSL reporting after forced
+  delisting, preserve factual terminal times, and retain disabled-feature ablation.
+
 - Let offline GPU cohort comparisons use an explicit objective vector, with requested
   metric collection, min/max directions, Pareto membership and per-objective CPU regret.
   Preserve the default ADG/drawdown comparison and separate diagnostic limit checks.

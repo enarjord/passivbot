@@ -1532,3 +1532,124 @@ Completion requires:
   identity, CPU/GPU metric comparison and limit outcome; their fronts reproduce the
   independent histogram analysis. Six documentation cases pass. Rust source/artifact
   is unchanged and verified; final source-byte verification precedes publication.
+
+
+### 2026-10-07 — Integrated objective diagnostics and identified HSL ordering
+
+- PR #1916 integrated at `732fb4791d47cdf8e6810d0f3fa458d5b3c3b3f5` after
+  completed clear automatic/author review of head
+  `46cdb50c2bde2c8161d0603f8f6a1eccdb593ec7` and all three required CI jobs.
+  The reviewed tree and master ancestry are verified. Master receives no redesign.
+- A public synthetic full optimizer workload uses TM, eight coins, both sides,
+  10,080 minute bars, population 64, 256 requested iterations and seed 12. Three
+  scenarios use all coins, alternating four coins and a two-coin subset; base-only
+  screening promotes half of later generations. Two starting configs are evaluated
+  on GPU. CPU simulation APIs, evaluators and worker pools are forbidden throughout.
+- Fresh versus populated CUDA compiler-cache runs complete 160 full records and 192
+  screenings with eight Pareto members. Canonical candidate bot/metric records match
+  exactly after order-independent comparison. Elapsed time is 186.819/63.385 seconds;
+  caller CPU is 24.489/25.937 seconds. Candidate preparation accounts for 18.024/19.037
+  CPU seconds; scoring and evolutionary updates are much cheaper. Phase timings
+  overlap and must not be added. This reveals a useful preparation target rather
+  than proving an optimal result cadence or a general performance bound.
+- Result cadence limits adapt from one to 77/86, but actual completion groups in this
+  workload remain singletons. Preserve that distinction when assessing grouping.
+  Both runs execute 584 backtests; widths remain underfilled and no completed tuning
+  window is accepted. Earlier sustained service-only tuning evidence stays separate.
+- Peak process RSS is about 2.15/1.08 GB, peak Torch allocation about 8.88/8.29 MB,
+  and retained session files about 1.26 MB. Sampled whole-device use peaks near 2.03 GB
+  and includes unrelated device allocations; it is not service-owned VRAM. Final
+  Torch allocations are zero. Larger/longer workloads and EMA full-search measurements
+  remain open; these observations do not close general resource acceptance.
+- Trace the remaining EMA coin-HSL time-in-red discrepancy using two coins, 3,000
+  bars, seed 43, threshold 0.002, EMA span 2.5 and five-minute cooldown. CPU records
+  three stop/restart episodes and 15 red minutes; GPU records the same three episodes
+  but 18 red bar samples. Output-only diagnostics preserve unrelated raw outputs
+  and locate GPU terminal flat timestamps one candle after CPU's corresponding fills.
+- CPU refreshes HSL before constructing the next orders. Shared GPU order generation
+  currently precedes HSL refresh, delaying the next panic order. A bounded exported-
+  shader ordering control restores the CPU fill count and brings ADG/drawdown inside
+  existing strict tolerances; all seven requested disabled-HSL metrics are unchanged.
+  The remaining red-time difference in that control is the sampled denominator
+  (2,938 observations versus 2,937 elapsed intervals), not the removed extra panic bar.
+- Do not absorb the delay into a tolerance or infer a production fix from the control.
+  Correct phase ordering across native paths with trigger/recovery/cooldown, aggregate
+  scopes, delisting/liquidation, specialization and interruption coverage. The control
+  deliberately does not certify those combinations. Keep legacy-retirement gates open.
+
+
+### 2026-10-07 — Correct HSL phase ownership and terminal boundaries
+
+- Fetch and verify master `cf3809c3d3b837861b7e8fdf5903c4fce8ceaadf` remains
+  included in development `732fb4791d47cdf8e6810d0f3fa458d5b3c3b3f5` through
+  PRs #1911 and #1915. No further master merge is needed; preserve pending work.
+- Advance scoped HSL after fills/indicators/slot budgets and before selection,
+  one-way arbitration, unstuck and next orders in both shared EMA/TM topologies.
+  Invalid controllers return the existing unavailable-HSL error before consumers;
+  do not represent malformed HSL as a fabricated zero balance or liquidation.
+- Separate observational reporting into a shared helper sampled after forced
+  delisting and fee-inclusive final valuation. It never advances the controller.
+  Preserve optional EMA-tail field/argument ablation and existing aggregate
+  strategy-equity sampling eligibility. No CPU simulation joins native optimization.
+- A same-bar forced terminal fill can precede the latest provisional mark. Retain
+  three bounded window cursors, retract only that latest observation, and recompute
+  the terminal signal using its factual timestamp. Reuse the existing lookback + 2
+  storage and bounded reduction-block repair; no extra history allocation or journal.
+  Ordinary out-of-order observations remain invalid. Core tests cover dense/sparse
+  timestamps; production interval packing continues to scale policy into bar units.
+- Extend independent Rust-controller comparison to 112 terminal cases covering
+  first exposure, expiry, ring reuse and multiple reduction blocks, both restart
+  policies and dense/sparse observations. Four native EMA one/two-coin long/fused
+  cases restore CPU fills and pass existing ADG/drawdown/lifecycle tolerances.
+  Four reporting probes verify final equity, factual terminal time and no re-observation.
+- Corrected, source-verified CUDA validation passes all 166 controller/ordering/
+  reporting cases. Rust passes 330 tests (one ignored) and default-feature checks;
+  six documentation tests pass. An earlier phase-only broader run passes 102 cases
+  with 13 hardware-specific skips; that result does not certify the final helper.
+- Continue real forced-delisting/liquidation regressions, exact disabled-HSL controls,
+  all-scope/strategy parity, native CLI/resume and final broader validation. Remaining
+  sampled red-time denominator differences are still separate acceptance work.
+  Keep this slice local until validated; require completed current-head automatic/
+  author review and all required CI before integration into development.
+
+- Final-helper validation adds 23 real forced-terminal/delist/liquidation boundary
+  cases and 374 orchestration, checkpoint and parity-tool cases, including actual
+  native CUDA comparisons. All pass. Original-source disabled-HSL controls compare
+  every raw output exactly across both strategies and long/short/fused topologies.
+- The eighteen-case ordinary scope matrix intentionally leaves red-time percentages
+  unassessed. All six EMA long/fused cases pass the five assessed metrics; three
+  short-only cases expose a material baseline ranking shortcut. A two-coin,
+  3,000-bar, seed-43 short fixture reproduces it in the original kernel and with
+  HSL disabled. Removing only the deferred-ranking return in an exported-shader
+  control passes existing strict metrics; the one-coin control also passes.
+  Resolve this separately before cutover; no tolerance can justify that shortcut.
+- A second eighteen-case matrix adds deterministic 30% price shocks and uses 0.002
+  HSL thresholds. All nine TM cases agree on stop/restart counts and drawdown;
+  three long cases pass every strict metric. Short/fused TM retains small fill/ADG
+  trajectory gaps. EMA long/fused lifecycle counts agree; short-only selection
+  remains material. Nine checked-in native cases cover the original coin regressions
+  and practical-threshold TM/all-scope and fused EMA observations with real stops.
+- The near-float32-scale TM threshold of 0.000001 in the ordinary stress matrix
+  retains large lifecycle differences for short/fused runs. Their cause and
+  materiality remain unaccepted; the stronger-signal matrix is additional evidence,
+  not a replacement for recording those failures. Neither matrix certifies full
+  cutover; the completed wider and native CLI checks below stay separate.
+- Enable the previously Apple-only episode-boundary probes through the shared
+  runtime on CUDA, retaining Metal support and explicit probe diagnostics. Run the
+  two expanded test files from an isolated temporary area while the existing
+  wider/CLI job keeps immutable source. Dedicated Metal capacity/layout cases
+  remain outside first-platform hardware acceptance. All 84 shared episode probes
+  and the 13 expanded native/reporting cases pass on CUDA.
+
+- Final wider HSL runner/service/replay validation passes 110 cases, with 97 skips:
+  84 formerly Apple-only episode probes now pass in the separate expanded CUDA run;
+  the other 13 require dedicated Metal layouts. All 32 native optimizer CLI cases
+  pass, including CPU-forbidden screening, scaled HSL, interruption and resume.
+- Two additional real-CUDA service tests inject HSL rejection at the producer's
+  controller boundary for EMA and TM. Both futures propagate the existing
+  unavailable-HSL exception; CPU simulation APIs are forbidden. Invalid HSL cannot
+  silently become a usable liquidation result.
+- The final Rust/kernel bytes match the tested extension source stamp. Only test
+  portability, rejection coverage and the evidence ledger changed after the broad
+  runs. Require a clean commit, completed exact-head automatic/author review and
+  all three required CI jobs before integrating this slice into development.
