@@ -7,13 +7,25 @@ use crate::types::EquityHardStopLossConfig;
 use ndarray::{Array1, Array3};
 
 fn assert_metrics(case: &str, actual: &[(&str, f64)], expected: &serde_json::Value) {
+    assert_metrics_with_tolerance(case, actual, expected, 1e-8);
+}
+
+fn assert_metrics_with_tolerance(
+    case: &str,
+    actual: &[(&str, f64)],
+    expected: &serde_json::Value,
+    absolute_tolerance: f64,
+) {
     for &(name, value) in actual {
         if let Some(reference) = expected[name].as_f64() {
             assert!(
                 value.is_finite()
-                    && (value - reference).abs() <= 1e-8_f64.max(reference.abs() * 1e-12),
+                    && (value - reference).abs()
+                        <= absolute_tolerance.max(reference.abs() * 1e-12),
                 "{case} {name}: Rust {value}, reference {reference}"
             );
+        } else if expected[name].as_str() == Some("positive_infinity") {
+            assert_eq!(value, f64::INFINITY, "{case} {name}: expected positive infinity");
         } else {
             assert!(
                 expected[name].is_null() && !value.is_finite(),
@@ -195,6 +207,24 @@ fn weighted_equity_shared_references_match_current_producers() {
                         ("sterling_ratio_w_usd", account.sterling_ratio_w),
                     ],
                     &case[expected_account][variant],
+                );
+                let expected_shape = if quantized {
+                    "expected_account_shape_f32"
+                } else {
+                    "expected_account_shape"
+                };
+                assert_metrics_with_tolerance(
+                    name,
+                    &[
+                        ("equity_choppiness_usd", account.equity_choppiness),
+                        ("equity_jerkiness_usd", account.equity_jerkiness),
+                        ("exponential_fit_error_usd", account.exponential_fit_error),
+                        ("equity_choppiness_w_usd", account.equity_choppiness_w),
+                        ("equity_jerkiness_w_usd", account.equity_jerkiness_w),
+                        ("exponential_fit_error_w_usd", account.exponential_fit_error_w),
+                    ],
+                    &case[expected_shape][variant],
+                    1e-10,
                 );
             }
         }
