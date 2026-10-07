@@ -92,8 +92,8 @@ def test_account_shape_matches_current_rust_producer(unit, device, quantized, va
         for source, reference in case[key][variant].items():
             name = source.removesuffix("usd") + unit
             actual = float(result[name][0])
-            if reference is None:
-                assert not math.isfinite(actual), (case["case"], name, actual)
+            if reference == "positive_infinity":
+                assert actual == math.inf, (case["case"], name, actual)
             else:
                 assert actual == pytest.approx(reference, abs=1e-10, rel=1e-12), (
                     case["case"], variant, name, actual, reference

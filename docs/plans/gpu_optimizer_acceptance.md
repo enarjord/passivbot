@@ -437,7 +437,8 @@ and absent fills. The existing Rust producer test rechecks all added values.
 
 CPU and CUDA each check the six USD fields and the six corresponding BTC fields
 with a constant BTC price of one. All 2,160 comparisons pass with `pytest.approx(abs=1e-10, rel=1e-12)`,
-with explicit nonfinite expectations. This covers BTC
+with explicit positive-infinity expectations. Rust rechecks those shape references
+with the same finite tolerance and sentinel type/sign. This covers BTC
 metric routing with an identical curve; it does not establish variable-price
 conversion or full simulator parity. The three focused Python files pass 178
 checks. Current-source Rust passes 332 tests with one existing ignore, default-feature

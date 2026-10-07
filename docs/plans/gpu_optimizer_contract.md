@@ -2350,3 +2350,11 @@ Completion requires:
 - This slice adds test/reference evidence only. Keep general parity policies, runtime
   behavior and all broader performance, numerical acceptance and retirement gates
   unchanged. Require current-head author/automatic review and CI before integration.
+
+- PR #1928 automatic review identified two test weaknesses: broad nonfinite matching
+  could accept NaN/negative infinity for Rust's positive-infinity sentinel, and the
+  existing Rust helper used a looser absolute floor than Python. Preserve shape
+  sentinel type/sign explicitly in the shared fixture and both consumers. Give the
+  new Rust shape checks the same 1e-10 absolute / 1e-12 relative tolerance as Python,
+  while preserving the existing other-family checks. Require fresh source validation
+  and completed current-head review/CI before integration.
