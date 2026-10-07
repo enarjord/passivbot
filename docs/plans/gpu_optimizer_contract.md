@@ -1880,3 +1880,55 @@ Completion requires:
 - Post-restart retrigger reporting remains a separate open defect. Its replacement
   must account for incomplete panic exits and current GREEN recovery, rather than
   inferring every lifecycle event from completed terminal closes.
+
+
+### 2026-10-07 — Measure fixed policy with a sixteen-request dispatch ceiling
+
+- Hold both sides' coin-HSL threshold/span/cooldown at 0.002/2.5/5 through explicit
+  search bounds; retain the eight-coin, 10,080-minute, seed-43 shocks, optimizer seed
+  12, three scenarios, population 64 and 256 requested iterations. Forbid CPU
+  simulation APIs and worker pools during both measurements.
+- Cold/warm runs complete 160 full results and 192 screens with 15 Pareto members.
+  Decoded candidate/metric records and Pareto membership agree exactly. All 160
+  records have nonzero RED time. Unrequested trigger/restart metrics do not prove
+  event counts. Cold/warm elapsed times are 330.286/230.581 seconds, caller CPU
+  23.566/27.060 seconds and whole-process CPU 162.497/64.175 seconds.
+- Both issue 52 actual GPU batches of 1–16 requests. An explicit batch size disables
+  adaptive execution tuning, so zero tuning windows here are expected. This supplies
+  a fixed-width comparison point, not adaptive-default acceptance or evidence that
+  width 16 is optimal. Compare the same fixed-policy recipe at other widths before
+  attributing timing differences to width; earlier adaptive-policy timings have
+  different effective HSL policies.
+- Peak RSS is 1.91/1.08 GB, Torch peak allocation 17.87/17.34 MB and final allocation
+  zero in both runs. Stored session data is approximately 1.33 MB, excluding compile
+  and packing caches. These measurements precede the lifecycle-reporting replacement.
+
+### 2026-10-07 — Separate observational HSL lifecycle accounting
+
+- Source inspection identifies a broader gap behind the dead retrigger scalar:
+  terminal-only trigger counting misses open panic and GREEN permission recovery.
+  Introduce reporting-only RED entry/restart transitions using existing state,
+  separately record flat completion, and include unfinished RED/exit durations.
+  Consume each scope's pending restart only once when a subsequent RED is observed.
+  Renewed exposure ends the preceding terminal cooldown before a new RED is counted.
+- Keep current controller action, signal, orders and all permission logic unchanged.
+  Preserve feature guards, replay-state layout and packed output cardinality. Retained
+  directional decoders must follow the same censored-duration reporting semantics.
+- Five CPU report reference cases cover completed cooldown/retrigger, GREEN recovery,
+  zero cooldown, renewed exposure and an unfinished panic. The CPU reference passes;
+  all ten corresponding original-source GPU probes fail. The source-verified replacement
+  passes all 20 lifecycle probes/scoped comparisons, 65 reporting cases, 169 replay
+  controls and 36 CPU-forbidden optimizer lifecycle cases. Rust passes 331 tests
+  with one ignored, and default-feature test compilation passes.
+- The six 28,800-minute comparisons produce all 942 finite metric pairs. All seven
+  assessed HSL metrics match their fixture-local absolute 1e-5 plus relative 0.1%
+  bounds, including nonzero EMA retriggers and first-observed TM trigger drawdown.
+  Every non-HSL GPU metric is exactly unchanged from the preceding audit. Existing
+  ADG/fill-rate gate failures remain; 146 metrics per case still have no assessed
+  policy. This accepts the reporting correction, not the entire metric surface.
+- A separate six-case, 3,000-minute diagnostic with HSL disabled confirms ordinary
+  side strategy-equity summaries are omitted: active-side raw drawdown and strict
+  recovery return zero despite nonzero CPU values. Inactive constant curves also
+  lose their full strict-recovery horizon. Separate ordinary equity sampling from
+  HSL eligibility in the next change; retain protection ablation and CPU reference
+  definitions. Weighted-ratio and long-trajectory assessments remain separate.

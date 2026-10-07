@@ -381,6 +381,36 @@ inline void finish_hsl_panic_loss(thread HslState& h) {
 #endif
 }
 
+// Observational lifecycle: current RED starts reporting before a terminal fill.
+// These counters never grant trading permission or retain a panic commitment.
+inline void begin_hsl_report(thread HslState& h, int minute, float score) {
+    h.triggers += 1.0f;
+    h.current_red_start_k = float(minute);
+    if (h.current_halt_start_k < 0.0f) h.current_halt_start_k = float(minute);
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    h.trigger_drawdown_sum += score;
+    h.trigger_drawdown_count += 1.0f;
+    // A restart contributes at most one following retrigger, per scope.
+    if (h.last_restart_k >= 0.0f) {
+        h.restart_retrigger_count += 1.0f;
+        h.last_restart_k = -1.0f;
+    }
+#endif
+}
+
+inline void restart_hsl_report(thread HslState& h, int minute) {
+    h.restarts += 1.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float duration = fmax(float(minute) - h.current_halt_start_k, 0.0f);
+    h.halt_duration_sum_steps += duration;
+    h.halt_duration_max_steps = fmax(h.halt_duration_max_steps, duration);
+    h.halt_duration_count += 1.0f;
+    h.last_restart_k = float(minute);
+#endif
+    h.current_halt_start_k = -1.0f;
+    h.current_red_start_k = -1.0f;
+}
+
 inline void observe_hsl(
     thread HslState& h, float balance, float realized, float upnl,
     bool exposed, int minute, bool terminal
@@ -400,31 +430,31 @@ inline void observe_hsl(
     if (terminal || (prior == 3 && !h.red_active_now)) finish_hsl_panic_loss(h);
     h.tier = h.red_active_now ? 3 : 0;
     h.halted = h.hsl.action == 1;
-    if (h.red_active_now && prior != 3) h.current_red_start_k = float(minute);
-    if (terminal && fmin(h.hsl.raw, h.hsl.ema) > h.red_threshold) {
-        h.triggers += 1.0f;
-        if (h.halted) h.current_halt_start_k = float(minute);
+    bool reporting_red = prior != 0;
+    // Renewed exposure ends the preceding terminal cooldown before the new
+    // episode is assessed, even when the new exposure is immediately RED.
+    if (prior == 1 && exposed) {
+        restart_hsl_report(h, minute);
+        reporting_red = false;
+    }
+    float score = fmin(h.hsl.raw, h.hsl.ema);
+    bool terminal_red = terminal && score > h.red_threshold;
+    if ((h.hsl.action != 0 || terminal_red) && !reporting_red) {
+        begin_hsl_report(h, minute, score);
+        reporting_red = true;
+    }
+    if (terminal_red) {
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-        h.trigger_drawdown_sum += fmin(h.hsl.raw, h.hsl.ema);
-        h.trigger_drawdown_count += 1.0f;
         if (h.current_red_start_k >= 0.0f) {
             h.flatten_time_sum_steps += fmax(float(minute) - h.current_red_start_k, 0.0f);
             h.flatten_time_count += 1.0f;
         }
 #endif
+        h.current_red_start_k = -1.0f;
     }
-    if (prior == 1 && !h.halted) {
-        h.restarts += 1.0f;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-        float duration = fmax(float(minute) - h.current_halt_start_k, 0.0f);
-        h.halt_duration_sum_steps += duration;
-        h.halt_duration_max_steps = fmax(h.halt_duration_max_steps, duration);
-        h.halt_duration_count += 1.0f;
-        h.last_restart_k = float(minute);
-#endif
-        h.current_halt_start_k = -1.0f;
-    }
-    if (!h.red_active_now) h.current_red_start_k = -1.0f;
+    // GREEN permits restart without requiring a flat panic exit. A terminal
+    // RED with zero cooldown can trigger, flatten and restart at one timestamp.
+    if (h.hsl.action == 0 && reporting_red) restart_hsl_report(h, minute);
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.drawdown_ema_max = fmax(h.drawdown_ema_max, h.drawdown_ema);
 #endif
@@ -886,7 +916,7 @@ inline void accumulate_hsl_output(
     );
     output.panic_loss_drawdown_count += report.panic_loss_drawdown_count;
     if (!h.enabled) return;
-    float terminal_count = h.halted
+    float terminal_count = (h.red_active_now || h.halted)
         && h.current_halt_start_k >= 0.0f && last_equity_k >= 0.0f
         ? 1.0f : 0.0f;
     float terminal_duration = terminal_count > 0.0f
@@ -914,8 +944,11 @@ inline void accumulate_hsl_output(
     output.duration_count += h.halt_duration_count + terminal_count;
     output.trigger_drawdown_sum += h.trigger_drawdown_sum;
     output.trigger_drawdown_count += h.trigger_drawdown_count;
-    output.flatten_time_sum += h.flatten_time_sum_steps;
-    output.flatten_time_count += h.flatten_time_count;
+    float open_exit_count = h.current_red_start_k >= 0.0f && last_equity_k >= 0.0f
+        ? 1.0f : 0.0f;
+    output.flatten_time_sum += h.flatten_time_sum_steps + (open_exit_count > 0.0f
+        ? fmax(last_equity_k - h.current_red_start_k, 0.0f) : 0.0f);
+    output.flatten_time_count += h.flatten_time_count + open_exit_count;
     output.restart_retrigger_count += h.restart_retrigger_count;
     output.halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
 #else

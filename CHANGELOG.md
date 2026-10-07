@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Count GPU HSL lifecycle metrics from observed RED and restart transitions, including
+  GREEN recovery, retriggers and unfinished panic durations.
+
 - Correct GPU optimizer HSL halt-to-restart loss metrics to use panic-close loss,
   matching CPU reporting instead of returning a dormant scalar.
 
