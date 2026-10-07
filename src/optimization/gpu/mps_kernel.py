@@ -1081,6 +1081,7 @@ def _ema_anchor_multicoin_shader_library(
     unstuck_pnl_capacity: int = 0,
     weighted_volume_enabled: bool = False,
     raw_strategy_risk_enabled: bool = False,
+    raw_strategy_growth_enabled: bool = False,
     weighted_raw_equity_enabled: bool = False,
     weighted_account_equity_enabled: bool = False,
 ):
@@ -1103,6 +1104,8 @@ def _ema_anchor_multicoin_shader_library(
         source = "#define PASSIVBOT_WEIGHTED_ACCOUNT_EQUITY_ENABLED 1\n" + source
     if raw_strategy_risk_enabled:
         source = "#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 1\n" + source
+    if raw_strategy_growth_enabled:
+        source = "#define PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED 1\n" + source
     if weighted_volume_enabled:
         source = "#define PASSIVBOT_WEIGHTED_VOLUME_ENABLED 1\n" + source
     source = _with_dynamic_wel_by_tradability(source, dynamic_wel_by_tradability)
@@ -1142,6 +1145,7 @@ def _trailing_martingale_multicoin_shader_library(
     loss_gate_disabled: bool = False,
     weighted_volume_enabled: bool = False,
     raw_strategy_risk_enabled: bool = False,
+    raw_strategy_growth_enabled: bool = False,
     weighted_raw_equity_enabled: bool = False,
     weighted_account_equity_enabled: bool = False,
 ):
@@ -1170,6 +1174,8 @@ def _trailing_martingale_multicoin_shader_library(
         source = "#define PASSIVBOT_WEIGHTED_ACCOUNT_EQUITY_ENABLED 1\n" + source
     if raw_strategy_risk_enabled:
         source = "#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 1\n" + source
+    if raw_strategy_growth_enabled:
+        source = "#define PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED 1\n" + source
     if weighted_volume_enabled:
         source = "#define PASSIVBOT_WEIGHTED_VOLUME_ENABLED 1\n" + source
     source = _with_dynamic_wel_by_tradability(source, dynamic_wel_by_tradability)
@@ -1348,7 +1354,7 @@ def _require_available_held_valuation(scalars):
         )
 
 
-def _decode_outputs(daily, scalars, gaps) -> dict:
+def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
     _require_available_held_valuation(scalars)
     active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
 
@@ -1444,12 +1450,13 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "hsl_drawdown_raw_mean_worst_1pct_long": _scalar_column_or_zero(scalars, 63),
         "hsl_drawdown_raw_mean_worst_1pct_short": _scalar_column_or_zero(scalars, 64),
     }
-    output.update(_decode_btc_risk_outputs(daily, active_days, 9))
+    if btc_risk_enabled:
+        output.update(_decode_btc_risk_outputs(daily, active_days, 9))
     return output
 
 
-def _decode_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
-    output = _decode_outputs(daily, scalars, gaps)
+def _decode_multicoin_fused_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
+    output = _decode_outputs(daily, scalars, gaps, btc_risk_enabled=btc_risk_enabled)
     long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
     output.update(
         {
@@ -2210,6 +2217,7 @@ class MpsEmaAnchorMulticoinRunner:
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
+        raw_strategy_growth_enabled: bool = False,
         weighted_equity_metrics=(),
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
@@ -2231,6 +2239,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         self.weighted_volume_enabled = bool(weighted_volume_enabled)
         self.raw_strategy_risk_enabled = bool(raw_strategy_risk_enabled)
+        self.raw_strategy_growth_enabled = bool(raw_strategy_growth_enabled)
         self.weighted_equity_metrics = frozenset(weighted_equity_metrics)
         if self.weighted_equity_metrics - WEIGHTED_EQUITY_METRICS:
             raise ValueError("unsupported resident weighted equity metrics")
@@ -2333,6 +2342,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.daily_cols = (
             MPS_MULTICOIN_DAILY_COLS + (3 if self.btc_risk_enabled else 0)
             + int(self.raw_strategy_risk_enabled)
+            + 2 * int(self.raw_strategy_growth_enabled)
         )
         self.recovery_stride = 1 if self.recovery_distribution_enabled else 0
         self.n_recovery_samples = (
@@ -2523,6 +2533,9 @@ class MpsEmaAnchorMulticoinRunner:
                 buffer.zero_()
         self._buffers[batch_size][0][:, :, 1].fill_(float("inf"))
         self._buffers[batch_size][0][:, :, 5].fill_(float("inf"))
+        if self.raw_strategy_growth_enabled:
+            offset = self.daily_cols - int(self.raw_strategy_risk_enabled) - 1
+            self._buffers[batch_size][0][:, :, offset].fill_(float("inf"))
         return self._buffers[batch_size]
 
     def _end_steps(self, end_steps: np.ndarray | None, batch_size: int):
@@ -2635,6 +2648,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.unstuck_pnl_capacity,
             self.weighted_volume_enabled,
             self.raw_strategy_risk_enabled,
+            self.raw_strategy_growth_enabled,
             self.weighted_raw_equity_enabled,
             self.weighted_account_equity_enabled,
         )
@@ -2649,6 +2663,7 @@ class MpsEmaAnchorMulticoinRunner:
         return (
             self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
             + (4 * self.n_days if self.raw_strategy_risk_enabled else 0)
+            + (8 * self.n_days if self.raw_strategy_growth_enabled else 0)
             + weighted_equity_history_bytes(
                 self.n, self.n_days, self.weighted_equity_metrics
             )
@@ -2749,7 +2764,7 @@ class MpsEmaAnchorMulticoinRunner:
         return combined
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_outputs(daily, scalars, gaps)
+        return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
 
     def _recovery_sample_buffer(self, batch_size: int):
         if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
@@ -2983,6 +2998,10 @@ class MpsEmaAnchorMulticoinRunner:
         output = self._decode(daily, scalars, gaps)
         if self.raw_strategy_risk_enabled:
             output["raw_strategy_day_max_dd"] = daily[:, :, -1]
+        if self.raw_strategy_growth_enabled:
+            offset = self.daily_cols - int(self.raw_strategy_risk_enabled) - 2
+            output["raw_strategy_day_end_eq"] = daily[:, :, offset]
+            output["raw_strategy_day_min_eq"] = daily[:, :, offset + 1]
         output.update(self._reduce_weighted_equity(weighted_equity_samples, output))
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(
@@ -3038,6 +3057,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
+        raw_strategy_growth_enabled: bool = False,
         weighted_equity_metrics=(),
         hedge_mode: bool = True,
         dynamic_wel_by_tradability: bool = True,
@@ -3067,6 +3087,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
+            raw_strategy_growth_enabled=raw_strategy_growth_enabled,
             weighted_equity_metrics=weighted_equity_metrics,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
@@ -3216,7 +3237,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_multicoin_fused_outputs(daily, scalars, gaps)
+        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
 
 
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
@@ -3297,6 +3318,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
+        raw_strategy_growth_enabled: bool = False,
         weighted_equity_metrics=(),
         dynamic_wel_by_tradability: bool = True,
         btc_prices: np.ndarray | None = None,
@@ -3337,6 +3359,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
+            raw_strategy_growth_enabled=raw_strategy_growth_enabled,
             weighted_equity_metrics=weighted_equity_metrics,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
@@ -3392,6 +3415,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.loss_gate_specialization and not self.loss_gate_enabled,
             self.weighted_volume_enabled,
             self.raw_strategy_risk_enabled,
+            self.raw_strategy_growth_enabled,
             self.weighted_raw_equity_enabled,
             self.weighted_account_equity_enabled,
         )
@@ -3548,7 +3572,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         return output
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_outputs(daily, scalars, gaps)
+        return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
 
 
 class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRunner):
@@ -3578,6 +3602,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         recovery_distribution_enabled: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
+        raw_strategy_growth_enabled: bool = False,
         weighted_equity_metrics=(),
         hedge_mode: bool = True,
         dynamic_wel_by_tradability: bool = True,
@@ -3607,6 +3632,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             recovery_distribution_enabled=recovery_distribution_enabled,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
+            raw_strategy_growth_enabled=raw_strategy_growth_enabled,
             weighted_equity_metrics=weighted_equity_metrics,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
             btc_prices=btc_prices,
@@ -3749,7 +3775,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_multicoin_fused_outputs(daily, scalars, gaps)
+        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):

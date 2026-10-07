@@ -9,7 +9,10 @@ import time
 
 import numpy as np
 
-from optimization.gpu.metric_registry import RAW_STRATEGY_RISK_METRICS, weighted_equity_capture_metrics
+from optimization.gpu.metric_registry import (
+    RAW_STRATEGY_DRAWDOWN_CONSUMERS, RAW_STRATEGY_EQUITY_METRICS,
+    weighted_equity_capture_metrics,
+)
 
 from optimization.gpu.runtime import gpu_device
 from optimization.gpu.model import (
@@ -421,7 +424,8 @@ def _build_case(
         runs[0],
         data,
         side="long",
-        raw_strategy_risk_enabled=bool(set(needed_metrics) & RAW_STRATEGY_RISK_METRICS),
+        raw_strategy_risk_enabled=bool(set(needed_metrics) & RAW_STRATEGY_DRAWDOWN_CONSUMERS),
+        raw_strategy_growth_enabled=bool(set(needed_metrics) & RAW_STRATEGY_EQUITY_METRICS),
         weighted_equity_metrics=(
             weighted_equity_capture_metrics(needed_metrics) if gpu_device() == "cuda" else ()
         ),

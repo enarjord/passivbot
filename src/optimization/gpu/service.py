@@ -25,7 +25,8 @@ from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import proxy_batches
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
-    RAW_STRATEGY_RISK_METRICS,
+    RAW_STRATEGY_EQUITY_METRICS,
+    RAW_STRATEGY_DRAWDOWN_CONSUMERS,
     WEIGHTED_RAW_EQUITY_METRICS,
     WEIGHTED_ACCOUNT_EQUITY_METRICS,
     WEIGHTED_EQUITY_METRICS,
@@ -84,6 +85,8 @@ from optimization.gpu.model import (
 CORE_OUTPUT_KEYS = {
     *WEIGHTED_EQUITY_METRICS,
     "raw_strategy_day_max_dd",
+    "raw_strategy_day_end_eq",
+    "raw_strategy_day_min_eq",
     "volume_pct_per_day_avg_w",
     "btc_day_end_eq",
     "btc_day_min_eq",
@@ -964,7 +967,8 @@ def mps_requested_metric_features(
             metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
         ),
         "weighted_volume": "volume_pct_per_day_avg_w" in metrics,
-        "raw_strategy_risk": bool(metrics & RAW_STRATEGY_RISK_METRICS),
+        "raw_strategy_risk": bool(metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS),
+        "raw_strategy_growth": bool(metrics & RAW_STRATEGY_EQUITY_METRICS),
         "weighted_raw_equity": bool(weighted_capture & WEIGHTED_RAW_EQUITY_METRICS),
         "weighted_account_equity": bool(weighted_capture & WEIGHTED_ACCOUNT_EQUITY_METRICS),
         "hsl_ema_tail": bool(metrics & _HSL_EMA_TAIL_METRICS),
@@ -2939,7 +2943,10 @@ class MpsMulticoinProxy:
             ),
             "weighted_volume_enabled": "volume_pct_per_day_avg_w" in self.needed_metrics,
             "raw_strategy_risk_enabled": bool(
-                self.needed_metrics & RAW_STRATEGY_RISK_METRICS
+                self.needed_metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS
+            ),
+            "raw_strategy_growth_enabled": bool(
+                self.needed_metrics & RAW_STRATEGY_EQUITY_METRICS
             ),
             "weighted_equity_metrics": self.weighted_equity_metrics,
             "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
@@ -3374,10 +3381,14 @@ class MpsMulticoinProxy:
                     )
                 )
             if (
-                self.needed_metrics & RAW_STRATEGY_RISK_METRICS
+                self.needed_metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS
                 and "raw_strategy_day_max_dd" not in output
             ):
                 raise RuntimeError("GPU raw strategy-risk summary is missing")
+            if self.needed_metrics & RAW_STRATEGY_EQUITY_METRICS and not {
+                "raw_strategy_day_end_eq", "raw_strategy_day_min_eq"
+            }.issubset(output):
+                raise RuntimeError("GPU raw strategy-equity daily summaries are missing")
             missing_weighted = set(self.weighted_equity_metrics) - set(output)
             if missing_weighted:
                 raise RuntimeError(

@@ -91,7 +91,8 @@ def test_compact_account_results_precede_aliases_and_raw_replacements(monkeypatc
     assert float(result["mdg_w_per_exposure_short_usd"][0]) == float(out["mdg_w_usd"][0]) / 4
 
 
-def _runner_context(strategy, sides, *, requested=(), chunked=False):
+def _runner_context(strategy, sides, *, requested=(), chunked=False,
+                    raw_growth=False, raw_risk=False, btc_risk=False):
     from test_gpu_mps import _multicoin_exposure_fixture
     from optimization.gpu.mps_kernel import (
         MpsEmaAnchorMulticoinRunner, MpsEmaAnchorMulticoinFusedRunner,
@@ -108,7 +109,10 @@ def _runner_context(strategy, sides, *, requested=(), chunked=False):
         ("trailing_martingale", False): MpsTrailingMartingaleMulticoinRunner,
         ("trailing_martingale", True): MpsTrailingMartingaleMulticoinFusedRunner,
     }[strategy, sides == "both"]
-    kwargs = dict(weighted_equity_metrics=requested, recovery_distribution_enabled=True)
+    kwargs = dict(weighted_equity_metrics=requested, recovery_distribution_enabled=True,
+                  raw_strategy_growth_enabled=raw_growth, raw_strategy_risk_enabled=raw_risk,
+                  btc_risk_enabled=btc_risk,
+                  btc_prices=np.full(count, 30000.0) if btc_risk else None)
     if sides != "both":
         kwargs["side"] = sides
     if chunked:

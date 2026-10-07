@@ -23,6 +23,7 @@ from optimization.gpu.metric_registry import (
     HARD_STOP_PROXY_METRICS,
     WEIGHTED_RAW_EQUITY_METRICS,
     WEIGHTED_ACCOUNT_EQUITY_METRICS,
+    RAW_STRATEGY_EQUITY_METRICS,
     reject_exact_only_gpu_metric_names,
 )
 
@@ -2491,7 +2492,61 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         objectives["strategy_eq_underwater_pct_mean"] = (
             raw_daily_dd.sum(dim=1) / active.sum(dim=1).clamp(min=1)
         )
+    # Account aliases/exposure normalization above keep their account curve.
+    # Explicit strategy growth consumes independently captured raw daily equity.
+    if requested & RAW_STRATEGY_EQUITY_METRICS and "raw_strategy_day_end_eq" in out:
+        objectives.update(_raw_strategy_equity_metrics(out, requested))
     objectives.update(_btc_account_metrics(out, run, data, requested))
     if needed is None:
         return objectives
     return {key: value for key, value in objectives.items() if key in requested}
+
+
+def _raw_strategy_equity_metrics(out, requested):
+    """Reduce factual raw daily closes/minima without a per-step history."""
+    names = set(requested) & RAW_STRATEGY_EQUITY_METRICS
+    if not names:
+        return {}
+    ends = out["raw_strategy_day_end_eq"].to(torch.float64)
+    minima = out["raw_strategy_day_min_eq"].to(torch.float64)
+    active = torch.isfinite(minima)
+    result = {}
+    growth_names = names - {
+        "mdg_strategy_eq", "omega_ratio_strategy_eq", "expected_shortfall_1pct_strategy_eq",
+        "adg_rolling_hmean_strategy_eq", "adg_time_integrated_strategy_eq",
+        "positive_gain_participation_strategy_eq",
+    }
+    if growth_names:
+        adg = _smoothed_adg(ends, active)
+        if "adg_strategy_eq" in names:
+            result["adg_strategy_eq"] = adg
+    if names & {"mdg_strategy_eq", "omega_ratio_strategy_eq"}:
+        returns, return_mask = _pct_change(ends, active)
+        if "mdg_strategy_eq" in names:
+            result["mdg_strategy_eq"] = _masked_median(returns, return_mask)
+        if "omega_ratio_strategy_eq" in names:
+            result["omega_ratio_strategy_eq"] = _omega_ratio(returns, return_mask)
+    if names & {"sharpe_ratio_strategy_eq", "sortino_ratio_strategy_eq",
+                "expected_shortfall_1pct_strategy_eq"}:
+        changes, change_mask = _pct_change(minima, active)
+        if names & {"sharpe_ratio_strategy_eq", "sortino_ratio_strategy_eq"}:
+            sharpe, sortino = _sharpe_sortino(changes, change_mask, adg)
+            if "sharpe_ratio_strategy_eq" in names:
+                result["sharpe_ratio_strategy_eq"] = sharpe
+            if "sortino_ratio_strategy_eq" in names:
+                result["sortino_ratio_strategy_eq"] = sortino
+        if "expected_shortfall_1pct_strategy_eq" in names:
+            result["expected_shortfall_1pct_strategy_eq"] = _mean_worst_one_pct_abs(
+                changes, change_mask
+            )
+    if names & {"calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq"}:
+        dd = out["raw_strategy_day_max_dd"].to(torch.float64)
+        dd = torch.where(active, dd, torch.zeros_like(dd))
+        if "calmar_ratio_strategy_eq" in names:
+            result["calmar_ratio_strategy_eq"] = adg / dd.max(dim=1).values.clamp(min=1e-12)
+        if "sterling_ratio_strategy_eq" in names:
+            result["sterling_ratio_strategy_eq"] = adg / _mean_worst_one_pct_largest(
+                dd, active
+            ).clamp(min=1e-12)
+    result.update(_gain_quality_metrics(ends, active, names))
+    return result

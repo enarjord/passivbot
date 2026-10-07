@@ -2221,6 +2221,55 @@ Completion requires:
   optimizer throughput acceptance. Requested-only capture is the foundation for
   future reductions; tuning accounts for its real cost rather than treating it free.
 - All 24 ordinary weighted shock regressions and eight exact shared shock capture
-  ablations pass. Author/current-head automatic review and required CI remain open.
+  ablations pass. PR #1925 integrated reviewed head `bedbe2a3d4` after completed
+  current-head automatic review, author review and all three required CI jobs.
   Broader raw growth/recovery/other weighted families, representative
   optimizer performance and legacy retirement remain separate acceptance work.
+
+### 2026-10-07 — Compact unweighted raw strategy growth
+
+- Eight actual fill/mark liquidations across midnight expose a wrong source curve:
+  raw strategy ADG is about -.276 on the prior GPU path when Rust reports -1.0.
+  Seven ordinary raw growth/ratio metrics differ in every case, while all 64
+  ordinary account comparisons pass. This is a source-selection defect, not an
+  accepted decimal difference.
+- Add requested-only raw daily closes/minima alongside the existing raw daily
+  drawdown summary. Eleven unweighted growth, gain-quality and ratio metrics use
+  that factual curve. Calmar/Sterling request drawdowns independently. Preserve
+  account aliases and exposure normalization before explicit raw replacements.
+  No full history is needed: capture adds eight bytes per candidate per calendar
+  day, including its actual daily storage in scratch admission.
+- Keep optional daily-column ownership explicit. Adding raw closes/minima and
+  drawdown made the old width-based decoder mistake raw columns for BTC metrics.
+  Shared decoders now receive the known BTC feature flag; synthetic and actual
+  combinations cover both ownership cases.
+- Current rebuilt Rust passes 332 tests with one existing ignore and default-feature
+  compile coverage. Shared controlled references cover fifteen curves at f64 and
+  f32 input precision, using the actual Rust producer. All 52 focused reducer,
+  liquidation, capture, temporal replay, decoder and service-guard checks pass.
+  Capture on/off across both strategies, all side combinations, optional raw
+  risk and BTC risk preserves every previous output exactly, including weighted
+  metrics and recovery. The liquidation checks retain strict comparison policies.
+- On 72 original CPU, quantized CPU and actual GPU raw curves from 24 public HSL
+  shock cases, all 792 same-curve producer/reducer comparisons pass. Maximum
+  absolute reduction error is below 9e-13. All 264 new compact results also match
+  actual Rust reductions of the previously captured GPU curves; the largest
+  residual is below 1e-8 and comes from f32 daily drawdown inputs to ratios.
+- Strict 1e-6 absolute plus 1e-4 relative replay comparison passes only one of those
+  short shock cases. Existing input-curve differences amplify near-zero two-day
+  ADG and derived ratios: the worst ADG absolute difference is .208 basis points,
+  gain-quality difference is .648 basis points and expected-shortfall difference
+  is .848 basis points. Near-zero TM ratios differ by less than .0005 in absolute
+  units; positive participation differs by less than .051 percentage points.
+  Retain strict controlled/liquidation tests and use documented fixture-local
+  materiality bounds for ordinary shocks. General parity-tool policy stays unchanged.
+- All 24 current-source ordinary regressions pass with those fixture-local bounds.
+  Affected callers and reducers pass 1,178 checks with one existing skip; two
+  existing decoder checks also pass. Four actual CUDA optimizer interruption and
+  resumption cases pass with CPU simulations forbidden, covering both strategies
+  and standalone/scenario-screened suites. Six documentation tests pass and checks
+  report no errors. Require current-head author/automatic review and CI before
+  dev integration.
+  Remaining recovery, other weighted/BTC families, representative performance and
+  legacy retirement remain separate acceptance work. CUDA checks do not establish
+  Metal device acceptance.

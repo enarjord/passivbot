@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Shared GPU raw strategy ADG, MDG, growth-quality and risk-adjusted growth
+  metrics use raw daily equity closes and minima, retaining terminal losses beyond
+  account liquidation clamping. Capture only requested daily summaries and preserve
+  ordinary account metrics and exposure normalization.
+
 - Reduce shared CUDA weighted equity ADG, MDG, Sharpe, Sortino, Omega, Calmar and
   Sterling metrics from factual raw strategy and account histories, including
   partial-day suffixes and liquidation. Keep histories on the GPU, return compact
