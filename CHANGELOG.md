@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- GPU HSL cooldown re-evaluates completed episodes from retained observations
+  after their peak leaves the history window. Preserve current entry-loss
+  estimates for active exposure and the terminal accounting sample.
+
 - Native GPU strategy recovery distributions use factual realized and unrealized
   trading PnL, retaining terminal losses below the account liquidation floor.
   Recovery-only requests use the same strategy curve as weighted raw metrics.
