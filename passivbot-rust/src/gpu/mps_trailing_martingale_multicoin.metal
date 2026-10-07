@@ -5178,10 +5178,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     int recovery_start_k = -1;
 #endif
     int liquidation_day = -1;
-    float hsl_tier_samples_total = 0.0f;
-
-
-    float hsl_tier_samples_red = 0.0f;
+    HslTimeObservation hsl_time = init_hsl_time_observation();
 
     int current_day = 0;
     bool day_touched = false;
@@ -5633,8 +5630,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                     + (unified ? long_unrealized + short_unrealized : short_unrealized),
                 day_index);
             if (long_tier >= 0 || short_tier >= 0) {
-                hsl_tier_samples_total += 1.0f;
-                hsl_tier_samples_red += max(long_tier, short_tier) == 3 ? 1.0f : 0.0f;
+                record_hsl_time_observation(hsl_time, float(k), max(long_tier, short_tier));
             }
         }
 #endif
@@ -5885,15 +5881,15 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     if (long_config.coin_hsl_mode) {
         write_dual_side_coin_hsl_outputs(
             long_side.coin_hsl, short_side.coin_hsl, C,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
             last_eq_k, scalars, scalar_offset + 32
         );
     } else {
         write_dual_side_hsl_outputs(
             long_side.hsl, short_side.hsl,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
             last_eq_k, scalars, scalar_offset + 32
         );
     }
@@ -6047,10 +6043,9 @@ struct TrailingMartingaleMulticoinReplayState {
     float first_eq_k;
     float last_eq_k;
     int liquidation_day;
-    float hsl_tier_samples_total;
-
-
-    float hsl_tier_samples_red;
+#if !PASSIVBOT_HSL_DISABLED
+    HslTimeObservation hsl_time;
+#endif
     int current_day;
     bool day_touched;
     float day_end;
@@ -6251,10 +6246,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     int recovery_start_k = -1;
 #endif
     int liquidation_day = -1;
-    float hsl_tier_samples_total = 0.0f;
-
-
-    float hsl_tier_samples_red = 0.0f;
+    HslTimeObservation hsl_time = init_hsl_time_observation();
 
     int current_day = 0;
     bool day_touched = false;
@@ -6293,10 +6285,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         first_eq_k = replay_states[b].first_eq_k;
         last_eq_k = replay_states[b].last_eq_k;
         liquidation_day = replay_states[b].liquidation_day;
-        hsl_tier_samples_total = replay_states[b].hsl_tier_samples_total;
-
-
-        hsl_tier_samples_red = replay_states[b].hsl_tier_samples_red;
+#if !PASSIVBOT_HSL_DISABLED
+        hsl_time = replay_states[b].hsl_time;
+#endif
         current_day = replay_states[b].current_day;
         day_touched = replay_states[b].day_touched;
         day_end = replay_states[b].day_end;
@@ -6589,8 +6580,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 side.hsl_strategy_eq,
                 starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
             if (sampled_tier >= 0) {
-                hsl_tier_samples_total += 1.0f;
-                hsl_tier_samples_red += sampled_tier == 3 ? 1.0f : 0.0f;
+                record_hsl_time_observation(hsl_time, float(k), sampled_tier);
             }
         }
 #endif
@@ -6727,10 +6717,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         replay_states[b].first_eq_k = first_eq_k;
         replay_states[b].last_eq_k = last_eq_k;
         replay_states[b].liquidation_day = liquidation_day;
-        replay_states[b].hsl_tier_samples_total = hsl_tier_samples_total;
-
-
-        replay_states[b].hsl_tier_samples_red = hsl_tier_samples_red;
+#if !PASSIVBOT_HSL_DISABLED
+        replay_states[b].hsl_time = hsl_time;
+#endif
         replay_states[b].current_day = current_day;
         replay_states[b].day_touched = day_touched;
         replay_states[b].day_end = day_end;
@@ -6856,8 +6845,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     if (coin_hsl_mode) {
         write_one_side_coin_hsl_outputs(
             coin_hsl, C, short_side,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
             last_eq_k,
             scalars,
             scalar_offset + 32
@@ -6865,8 +6854,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     } else {
         write_one_side_hsl_outputs(
             hsl, short_side,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
             last_eq_k,
             scalars,
             scalar_offset + 32

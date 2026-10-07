@@ -1703,3 +1703,17 @@ Completion requires:
   final 203-case run passes with the same verified Rust/kernel bytes. Six
   documentation tests pass; require clean publication, completed exact-head automatic/
   author review and all three CI jobs before integrating this slice into development.
+
+### 2026-10-07 — Align native HSL elapsed reporting
+
+- CPU HSL reporting accumulates elapsed time using the preceding observation's RED
+  state. Shared GPU reporting counted current bar samples, adding an initial
+  denominator unit and potentially treating a terminal RED state as elapsed time.
+- Add one shared observation clock and retain it across TM temporal dispatches.
+  Reuse the two existing scalar slots for elapsed observed/RED steps; their packed
+  labels remain compatible with retained directional single-coin reporting. No
+  simulation/order/controller behavior or history transfer changes. HSL-disabled
+  code omits observation updates and chunk-owned clock state.
+- Add explicit duration/boundary probes and strict native EMA time-in-red coverage.
+  Keep this follow-up local until current-source CUDA, disabled controls, temporal
+  chunking, lifecycle and CPU-forbidden CLI evidence is complete.

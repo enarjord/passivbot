@@ -5711,9 +5711,10 @@ def test_mps_multicoin_all_invalid_time_keeps_equity_and_hsl_clock(
         expected_first_eq_index * run.interval_ms
     )
     assert output["last_eq_ts"].item() >= invalid_end * run.interval_ms
+    # Shared replay reports elapsed steps, with no initial sample duration.
     expected_hsl_samples = (
         output["last_eq_ts"].item() - output["first_eq_ts"].item()
-    ) / run.interval_ms + 1.0
+    ) / run.interval_ms
     assert output["hsl_tier_samples_total"].item() == pytest.approx(
         expected_hsl_samples
     )
@@ -7608,7 +7609,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "long_hsl.drawdown_ema_max" in source
     assert "scalars[so + 61] = short_hsl.enabled" in source
     assert "record_gross_pnl" in source
-    assert "hsl_tier_samples_total" in source
+    assert "hsl_time.observed_steps" in source
     assert "h.restart_retrigger_count" in source
     assert "record_hsl_panic_fill(" in source
     assert "side.psize * price_now * c_mult / balance" in source

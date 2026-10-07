@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Calculate shared GPU HSL time-in-red from elapsed observations, including
+  dispatch resumption and terminal-state boundaries, instead of bar-sample counts.
+
 - Refresh shared GPU EMA flat-coin rankings every bar and derive hysteresis priority
   from outstanding entry orders, removing deferred-selection caches.
 
