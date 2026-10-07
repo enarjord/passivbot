@@ -273,7 +273,8 @@ The [cohort tool](../gpu_cohort_benchmark.md#optional-metric-cohort-measurements
 now requests optional histories/reductions and scalar diagnostic limit metrics from
 both simulators. Explicit policy files are resolved into the report; unknown policies
 remain unassessed. BTC-denominated requests enable CPU BTC analysis. The core three
-comparisons and two-objective ADG/drawdown ranking remain fixed.
+comparisons and default two-objective ADG/drawdown ranking remain available;
+explicit objective vectors select additional ranking dimensions.
 
 Four public seven-day, four-coin, both-side cohorts (both strategies, seeds 7/43,
 sixteen candidates) retain identical core comparisons/rankings on the integrated
@@ -319,8 +320,8 @@ limit decisions are unchanged. Add minimizing fill-gap p95 as a third objective:
 The remaining EMA/43 p95 residual is 18.55 CPU versus 18.45 GPU minutes for one
 candidate. The GPU front omits candidate 9 (zero-based) from the CPU front. Existing
 trajectory and core-metric differences remain; this experiment does not certify
-all objective rankings. The standalone tool's built-in ranking still covers only
-ADG/drawdown; these third-objective observations are a separate analysis.
+all objective rankings. The original tool covered only ADG/drawdown. Explicit objective
+vectors now make these third-objective observations directly reproducible from its reports.
 
 Warm direct/native cohort cost remains comparable, as recorded in the
 [measurement recipe](../gpu_cohort_benchmark.md#fill-gap-resolution-experiment).
@@ -330,6 +331,61 @@ have no eligible tuning samples in these underfilled cohorts. Regression tests c
 float32 bin boundaries, distinct 29/30/31-minute gaps, the actual EMA cohorts and
 simultaneously requested 512-bin fill gaps/128-bin entry intervals. Native-only cases
 forbid CPU simulations. Actual Metal execution and long-gap materiality remain open.
+
+## Explicit objective-vector diagnostics
+
+The cohort tool accepts repeatable `--objective METRIC min|max` options, requests
+those metrics and reports the resolved vector, raw Pareto fronts, pair-order
+changes and CPU regret at each GPU-selected axis extreme. Without those options,
+ADG/max and drawdown/min remain the default. Aliases and directions are explicit;
+missing/non-finite axes leave ranking unassessed. Constraint/limit checks remain
+separate. These are offline observations, not production survivor selection.
+
+Three/four-dimensional independent cases verify dominance, ties, directions and
+axis regret; real CUDA cohorts check the full requested vector in recipe/results.
+The public three-objective recipe in the [cohort guide](../gpu_cohort_benchmark.md)
+replaces the separate post-processing used for the fill-gap experiment. Tooling
+alone does not accept the remaining one-member EMA/43 front difference or other
+unassessed metric discrepancies.
+
+## Sustained completed-work service tuning
+
+After fill-gap refinement, a GPU-only workload exercises the default 24-sample/30-second
+evidence windows without shortening them. These timing observations precede the
+shared-session-artifact master integration; they measure that recorded service workload. Prepare the public cohort's sixteen configurations
+with seed 7, four coins, both sides and 10,080 minute bars; request the default three
+metrics. Warm a sixteen-candidate direct GPU reference, then register the same prepared
+dataset with `CudaBacktestService(batch_size=None, max_pending=512)` and the cohort's
+500-million candidate-bar dispatch budget. Maintain 512 outstanding requests with
+unique IDs, cycling the sixteen already resolved parameter sets; replenish after
+completed futures until 12,288 EMA or 6,144 TM requests finish. Check each request/
+dataset/liquidation identity and all metrics against its reference. Forbid the CPU
+`execute_backtest`, `run_backtest` and Rust bundle APIs during this measurement.
+The public `_cohort`, `_native_dataset` and `_observe_batches` helpers provide the
+fixture, shared registration and controller observations used by this recipe.
+
+Time from before dataset registration through service shutdown, after reference
+warmup. Record `time.thread_time()` for the caller and `time.process_time()` for
+whole-process CPU work. Do not infer caller cost from whole-process/proc PID time.
+
+| Strategy | Requests | End-to-end rate | Completed-window median rate, width 64 → 128 | Caller CPU / elapsed seconds | Peak Torch allocated bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| EMA | 12,288 | 140.024/s | 86.570/s → 171.750/s | 0.606 / 87.756 | 2,667,008 |
+| TM | 6,144 | 37.090/s | 23.953/s → 47.855/s | 0.331 / 165.652 | 2,488,320 |
+
+Both completed windows meet the unchanged sample/time minima. All 18,432 results
+match GPU references exactly and final Torch allocation is zero. Eligible samples
+include completed work beyond the two consumed windows; pending windows do not
+establish another accepted trial. Only widths 64/128 are measured. Caller p95 latency
+is about 5.912/21.424 seconds with a full 512-request queue, so throughput does not
+imply low per-request latency. Whole-process CPU time is 81.105/49.207 seconds and
+includes execution-worker/driver/reducer work.
+
+This proves useful adaptation and modest service-caller cost for repeated resolved
+requests. It omits candidate generation, canonical scoring, evolution, Pareto writes,
+scenario switches and cold compilation. Torch-only memory excludes driver/CuPy,
+host RSS and disk. Full-optimizer CPU cost, large-suite resources, search quality and
+an optimal dispatch width remain separate acceptance work.
 
 ## Work still required before legacy retirement
 

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Let offline GPU cohort comparisons use an explicit objective vector, with requested
+  metric collection, min/max directions, Pareto membership and per-objective CPU regret.
+  Preserve the default ADG/drawdown comparison and separate diagnostic limit checks.
+
 - Refine GPU fill-gap histograms from 128 to 512 bins so neighbouring short gaps
   remain distinguishable in percentile objectives. Keep fixed per-candidate storage,
   restored same-candle zeros and streamed time-weighted gaps; preserve the separate

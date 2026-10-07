@@ -232,7 +232,10 @@ def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(stra
                    "--candidates", "3", "--warm-runs", "1", "--widths", "1", "2", "auto",
                    "--metrics", "strategy_eq_recovery_days_p95", "volume_pct_per_day_avg_w", "adg_btc",
                    "--limit", "fills_gap_p95_hours", "greater_than", "1",
-                   "--tolerances", str(path))
+                   "--tolerances", str(path),
+                   "--objective", "adg_strategy_eq", "max",
+                   "--objective", "drawdown_worst_strategy_eq", "min",
+                   "--objective", "fills_gap_p95_hours", "min")
     report = benchmark.run_benchmark(args)
     json.dumps(report, allow_nan=False)
     case = report["cases"][0]
@@ -250,6 +253,9 @@ def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(stra
     assert all(row["metrics"]["volume_pct_per_day_avg_w"]["status"] == "unassessed"
                for row in case["cpu_gpu_comparisons"])
     assert case["ranking"]["assessed"]
+    assert case["ranking"]["objectives"] == args.objectives
+    assert report["recipe"]["objectives"] == args.objectives
+    assert set(case["ranking"]["cpu_regret_at_gpu_best"]) == set(args.objectives)
     assert len(case["diagnostic_limits"]["comparisons"]) == 3
     assert all(row["assessed"] for row in case["diagnostic_limits"]["comparisons"])
     for native in case["native"]:
@@ -298,3 +304,67 @@ def test_cuda_weighted_reduction_batch_shapes_preserve_raw_replay():
     for expected, observed in zip(full, split, strict=True):
         assert expected.liquidated == observed.liquidated
         assert benchmark._metric_rounding(expected.metrics, observed.metrics) is not None
+
+
+def test_explicit_objectives_replace_default_and_request_canonical_metrics():
+    args = options('--objective', 'adg_strategy_pnl_rebased', 'max',
+                   '--objective', 'fills_gap_p95_hours', 'min')
+    assert args.objectives == {'adg_strategy_eq': 'max', 'fills_gap_p95_hours': 'min'}
+    assert args.metrics == [*benchmark.gpu_parity.DEFAULT_METRICS, 'fills_gap_p95_hours']
+    assert options('--objective', 'fills_gap_p95_hours', 'min', '--objective', 'fills_gap_p95_hours', 'min').objectives == {'fills_gap_p95_hours': 'min'}
+
+
+@pytest.mark.parametrize('flags', [('--objective', 'fills_gap_p95_hours', 'auto'),
+    ('--objective', 'adg_strategy_eq', 'max', '--objective', 'adg_strategy_pnl_rebased', 'min')])
+def test_bad_objective_direction_is_rejected(flags):
+    with pytest.raises(SystemExit) as error:
+        options(*flags)
+    assert error.value.code == 2
+
+
+def test_third_objective_exposes_front_change_hidden_by_default():
+    cpu = [dict(adg_strategy_eq=.1, drawdown_worst_strategy_eq=.2, fills_gap_p95_hours=1),
+           dict(adg_strategy_eq=.1, drawdown_worst_strategy_eq=.1, fills_gap_p95_hours=2)]
+    gpu = [cpu[0], {**cpu[1], 'fills_gap_p95_hours': .5}]
+    assert benchmark._ranking(cpu, gpu)['front_members_match']
+    report = benchmark._ranking(cpu, gpu, {**benchmark.DEFAULT_OBJECTIVES, 'fills_gap_p95_hours': 'min'})
+    assert report['cpu_front'] == [0, 1]
+    assert report['gpu_front'] == [1]
+    assert report['pair_order_disagreements']['fills_gap_p95_hours'] == 1
+    assert report['cpu_regret_at_gpu_best']['fills_gap_p95_hours'] == 1
+    assert report['gpu_best_candidates']['fills_gap_p95_hours'] == 1
+
+
+@pytest.mark.parametrize('direction,selected,regret', [('min', 1, 1), ('max', 0, 1)])
+def test_non_adg_objective_directions_and_axis_regret(direction, selected, regret):
+    cpu = [{'fills_gap_p95_hours': 1}, {'fills_gap_p95_hours': 2}]
+    gpu = [{'fills_gap_p95_hours': 2}, {'fills_gap_p95_hours': 1}]
+    report = benchmark._ranking(cpu, gpu, {'fills_gap_p95_hours': direction})
+    assert report['gpu_front'] == [selected]
+    assert report['gpu_best_candidates'] == {'fills_gap_p95_hours': selected}
+    assert report['cpu_regret_at_gpu_best'] == {'fills_gap_p95_hours': regret}
+    assert 'cpu_adg_regret_of_gpu_max' not in report
+
+
+@pytest.mark.parametrize('rows', [([], []), ([{'fills_gap_p95_hours': 1}], [])])
+def test_empty_or_mismatched_cohorts_are_unassessed(rows):
+    assert benchmark._ranking(*rows, {'fills_gap_p95_hours': 'min'}) == {'assessed':False, 'reason':'empty_or_mismatched_candidates'}
+
+
+@pytest.mark.parametrize('value', [None, float('nan'), float('inf')])
+def test_missing_extra_objective_is_unassessed(value):
+    rows = [{'fills_gap_p95_hours': value}]
+    assert benchmark._ranking(rows, rows, {'fills_gap_p95_hours': 'min'})['assessed'] is False
+
+
+def test_fourth_objective_direction_changes_dominance():
+    axes = {**benchmark.DEFAULT_OBJECTIVES, "fills_gap_p95_hours": "min",
+            "adg_strategy_eq_w": "max"}
+    cpu = [dict(adg_strategy_eq=.1, drawdown_worst_strategy_eq=.1,
+                fills_gap_p95_hours=gap, adg_strategy_eq_w=weighted)
+           for gap, weighted in [(1, 0), (2, 1), (1, 1)]]
+    gpu = [*cpu[:2], {**cpu[2], "adg_strategy_eq_w": -1}]
+    report = benchmark._ranking(cpu, gpu, axes)
+    assert report["cpu_front"] == [2]
+    assert report["gpu_front"] == [0, 1]
+    assert report["pair_order_disagreements"]["adg_strategy_eq_w"] == 2

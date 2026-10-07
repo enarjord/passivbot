@@ -25,6 +25,7 @@ DISPATCH_BUDGET = 500_000_000
 # Identical float32 replay summaries can differ in the last float64 reduction
 # bits across batch shapes. This does not admit a float32 ULP of replay drift.
 MAX_FLOAT64_REDUCTION_ULPS = 8
+DEFAULT_OBJECTIVES = {"adg_strategy_eq": "max", "drawdown_worst_strategy_eq": "min"}
 
 
 def build_parser():
@@ -44,6 +45,9 @@ def build_parser():
     parser.add_argument("--drawdown-ceiling", type=float)
     parser.add_argument("--metrics", nargs="+", default=[],
                         help="Additional GPU metrics; ADG, drawdown and fills/day remain included")
+    parser.add_argument("--objective", dest="objectives", action="append", nargs=2, default=[],
+                        metavar=("METRIC", "DIRECTION"),
+                        help="Repeat to replace the default ADG/max, drawdown/min ranking; DIRECTION is min or max")
     parser.add_argument("--tolerances", help="JSON per-metric comparison policies, as in gpu-parity")
     parser.add_argument("--limit", dest="limits", action="append", nargs=3, default=[],
                         metavar=("METRIC", "MODE", "VALUE"),
@@ -83,6 +87,15 @@ def validate_args(parser, args):
     from config.metrics import canonicalize_metric_name
 
     try:
+        objectives = {}
+        for metric, direction in args.objectives:
+            if direction not in {"min", "max"}:
+                raise ValueError("--objective DIRECTION must be min or max")
+            name = canonicalize_metric_name(metric)
+            if name in objectives and objectives[name] != direction:
+                raise ValueError(f"conflicting objective directions for {name}")
+            objectives[name] = direction
+        args.objectives = objectives or dict(DEFAULT_OBJECTIVES)
         limits = []
         for metric, mode, value in args.limits:
             if mode not in {"less_than", "greater_than"}:
@@ -94,7 +107,7 @@ def validate_args(parser, args):
         args.limits = limits
         checks = _checks(args)
         args.metrics = list(dict.fromkeys(canonicalize_metric_name(name) for name in
-                            [*gpu_parity.DEFAULT_METRICS, *args.metrics,
+                            [*gpu_parity.DEFAULT_METRICS, *args.metrics, *args.objectives,
                              *(check["metric"] for check in checks)]))
         args.policies = dict(gpu_parity.DEFAULT_TOLERANCES)
         if args.tolerances:
@@ -113,30 +126,41 @@ def _timing_summary(samples, count):
                 warm_median_seconds=median, warm_candidates_per_second=count / median)
 
 
-def _front(rows):
-    values = [(-row["adg_strategy_eq"], row["drawdown_worst_strategy_eq"]) for row in rows]
+def _front(rows, objectives):
+    values = [tuple(row[name] * (-1 if direction == "max" else 1)
+                    for name, direction in objectives.items()) for row in rows]
     return [i for i, row in enumerate(values) if not any(
         all(left <= right for left, right in zip(other, row)) and
         any(left < right for left, right in zip(other, row))
         for j, other in enumerate(values) if j != i)]
 
 
-def _ranking(cpu, gpu):
-    objectives = ("adg_strategy_eq", "drawdown_worst_strategy_eq")
+def _ranking(cpu, gpu, objectives=None):
+    objectives = dict(DEFAULT_OBJECTIVES if objectives is None else objectives)
+    if not cpu or len(cpu) != len(gpu):
+        return {"assessed": False, "reason": "empty_or_mismatched_candidates"}
     if any(row.get(name) is None or not math.isfinite(row[name])
            for rows in (cpu, gpu) for row in rows for name in objectives):
         return {"assessed": False, "reason": "nonfinite_or_missing_objective"}
-    cpu_front, gpu_front = _front(cpu), _front(gpu)
+    cpu_front, gpu_front = _front(cpu, objectives), _front(gpu, objectives)
     relation = lambda a, b: int(a > b) - int(a < b)
     flips = {name: sum(
         relation(cpu[i][name], cpu[j][name]) != relation(gpu[i][name], gpu[j][name])
         for i in range(len(cpu)) for j in range(i + 1, len(cpu))) for name in objectives}
-    selected = max(range(len(gpu)), key=lambda i: gpu[i]["adg_strategy_eq"])
-    return dict(assessed=True, objectives={objectives[0]: "max", objectives[1]: "min"},
-                cpu_front=cpu_front, gpu_front=gpu_front, front_members_match=cpu_front == gpu_front,
-                pair_order_disagreements=flips, pairs=len(cpu) * (len(cpu) - 1) // 2,
-                gpu_max_adg_candidate=selected,
-                cpu_adg_regret_of_gpu_max=max(row[objectives[0]] for row in cpu) - cpu[selected][objectives[0]])
+    best, regret = {}, {}
+    for name, direction in objectives.items():
+        sign = -1 if direction == "max" else 1
+        selected = min(range(len(gpu)), key=lambda i: sign * gpu[i][name])
+        best[name] = selected
+        regret[name] = sign * cpu[selected][name] - min(sign * row[name] for row in cpu)
+    result = dict(assessed=True, objectives=objectives,
+                  cpu_front=cpu_front, gpu_front=gpu_front, front_members_match=cpu_front == gpu_front,
+                  pair_order_disagreements=flips, pairs=len(cpu) * (len(cpu) - 1) // 2,
+                  gpu_best_candidates=best, cpu_regret_at_gpu_best=regret)
+    if objectives.get("adg_strategy_eq") == "max":
+        result.update(gpu_max_adg_candidate=best["adg_strategy_eq"],
+                      cpu_adg_regret_of_gpu_max=regret["adg_strategy_eq"])
+    return result
 
 
 def _checks(args):
@@ -346,7 +370,7 @@ def _measure(torch, args, strategy, seed):
                 cpu_serial_prepare_and_execute=_timing_summary(cpu_samples, len(parameters)),
                 direct_gpu_prepare_seconds=prepare_seconds,
                 direct_gpu=_timing_summary(direct_samples, len(parameters)), native=native,
-                cpu_gpu_comparisons=comparisons, ranking=_ranking(cpu, gpu),
+                cpu_gpu_comparisons=comparisons, ranking=_ranking(cpu, gpu, args.objectives),
                 diagnostic_limits=dict(adg_floor=args.adg_floor, drawdown_ceiling=args.drawdown_ceiling,
                                        limits=args.limits, comparisons=limits))
 

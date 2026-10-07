@@ -1502,3 +1502,33 @@ Completion requires:
   simulator or numerical-policy change is introduced by this refresh.
 - Require completed current-head automatic/author review and all required CI before
   development integration. Master receives no optimizer redesign changes.
+
+
+### 2026-10-06 — Explicit multiobjective evidence and sustained native traffic
+
+- PR #1915 integrated master session artifacts after completed clear current-head
+  automatic/author review and all required CI. Development preserves the reviewed
+  tree and master ancestry; pending objective-vector work was retained separately.
+- Add explicit min/max objective vectors to offline cohort comparison, automatically
+  request their metrics and report multi-dimensional fronts, pair-order changes and
+  per-axis CPU regret. Preserve default ADG/drawdown diagnostics, independent limits
+  and unknown-tolerance handling. No search or GPU execution policy changes.
+- Reproduce the fill-gap third-objective analysis through the public tool rather than
+  separate post-processing. Raw fronts and axis extremes are diagnostic observations,
+  not constraint penalties, optimizer survival or whole-search quality certification.
+- Refresh sustained GPU-only completed-work evidence after fill-gap refinement with
+  unchanged tuning windows: 12,288 EMA and 6,144 TM requests exactly match direct GPU
+  references. Completed width-128 evidence roughly doubles width-64 throughput;
+  no larger-width optimum is inferred. Shutdown releases all Torch allocations.
+- Measure service caller CPU with `time.thread_time()`: 0.606/0.331 CPU seconds over
+  87.756/165.652 elapsed seconds. Whole-process CPU includes worker/driver/reducers;
+  repeated resolved requests do not measure full optimizer overhead. Keep large-suite,
+  cold compilation, CPU evolution/storage and metric-materiality acceptance open.
+- This slice requires completed current-head automatic/author review and successful
+  required CI before development integration.
+- Validation passes all 44 cohort-tool cases on the NVIDIA runtime, including both
+  real CUDA requested-vector reports and the existing raw-replay batch-shape check.
+  Four fresh eleven-metric/three-objective cohorts preserve every input/parameter
+  identity, CPU/GPU metric comparison and limit outcome; their fronts reproduce the
+  independent histogram analysis. Six documentation cases pass. Rust source/artifact
+  is unchanged and verified; final source-byte verification precedes publication.
