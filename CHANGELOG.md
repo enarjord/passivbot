@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Correct GPU optimizer HSL halt-to-restart loss metrics to use panic-close loss,
+  matching CPU reporting instead of returning a dormant scalar.
+
 - Calculate shared GPU HSL time-in-red from elapsed observations, including
   dispatch resumption and liquidation/fill boundaries, instead of bar-sample counts.
 
