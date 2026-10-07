@@ -1949,7 +1949,12 @@ Completion requires:
   fixture's final row is lookahead, so its final simulated close is row five.
 - The corrected source additionally passes 77 reporting/selection/loss checks and
   331 Rust tests (one ignored), with default-feature compilation and rebuilt-extension
-  verification. Replay controls and CPU-forbidden optimizer checks are pending.
+  verification. The combined replay run passes 168 controls; one service request exceeds
+  its 60-second observation deadline without a metric verdict. The unchanged-source
+  isolated check passes in 2.83 seconds, including CPU/GPU liquidation identity.
+  All 36 CPU-forbidden optimizer checks pass, covering suites, screening, prompt
+  persistence, interruption and resume. No timeout is treated as terminal work or
+  as successful simulation output. Six documentation checks also pass.
 - A separate 3,000-minute seed-43 shock experiment with a 10,000-minute cooldown
   and one-day retained history still exposes closed-episode/history-expiry duration
   discrepancies of one to 55 minutes. It does not isolate the endpoint defect and
