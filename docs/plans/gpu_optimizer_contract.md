@@ -2030,3 +2030,41 @@ Completion requires:
   four native optimizer CLI/suite/interruption/resume cases and six documentation
   tests. The final replay expectations are checked against actual Rust ideal orders.
   Automatic review and required CI must clear the current head before merging.
+
+### 2026-10-07 — Independent side strategy-equity accounting
+
+- PR #1922 integrated into development after completed clear exact-head automatic
+  and author review and all three required CI jobs. Stack the side-equity correction
+  on the accepted EMA allocation behavior; do not restore the extra entry cap.
+- Shared EMA and trailing-martingale replay sample ordinary raw strategy equity
+  on the factual account-equity clock, independently of HSL signal eligibility.
+  Unified protection retains separate long and short net cashflows and UPNL for
+  ordinary side performance. Keep HSL EMA telemetry scoped to its actual signals.
+- An inactive side is a constant curve: strict new-peak recovery includes the
+  complete observed horizon. Requested-metric specialization still removes
+  unneeded statistics; no history is transferred to the optimizer.
+- For fewer than 200 observed days, the worst floor(1%) tail contains one daily
+  maximum. Reuse the already requested raw maximum instead of averaging its
+  histogram bin. Longer tails retain the existing approximation pending acceptance.
+- Initial source-verified CUDA validation of the public seed-43 two-coin,
+  3,000-bar shock matrix passes 22 of 24 side-metric scenarios. All 48 recovery
+  comparisons match exactly across both strategies, trading sides and disabled,
+  coin, pside and unified HSL. Disabled/unified shared trailing-martingale long
+  drawdown residuals remain visible at 5.35e-5 and 5.94e-6 respectively. Do not
+  change general parity policies or treat this partial matrix as acceptance.
+- The focused run passes 55 checks and fails only those two side drawdown cases;
+  all 29 HSL ordering cases and four compiled two-/199-day tail probes pass.
+  Rust passes 331 tests (one ignored), default-feature compilation passes and the
+  rebuilt runtime is source-verified. Replay controls and CPU-forbidden optimizer
+  lifecycle checks did not run after the focused failure.
+- Keep recursive grid sizing as separate semantic work: Rust refreshes initial
+  sizing from its simulated order-book price; the GPU helper currently retains the
+  original generation price. Correcting that policy does not establish arbitrary
+  trading-path identity. Do not change metric accounting to conceal distinct trades.
+- The actual Rust floor API reproduces .017 from .060-.042; the existing
+  GPU float32 rounding tolerance produces .018. Accept a fixture-local absolute
+  drawdown bound of 1e-4 (one basis point) for the two affected long raw/tail values.
+  Their observed errors are 5.35e-5 and 5.94e-6. Keep all recovery, short drawdown
+  and the other 22 scenario comparisons strict, and leave general parity policies
+  unchanged. This bounds practical risk in these fixtures without declaring the
+  separate recursive sizing mismatch corrected or certifying arbitrary trajectories.

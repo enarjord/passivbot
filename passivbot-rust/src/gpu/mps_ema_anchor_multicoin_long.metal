@@ -3098,7 +3098,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         equity_started = equity_started || can_generate;
         // Refresh HSL after fills, before forager selection and next orders.
 #if !PASSIVBOT_HSL_DISABLED
-        const bool hsl_strategy_eq_eligible = hsl.enabled && !hsl.halted;
+        const bool hsl_ema_eligible = hsl.enabled && !hsl.halted;
         const float hsl_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
             side, bars, coin_settings, k, C, short_side, 0.0f
         );
@@ -3252,12 +3252,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #if !PASSIVBOT_HSL_DISABLED
         if (can_generate && alive && balance > 0.0f && equity > liquidation_floor) {
             int sampled_tier = record_multicoin_hsl_report(
-                hsl, coin_hsl, C, effective_n_positions, hsl_strategy_eq_eligible,
+                hsl, coin_hsl, C, effective_n_positions, hsl_ema_eligible
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                side.hsl_ema_tail,
+                , side.hsl_ema_tail
 #endif
-                side.hsl_strategy_eq,
-                starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
+            );
             if (sampled_tier >= 0) {
                 record_hsl_time_observation(hsl_time, float(k), sampled_tier);
             }
@@ -3265,6 +3264,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #endif
         bool active = equity_started && alive;
         if (active) {
+            // Ordinary side-equity statistics share the factual equity clock,
+            // independent of HSL mode, permission and protection specialization.
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            update_hsl_strategy_equity_stats(side.hsl_strategy_eq,
+                starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
+#endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
             if (any_fill) {
@@ -3504,11 +3509,15 @@ inline void passivbot_ema_anchor_multicoin_impl(
         );
     }
 #endif
-    scalars[scalar_offset + 57] = short_side ? 0.0f
+    // The untraded opposite side is a constant curve over the same equity
+    // horizon. Strict new-peak recovery includes that entire unrecovered tail.
+    const float inactive_recovery_ms = first_eq_k >= 0.0f && last_eq_k >= 0.0f
+        ? fmax(last_eq_k - first_eq_k, 0.0f) * interval_ms : 0.0f;
+    scalars[scalar_offset + 57] = short_side ? inactive_recovery_ms
         : hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms;
     scalars[scalar_offset + 58] = short_side
         ? hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms
-        : 0.0f;
+        : inactive_recovery_ms;
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     scalars[scalar_offset + 59] = short_side ? 0.0f
         : hsl_drawdown_ema_mean_worst_1pct(side.hsl_ema_tail);
@@ -4043,9 +4052,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             && joint_portfolio_can_generate(
                 account, hsl_equity, liquidation_floor
             );
-        const bool long_hsl_strategy_eq_eligible =
+        const bool long_hsl_ema_eligible =
             long_side.hsl.enabled && !long_side.hsl.halted;
-        const bool short_hsl_strategy_eq_eligible =
+        const bool short_hsl_ema_eligible =
             short_side.hsl.enabled && !short_side.hsl.halted;
         if (can_sample_hsl) {
             bool hsl_valid = update_ema_multicoin_dual_side_hsl(
@@ -4255,29 +4264,20 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #if !PASSIVBOT_HSL_DISABLED
         if (can_sample_hsl && joint_portfolio_can_generate(
                 account, equity, liquidation_floor)) {
-            const bool unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
             int long_tier = record_multicoin_hsl_report(
                 long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions,
-                long_hsl_strategy_eq_eligible,
+                long_hsl_ema_eligible
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                long_side.hsl_ema_tail,
+                , long_side.hsl_ema_tail
 #endif
-                long_side.hsl_strategy_eq,
-                starting_balance + (unified
-                    ? account.realized_pnl_total : account.realized_pnl_long)
-                    + (unified ? long_unrealized + short_unrealized : long_unrealized),
-                day_index);
+            );
             int short_tier = record_multicoin_hsl_report(
                 short_side.hsl, short_side.coin_hsl, C, short_effective_n_positions,
-                short_hsl_strategy_eq_eligible,
+                short_hsl_ema_eligible
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                short_side.hsl_ema_tail,
+                , short_side.hsl_ema_tail
 #endif
-                short_side.hsl_strategy_eq,
-                starting_balance + (unified
-                    ? account.realized_pnl_total : account.realized_pnl_short)
-                    + (unified ? long_unrealized + short_unrealized : short_unrealized),
-                day_index);
+            );
             if (long_tier >= 0 || short_tier >= 0) {
                 record_hsl_time_observation(hsl_time, float(k), max(long_tier, short_tier));
             }
@@ -4285,6 +4285,12 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #endif
         bool active = equity_started && alive;
         if (active) {
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            update_hsl_strategy_equity_stats(long_side.hsl_strategy_eq,
+                starting_balance + account.realized_pnl_long + long_unrealized, day_index);
+            update_hsl_strategy_equity_stats(short_side.hsl_strategy_eq,
+                starting_balance + account.realized_pnl_short + short_unrealized, day_index);
+#endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
             if (any_fill) {

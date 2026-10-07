@@ -94,14 +94,16 @@ kernel void terminal_reporting_probe(constant float* params, device HslNode* tre
     HslDrawdownEmaTailStats tail = init_hsl_drawdown_ema_tail_stats();
     HslStrategyEquityStats eq = init_hsl_strategy_equity_stats();
     observe_hsl(owner, 1000, 0, 0, false, 0, false);
-    record_multicoin_hsl_report(aggregate, coins, 1, 1, true, tail, eq, 1000, 0);
+    record_multicoin_hsl_report(aggregate, coins, 1, 1, true, tail);
+    update_hsl_strategy_equity_stats(eq, 1000, 0);
     observe_hsl(owner, 1000, 0, 50, true, 1, false);
     observe_hsl(owner, 1000, 0, 5000, true, 2, false);
     // A same-bar forced close follows next-order construction. The terminal
     // fill's factual time is one minute earlier than that provisional mark.
     finish_hsl_episode_at_flat(owner, 700, 1000, -300, 1, 60000);
     out[0] = record_multicoin_hsl_report(
-        aggregate, coins, 1, 1, true, tail, eq, 700, 0);
+        aggregate, coins, 1, 1, true, tail);
+    update_hsl_strategy_equity_stats(eq, 700, 0);
     out[1] = hsl_strategy_equity_drawdown_max(eq);
     out[2] = owner.hsl.last_observed;
     out[3] = owner.hsl.flat_minute;
@@ -192,7 +194,12 @@ def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill
     candles[5:, :, :3] = [21, 19, 20]
     metric = "hard_stop_time_in_red_pct"
     durations = ("hard_stop_duration_minutes_mean", "hard_stop_duration_minutes_max")
-    metrics = (metric, *durations)
+    side_equity = tuple(
+        f"{name}_strategy_eq_{side}"
+        for side in ("long", "short")
+        for name in ("peak_recovery_days", "drawdown_worst", "drawdown_worst_mean_1pct")
+    )
+    metrics = (metric, *durations, *side_equity)
     report = run_comparison(tuple(inputs), "bybit", metrics,
                             {name: MetricTolerance(1e-8, 1e-6) for name in metrics},
                             diagnostics=True, gpu_engine="native")
