@@ -541,16 +541,59 @@ none. Neither completes a tuning window. This is one saturated service workload,
 not a cold-cache or full-optimizer speedup claim. Demand-limited tuning and broader
 resource/performance acceptance remain open.
 
+## Raw strategy recovery observations
+
+Rust's strategy equity is starting balance plus factual net realized PnL and
+unrealized PnL. Account liquidation clamping must not replace that curve when
+sampling the six strategy recovery distribution metrics. Shared EMA/TM single-
+and dual-side replay now stores raw strategy equity in the existing recovery
+buffer, including when no weighted raw metric is requested. Trading decisions,
+account metrics, memory layout and the separate streaming maximum-recovery
+summary are unchanged.
+
+The sixteen cases in `test_gpu_recovery_resolution.py` exercise both strategies,
+long/shared sides, mark/market-panic liquidation and recovery-only/weighted-raw
+capture. Each runs actual Rust first, then prohibits CPU simulation during native
+execution. It checks every observed recovery sample against Rust's fourth equity
+column and all six metrics against an independent strict time-to-exceed reference.
+All sixteen fail on the original producer: an account floor of 50 replaces raw
+terminal strategy equity of -2201.6. The rebuilt correction passes the complete
+194-case recovery, raw growth, weighted capture and HSL ordering suite. Rust tests
+pass 332 cases with one ignored; default-feature compilation and six documentation
+checks also pass.
+
+Four additional actual optimizer cases use the recovery p95 objective with both
+strategies, standalone/screened suites and automatic dispatch width. They verify
+prompt result/Pareto persistence, interruption and resume while prohibiting CPU
+simulation. Seven disabled-HSL policy/specialization controls also pass.
+
+The corrected source also completes the six twenty-day, two-coin, seed-43 shock
+recipes above with all 157 requested metrics present and finite. All 151
+non-recovery values per case match the preceding source exactly. The six recovery
+fields remain separately measured; finite output alone is not parity acceptance.
+
+This fixes an input definition, not every float32 trajectory difference. Four
+aligned twenty-day curve diagnostics preserve the same observations and requested
+non-recovery metrics. In one case recovery p95 moves from 13.425105 to 12.422327
+days against CPU's 12.468854. Quantizing that CPU curve to float32 alone gives
+13.434931 days: strict ordering near flat samples can amplify small rounding.
+Another case retains 90 versus 91 fills and a 3.366703 versus 2.608437-day recovery
+p95. Keep those residuals visible and assess optimizer materiality separately;
+general standalone-tool tolerances are unchanged.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account
    path. In particular assess requested histogram tails, recovery trajectories, partial-day
    weighting and HSL observation timing using meaningful samples and canonical limit
-   decisions. The all-157-metric audit has finite results in six long shock cases,
-   but exposed missing HSL retrigger reporting and weighted-ratio/trajectory differences;
-   lifecycle reporting has since been corrected, while long-cooldown/history-expiry
-   duration differences and side-equity/weighted-ratio gaps remain. Finite output is
-   not acceptance. Keep strict measurements visible; justify bounded
+   decisions. A refreshed all-157-metric audit has no missing or non-finite outputs in
+   six long shock cases after the lifecycle, side-equity and weighted-ratio corrections.
+   Finite output is not acceptance. An independent recovery investigation also exposed
+   account-equity sampling where raw strategy equity is required; the corrected
+   producer now passes the liquidation regressions above. Assess its residual numerical
+   differences separately. Long-cooldown/history-
+   expiry duration materiality and histogram/trajectory differences still need assessment.
+   Keep strict measurements visible; justify bounded
    accepted differences
    by optimization/risk materiality rather than widening gates to hide failures.
 2. Consolidate representative specialized/general metric and risk evidence for both

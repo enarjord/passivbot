@@ -2401,3 +2401,37 @@ Completion requires:
   CUDA packing, worker-owned multicoin execution and CPU-forbidden optimizer
   interruption/resume pass for both strategies. Require current-head author/
   automatic review and CI before development integration.
+
+### 2026-10-07 — Matched request assessment and raw recovery input
+
+- Before correcting the recovery input below, replay all 1,068 accepted requests
+  from a six-scenario, 160-complete-candidate
+  synthetic EMA Anchor search through the retained synchronous shared-account GPU
+  engine. Every metric and liquidation result matches native execution exactly.
+  This compares identical simulation requests, not whole legacy optimizer throughput.
+- The same pre-correction candidate assessment preserves all eleven
+  Pareto members and all three objective winners. Across 12,720 candidate pairs,
+  95 objective orderings differ. Generous configured limits produce no feasibility
+  changes; that does not certify arbitrary tight thresholds or independent searches.
+- Refresh six twenty-day EMA/TM long/short/both shock comparisons: all 157 requested
+  metrics are present and finite. Keep unassessed policies explicit. Historical
+  inventory measurements preceding semantic corrections are not current acceptance.
+- Investigate four worst recovery/drawdown cases with aligned CPU and GPU curves.
+  Strict recovery is discontinuous near equal samples: quantizing one CPU curve
+  changes p95 from 12.468854 to 13.434931 days. Its GPU account curve gives 13.425105
+  days, while its raw strategy curve gives 12.422327 days. Neither bit identity nor
+  a universal duration tolerance is an appropriate inference from that case.
+- Correct shared EMA/TM recovery samples to raw realized PnL plus UPNL, matching
+  Rust's strategy curve and retaining losses below the account liquidation floor.
+  Compile that scalar calculation when recovery is requested even without weighted
+  capture. Account metrics, trading decisions and request/result boundaries stay
+  unchanged. Sixteen liquidation regression cases independently reproduce the old
+  account-floor substitution with both strategies, one/both sides, mark/panic-fill
+  endpoints and recovery-only/weighted-capture requests. The verified rebuilt source
+  passes 194 focused device cases, 332 Rust cases (one ignored), default-feature
+  compilation and six documentation cases. Six refreshed twenty-day comparisons
+  contain all 157 metrics with no missing/non-finite output, and preserve all 151
+  non-recovery metrics per case exactly. Four additional actual recovery-objective
+  optimizer cases pass interruption/resume and prompt result/Pareto persistence
+  with CPU simulation prohibited. Seven disabled-HSL policy/specialization controls
+  also pass. Require current-head review/CI before integrating the correction.

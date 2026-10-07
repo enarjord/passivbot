@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native GPU strategy recovery distributions use factual realized and unrealized
+  trading PnL, retaining terminal losses below the account liquidation floor.
+  Recovery-only requests use the same strategy curve as weighted raw metrics.
+
 - Prepare native GPU requests and offline parity fixtures without importing GPU
   runtime or legacy benchmark modules. Synthetic candle generation is shared by
   the comparison tools without changing fixture values.

@@ -14,7 +14,7 @@ import pytest
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
                                                                     screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
-                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False):
+                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -57,6 +57,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         config["optimize"]["scoring"].append(dict(
             metric="drawdown_worst_mean_1pct_ema_strategy_eq", goal="min",
         ))
+    if recovery:
+        config["optimize"]["scoring"] = [
+            dict(metric="adg_strategy_eq", goal="max"),
+            dict(metric="strategy_eq_recovery_days_p95", goal="min"),
+        ]
     config["optimize"]["gpu"].update(batch_size=None if automatic else 2, checkpoint_interval_seconds=0)
     if screening:
         config["optimize"]["gpu"]["screening"] = dict(scenarios=["base"], min_survivors=1, survival_fraction=0.5)
@@ -152,6 +157,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
                 stored = list(msgpack.Unpacker(source, raw=False, strict_map_key=False))
             assert len(stored) == 1
             assert stored[0][CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
+            if recovery:
+                assert 0 <= stored[0]["metrics"]["unpenalized_objectives"][1] <= len(candles) / 1440
             members = list(Path(self.store.pareto_dir).glob("*.json"))
             assert members
             assert json.loads(members[0].read_text())[CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
@@ -317,6 +324,18 @@ async def test_native_weighted_equity_cli_persists_interrupts_and_resumes_withou
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, suite, True, True, screening=suite,
         strategy_kind=strategy_kind, weighted_equity=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite", [False, True])
+async def test_native_recovery_cli_persists_interrupts_and_resumes_without_cpu(
+    monkeypatch, tmp_path, strategy_kind, suite,
+):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, True, True, screening=suite,
+        strategy_kind=strategy_kind, recovery=True,
     )
 
 
