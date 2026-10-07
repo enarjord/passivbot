@@ -1813,7 +1813,8 @@ def test_strategy_eq_recovery_distribution_fails_closed_without_mps_output():
         _strategy_eq_recovery_distribution_metrics({})
 
 
-def test_hard_stop_lifecycle_reduction_matches_rust_formulas():
+@pytest.mark.parametrize("unified", [False, True], ids=["directional", "unified"])
+def test_hard_stop_lifecycle_reduction_matches_rust_formulas(unified):
     out = {
         "day_end_eq": torch.zeros((2, 1), dtype=torch.float32),
         "max_dd": torch.zeros(2, dtype=torch.float32),
@@ -1835,18 +1836,21 @@ def test_hard_stop_lifecycle_reduction_matches_rust_formulas():
         "hsl_restart_retrigger_count": torch.tensor([1.0, 0.0]),
     }
 
+    out["hsl_unified_scope"] = torch.tensor([unified, False])
     metrics = _hard_stop_lifecycle_metrics(out, SimpleNamespace(interval_ms=60_000))
 
+    assert metrics["hard_stop_triggers_long"].tolist() == [0.0 if unified else 2.0, 0.0]
+    assert metrics["hard_stop_triggers_short"].tolist() == [0.0 if unified else 1.0, 0.0]
     assert metrics["hard_stop_triggers"].tolist() == [3.0, 0.0]
     assert metrics["hard_stop_triggers_per_year"].tolist() == pytest.approx(
         [3.0 * 365.25, 0.0]
     )
     assert metrics["hard_stop_restarts"].tolist() == [2.0, 0.0]
     assert metrics["hard_stop_restarts_per_year_long"].tolist() == pytest.approx(
-        [365.25, 0.0]
+        [0.0 if unified else 365.25, 0.0]
     )
     assert metrics["hard_stop_restarts_per_year_short"].tolist() == pytest.approx(
-        [365.25, 0.0]
+        [0.0 if unified else 365.25, 0.0]
     )
     assert metrics["hard_stop_time_in_red_pct"][0].item() == pytest.approx(
         720.0 / 1441.0

@@ -1508,6 +1508,14 @@ def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
     restarts_short = value("hsl_restarts_short")
     triggers = triggers_long + triggers_short
     restarts = restarts_long + restarts_short
+    # Unified events use one owner lane in the packed shader output, but that
+    # lane is storage ownership, not a directional event. Keep portfolio totals.
+    if "hsl_unified_scope" in out:
+        unified = out["hsl_unified_scope"].to(device=reference.device, dtype=torch.bool)
+        triggers_long = torch.where(unified, zeros, triggers_long)
+        triggers_short = torch.where(unified, zeros, triggers_short)
+        restarts_long = torch.where(unified, zeros, restarts_long)
+        restarts_short = torch.where(unified, zeros, restarts_short)
     sample_count = value("hsl_tier_samples_total")
     first_eq_ts = out["first_eq_ts"].to(torch.float64)
     last_eq_ts = out["last_eq_ts"].to(torch.float64)

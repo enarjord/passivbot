@@ -6,7 +6,7 @@ gates in [the development contract](gpu_optimizer_contract.md).
 
 ## Existing execution and ownership
 
-- [`gpu_backend.py`](../../src/optimization/backends/gpu_backend.py) currently mixes
+- Retained legacy [`gpu_backend.py`](../../src/optimization/backends/gpu_backend.py) mixes
   request preparation, suite scheduling, proxy fitness, evolution, exact-worker pools,
   drift gates, checkpoints and publication of CPU-evaluated results. NSGA-II receives
   proxy fitness, while the archive receives CPU-validated records.
@@ -16,6 +16,12 @@ gates in [the development contract](gpu_optimizer_contract.md).
 - [`mps_kernel.py`](../../src/optimization/gpu/mps_kernel.py) owns shader specialization,
   dispatch, mutable replay buffers and temporal chunking. Rust-owned shader sources
   run on CUDA through [`cuda_kernel.py`](../../src/optimization/gpu/cuda_kernel.py).
+- Native [`gpu_native_backend.py`](../../src/optimization/backends/gpu_native_backend.py)
+  owns search and persistence through `NativeCandidatePlanner`, `NativeEvaluationSession`
+  and `CanonicalResultScorer`. CPU preparation/scoring does not invoke simulation.
+  [`native.py`](../../src/optimization/gpu/native.py) owns resident replay behind prepared
+  descriptors; [`executor.py`](../../src/optimization/gpu/executor.py) receives requests
+  and completes their futures. Device implementation and tuning remain service-owned.
 - CPU scoring/limits and scenario reduction remain with the existing evaluator helpers.
   Reusing their metric-processing methods must not call their CPU simulation methods.
 - CPU backend dispatch lazily imports the GPU backend. Preserve that dependency boundary.
@@ -90,15 +96,37 @@ resource gates. The lifecycle foundation does not itself certify metric authorit
   policy recovers the missing trajectory in the public parity fixtures. Small remaining
   fill/ADG differences stay visible under the tool's unchanged strict measurement gates;
   broader controller, reducer and loss-gate combinations still require assessment.
-- The disabled-HSL CUDA regression expects compact state, but the current multicoin
-  runner unconditionally sets `dispatch_hsl_disabled=False`. The earlier compact path
-  was restricted to the removed legacy HSL engine. Restore useful specialization for
-  the current controller ABI rather than blindly re-enabling the old condition.
-- The synthetic dual-side unstuck regression reports 71 GPU fills versus 72 CPU fills
-  with both finite and all-history lookbacks. Single-side cases pass. This test calls
-  the synchronous replay directly, without the new execution service. Quantify account,
-  position and metric effects before deciding whether to fix or accept the discrepancy.
-- Two source-specialization tests leaked a fake Torch module into later device tests;
-  import the real optional runtime for these source-only assertions. Coin-capacity tests
-  also assumed capacity was the final shader-cache argument, although history-layout
-  arguments now follow it; bind the arguments to the loader signature instead.
+- Disabled-HSL specialization is restored for the current controller ABI in eligible
+  single-side EMA pside/unified replay. `_use_disabled_hsl_specialization` verifies the
+  effective matrix and excludes coin overrides that may enable HSL. Coin mode retains
+  per-coin forced-delisting loss telemetry; fused/TM layouts remain separate. Do not
+  treat the original unconditional `dispatch_hsl_disabled=False` as current behavior.
+- The original high-churn dual-side unstuck fixture reports 71/72 GPU/CPU fills, but
+  its retired cooldown alias never changed the canonical zero cooldown. The corrected
+  allowance-exhaustion experiment sets `entry_cooldown.base_duration_minutes` directly;
+  CPU/GPU agree on 21 finite-lookback fills and 10 all-history fills, and its 26-case
+  suite passes. This resolves the intended fixture, not every high-churn trajectory;
+  retain the old measurement as historical evidence, not a general parity claim.
+- The source-specialization Torch leakage and positional cache-argument assertions
+  are corrected: device modules import the real optional runtime and capacity checks
+  bind arguments to the loader signature. Keep these as regression coverage rather
+  than unresolved simulator defects.
+- The all-157-metric audit produces finite output for six long shock cases but is not
+  full parity acceptance. Normalized HSL loss now uses the existing produced panic-loss
+  sum. Lifecycle replacement covers open RED, GREEN restart, retriggers and censored
+  durations. The review correction passes 58 lifecycle/endpoint cases, 57 broader
+  reporting cases, 181 replay/ablation controls and 36 CPU-forbidden optimizer cases.
+  Unified portfolio events no longer populate directional restart counters, and retained
+  forced-delisting endpoints are distinguished from ordinary-fill liquidation.
+  Four additional retained ordinary-liquidation comparisons still differ by one minute:
+  identical published/current shader metrics and positions expose existing extra-entry
+  or missing market-panic behavior. All eight native counterparts pass. Do not confuse
+  retained-engine trading differences with reporting-clock acceptance. The earlier seven
+  assessed HSL metrics match in six long comparisons; full cutover remains unaccepted.
+- Per-side strategy-equity summaries are coupled to HSL eligibility in
+  `record_multicoin_hsl_report`, whereas CPU side curves are recorded independently.
+  The inactive-side constant-curve audit returns the full strict-recovery horizon on
+  CPU and zero on GPU. Six HSL-disabled diagnostics also confirm zero active-side
+  raw drawdown/recovery despite nonzero CPU values. Separate ordinary strategy
+  summaries from protection telemetry while preserving protection ablation. Weighted-ratio and
+  remaining long-trajectory differences still require independent assessment.

@@ -393,8 +393,10 @@ an optimal dispatch width remain separate acceptance work.
    path. In particular assess requested histogram tails, recovery trajectories, partial-day
    weighting and HSL observation timing using meaningful samples and canonical limit
    decisions. The all-157-metric audit has finite results in six long shock cases,
-   but exposes missing HSL retrigger reporting and weighted-ratio/trajectory differences;
-   finite output is not acceptance. Keep strict measurements visible; justify bounded
+   but exposed missing HSL retrigger reporting and weighted-ratio/trajectory differences;
+   lifecycle reporting has since been corrected, while long-cooldown/history-expiry
+   duration differences and side-equity/weighted-ratio gaps remain. Finite output is
+   not acceptance. Keep strict measurements visible; justify bounded
    accepted differences
    by optimization/risk materiality rather than widening gates to hide failures.
 2. Consolidate representative specialized/general metric and risk evidence for both

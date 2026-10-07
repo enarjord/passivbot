@@ -28,6 +28,7 @@ from optimization.gpu.metric_registry import (
     ENTRY_INTERVAL_METRICS,
     EQUITY_BALANCE_DIFF_METRICS,
     HARD_STOP_PROXY_METRICS,
+    HARD_STOP_LIFECYCLE_METRICS,
 )
 from optimization.gpu.model import (
     adaptive_params,
@@ -2245,6 +2246,10 @@ class MpsSingleCoinProxy:
                     effective_start_step=0,
                     effective_end_step=effective_end_step,
                 )
+            if self.needed_metrics & HARD_STOP_LIFECYCLE_METRICS:
+                output["hsl_unified_scope"] = torch.from_numpy(
+                    parameter_matrix[:, self.param_keys.index("hsl_signal_mode")] == 0
+                )
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",
@@ -3312,6 +3317,12 @@ class MpsMulticoinProxy:
                 ]
             if recovery_distribution is not None:
                 output["strategy_eq_recovery_distribution"] = recovery_distribution
+            if self.needed_metrics & HARD_STOP_LIFECYCLE_METRICS:
+                output["hsl_unified_scope"] = torch.from_numpy(
+                    parameter_matrices[self.sides[0]][
+                        :, self.param_keys.index("hsl_signal_mode")
+                    ] == 0
+                )
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",

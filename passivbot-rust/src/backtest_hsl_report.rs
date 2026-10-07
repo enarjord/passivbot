@@ -679,6 +679,88 @@ mod tests {
         assert!(compact.events.is_empty());
     }
     #[test]
+    fn gpu_lifecycle_reference_covers_green_open_and_renewed_exposure() {
+        let expected = [
+            (2, 1, 1.0, 4.5, 7.0, 2.0),
+            (2, 1, 1.0, 1.5, 2.0, 2.0),
+            (1, 1, 0.0, 1.0, 1.0, 1.0),
+            (2, 1, 1.0, 2.5, 3.0, 2.0),
+            (1, 0, 0.0, 2.0, 2.0, 2.0),
+            (2, 1, 1.0, 2.5, 3.0, 1.0),
+        ];
+        for (mode, expected) in expected.into_iter().enumerate() {
+            let key = (Some(LONG), Some(0));
+            let mut report = Report::new(false, false);
+            let mut observe = |minute: i64, action, kinds: &[&'static str]| {
+                let now = minute * 60_000;
+                let events = kinds
+                    .iter()
+                    .map(|kind| LifecycleEvent {
+                        timestamp: now,
+                        kind,
+                        red_at: 120_000,
+                        flat_at: (*kind == "flat").then_some(now),
+                        reason: "fixture",
+                        raw: Some(0.2),
+                        ema: Some(0.1),
+                    })
+                    .collect();
+                report.observe(key, now, "fixture", &output(now, action, events));
+            };
+            observe(0, Action::Normal, &[]);
+            observe(1, Action::Normal, &[]);
+            observe(2, Action::Panic, &[]);
+            let last = match mode {
+                0 => {
+                    observe(3, Action::Panic, &[]);
+                    observe(4, Action::Halted, &["flat"]);
+                    observe(5, Action::Halted, &[]);
+                    observe(9, Action::Normal, &[]);
+                    observe(10, Action::Normal, &[]);
+                    observe(11, Action::Panic, &[]);
+                    observe(11, Action::Panic, &[]);
+                    13
+                }
+                1 => {
+                    observe(3, Action::Normal, &[]);
+                    observe(4, Action::Panic, &[]);
+                    6
+                }
+                2 => {
+                    observe(3, Action::Normal, &["flat", "restart"]);
+                    3
+                }
+                3 => {
+                    observe(3, Action::Panic, &[]);
+                    observe(4, Action::Halted, &["flat"]);
+                    observe(5, Action::Panic, &["restart"]);
+                    7
+                }
+                5 => {
+                    observe(4, Action::Halted, &["flat"]);
+                    observe(5, Action::Halted, &["restart", "red", "flat"]);
+                    7
+                }
+                _ => 4,
+            };
+            report.record_bar_signals(last * 60_000, [0.0; 3]);
+            let m = report.metrics(1000.0, last as f64);
+            assert_eq!(
+                (
+                    m.triggers,
+                    m.restarts,
+                    m.post_restart_retrigger_pct,
+                    m.duration_minutes_mean,
+                    m.duration_minutes_max,
+                    m.flatten_time_minutes_mean
+                ),
+                expected,
+                "mode {mode}"
+            );
+        }
+    }
+
+    #[test]
     fn lifecycle_metrics_include_open_halts_partial_exits_and_retriggers() {
         let key = (Some(LONG), Some(0));
         let mut report = Report::new(false, false);

@@ -1880,3 +1880,116 @@ Completion requires:
 - Post-restart retrigger reporting remains a separate open defect. Its replacement
   must account for incomplete panic exits and current GREEN recovery, rather than
   inferring every lifecycle event from completed terminal closes.
+
+
+### 2026-10-07 — Measure fixed policy with a sixteen-request dispatch ceiling
+
+- Hold both sides' coin-HSL threshold/span/cooldown at 0.002/2.5/5 through explicit
+  search bounds; retain the eight-coin, 10,080-minute, seed-43 shocks, optimizer seed
+  12, three scenarios, population 64 and 256 requested iterations. Forbid CPU
+  simulation APIs and worker pools during both measurements.
+- Cold/warm runs complete 160 full results and 192 screens with 15 Pareto members.
+  Decoded candidate/metric records and Pareto membership agree exactly. All 160
+  records have nonzero RED time. Unrequested trigger/restart metrics do not prove
+  event counts. Cold/warm elapsed times are 330.286/230.581 seconds, caller CPU
+  23.566/27.060 seconds and whole-process CPU 162.497/64.175 seconds.
+- Both issue 52 actual GPU batches of 1–16 requests. An explicit batch size disables
+  adaptive execution tuning, so zero tuning windows here are expected. This supplies
+  a fixed-width comparison point, not adaptive-default acceptance or evidence that
+  width 16 is optimal. Compare the same fixed-policy recipe at other widths before
+  attributing timing differences to width; earlier adaptive-policy timings have
+  different effective HSL policies.
+- Peak RSS is 1.91/1.08 GB, Torch peak allocation 17.87/17.34 MB and final allocation
+  zero in both runs. Stored session data is approximately 1.33 MB, excluding compile
+  and packing caches. These measurements precede the lifecycle-reporting replacement.
+
+### 2026-10-07 — Separate observational HSL lifecycle accounting
+
+- Source inspection identifies a broader gap behind the dead retrigger scalar:
+  terminal-only trigger counting misses open panic and GREEN permission recovery.
+  Introduce reporting-only RED entry/restart transitions using existing state,
+  separately record flat completion, and include unfinished RED/exit durations.
+  Consume each scope's pending restart only once when a subsequent RED is observed.
+  Renewed exposure ends the preceding terminal cooldown before a new RED is counted.
+- Keep current controller action, signal, orders and all permission logic unchanged.
+  Preserve feature guards, replay-state layout and packed output cardinality. Retained
+  directional decoders must follow the same censored-duration reporting semantics.
+- Five CPU report reference cases cover completed cooldown/retrigger, GREEN recovery,
+  zero cooldown, renewed exposure and an unfinished panic. The CPU reference passes;
+  all ten corresponding original-source GPU probes fail. The source-verified replacement
+  passes all 20 lifecycle probes/scoped comparisons, 65 reporting cases, 169 replay
+  controls and 36 CPU-forbidden optimizer lifecycle cases. Rust passes 331 tests
+  with one ignored, and default-feature test compilation passes.
+- The six 28,800-minute comparisons produce all 942 finite metric pairs. All seven
+  assessed HSL metrics match their fixture-local absolute 1e-5 plus relative 0.1%
+  bounds, including nonzero EMA retriggers and first-observed TM trigger drawdown.
+  Every non-HSL GPU metric is exactly unchanged from the preceding audit. Existing
+  ADG/fill-rate gate failures remain; 146 metrics per case still have no assessed
+  policy. This accepts the reporting correction, not the entire metric surface.
+- A separate six-case, 3,000-minute diagnostic with HSL disabled confirms ordinary
+  side strategy-equity summaries are omitted: active-side raw drawdown and strict
+  recovery return zero despite nonzero CPU values. Inactive constant curves also
+  lose their full strict-recovery horizon. Separate ordinary equity sampling from
+  HSL eligibility in the next change; retain protection ablation and CPU reference
+  definitions. Weighted-ratio and long-trajectory assessments remain separate.
+
+### 2026-10-07 — Censored HSL reporting endpoints
+
+- Automatic review of PR #1921 identified a real endpoint defect: unfinished RED
+  snapshots subtracted the bar-open equity index from a bar-close episode start.
+  Derive the final reporting coordinate from the existing elapsed-observation clock.
+  Normal terminal marks reach bar close; liquidation during a fill retains its fill
+  timestamp. Apply that convention to shared and retained directional outputs without
+  adding replay state or changing controller decisions.
+- Twenty-four controlled native comparisons cover both strategies, long/shared sides,
+  coin/pside/unified scopes and open limit panic versus flattened market cooldown.
+  Actual CPU fill traces confirm the intended terminal exposure. All original-source
+  cases report zero minutes against the CPU's one minute. The corrected source passes
+  all 24; eight actual fill/mark liquidation comparisons also pass. The seven-row
+  fixture's final row is lookahead, so its final simulated close is row five.
+- The corrected source additionally passes 77 reporting/selection/loss checks and
+  331 Rust tests (one ignored), with default-feature compilation and rebuilt-extension
+  verification. The combined replay run passes 168 controls; one service request exceeds
+  its 60-second observation deadline without a metric verdict. The unchanged-source
+  isolated check passes in 2.83 seconds, including CPU/GPU liquidation identity.
+  All 36 CPU-forbidden optimizer checks pass, covering suites, screening, prompt
+  persistence, interruption and resume. No timeout is treated as terminal work or
+  as successful simulation output. Six documentation checks also pass.
+- A separate 3,000-minute seed-43 shock experiment with a 10,000-minute cooldown
+  and one-day retained history still exposes closed-episode/history-expiry duration
+  discrepancies of one to 55 minutes. It does not isolate the endpoint defect and
+  is not accepted by the short controlled regression. Preserve it as a distinct
+  trajectory/reporting gap for subsequent diagnosis; general parity policy is unchanged.
+
+
+### 2026-10-07 — Review follow-up: scope and accounting boundaries
+
+- The next automatic review found three reporting defects. On the published source,
+  both shared shader round-trip probes miss the new trigger/restart when renewed
+  exposure opens and flattens during cooldown. The six-case Rust reporting reference
+  passes; align GPU reporting with the controller's exposed-or-terminal boundary.
+- Two native unified comparisons preserve total trigger/restart counts but incorrectly
+  attribute their restart rate to long. Transport each candidate's actual packed scope
+  into metric reduction, keep portfolio totals, and exclude unified events from
+  directional counters. Scope metadata stays inside the GPU execution service.
+- Two retained single-coin forced-delisting comparisons report one minute against
+  Rust's two; the two corresponding native shared comparisons already match. Record
+  the accounting endpoint before forced delisting can be mistaken for an ordinary
+  liquidation fill. Carry one explicit endpoint scalar through TM temporal replay;
+  do not change order construction or controller decisions.
+- The corrected source passes 331 Rust tests (one ignored), default-feature
+  compilation and rebuilt-extension identity checks; 64 selected reducer/service
+  cases, 58 lifecycle/endpoint/liquidation cases, 57 reporting/selection/loss cases,
+  181 replay/ablation controls and all 36 CPU-forbidden optimizer lifecycle cases.
+  TM temporal replay includes the new endpoint scalar. Six documentation checks pass.
+- Reusing the eight ordinary fill/mark liquidation fixtures with the retained engine
+  and duration-only requests yields four matches and four one-minute discrepancies.
+  Four long-side comparisons against the exact published shaders reproduce identical
+  metrics and positions: retained EMA makes an additional entry and retained TM misses
+  the CPU's market panic close. These are existing simulation differences, not caused
+  by the endpoint correction; do not change reporting to conceal different trades.
+  All eight native counterparts pass. Keep the retained-engine limitation distinct
+  from native acceptance and from the corrected forced-delisting endpoint.
+- The PR remains unmerged until the corrected head passes automatic review and all
+  required CI. Side-equity, weighted reductions and longer history-expiry trajectories
+  remain independent acceptance work; general parity policies are unchanged.
