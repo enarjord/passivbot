@@ -1388,6 +1388,8 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "hsl_triggers_short": scalars[:, 35],
         "hsl_restarts_long": scalars[:, 36],
         "hsl_restarts_short": scalars[:, 37],
+        # Shared replay keeps the packed ABI labels but stores elapsed steps;
+        # retained directional single-coin replay still stores sample counts.
         "hsl_tier_samples_total": scalars[:, 38],
         "hsl_tier_samples_red": scalars[:, 39],
         "hsl_duration_sum_steps": scalars[:, 40],

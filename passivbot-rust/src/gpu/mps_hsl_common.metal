@@ -753,6 +753,43 @@ inline void record_hsl_panic_fill(
 #endif
 }
 
+// CPU reporting assigns elapsed time to the preceding observation's RED state.
+// An initial observation and a terminal state have no extra duration of their own.
+struct HslTimeObservation {
+    float observed_steps;
+    float red_steps;
+    float last_step;
+    bool was_red;
+};
+
+inline HslTimeObservation init_hsl_time_observation() {
+    HslTimeObservation observation;
+    observation.observed_steps = 0.0f;
+    observation.red_steps = 0.0f;
+    observation.last_step = -1.0f;
+    observation.was_red = false;
+    return observation;
+}
+
+// A terminal accounting boundary advances time without inventing a fresh tier.
+inline void advance_hsl_time_observation(
+    thread HslTimeObservation& observation, float step
+) {
+    if (observation.last_step >= 0.0f) {
+        const float elapsed = fmax(step - observation.last_step, 0.0f);
+        observation.observed_steps += elapsed;
+        if (observation.was_red) observation.red_steps += elapsed;
+    }
+    observation.last_step = fmax(observation.last_step, step);
+}
+
+inline void record_hsl_time_observation(
+    thread HslTimeObservation& observation, float step, int tier
+) {
+    advance_hsl_time_observation(observation, step);
+    observation.was_red = tier == 3;
+}
+
 // Keep every HSL scalar reduction in one contract. Existing one-side kernels
 // and future fused dual-side kernels therefore share identical sum/max/count
 // and conditional-min semantics.

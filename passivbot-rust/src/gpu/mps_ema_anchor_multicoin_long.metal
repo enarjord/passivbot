@@ -3000,10 +3000,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     int recovery_start_k = -1;
 #endif
     int liquidation_day = -1;
-    float hsl_tier_samples_total = 0.0f;
-
-
-    float hsl_tier_samples_red = 0.0f;
+    HslTimeObservation hsl_time = init_hsl_time_observation();
 
     int current_day = 0;
     bool day_touched = false;
@@ -3118,6 +3115,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
         const float hsl_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
             side, bars, coin_settings, k, C, short_side, 0.0f
         );
+        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
+            || (any_fill && balance + hsl_unrealized <= liquidation_floor);
         const bool has_hsl_position = ema_multicoin_side_has_position(side, C);
         const bool hsl_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
             side, config, bars, coin_settings, k, C
@@ -3273,8 +3272,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 side.hsl_strategy_eq,
                 starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
             if (sampled_tier >= 0) {
-                hsl_tier_samples_total += 1.0f;
-                hsl_tier_samples_red += sampled_tier == 3 ? 1.0f : 0.0f;
+                record_hsl_time_observation(hsl_time, float(k), sampled_tier);
             }
         }
 #endif
@@ -3370,6 +3368,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 );
             }
             if (liquidated) {
+#if !PASSIVBOT_HSL_DISABLED
+                // Normal bar reports are at k+1 in CPU time; a terminal fill
+                // is at k. Our relative clock therefore uses k or k-1.
+                advance_hsl_time_observation(
+                    hsl_time, float(k) - (hsl_report_at_fill_boundary ? 1.0f : 0.0f));
+#endif
                 alive = false;
                 liquidation_day = day_index;
             }
@@ -3496,8 +3500,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     if (coin_hsl_mode) {
         write_one_side_coin_hsl_outputs(
             coin_hsl, C, short_side,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
             last_eq_k,
             scalars,
             scalar_offset + 32
@@ -3505,8 +3509,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     } else {
         write_one_side_hsl_outputs(
             hsl, short_side,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
             last_eq_k,
             scalars,
             scalar_offset + 32
@@ -3869,10 +3873,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     int recovery_start_k = -1;
 #endif
     int liquidation_day = -1;
-    float hsl_tier_samples_total = 0.0f;
-
-
-    float hsl_tier_samples_red = 0.0f;
+    HslTimeObservation hsl_time = init_hsl_time_observation();
 
     int current_day = 0;
     bool day_touched = false;
@@ -4046,6 +4047,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             accumulate_ema_multicoin_side_unrealized_pnl(
                 short_side, bars, coin_settings, k, C, true, 0.0f)
         );
+        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
+            || (any_fill && hsl_equity <= liquidation_floor);
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
         bool can_sample_hsl = (long_can_generate || short_can_generate)
@@ -4289,8 +4292,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                     + (unified ? long_unrealized + short_unrealized : short_unrealized),
                 day_index);
             if (long_tier >= 0 || short_tier >= 0) {
-                hsl_tier_samples_total += 1.0f;
-                hsl_tier_samples_red += max(long_tier, short_tier) == 3 ? 1.0f : 0.0f;
+                record_hsl_time_observation(hsl_time, float(k), max(long_tier, short_tier));
             }
         }
 #endif
@@ -4391,6 +4393,12 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 );
             }
             if (liquidated) {
+#if !PASSIVBOT_HSL_DISABLED
+                // Normal bar reports are at k+1 in CPU time; a terminal fill
+                // is at k. Our relative clock therefore uses k or k-1.
+                advance_hsl_time_observation(
+                    hsl_time, float(k) - (hsl_report_at_fill_boundary ? 1.0f : 0.0f));
+#endif
                 alive = false;
                 liquidation_day = day_index;
             }
@@ -4541,15 +4549,15 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     if (long_config.coin_hsl_mode) {
         write_dual_side_coin_hsl_outputs(
             long_side.coin_hsl, short_side.coin_hsl, C,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
             last_eq_k, scalars, scalar_offset + 32
         );
     } else {
         write_dual_side_hsl_outputs(
             long_side.hsl, short_side.hsl,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
             last_eq_k, scalars, scalar_offset + 32
         );
     }
