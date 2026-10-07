@@ -1833,9 +1833,20 @@ Completion requires:
   USD/BTC through the CPU serialization boundary: short suffixes lack fit samples.
   Use the longer fixture to assess actual metric coverage; do not treat short-fixture
   missing/sentinel values as numerical matches or substitute fabricated finite values.
-- Full native GPU comparison starts after the current-source reporting, replay
-  controls and CPU-forbidden optimizer CLI checks pass. Requested metrics without an
-  established tolerance remain unassessed; reference availability is not GPU parity.
+- Full native GPU comparison completes after the current-source reporting, replay
+  controls and CPU-forbidden optimizer CLI checks pass: all 942 metric pairs are
+  present and finite. Only the four existing default tolerance policies are assessed;
+  the other 153 requested metrics per case remain unassessed. Presence is not parity.
+- The audit identifies two concrete HSL reporting defects: halt-to-restart loss stays
+  zero despite nonzero panic loss in all six cases; post-restart retrigger percentage
+  stays zero despite nonzero CPU results in the three EMA cases. Their kernel scalar
+  fields have no updating producer. Resolve these before acceptance; do not widen
+  tolerances around a missing calculation.
+- Weighted strategy-equity ratios, trigger-drawdown means and disabled-side strict
+  recovery also require case-specific assessment. Some default ADG/fill-rate gates
+  fail on these long shock fixtures. Keep these results distinct from the narrower
+  liquidation-clock acceptance and evaluate trajectory/materiality before choosing
+  numerical policies.
 
 
 ### 2026-10-07 — Reconcile retained single-coin reporting controls
@@ -1852,3 +1863,20 @@ Completion requires:
   the browser-logic test additionally passes where its JavaScript runtime is available.
   Backend/search tests use identified fake evaluators; the separate six-case real CPU
   reference audit supplies actual simulation evidence. These are distinct claims.
+
+
+### 2026-10-07 — Reuse panic loss for normalized HSL reporting
+
+- CPU `Report::metrics` defines halt-to-restart equity loss as total panic-close
+  loss divided by starting balance, including unfinished halts. Decode the existing
+  GPU panic-loss sum with that same formula instead of reading the dormant independent
+  halt-loss scalar. No kernel, controller, transfer or trading change is necessary.
+- Six two-coin, 3,000-minute seed-43 shock fixtures cover both strategies and
+  long/short/fused replay. Every fixture fails on the original reducer with positive
+  CPU loss and zero GPU loss; all six pass after the correction with a local absolute
+  bound of 1e-5 plus relative 0.1%. General tool policy is unchanged. Synthetic
+  reduction coverage deliberately supplies different panic-loss and legacy halt-loss
+  scalars, verifying the actual Rust numerator and the zero-loss case.
+- Post-restart retrigger reporting remains a separate open defect. Its replacement
+  must account for incomplete panic exits and current GREEN recovery, rather than
+  inferring every lifecycle event from completed terminal closes.

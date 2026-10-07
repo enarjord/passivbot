@@ -1884,8 +1884,9 @@ def test_hard_stop_panic_loss_reduction_matches_rust_formulas():
         out, SimpleNamespace(starting_balance=1_000.0)
     )
 
+    # Rust normalizes panic-close loss, not the legacy independent halt scalar.
     assert metrics["hard_stop_halt_to_restart_equity_loss_pct"].tolist() == [
-        0.025,
+        0.045,
         0.0,
     ]
     assert metrics["hard_stop_panic_close_loss_sum"].tolist() == [45.0, 0.0]

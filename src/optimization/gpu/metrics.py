@@ -1581,8 +1581,10 @@ def _hard_stop_panic_loss_metrics(out: dict, run) -> dict:
 
     drawdown_count = value("hsl_panic_loss_drawdown_count")
     return {
+        # Rust Report::metrics normalizes all panic-close loss, including an
+        # unfinished halt. The legacy halt-loss scalar has no kernel producer.
         "hard_stop_halt_to_restart_equity_loss_pct": value(
-            "hsl_halt_to_restart_equity_loss"
+            "hsl_panic_close_loss_sum"
         )
         / max(float(run.starting_balance), 1.0e-12),
         "hard_stop_panic_close_loss_sum": value("hsl_panic_close_loss_sum"),
