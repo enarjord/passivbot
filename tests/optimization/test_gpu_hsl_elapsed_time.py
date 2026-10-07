@@ -53,5 +53,7 @@ kernel void hsl_elapsed_probe(constant float* rows, device float* output,
     rows = torch.tensor(observations or [(0, 0)], dtype=torch.float32, device=device)
     count = torch.tensor([len(observations)], dtype=torch.int32, device=device)
     output = torch.zeros(4, dtype=torch.float32, device=device)
-    compile_shader(source).hsl_elapsed_probe(rows, output, count, threads=1)
+    compile_shader(source, mps_coin_capacity=1, cuda_coin_capacity=1).hsl_elapsed_probe(
+        rows, output, count, threads=1
+    )
     assert output.cpu().tolist() == expected + expected

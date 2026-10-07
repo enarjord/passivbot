@@ -339,6 +339,10 @@ single-coin Trailing Martingale engine still uses its conservative loss policy.
 
 GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
 Reporting state is separate from the panic tier used by the simulation; counting
-cooldown does not extend panic orders. The GPU reduction still uses sampled bars,
-whereas CPU reporting integrates elapsed scope-state time. Controller-active parity
-checks remain required to assess observation timing and numerical discrepancies.
+cooldown does not extend panic orders. Shared-account EMA/TM replay integrates
+elapsed steps using the preceding observation's portfolio RED state, matching CPU
+elapsed-time reporting. First observations add no duration, terminal states add no
+unobserved tail, and temporal dispatches retain the complete clock. The two packed
+scalar labels remain unchanged. Retained legacy directional single-coin replay
+still counts samples. Controller-active parity checks remain required to assess
+observation timing and numerical discrepancies.

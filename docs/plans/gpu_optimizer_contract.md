@@ -1715,12 +1715,13 @@ Completion requires:
   simulation/order/controller behavior or history transfer changes. HSL-disabled
   code omits observation updates and chunk-owned clock state.
 - Add explicit duration/boundary probes and strict native EMA time-in-red coverage.
-  Keep this follow-up local until current-source CUDA, disabled controls, temporal
-  chunking, lifecycle and CPU-forbidden CLI evidence is complete.
+  Publication requires current-source CUDA, disabled controls, temporal chunking,
+  lifecycle and CPU-forbidden CLI evidence; integration additionally requires
+  completed current-head automatic/author review and all three CI jobs.
 
 - Before this reporting correction, repeat the full three-scenario EMA search on
-  the integrated selection source: eight coins, 10,080 minute bars, data seed 43,
-  optimizer seed 12, population 64, 256 iterations, two starting configs and
+  the integrated selection source: eight coins, 10,080 minute bars, disabled HSL,
+  data seed 43, optimizer seed 12, population 64, 256 iterations, two starting configs and
   base-screening survival fraction 0.5. Both cold/warm runs complete 160 full
   candidate records and 192 screens, retaining 51 Pareto members. Decode the
   incremental result stream with the canonical reader before comparison: complete
@@ -1737,6 +1738,31 @@ Completion requires:
   session storage; other seeds and representative comparisons remain open.
 - All nine enabled side/scope EMA cases fail strict time-in-red parity on the
   original sample-based reporting source; all three disabled controls pass.
-  Preserve this regression evidence independently of the forthcoming corrected
-  source run. Rust passes 330 tests (one ignored), default-feature checks and six
+  Preserve this original-source regression independently of the corrected-source
+  runs. Rust passes 330 tests (one ignored), default-feature checks and six
   documentation tests for the local elapsed-observation implementation.
+
+- Initial current-source CUDA validation passes 43 cases. Extend coverage to six
+  short/shared TM scope cases: original and corrected shader sources return identical
+  assessed ADG, drawdown, fills, trigger and restart metrics; corrected time-in-red
+  matches CPU exactly in all six. The original denominator differs by one initial
+  sample. Record bounded pre-existing trajectory discrepancies only for these shock
+  fixtures: at most 0.00004505 ADG and 0.0978% fill rate. Fixture gates accept
+  0.00005 absolute ADG and 0.1% relative fill rate; default parity policy, drawdown,
+  trigger/restart and strict RED-time gates stay unchanged. Broader trajectory
+  materiality remains separate acceptance work.
+
+- Broader current-source CUDA controls pass 142 cases, with thirteen Apple-only
+  cases skipped. They preserve every returned output across disabled HSL, general/
+  specialized replay, temporal dispatches, repeated buffers, reordered candidates
+  and scratch splitting, and retain invalid-input/failure propagation. All 36
+  native optimizer CLI cases pass with CPU simulation APIs and worker pools forbidden,
+  including seeds, suite screening, coupled/scaled policy, prompt records/Pareto,
+  interruption and checkpoint resumption. The final fixture guard restricts the
+  six numerical bounds explicitly to the measured two-coin shock geometry.
+- Final reporting parity passes 49 cases. A focused repeat of the changed ordering
+  file verifies the narrowed fixture guard; production Rust/kernel bytes remain
+  unchanged. Six documentation tests, AI-document checks and the generated registry
+  pass. Verify final tracked bytes and the loaded Rust artifact before publication;
+  required automatic/author review and three CI jobs remain development merge gates.
+  Full metric/resource/performance acceptance and legacy retirement remain open.
