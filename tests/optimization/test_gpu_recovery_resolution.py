@@ -110,6 +110,64 @@ def test_native_recovery_matches_cpu_on_subhour_replay(cuda_runtime, strategy, s
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "both"])
+@pytest.mark.parametrize("terminal_fill", [False, True], ids=["mark", "panic-fill"])
+@pytest.mark.parametrize("weighted_capture", [False, True], ids=["recovery-only", "raw-capture"])
+def test_native_recovery_observes_raw_strategy_liquidation_equity(
+    cuda_runtime, monkeypatch, strategy, sides, terminal_fill, weighted_capture,
+):
+    import backtest
+    from test_gpu_hsl_ordering import _liquidation_inputs
+    from optimization.gpu import mps_kernel
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from tools.gpu_parity import _native_dataset
+
+    inputs = _liquidation_inputs(strategy, sides, terminal_fill)
+    config, candles, markets, btc, timestamps = inputs
+    payload = backtest.build_backtest_payload(
+        candles, markets, config, "bybit", btc, timestamps,
+        metrics_only=False, skip_btc_analysis=True,
+    )
+    _, equities, analysis = backtest.execute_backtest(payload, config)
+    assert analysis["liquidated"]
+    # Account equity stops at the liquidation floor. The strategy curve retains
+    # the factual loss, independently of requested weighted-history capture.
+    assert equities[-1, 3] < 0 < equities[-1, 1]
+    expected = equities[:, 3]
+    observed = []
+    base = mps_kernel.MpsEmaAnchorMulticoinRunner
+    original = base.run
+
+    def capture(self, *args, **kwargs):
+        output = original(self, *args, **kwargs)
+        row = output["strategy_eq_recovery_samples"][0]
+        observed.append(row[row.isfinite()].cpu().numpy().copy())
+        return output
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("native execution must not invoke CPU simulations")
+
+    monkeypatch.setattr(base, "run", capture)
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
+    metrics = (*METRICS, "adg_strategy_eq_w") if weighted_capture else METRICS
+    with _native_dataset(inputs, "bybit", metrics) as dataset:
+        with CudaBacktestService(batch_size=1, tuning_mode="off") as service:
+            service.register_dataset("raw-recovery", dataset)
+            result = service.submit(BacktestRequest("raw-recovery", "raw-recovery", {})).result()
+    assert result.liquidated
+    assert len(observed) == 1
+    np.testing.assert_allclose(observed[0], expected, rtol=1e-5, atol=1e-4)
+    expected_recovery = reference(expected) / 1440
+    np.testing.assert_allclose(
+        [result.metrics[name] for name in METRICS], expected_recovery[:6],
+        rtol=2e-6, atol=1e-8,
+    )
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 def test_native_dispatch_accounts_for_opt_in_recovery_memory(
     cuda_runtime, monkeypatch, strategy,
 ):

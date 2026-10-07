@@ -5680,7 +5680,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             update_hsl_strategy_equity_stats(short_side.hsl_strategy_eq,
                 starting_balance + account.realized_pnl_short + short_unrealized, day_index);
 #endif
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED || defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
             const float raw_strategy_equity = starting_balance + account.realized_pnl_long
                 + account.realized_pnl_short + long_unrealized + short_unrealized;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
@@ -5720,8 +5720,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
             if (recovery_stride > 0 && recovery_start_k < 0) {
                 recovery_start_k = k;
+                // Strategy recovery retains factual PnL/UPNL, including losses
+                // below the separately clamped account liquidation floor.
                 recovery_samples[int(b) * recovery_sample_count]
-                    = effective_equity;
+                    = raw_strategy_equity;
             } else if (recovery_stride > 0) {
                 const int recovery_elapsed = k - recovery_start_k;
                 const bool recovery_terminal = liquidated || k == stop_k - 1;
@@ -5735,7 +5737,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                     if (sample_index < recovery_sample_count) {
                         recovery_samples[
                             int(b) * recovery_sample_count + sample_index
-                        ] = effective_equity;
+                        ] = raw_strategy_equity;
                     }
                 }
             }
@@ -6727,7 +6729,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             update_hsl_strategy_equity_stats(side.hsl_strategy_eq,
                 starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
 #endif
-#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED || defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
             const float raw_strategy_equity = starting_balance
                 + realized_pnl_cumsum_last + unrealized;
 #if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
@@ -6765,8 +6767,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
             if (recovery_stride > 0 && recovery_start_k < 0) {
                 recovery_start_k = k;
+                // Strategy recovery retains factual PnL/UPNL, including losses
+                // below the separately clamped account liquidation floor.
                 recovery_samples[int(b) * recovery_sample_count]
-                    = effective_equity;
+                    = raw_strategy_equity;
             } else if (recovery_stride > 0) {
                 const int recovery_elapsed = k - recovery_start_k;
                 const bool recovery_terminal = liquidated || k == stop_k - 1;
@@ -6780,7 +6784,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     if (sample_index < recovery_sample_count) {
                         recovery_samples[
                             int(b) * recovery_sample_count + sample_index
-                        ] = effective_equity;
+                        ] = raw_strategy_equity;
                     }
                 }
             }
