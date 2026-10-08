@@ -248,6 +248,9 @@ Completion requires:
 - [x] Replace hourly recovery distribution sampling with per-step GPU observations,
   budget their replay/reduction storage, and isolate mutable reduction scratch.
 - [x] Restore safe disabled-HSL single-side EMA ablation and verify all returned outputs.
+- [x] Prove effective candidate/coin-side unstuck EMA consumers independently of scheduling;
+  specialize multicoin EMA/TM layouts and verify general/specialized outputs.
+  Full unstuck and inactive-side ablation remain separate work.
 
 ### Optimizer cutover
 

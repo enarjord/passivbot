@@ -2392,3 +2392,35 @@ Historical observations do not supersede those requirements or prove current acc
   or modifying the trading simulation.
   All 82 final CUDA cases pass. Keep the original review thread open for the
   updated-head review and require fresh author review and CI before integration.
+
+### 2026-10-08 — Specialize unused unstuck EMA consumers
+
+- Keep consumer proofs in execution rather than evolutionary orchestration. Prove
+  enabled/gating combinations over packed float32 candidates and immutable per-side
+  coin flags; one possible consumer keeps the general layout. Cache both compiled
+  code and temporal state size by that decision. No device readback, optimizer
+  control or persisted simulator state is added.
+- Remove only unused EMA band state, initialization, updates and gated branches
+  in shared-account EMA/TM. Retain ordinary EMAs, ungated unstuck, selection, loss
+  accounting and finite history. Default single-coin sources remain general.
+  This lays a consumer-specific foundation; full unstuck and inactive-side
+  ablation remain open rather than being inferred from this smaller proof.
+- Ten host-proof tests and thirty source-verified CUDA controls pass. Both
+  strategies, long/short/fused paths, effective coin flags, mixed candidate gates,
+  weighted/recovery metrics and TM chunk/layout changes preserve every finite
+  returned value exactly and preserve intentional unobserved-sample NaN masks.
+  Rust passes 332 tests with one existing ignore and default-feature compilation;
+  all 38 coupling, preparation-isolation and documentation checks pass against
+  the current extension. See the [acceptance map](gpu_optimizer_acceptance.md#unstuck-ema-consumer-specialization).
+- The broader current-build suite passes all 172 unstuck, HSL, fused temporal and
+  optimizer CLI controls, including eight standalone/suite interruption/resume
+  cases that forbid CPU simulations and worker pools.
+- The public three-coin, both-side, two-day fixture preserves every output across
+  five alternating warm general/specialized runs of 64 identical candidates.
+  EMA local storage/registers decrease from 7248/202 to 6976/198; TM local storage
+  decreases from 7936 to 7904 bytes and temporal state from 6000 to 5744 bytes.
+  Median replay kernel times change from 0.203985 to 0.192849 seconds for EMA and
+  0.588270 to 0.572162 for TM. Keep these isolated controls separate from optimizer
+  throughput, total resource bounds and optimal scheduling claims.
+- Current-head automatic review, author review, all required CI and fresh unchanged
+  publication metadata remain mandatory before development integration.

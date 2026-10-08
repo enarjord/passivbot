@@ -93,7 +93,9 @@ inline float finalized_reducer_qty_with_ordinary(
 // behind one thread-local value lets a future fused kernel own long and short
 // portfolios concurrently without changing the proven one-side candle loop.
 struct EmaMulticoinSideState {
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
     UnstuckEmaBand unstuck_ema[MAX_COINS];
+#endif
     HslState hsl;
 #if PASSIVBOT_HSL_DISABLED
     // Disabled HSL never indexes per-coin controllers. One placeholder avoids
@@ -472,11 +474,13 @@ inline void init_ema_multicoin_side_state(
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < coin_count ? coin_settings[c * COIN_COLS + 9] : 0.0f;
         float seed_volume = c < coin_count ? coin_settings[c * COIN_COLS + 10] : 0.0f;
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
         side.unstuck_ema[c] = init_unstuck_ema_band(
             c < coin_count ? coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START, config.unstuck_span0) : config.unstuck_span0,
             c < coin_count ? coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START + 1, config.unstuck_span1) : config.unstuck_span1,
             seed_close
         );
+#endif
         side.ema0[c] = seed_close;
         side.ema1[c] = seed_close;
         side.ema2[c] = seed_close;
@@ -632,7 +636,9 @@ inline void update_ema_multicoin_side_indicators(
         if (!valid) continue;
         update_adaptive_rms(side.adaptive[c], bars, k, first_valid, coin_count * 4, c * 4 + 2);
         float log_range = log(high / low);
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
         update_unstuck_ema_band(side.unstuck_ema[c], close);
+#endif
         side.ema0[c] = fma(
             side.alpha0_coin[c], close - side.ema0[c], side.ema0[c]
         );
@@ -1245,6 +1251,7 @@ inline int select_ema_multicoin_unstuck_coin(
             && wallet_exposure / allowed_coin_wel > coin_threshold)) {
             continue;
         }
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
         if (coin_ema_gate) {
             const float lower = unstuck_ema_lower(side.unstuck_ema[c]);
             const float upper = unstuck_ema_upper(side.unstuck_ema[c]);
@@ -1262,6 +1269,7 @@ inline int select_ema_multicoin_unstuck_coin(
                 : touch_ticks[tick_offset + 0] >= trigger_tick;
             if (!triggered) continue;
         }
+#endif
         const float pprice_diff = short_side
             ? price_now / side.pprice[c] - 1.0f
             : 1.0f - price_now / side.pprice[c];
@@ -1555,6 +1563,7 @@ inline void generate_ema_multicoin_side_orders(
             && wallet_exposure / allowed_coin_wel > coin_threshold)) {
             continue;
         }
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
         if (coin_ema_gate) {
             float lower = unstuck_ema_lower(side.unstuck_ema[c]);
             float upper = unstuck_ema_upper(side.unstuck_ema[c]);
@@ -1572,6 +1581,7 @@ inline void generate_ema_multicoin_side_orders(
                 : touch_ticks[tick_offset + 0] >= trigger_tick;
             if (!triggered) continue;
         }
+#endif
         int reducer_tick = max(
             short_side
                 ? touch_ticks[tick_offset + 0]

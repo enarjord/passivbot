@@ -14,6 +14,7 @@ from optimization.gpu.weighted_equity import (
     weighted_equity_from_samples, weighted_equity_history_bytes,
 )
 
+from optimization.gpu.specialization import unstuck_ema_required
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import record_replay_chunk
 from optimization.gpu.runtime import (
@@ -26,7 +27,9 @@ from optimization.gpu.runtime import (
 from optimization.gpu.model import (
     ADAPTIVE_PARAM_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
@@ -1075,6 +1078,14 @@ def _trailing_martingale_short_no_hsl_shader_library(
     return compile_shader(source)
 
 
+def _with_unstuck_ema(source: str, enabled: bool) -> str:
+    if enabled:
+        return source
+    if "#if PASSIVBOT_UNSTUCK_EMA_ENABLED" not in source:
+        raise RuntimeError("GPU source is missing the unstuck EMA ablation contract")
+    return "#define PASSIVBOT_UNSTUCK_EMA_ENABLED 0\n" + source
+
+
 def _with_unstuck_pnl_window(source, lookback_bars, capacity):
     if lookback_bars:
         source = (
@@ -1106,6 +1117,7 @@ def _ema_anchor_multicoin_shader_library(
     weighted_raw_equity_enabled: bool = False,
     weighted_account_equity_enabled: bool = False,
     hsl_raw_tail_capacity: int = 1,
+    unstuck_ema_enabled: bool = True,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1117,6 +1129,7 @@ def _ema_anchor_multicoin_shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
         raw_tail_capacity=hsl_raw_tail_capacity,
     )
+    source = _with_unstuck_ema(source, unstuck_ema_enabled)
     # Keep diagnostics for forced delist panic-loss parity even when the HSL
     # controllers and their per-candle scans are compiled away.
     source = _with_hsl_disabled(source, hsl_disabled)
@@ -1172,6 +1185,7 @@ def _trailing_martingale_multicoin_shader_library(
     weighted_raw_equity_enabled: bool = False,
     weighted_account_equity_enabled: bool = False,
     hsl_raw_tail_capacity: int = 1,
+    unstuck_ema_enabled: bool = True,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1192,6 +1206,7 @@ def _trailing_martingale_multicoin_shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
         raw_tail_capacity=hsl_raw_tail_capacity,
     )
+    source = _with_unstuck_ema(source, unstuck_ema_enabled)
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     if weighted_raw_equity_enabled:
         source = "#define PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED 1\n" + source
@@ -2453,6 +2468,10 @@ class MpsEmaAnchorMulticoinRunner:
             self.coin_hsl_may_enable = bool(
                 np.any(np.isfinite(hsl_overrides) & (hsl_overrides > 0.5))
             )
+        unstuck_start = (TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
+                         if self.coin_override_label == "Trailing Martingale"
+                         else EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN)
+        self._unstuck_ema_overrides = (coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
         self.coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(coin_overrides), device=gpu_device()
         )
@@ -2679,6 +2698,14 @@ class MpsEmaAnchorMulticoinRunner:
             and np.isin(matrix[:, keys.index("hsl_signal_mode")], [0, 1]).all()
         )
 
+    def _unstuck_ema_required(self, matrix):
+        if not getattr(self, "unstuck_ema_specialization", True):
+            return True
+        keys = (TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+                if self.coin_override_label == "Trailing Martingale"
+                else EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+        return unstuck_ema_required(matrix, keys, self._unstuck_ema_overrides)
+
     def _library_cache_call(self):
         return _ema_anchor_multicoin_shader_library, (
             self.hsl_ema_tail_enabled,
@@ -2701,6 +2728,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.weighted_raw_equity_enabled,
             self.weighted_account_equity_enabled,
             self.hsl_raw_tail_capacity,
+            getattr(self, "dispatch_unstuck_ema_enabled", True),
         )
 
     def _hsl_history_bytes_per_candidate(self):
@@ -2965,6 +2993,7 @@ class MpsEmaAnchorMulticoinRunner:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
         self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(matrix)
+        self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(matrix)
         packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
@@ -3175,6 +3204,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             self.coin_override_cols - 4, self.coin_override_cols - 3,
             self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
         ]].copy(),)
+        unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
+        self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
@@ -3473,6 +3504,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.weighted_raw_equity_enabled,
             self.weighted_account_equity_enabled,
             self.hsl_raw_tail_capacity,
+            getattr(self, "dispatch_unstuck_ema_enabled", True),
         )
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -3730,6 +3762,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             self.coin_override_cols - 4, self.coin_override_cols - 3,
             self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
         ]].copy(),)
+        unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
+        self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )

@@ -831,3 +831,66 @@ exceeds the local 0.1% trajectory guard (CPU 0.02232715, GPU 0.02235809). Untouc
 target-branch tool sources reproduce those values with identical default fixture
 arrays and evaluation identity. Keep that measured discrepancy visible; this
 tooling change does not widen its assertion or the general comparison policy.
+
+## Unstuck EMA consumer specialization
+
+Multicoin EMA/TM execution proves the effective enabled/gating flags across every
+packed candidate, coin and active side after float32 conversion. Finite coin flags
+replace candidate flags; nonfinite coin flags inherit them. One consuming combination
+keeps EMA state for the entire dispatch. Unknown base flags conservatively retain it.
+The proof is independent of search and scheduling, uses immutable host override views,
+and performs no device readback. Its result participates in compilation and temporal
+state cache identity.
+
+When no combination consumes unstuck EMA, compilation removes the band, initialization,
+updates and gated-selection branches. Ordinary strategy EMAs, ungated unstuck selection,
+loss budgets and histories keep their existing contracts. The single-coin kernels remain
+general. This is not full unstuck or inactive-side ablation.
+
+Run with the current verified extension and a GPU:
+
+```bash
+PYTHONPATH=src python -m pytest \
+  tests/optimization/test_gpu_unstuck_ema_specialization.py -q -o addopts=
+```
+
+Ten host-proof tests and thirty real CUDA cases
+pass. Both strategies and long/short/fused paths cover disabled, ungated, gated and
+coin-overridden consumers, actual fills, weighted metrics and recovery tapes. Every
+returned finite value agrees exactly; intentional NaN masks also agree. TM temporal
+chunks and repeated layout/batch changes preserve all outputs and reduce saved state
+when specialized. Six mixed-candidate controls retain the EMA layout when only one
+candidate enables its gate, then restore the compact layout on the next dispatch.
+
+Rust validation passes 332 tests with one existing ignore and default-feature compilation.
+All 38 coupling, CPU preparation-isolation and documentation checks pass with the
+current extension. The broader source-verified suite passes 172 cases: finite unstuck
+history and exact Rust controls, HSL empty-history helper/native callers, fused temporal
+replay, and eight actual standalone/suite optimizer CLI interruption/resume cases with
+CPU backtests and worker pools forbidden. These cases do not establish general simulator
+parity or optimizer
+throughput, and do not supersede the remaining replacement-acceptance gates.
+
+A controlled RTX 3070 Ti Laptop measurement uses `tools.gpu_parity.fixture_inputs`:
+each strategy, three coins, both sides, 2880 minute bars, seed 43, disabled HSL and
+enabled ungated unstuck. Request weighted raw ADG, raw worst drawdown, recovery p95
+and weighted volume. Replay 64 identical candidate rows directly, bypassing search
+and deduplication. Warm both variants before five alternating measured runs each;
+TM uses a 720-bar work envelope. Set `runner.unstuck_ema_specialization=False` for
+the general control and `True` for the proved specialization. Read CUDA attributes
+from the selected library's replay kernel and temporal bytes from the runner's
+queried ABI. All returned outputs match exactly across every measured run; each
+candidate has 4442 EMA or 28726 TM fills.
+
+| Strategy | Measure | General | Specialized |
+| --- | --- | ---: | ---: |
+| EMA | Warm median replay kernel seconds | 0.203985 | 0.192849 |
+| EMA | Compiler local bytes / registers | 7248 / 202 | 6976 / 198 |
+| TM | Warm median replay kernel seconds | 0.588270 | 0.572162 |
+| TM | Compiler local bytes / registers | 7936 / 255 | 7904 / 255 |
+| TM | Temporal state bytes per candidate | 6000 | 5744 |
+
+These are isolated warm replay/storage controls with identical candidate rows,
+not search throughput, a cold-start benchmark, total VRAM/RAM bounds or an optimal
+batch/chunk size. Compiler attributes and small timing gains are workload/device
+observations, not requirements imposed on other architectures.
