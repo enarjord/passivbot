@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Offline GPU parity and cohort tools accept explicit synthetic HSL policies and
+  repeatable price shocks, making long-history expiry and selection comparisons
+  reproducible without custom fixture scripts.
+
 - GPU HSL cooldown re-evaluates completed episodes from retained observations
   after their peak leaves the history window. Preserve current entry-loss
   estimates for active exposure and the terminal accounting sample.

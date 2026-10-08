@@ -18,6 +18,79 @@ def args(*options):
     return gpu_parity.build_parser().parse_args(list(options))
 
 
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mode):
+    base = ["--fixture", strategy, "--bars", "128", "--sides", "both", "--hsl", mode]
+    original = gpu_parity.fixture_inputs(args(*base))
+    modified = gpu_parity.fixture_inputs(args(*base,
+        "--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
+        "--hsl-cooldown-minutes", "10000", "--hsl-lookback-days", "2.5",
+        "--price-shock", "0", "64", ".7", "--price-shock", "0", "96", "1.3"))
+    config, candles, markets, btc, timestamps = modified
+    assert config["live"]["pnls_max_lookback_days"] == 2.5
+    for policy in [config["bot"][side]["hsl"] for side in ("long", "short")] + (
+            [config["bot"]["hsl"]] if mode == "unified" else []):
+        assert policy["red_threshold"] == .002
+        assert policy["ema_span_minutes"] == 2.5
+        assert policy["cooldown_minutes_after_red"] == 10000
+    expected = original[1].copy()
+    expected[64:, 0, :3] *= .7
+    expected[96:, 0, :3] *= 1.3
+    np.testing.assert_array_equal(candles, expected)
+    np.testing.assert_array_equal(candles[:, :, 3], original[1][:, :, 3])
+    np.testing.assert_array_equal(btc, original[3])
+    np.testing.assert_array_equal(timestamps, original[4])
+    assert markets == original[2]
+
+
+@pytest.mark.parametrize("flags", [
+    ("--hsl-red-threshold", "0"), ("--hsl-red-threshold", "1.1"),
+    ("--hsl-ema-span-minutes", ".9"), ("--hsl-ema-span-minutes", "nan"),
+    ("--hsl-cooldown-minutes", "-1"), ("--hsl-cooldown-minutes", "inf"),
+    ("--hsl-lookback-days", ".9"), ("--hsl-lookback-days", "91"),
+    ("--price-shock", "2", "64", ".7"), ("--price-shock", "0", "128", ".7"),
+    ("--price-shock", "0", "64.5", ".7"), ("--price-shock", "0", "64", "nan"),
+    ("--price-shock", "0", "64", "0"),
+])
+def test_malformed_stress_recipe_is_rejected(flags):
+    with pytest.raises(ValueError):
+        gpu_parity.resolve_fixture_args(args("--fixture", "ema_anchor", "--bars", "128", *flags))
+
+
+@pytest.mark.parametrize("flags", [
+    ("--hsl-red-threshold", ".05"), ("--hsl-ema-span-minutes", "30"),
+    ("--hsl-cooldown-minutes", "30"), ("--hsl-lookback-days", "1"),
+    ("--price-shock", "0", "64", "1"),
+])
+def test_prepared_input_rejects_stress_flags_even_when_they_equal_defaults(flags):
+    with pytest.raises(ValueError, match="fixture-only options"):
+        gpu_parity.prepared_inputs(args("--config", "unused.json", *flags))
+
+
+def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypatch, capsys):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
+        validate_gpu_metric_names=lambda names: names,
+    ))
+    def comparison(inputs, *a, **kw):
+        assert inputs[0]["bot"]["hsl"]["red_threshold"] == .002
+        return {"passed": False}
+    monkeypatch.setattr(gpu_parity, "run_comparison", comparison)
+    assert gpu_parity.main(["--fixture", "ema_anchor", "--bars", "128", "--hsl", "unified",
+        "--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
+        "--price-shock", "0", "64", ".7"]) == 1
+    recipe = json.loads(capsys.readouterr().out)["fixture_recipe"]
+    assert recipe["hsl_red_threshold"] == .002
+    assert recipe["hsl_ema_span_minutes"] == 2.5
+    assert recipe["hsl_cooldown_minutes"] == 30
+    assert recipe["hsl_lookback_days"] == 1
+    assert recipe["price_shocks"] == [[0, 64, .7]]
+    assert recipe["seed"] == 7 and recipe["fixture"] == "ema_anchor"
+
+
 def _prepared_fixture_files(tmp_path, *, exchange="binance", reversed_coins=False):
     config, candles, markets, btc, timestamps = gpu_parity.fixture_inputs(
         args("--fixture", "trailing_martingale", "--bars", "128", "--exchange", exchange)

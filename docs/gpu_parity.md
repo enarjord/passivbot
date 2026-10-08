@@ -31,6 +31,32 @@ and minimum-effective-cost filtering are explicit options. These toggles exercis
 configuration paths; enabling a controller does not prove that a particular fixture
 triggers its transitions. Add targeted stress fixtures for behavioral coverage.
 
+Fixture-only `--hsl-red-threshold`, `--hsl-ema-span-minutes`,
+`--hsl-cooldown-minutes` and `--hsl-lookback-days` set the explicit policy before
+canonical preparation. Defaults remain 0.05, 30 minutes, 30 minutes and one day.
+These settings do not enable HSL; select its mode with `--hsl`. Fractional spans and
+lookbacks remain floats. Lookback also controls the fixture's ordinary PnL history.
+Repeat `--price-shock COIN_INDEX BAR FACTOR` to multiply high, low and close from
+that zero-based bar onward. Volume, BTC and timestamps are unchanged; overlapping
+shocks compound in authored order. Invalid indexes and nonpositive/nonfinite factors
+are rejected. The report's `fixture_recipe` records the resolved public synthetic
+settings. Prepared config comparisons reject all these switches, including defaults.
+
+For a retained-history expiry diagnostic:
+
+```sh
+passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 2 --bars 3000 \
+  --seed 43 --hsl unified --gpu-engine native --hsl-red-threshold 0.002 \
+  --hsl-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
+  --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
+  --metrics adg_strategy_eq drawdown_worst_strategy_eq hard_stop_time_in_red_pct \
+  hard_stop_duration_minutes_max --report expiry.json
+```
+
+This is an adversarial diagnostic with known reconstruction differences, not a
+passing release fixture. Missing policies remain unassessed; do not infer acceptance
+from the execution completing.
+
 `--gpu-engine native` uses the actual `CudaBacktestService` selected by native GPU
 optimization, including its shared-account replay for a single coin. It requires NVIDIA
 CUDA and never falls back to the legacy path. The default `legacy` retains the existing

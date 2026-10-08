@@ -2515,3 +2515,30 @@ Completion requires:
   before integration. Long unified reconstruction differences remain explicit
   acceptance work; do not widen general parity policy or declare simulator cutover
   from these controlled expiry cases alone.
+
+### 2026-10-08 — Reproduce unified history-expiry materiality before cutover
+
+- The completed-window correction merged into the development branch only after
+  current-head automatic review, author review, all Rust/Python CI and a fresh
+  base/head/merge-base and metadata gate. New 64-candidate materiality evidence
+  was investigated before merge, even though the original automated checks passed.
+- The [acceptance map](gpu_optimizer_acceptance.md#unified-hsl-cohort-materiality)
+  records four fixed synthetic cohorts, original-controller controls and the
+  additional EMA stop. Same-observation Rust replay confirms the corrected
+  cooldown release. Retained-fill reconstruction still changes trading and Pareto
+  membership; this is an open producer contract issue, not accepted float32 noise.
+- Share explicit fixture HSL policies and ordered price shocks between parity and
+  cohort tools. Validate before device work, preserve prepared-input ownership,
+  record resolved synthetic recipes, and keep general tolerance/feasibility
+  policies unchanged. Publish reproducible commands rather than private traces.
+- Do not alter CPU/live reconstruction or add a CPU validation backtest to make
+  the new GPU path appear conformant. Investigate a bounded GPU reconstruction
+  that preserves Rust's current facts, history clipping and cache independence.
+  Complexity and throughput must be measured before selecting a producer design.
+- All 33 new recipe, validation and report-provenance checks pass. The documented
+  four-cohort command reproduces all nine measured CPU/GPU values, candidate
+  parameter fingerprints and rankings for all 64 candidates; native results are
+  exact against direct GPU at both measured widths. An existing passive-TM
+  both-side 0.1% ADG assertion remains exceeded by 0.00003094 absolute; untouched
+  target-branch tools reproduce it with identical default fixture inputs. Keep
+  that existing discrepancy visible without widening policy in this tooling slice.

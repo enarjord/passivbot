@@ -40,6 +40,7 @@ def build_parser():
     parser.add_argument("--warm-runs", type=int, default=3)
     parser.add_argument("--widths", nargs="+", default=["1", "4", "16", "auto"])
     parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "unified"), default="disabled")
+    gpu_parity.add_fixture_stress_options(parser)
     parser.add_argument("--unstuck", action="store_true")
     parser.add_argument("--adg-floor", type=float)
     parser.add_argument("--drawdown-ceiling", type=float)
@@ -58,6 +59,12 @@ def build_parser():
 
 
 def validate_args(parser, args):
+    try:
+        recipe = gpu_parity.resolve_fixture_args(args)
+        for name in gpu_parity.STRESS_OPTIONS:
+            setattr(args, name, getattr(recipe, name))
+    except ValueError as error:
+        parser.error(str(error))
     for name, lower, upper in (("coins", 1, 64), ("bars", 61, 100000),
                                ("candidates", 2, 128), ("warm_runs", 1, 10)):
         if not lower <= getattr(args, name) <= upper:
@@ -182,7 +189,10 @@ def _cohort(args, strategy, seed):
                "--bars", str(args.bars), "--seed", str(seed), "--hsl", args.hsl]
     if args.unstuck:
         options.append("--unstuck")
-    inputs = gpu_parity.fixture_inputs(gpu_parity.build_parser().parse_args(options))
+    fixture_args = gpu_parity.build_parser().parse_args(options)
+    for name in gpu_parity.STRESS_OPTIONS:
+        setattr(fixture_args, name, getattr(args, name, None))
+    inputs = gpu_parity.fixture_inputs(fixture_args)
     config, _candles, markets, _btc, _timestamps = inputs
     configs, parameters = [], []
     active = ("long", "short") if args.sides == "both" else (args.sides,)

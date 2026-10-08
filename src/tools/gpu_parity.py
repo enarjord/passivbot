@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import math
 from pathlib import Path
 import sys
 import time
@@ -25,7 +26,11 @@ DEFAULT_METRICS = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_d
 FIXTURE_DEFAULTS = {
     "sides": "long", "coins": 2, "bars": 5760, "seed": 7, "hsl": "disabled",
     "unstuck": False, "market_orders": False, "filter_by_min_effective_cost": False,
+    "hsl_red_threshold": 0.05, "hsl_ema_span_minutes": 30.0,
+    "hsl_cooldown_minutes": 30.0, "hsl_lookback_days": 1.0, "price_shocks": [],
 }
+STRESS_OPTIONS = ("hsl_red_threshold", "hsl_ema_span_minutes", "hsl_cooldown_minutes",
+                  "hsl_lookback_days", "price_shocks")
 # Provisional measurement gates for selected definitions, not a release certificate.
 DEFAULT_TOLERANCES = {
     "adg_strategy_eq": MetricTolerance(1e-7, 1e-4),
@@ -48,6 +53,7 @@ def build_parser():
     parser.add_argument("--bars", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "unified"))
+    add_fixture_stress_options(parser)
     parser.add_argument("--unstuck", action="store_true", default=None)
     parser.add_argument("--market-orders", action="store_true", default=None)
     parser.add_argument("--filter-by-min-effective-cost", action="store_true", default=None)
@@ -61,6 +67,45 @@ def build_parser():
     return parser
 
 
+def add_fixture_stress_options(parser):
+    for name in STRESS_OPTIONS[:-1]:
+        parser.add_argument("--" + name.replace("_", "-"), type=float,
+                            help="Synthetic fixture HSL policy only; does not enable HSL")
+    parser.add_argument("--price-shock", dest="price_shocks", nargs=3, action="append",
+                        metavar=("COIN_INDEX", "BAR", "FACTOR"),
+                        help="Multiply fixture high/low/close from BAR onward; repeat for more shocks")
+
+
+def resolve_fixture_args(args):
+    """Validate and normalize the shared recipe before preparing either simulator."""
+    args = argparse.Namespace(**vars(args))
+    for name, default in FIXTURE_DEFAULTS.items():
+        if getattr(args, name, None) is None:
+            setattr(args, name, deepcopy(default))
+    if not 1 <= args.coins <= 64 or not 61 <= args.bars <= 100_000:
+        raise ValueError("fixtures require 1..64 coins and 61..100000 bars")
+    for name, lower, upper in (("hsl_red_threshold", 0, 1),
+                              ("hsl_ema_span_minutes", 1, math.inf),
+                              ("hsl_cooldown_minutes", 0, math.inf),
+                              ("hsl_lookback_days", 1, 90)):
+        value = getattr(args, name)
+        if not math.isfinite(value) or not lower <= value <= upper or (
+                name == "hsl_red_threshold" and value == 0):
+            raise ValueError(f"invalid fixture --{name.replace('_', '-')}")
+    shocks = []
+    for coin, bar, factor in args.price_shocks:
+        try:
+            coin, bar, factor = int(coin), int(bar), float(factor)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("--price-shock requires integer COIN_INDEX/BAR and a positive finite FACTOR") from error
+        if not (0 <= coin < args.coins and 0 <= bar < args.bars
+                and math.isfinite(factor) and factor > 0):
+            raise ValueError("--price-shock must refer to a fixture coin/bar and a positive finite factor")
+        shocks.append([coin, bar, factor])
+    args.price_shocks = shocks
+    return args
+
+
 def fixture_inputs(args):
     import numpy as np
     from config import prepare_config
@@ -68,14 +113,15 @@ def fixture_inputs(args):
     from config.hsl import generated_template
     from tools.synthetic_backtest_data import synthetic_hlcvs
 
-    args = argparse.Namespace(**vars(args))
-    for name, default in FIXTURE_DEFAULTS.items():
-        if getattr(args, name) is None:
-            setattr(args, name, default)
-    if not 1 <= args.coins <= 64 or not 61 <= args.bars <= 100_000:
-        raise ValueError("fixtures require 1..64 coins and 61..100000 bars")
+    args = resolve_fixture_args(args)
     coins = [f"COIN{i:02d}" for i in range(args.coins)]
     hlcvs, timestamps = synthetic_hlcvs(args.bars, args.coins, args.seed)
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            for coin, bar, factor in args.price_shocks:
+                hlcvs[bar:, coin, :3] *= factor
+    except FloatingPointError as error:
+        raise ValueError("fixture price shocks overflow high/low/close") from error
     # The canonical backtest end date has UTC-day precision. Align the synthetic
     # exclusive endpoint to midnight so both engines see exactly the same span,
     # including small fixtures which do not contain a whole number of days.
@@ -93,7 +139,7 @@ def fixture_inputs(args):
         max_warmup_minutes=60,
         minimum_coin_age_days=0,
         market_orders_allowed=args.market_orders,
-        pnls_max_lookback_days=1.0,
+        pnls_max_lookback_days=args.hsl_lookback_days,
         hsl_signal_mode="coin" if args.hsl == "disabled" else args.hsl,
         approved_coins={side: coins if side in active else [] for side in ("long", "short")},
         ignored_coins={"long": [], "short": []},
@@ -115,15 +161,16 @@ def fixture_inputs(args):
         )
         bot["hsl"].update(
             enabled=side in active and args.hsl in {"coin", "pside"},
-            red_threshold=0.05, ema_span_minutes=30.0,
-            cooldown_minutes_after_red=30.0, restart_after_red_policy="always",
+            red_threshold=args.hsl_red_threshold, ema_span_minutes=args.hsl_ema_span_minutes,
+            cooldown_minutes_after_red=args.hsl_cooldown_minutes, restart_after_red_policy="always",
         )
         bot["unstuck"]["enabled"] = args.unstuck and side in active
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
     if args.hsl == "unified":
         config["bot"]["hsl"].update(
-            enabled=True, red_threshold=0.05, ema_span_minutes=30.0,
-            cooldown_minutes_after_red=30.0, restart_after_red_policy="always",
+            enabled=True, red_threshold=args.hsl_red_threshold,
+            ema_span_minutes=args.hsl_ema_span_minutes,
+            cooldown_minutes_after_red=args.hsl_cooldown_minutes, restart_after_red_policy="always",
         )
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     # Ordered coins are derived preparation metadata, outside the canonical config.
@@ -466,6 +513,10 @@ def main(argv=None):
         with redirect_stdout(sys.stderr):
             report = run_comparison(inputs, args.exchange, metrics, policies, checks,
                                     diagnostics=args.diagnostics, gpu_engine=args.gpu_engine)
+        if args.fixture:
+            recipe = resolve_fixture_args(args)
+            report["fixture_recipe"] = {name: getattr(recipe, name) for name in FIXTURE_DEFAULTS}
+            report["fixture_recipe"].update(fixture=args.fixture, exchange=args.exchange)
         code = 0 if report["passed"] else 1
     except Exception as error:
         # Diagnostic boundary: failed execution is never reported as a metric match.

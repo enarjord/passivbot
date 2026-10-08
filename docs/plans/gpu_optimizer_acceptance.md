@@ -688,3 +688,54 @@ fills. Unified TM improves from 1385/1440 to 1385/1386 minutes, with ADG differe
 the same public recipe and strict measurement policies above; their mismatches are
 reported without widening general policy. Same-observation correctness does not
 approve the separate unified reconstruction/selection difference.
+
+## Unified HSL cohort materiality
+
+The reproducible command in [the cohort guide](../gpu_cohort_benchmark.md) measures
+64 matched candidates: EMA/TM, seeds 7/43, 16 candidates each, two coins and both
+sides, 3000 minutes, threshold/span/cooldown 0.002/2.5/10000, one-day history and
+price shocks at bars 1500/1800. This is a fixed candidate cohort, not an independent
+evolutionary search. Native service results agree with direct GPU under the tool's
+reported float64 reduction policy. Undefined CPU/GPU metric policies remain unassessed.
+
+No candidate changes feasibility at the authored diagnostic limits (ADG >= 0,
+worst drawdown <= 0.005, RED time <= 0.5, completion >= 0.99), and all four
+GPU-selected ADG extremes have zero CPU ADG regret. Nevertheless, adding RED time
+as a third objective changes Pareto membership in all four cohorts. ADG/drawdown
+fronts agree in three cohorts; TM seed 43 loses CPU-front candidate 0. Maximum
+absolute discrepancies include 0.209738 RED-time fraction, 223 minutes in maximum
+halt duration, 0.001150 ADG and 0.000974 worst drawdown. These are not all decimal
+noise, and generous limit agreement does not certify arbitrary tighter limits.
+
+Original-controller controls replace only `mps_hsl.metal` from the preceding
+development source, verify the assembled shader and candidate parameter hashes,
+and reuse the same CPU reference metrics. All four three-objective fronts already
+differ before the correction. Mean errors improve in three cohorts, but EMA seed 43
+has larger discrepancies afterward: candidate 15 now has two observed stops rather
+than one. This new evidence was investigated before merging the correction.
+
+For that candidate, original/current GPU runs first panic and flatten at minute 1526.
+The original GPU restarts at 2023, the corrected GPU at 1919, and the CPU at 2050.
+Replaying the GPU's identical factual terminal observations with the source-verified
+Rust controller is halted at 1918 and normal at 1919. The subsequent exposure stops
+again at 2252. Thus the controller correction matches Rust on the same observations;
+the retained-fill reconstruction gap can still change actual trading and selection.
+Do not restore a synthetic completed-entry peak to mask that gap or approve legacy
+retirement from the narrower controller tests. A producer solution must preserve the
+shared Rust reconstruction contract, including cache-loss/rebuild equivalence.
+
+Warm native measurements for these 16-candidate cohorts span approximately 24–43
+candidates/second. Width 16 and automatic mode are similar in this underfilled
+workload; there are no completed tuning windows, so the final automatic width does
+not establish an optimum. Compilation is already warm, and CPU timing is serial
+preparation plus reference simulation, not CPU optimizer throughput.
+
+The shared stress CLI reproduces all nine CPU/GPU metrics, candidate parameter
+fingerprints and ranking results for all 64 measured candidates exactly; native
+width-16 and automatic runs both retain exact direct-GPU values in these cases.
+All 33 new recipe/validation/provenance checks pass. A wider focused run has one
+remaining pre-existing passive-TM fixture failure: its both-side ADG comparison
+exceeds the local 0.1% trajectory guard (CPU 0.02232715, GPU 0.02235809). Untouched
+target-branch tool sources reproduce those values with identical default fixture
+arrays and evaluation identity. Keep that measured discrepancy visible; this
+tooling change does not widen its assertion or the general comparison policy.

@@ -15,6 +15,39 @@ def options(*values):
     return args
 
 
+@pytest.mark.parametrize("flags", [
+    ("--hsl-red-threshold", "nan"), ("--hsl-ema-span-minutes", "0"),
+    ("--hsl-cooldown-minutes", "-1"), ("--hsl-lookback-days", "91"),
+    ("--price-shock", "4", "64", ".7"), ("--price-shock", "0", "10080", ".7"),
+    ("--price-shock", "0", "64", "inf"),
+])
+def test_cohort_stress_options_are_checked_before_device_access(flags):
+    with pytest.raises(SystemExit) as error:
+        options(*flags)
+    assert error.value.code == 2
+
+
+def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
+    import numpy as np
+    flags = ["--hsl", "unified", "--bars", "128", "--coins", "2", "--sides", "both",
+             "--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
+             "--hsl-cooldown-minutes", "10000", "--price-shock", "0", "64", ".7"]
+    args = options("--candidates", "2", *flags)
+    inputs, configs, parameters = benchmark._cohort(args, "ema_anchor", 7)
+    reference = benchmark.gpu_parity.fixture_inputs(
+        benchmark.gpu_parity.build_parser().parse_args(["--fixture", "ema_anchor", *flags]))
+    np.testing.assert_array_equal(inputs[1], reference[1])
+    assert benchmark.gpu_parity._identity(
+        inputs[0], (inputs[1], inputs[3], inputs[4]), inputs[2], "binance"
+    ) == benchmark.gpu_parity._identity(
+        reference[0], (reference[1], reference[3], reference[4]), reference[2], "binance"
+    )
+    assert len(configs) == len(parameters) == 2
+    assert all(c["bot"]["hsl"]["red_threshold"] == .002 for c in configs)
+    assert args.price_shocks == [[0, 64, .7]]
+    assert args.hsl_lookback_days == 1
+
+
 @pytest.mark.parametrize("flags", [("--widths", "0"), ("--widths", "broken"),
                                    ("--warm-runs", "0"), ("--candidates", "129"),
                                    ("--adg-floor", "nan"), ("--drawdown-ceiling", "inf"),
