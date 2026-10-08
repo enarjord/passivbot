@@ -143,13 +143,20 @@ def test_cursor_rejects_changed_or_uncertain_inputs(reference, monkeypatch, guar
     assert statuses.tolist() == [0 if guard == 10 else 1]
 
 
-@pytest.mark.parametrize("kind", ["missing_opening", "future_fill", "first_quote", "nonpositive_peak_equity"])
+@pytest.mark.parametrize("kind", ["missing_opening", "future_fill", "same_minute_fill", "endpoint_size", "endpoint_basis",
+                                  "first_quote", "nonpositive_peak_equity"])
 def test_cursor_does_not_seed_uncertain_history(reference, monkeypatch, kind):
     row = deepcopy(_row(constant=True))
     if kind == "missing_opening":
         row["pairs"][0]["fills"] = []
     elif kind == "future_fill":
         row["pairs"][0]["fills"][0]["timestamp"] = 10
+    elif kind == "same_minute_fill":
+        row["pairs"][0]["fills"][0]["timestamp"] = 2
+    elif kind == "endpoint_size":
+        row["pairs"][0]["position"]["size"] = 1.01
+    elif kind == "endpoint_basis":
+        row["pairs"][0]["position"]["basis"] = 100.01
     elif kind == "first_quote":
         row["pairs"][0]["prices"] = {str(t): float("nan") if t < 31 else 100.0
                                       for t in range(33)}

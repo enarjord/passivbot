@@ -2934,3 +2934,24 @@ Historical observations do not supersede those requirements or prove current acc
   clipping, causal phase and numerical concerns. Require cache-loss/temporal controls,
   paired factual and CPU parity, resource evidence and review before adoption.
   The strategy-neutral shared-runner extraction remains a separate focused follow-up.
+
+
+### 2026-10-08 — Integrate resource fixes and tighten continuation guards
+
+- Compact native factual storage and dataset-owned capacity retention are integrated
+  on development through [PR #1945](https://github.com/enarjord/passivbot/pull/1945)
+  and [PR #1946](https://github.com/enarjord/passivbot/pull/1946), after clean independent
+  current-head review and all required CI. Master is unchanged. Reconcile the checklist
+  to distinguish completed integration from remaining representative acceptance.
+- The local active-episode continuation experiment passes its initial component
+  comparisons, but exact native comparisons expose approximately 5e-9 short-side EMA
+  diagnostic residuals. Do not count the interrupted validation as accepted parity.
+- A current endpoint becomes a historical sample on the next evaluation. Require no
+  same-end-minute fill and exact agreement of reconstructed final inventory/basis with
+  the actual endpoint before seeding continuation; otherwise reconstruct fresh.
+  Three new seed-denial regressions fail against the preceding draft without these
+  guards. Corrected component/native validation and paired performance/resource
+  evidence remain required before adoption.
+- Extend temporal controls to both retained factual and native factual layouts;
+  the earlier controls exercised only the retained factual layout. Keep the shared
+  runner extraction separate from this numerical/performance change.

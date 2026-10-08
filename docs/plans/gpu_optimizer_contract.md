@@ -249,15 +249,17 @@ Completion requires:
     native full/chunk/growth/discard and matched candidate evidence is recorded in
     the acceptance map. The known material HSL cohort discrepancy is resolved;
     remaining small numerical differences are accepted only for those fixtures.
-  - [ ] Adopt factual replay in the default native worker, version the semantic
-    checkpoint contract and consolidate wider feature/lifecycle, specialization,
-    scenario, resource and performance acceptance. Keep the old optimizer until
-    its replacement passes the relevant gates.
-    Local worker validation proves effective candidate/coin-policy dispatch,
+  - [x] Adopt factual replay in the default native worker and version the semantic
+    checkpoint contract after independent review and CI on development.
+  - [ ] Consolidate wider feature/lifecycle, specialization, scenario, resource and
+    performance acceptance. Keep the old optimizer until its replacement passes
+    the relevant gates.
+    Worker validation proves effective candidate/coin-policy dispatch,
     capacity learning across HSL-on/off/on transitions, preserved existing EMA
     disabled-HSL ablation and asynchronous service delivery. All 42 wider native
     HSL lifecycle/loss and 56 optimizer CLI/data/service controls also pass.
-    Representative acceptance and reviewed development integration remain required.
+    Representative acceptance remains required; the worker cutover is integrated
+    on development.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
 - [x] Replace hourly recovery distribution sampling with per-step GPU observations,
   budget their replay/reduction storage, and isolate mutable reduction scratch.
@@ -282,12 +284,14 @@ Completion requires:
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
   - [x] Give native factual HSL compact storage independent of the bypassed legacy
     observation tree/window; preserve the legacy layout for remaining consumers.
-    Source-verified CUDA allocation and replay controls pass; reviewed development
-    integration and representative total-resource acceptance remain separate gates.
+    Source-verified CUDA allocation and replay controls, independent review and CI
+    pass; development integration is complete. Representative total-resource
+    acceptance remains separate.
   - [x] Retain small learned factual-capacity estimates in dataset execution metadata
     across residency eviction, without retaining device buffers or adding checkpoints.
-    Host eviction/error-policy and actual CUDA scenario/owner switches pass;
-    reviewed integration and representative suite acceptance remain separate gates.
+    Host eviction/error-policy and actual CUDA scenario/owner switches, independent
+    review and CI pass; development integration is complete. Representative suite
+    acceptance remains separate.
   - [x] Measure held, many-coin HSL reconstruction scaling before further launch
     tuning. Matched 2/25-coin, 512/1024/2048-bar cases show roughly quadratic
     warm replay cost with HSL enabled; wider acceptance remains separate.

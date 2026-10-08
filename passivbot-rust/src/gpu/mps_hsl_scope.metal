@@ -354,9 +354,19 @@ inline bool hsl_compose_scope(
         bool complete = true, stable_prefix = true;
         for (int p = 0; p < pair_count; ++p) {
             complete = complete && pairs[p].consumed == pairs[p].facts.count;
+            // Today's endpoint becomes a historical sample on the next call.
+            // Same-minute fills shift to the causal following price sample, and
+            // reconstructed inventory/basis can differ from the actual endpoint.
+            // Continue only when that reinterpretation cannot revise this sample.
+            thread const HslScopePair& pair = pairs[p];
+            if (pair.facts.count > 0) {
+                int last = pair.facts.count - 1;
+                stable_prefix = stable_prefix && hsl_pair_minute(pair.facts, last) < end
+                    && pair.events[last].after == fabs(pair.current_size)
+                    && pair.events[last].basis == pair.current_basis;
+            }
             // Until a causal close exists, a later first quote can revise the
             // evaluation-local backfill of earlier marks. Keep that case fresh.
-            thread const HslScopePair& pair = pairs[p];
             if (pair.candles != nullptr) {
                 int bar = end - 1;
                 bool available = bar >= pair.candle_first && bar <= pair.candle_last;
