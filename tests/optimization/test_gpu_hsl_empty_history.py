@@ -172,3 +172,105 @@ def test_empty_history_is_scalar_cache_independent(
     cached = _run(strategy)
     rebuilt = _run(strategy, reset_cache=True)
     np.testing.assert_array_equal(cached, rebuilt)
+
+
+def _integrated_inputs(strategy, sides, expired_sides):
+    from tools.gpu_parity import build_parser, fixture_inputs
+
+    inputs = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", sides, "--coins", "2", "--bars", "1530",
+        "--hsl", "coin", "--hsl-red-threshold", ".003", "--hsl-ema-span-minutes", "2.5",
+    ]))
+    config, candles, markets, _, _ = inputs
+    active = ("long", "short") if sides == "both" else (sides,)
+    config["live"]["approved_coins"] = {
+        side: [f"COIN{index:02}"] if side in active else []
+        for index, side in enumerate(("long", "short"))
+    }
+    candles[:] = [100, 100, 100, 10_000]
+    for index, side in enumerate(("long", "short")):
+        bot = config["bot"][side]
+        if side in active:
+            bot["risk"]["n_positions"] = 1
+        bot["hsl"]["panic_close_order_type"] = "market"
+        if strategy == "ema_anchor":
+            bot["strategy"][strategy].update(
+                base_qty_pct=.1, ema_span_0=10_000, ema_span_1=10_000,
+                offset=.2, offset_psize_weight=0, offset_volatility_1h_weight=0,
+                offset_volatility_1m_weight=0,
+            )
+        else:
+            policy = bot["strategy"][strategy]
+            policy["entry"].update(
+                ema_span_0=10_000, ema_span_1=10_000, initial_ema_dist=.2,
+                initial_qty_pct=.1, threshold_base_pct=.5, retracement_base_pct=.5,
+                threshold_volatility_1h_weight=0, threshold_volatility_1m_weight=0,
+                threshold_we_weight=0, retracement_volatility_1h_weight=0,
+                retracement_volatility_1m_weight=0, retracement_we_weight=0,
+            )
+            policy["close"].update(
+                threshold_base_pct=.9, retracement_base_pct=.5,
+                threshold_volatility_1h_weight=0, threshold_volatility_1m_weight=0,
+                threshold_we_weight=0, retracement_volatility_1h_weight=0,
+                retracement_volatility_1m_weight=0,
+            )
+        # The wide candle fills actual pending initial orders. Later narrow
+        # candles cannot fill an ordinary close or another entry in this recipe.
+        entry = 64 if side in expired_sides else 1350
+        candles[entry, index, :3] = [121, 79, 100]
+        peak, current = (110, 102) if side == "long" else (90, 98)
+        candles[1450:1508, index, :3] = peak
+        candles[1508:, index, :3] = current
+    return inputs
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides,expired_sides", [
+    ("long", ("long",)), ("long", ()),
+    ("short", ("short",)), ("short", ()),
+    ("both", ("long", "short")), ("both", ()),
+    ("both", ("long",)), ("both", ("short",)),
+])
+def test_native_callers_use_their_own_factual_fill_history(
+    require_real_passivbot_rust_module, monkeypatch, strategy, sides, expired_sides,
+):
+    if not torch.cuda.is_available():
+        pytest.skip("native CUDA service required")
+    from optimization.gpu.parity import MetricTolerance
+    from tools.gpu_parity import run_comparison
+
+    active = ("long", "short") if sides == "both" else (sides,)
+    from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinRunner
+
+    observed = []
+    original_run = MpsEmaAnchorMulticoinRunner.run
+
+    def capture(self, *args, **kwargs):
+        output = original_run(self, *args, **kwargs)
+        observed.append(dict(
+            triggers={side: float(output[f"hsl_triggers_{side}"].item())
+                      for side in ("long", "short")},
+            fills=float(output["fill_count"].item()),
+            fused="Fused" in type(self).__name__,
+        ))
+        return output
+
+    monkeypatch.setattr(MpsEmaAnchorMulticoinRunner, "run", capture)
+    metrics = ("hard_stop_triggers_per_year",)
+    report = run_comparison(
+        _integrated_inputs(strategy, sides, expired_sides), "binance", metrics,
+        {name: MetricTolerance(1e-4, 1e-5) for name in metrics},
+        gpu_engine="native", diagnostics=True,
+    )
+    # Entry and optional protective-close fills must really occur. An empty
+    # simulation or a scope that never held exposure cannot satisfy this test.
+    retained = set(active) - set(expired_sides)
+    assert report["diagnostics"]["cpu"]["fill_count"] == len(active) + len(retained)
+    assert len(observed) == 1
+    assert observed[0]["triggers"] == {
+        side: float(side in retained) for side in ("long", "short")
+    }
+    assert observed[0]["fills"] == len(active) + len(retained)
+    assert observed[0]["fused"] is (sides == "both")
+    assert (report["metrics"][metrics[0]]["cpu"] > 0) is bool(retained)
+    assert report["passed"], report["metrics"]

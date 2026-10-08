@@ -2382,3 +2382,13 @@ Historical observations do not supersede those requirements or prove current acc
   general HSL parity, selected-config materiality, resource or replacement acceptance.
   Current-head automatic review, author review, all required CI and fresh unchanged
   publication metadata remain mandatory before integration.
+
+- Automatic review found that direct helper probes alone did not establish caller
+  wiring. Add sixteen full native replay cases across both strategies and long-only,
+  short-only and fused paths. Real initial fills precede or remain within the one-day
+  lookback; a later profit peak/drop distinguishes their signals. Mixed-age fused
+  sides distinguish each side's timestamp. Assert actual CPU/GPU fill counts,
+  per-side GPU triggers and the intended fused path, without injecting positions
+  or modifying the trading simulation.
+  All 82 final CUDA cases pass. Keep the original review thread open for the
+  updated-head review and require fresh author review and CI before integration.
