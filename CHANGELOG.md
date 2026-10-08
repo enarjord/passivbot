@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Trailing-martingale partial initial entries preserve aligned quantity differences instead of losing one step to floating-point subtraction; genuine fractional differences still round down.
+
 - GPU multicoin replay retains small fee/profit contributions with compensated f32 cash-balance accumulation, including across temporal dispatches.
 
 - GPU multicoin trailing-martingale recursive ladders update the initial sizing

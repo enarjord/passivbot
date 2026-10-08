@@ -2488,3 +2488,29 @@ Historical observations do not supersede those requirements or prove current acc
   pass in separate fresh processes. Production specialized replay checks pass.
   This test-resource limitation does not justify bypassing memory admission or
   establish general resource acceptance.
+
+### 2026-10-08 — Quantize partial-entry differences without losing aligned steps
+
+- Independent fresh HSL comparisons, crossing CPU/GPU histories, current budgets
+  and candle encoding, isolate the remaining restart difference to execution facts.
+  Post-shock partial-entry quantities start differing before recursive compounding.
+- The canonical Rust producer floors the f64 difference `0.094 - 0.066` to 27
+  quantity steps, although both quantities are aligned and their difference is
+  28 steps. Actual order APIs reproduce this on both sides; all four long/short
+  grid/trailing regressions fail before repair while four genuinely below-step
+  controls pass. Use the existing ULP-bounded downward quantizer at the four
+  partial-entry subtraction sites. Global rounding and sizing policy stay separate.
+- Simpler f32 basis-expression diagnostics also repair three canonical ladder
+  price ticks, but do not resolve the complete HSL outlier. Keep those prototypes
+  out of production while the narrow canonical producer correction is assessed.
+- The verified rebuilt extension passes 333 Rust tests (one existing ignore),
+  default-feature compilation and all seventeen Python order checks. Twelve CUDA
+  entry-sizing comparisons, two CPU-forbidden optimizer CLI start/resume cases,
+  72 checkpoint contracts and six documentation checks pass.
+- Recompute the same 64 independent CPU references against the retained verified
+  factual-GPU results, whose shader implementation is unchanged by this CPU fix.
+  All five HSL metrics now agree in every cohort; candidate two also agrees on
+  fill count. ADG and RED pair order and authored limit classifications match.
+  A small DD ordering/front difference remains in TM seed seven, with DD regret
+  about 0.00000022 at the GPU's minimum-DD candidate. Preserve this numerical
+  observation; resolving the material HSL outlier is not general parity acceptance.
