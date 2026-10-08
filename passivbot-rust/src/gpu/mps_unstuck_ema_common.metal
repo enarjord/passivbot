@@ -1,3 +1,7 @@
+#ifndef PASSIVBOT_UNSTUCK_EMA_ENABLED
+#define PASSIVBOT_UNSTUCK_EMA_ENABLED 1
+#endif
+
 // Rust seeds adjusted price EMA numerator/denominator with price/1, so its
 // denominator stays one and the recurrence reduces to the seeded EMA below.
 // Horizons arrive in candle periods after host-side minute scaling.

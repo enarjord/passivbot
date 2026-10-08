@@ -373,6 +373,15 @@ mode retains full state even when HSL is disabled: its separate panic segments a
 reported drawdown reductions. Fused portfolios and Trailing Martingale retain their
 existing layouts. Execution scheduling does not decide this semantic specialization.
 
+Shared-account EMA/TM dispatches prove whether any packed candidate and effective
+coin-side override can use unstuck EMA gating. When none can, compilation removes
+only its EMA band, initialization, per-candle updates and gating consumers. Ungated
+unstuck selection, ordinary strategy EMAs and realized-loss history retain their
+existing behavior. Finite coin flags override candidate flags; nonfinite overrides
+inherit them. The feature bit belongs to the compilation/replay-state identity,
+independently of batch scheduling or search policy. Both fused sides participate
+in the proof, and each replay reconstructs its state for the selected layout.
+
 Shared-account EMA and Trailing Martingale realized-loss admission and auto-unstuck
 use one bounded fill-PnL window selected by `live.pnls_max_lookback_days`. The history
 is prepared when either consumer is enabled and compiled out when neither needs it
