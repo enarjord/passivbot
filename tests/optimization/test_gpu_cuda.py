@@ -279,9 +279,9 @@ def test_disabled_hsl_selection_preserves_diagnostic_topology(
         coin_hsl_may_enable=coin_enabled,
         hsl_disabled_specialization=supported,
     )
-    assert source_kernel.MpsEmaAnchorMulticoinRunner._use_disabled_hsl_specialization(
-        runner, matrix
-    ) is expected
+    cls = (source_kernel.MpsEmaAnchorMulticoinRunner if label == "EMA"
+           else source_kernel.MpsTrailingMartingaleMulticoinRunner)
+    assert cls._use_disabled_hsl_specialization(runner, matrix) is expected
 
 
 def test_disabled_hsl_source_removes_hsl_portfolio_scans():
@@ -1259,3 +1259,44 @@ def test_mps_coin_capacity_is_explicit_and_preserves_other_source(monkeypatch):
     source = "constant int MAX_COINS = 64; // 64 remains elsewhere"
     compile_shader(source, mps_coin_capacity=4)
     assert sources == ["constant int MAX_COINS = 4; // 64 remains elsewhere"]
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("fused", [False, True])
+def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel, strategy, fused):
+    if strategy == "ema_anchor":
+        cls = (source_kernel.MpsEmaAnchorMulticoinFusedRunner if fused
+               else source_kernel.MpsEmaAnchorMulticoinRunner)
+        keys = source_kernel.EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        label = "Trailing Martingale"
+    else:
+        cls = (source_kernel.MpsTrailingMartingaleMulticoinFusedRunner if fused
+               else source_kernel.MpsTrailingMartingaleMulticoinRunner)
+        keys = source_kernel.TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        label = "EMA"
+    sides = 2 if fused else 1
+    runner = object.__new__(cls)
+    runner.coin_override_label = label
+    runner.native_factual_hsl = True
+    runner.hsl_replay_sides = sides
+    runner.hsl_fact_capacity_learned = 512
+    runner.hsl_fact_capacity = 64
+    runner._hsl_scratch_buffers = {"old": object()}
+    runner._coin_hsl_enabled_overrides = tuple(np.array([np.nan, 0.]) for _ in range(sides))
+    runner._unstuck_ema_overrides = tuple(np.full((2, 2), np.nan) for _ in range(sides))
+    matrix = np.zeros((2, len(keys) * sides), dtype=np.float32)
+    for side in range(sides):
+        matrix[:, side * len(keys) + keys.index("hsl_signal_mode")] = 2
+    matrix[0, (sides - 1) * len(keys) + keys.index("hsl_enabled")] = 1
+    runner._prepare_native_factual_hsl(matrix)
+    assert runner.hsl_fact_capacity == 512 and runner.hsl_factual_replay
+    assert runner._hsl_scratch_buffers == {}
+    assert not runner._unstuck_ema_required(matrix)
+    for name in ("unstuck_enabled", "unstuck_ema_gating_enabled"):
+        matrix[1, (sides - 1) * len(keys) + keys.index(name)] = 1
+    assert runner._unstuck_ema_required(matrix)
+    for side in range(sides):
+        matrix[:, side * len(keys) + keys.index("hsl_enabled")] = 0
+    runner._prepare_native_factual_hsl(matrix)
+    assert runner.hsl_fact_capacity == 0 and not runner.hsl_factual_replay
+    assert runner.hsl_fact_capacity_learned == 512
