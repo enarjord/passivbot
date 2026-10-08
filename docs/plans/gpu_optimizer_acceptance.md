@@ -1360,6 +1360,14 @@ does not pin the evicted runner. CPU backtests are forbidden in those service ch
 Checked source files remain unchanged. Development integration, independent
 current-head review and CI remain required.
 
+The compact-storage development merge is integrated without changing the checked
+capacity implementation or host regressions. The combined source passes all 154
+host checks and sixteen actual CUDA service checks: the four capacity-eviction
+controls plus twelve existing authoritative factual-service callers. All 951
+checked files remain unchanged after validation. Rust/shader sources and the
+verified extension are the reviewed compact-storage build; this slice changes
+only Python execution ownership and its regressions.
+
 Fresh scope composition can repeatedly traverse historical minutes for long exposed
 episodes. This is a scaling risk, not an established performance regression. Measure
 long-held, many-coin workloads, useful throughput and total host/device/disk resources

@@ -2909,3 +2909,8 @@ Historical observations do not supersede those requirements or prove current acc
 - Require integrated compact-storage validation, current-head independent review
   and CI before development merge. Representative suite/total-resource acceptance
   and long-held reconstruction scaling remain separate gates.
+- The reviewed compact layout is integrated with unchanged capacity production
+  and host regression hashes. Combined validation passes 154 host and sixteen
+  actual CUDA service controls, including all four eviction regressions. All checked
+  sources remain unchanged; Rust/shaders use the reviewed compact extension.
+  Require a fresh independent review and CI for this integrated head.
