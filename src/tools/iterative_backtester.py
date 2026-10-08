@@ -31,6 +31,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+from session_artifacts import create_session_dir, date_span, effective_setup_config
+from optimization.prepared_dataset_identity import materialized_dataset_identity
+from optimization.evaluation_implementation import evaluation_implementation_identity
 from prettytable import PrettyTable
 from config import load_prepared_config  # noqa: E402
 
@@ -540,12 +543,41 @@ class IterativeBacktestSession:
         self.backtest_exchanges = list(require_config_value(config, "backtest.exchanges"))
         self.combine_ohlcvs = len(self.backtest_exchanges) > 1
         self.backtest_signature = make_backtest_signature(config)
-        base_dir = require_config_value(config, "backtest.base_dir")
-        session_label = time.strftime("iterative_%Y%m%d_%H%M%S")
-        session_path = Path(make_get_filepath(os.path.join(base_dir, "iterative", session_label, "")))
-        self.session_dir = Path(session_path)
         self.datasets = await self._prepare_datasets(config)
+        self._create_session_output(config)
         logging.info("Loaded OHLCV data for %s", ", ".join(sorted(self.datasets.keys())))
+
+    def _create_session_output(self, config: Dict[str, Any]) -> None:
+        base_dir = require_config_value(config, "backtest.base_dir")
+        data_identity = {
+            exchange: materialized_dataset_identity(
+                dataset.coins,
+                dataset.hlcvs,
+                dataset.btc_usd_prices,
+                dataset.timestamps,
+                dataset.mss,
+            )
+            for exchange, dataset in sorted(self.datasets.items())
+        }
+        coins = sorted(
+            {coin for dataset in self.datasets.values() for coin in dataset.coins}
+        )
+        source = "combined" if self.combine_ohlcvs else self.backtest_exchanges[0]
+        span, span_metadata = date_span([config])
+        self.session_dir, _metadata = create_session_dir(
+            Path(base_dir) / "iterative",
+            coins=coins,
+            source=source,
+            span=span,
+            setup={
+                "version": 1,
+                "config": effective_setup_config(config),
+                "scoring": config["optimize"]["scoring"],
+                "data": data_identity,
+                "implementation": evaluation_implementation_identity(),
+            },
+            metadata={"kind": "iterative_backtest", "coins": coins, **span_metadata},
+        )
 
     # ------------------------------------------------------------------
     async def _load_config(self) -> Dict[str, Any]:
@@ -637,6 +669,10 @@ class IterativeBacktestSession:
     # ------------------------------------------------------------------
     async def reload_datasets(self, config: Dict[str, Any]) -> None:
         logging.info("Dataset-affecting configuration changed; reloading datasets...")
+        self.backtest_exchanges = list(require_config_value(config, "backtest.exchanges"))
+        self.combine_ohlcvs = len(self.backtest_exchanges) > 1
+        self.datasets = await self._prepare_datasets(config)
+        self._create_session_output(config)
         self.history.clear()
         self.best_run_index = None
         self.config_cache.clear()
@@ -645,7 +681,6 @@ class IterativeBacktestSession:
         self.backtest_durations.clear()
         self.scoring_keys = []
         self.scoring_specs = []
-        self.datasets = await self._prepare_datasets(config)
         self.backtest_signature = make_backtest_signature(config)
         logging.info("Datasets reloaded.")
 
@@ -958,9 +993,8 @@ class IterativeBacktestSession:
     ) -> Path:
         if self.session_dir is None:
             raise RuntimeError("session directory not initialised")
-        timestamp_str = format_timestamp(run_ts).replace(" ", "_").replace(":", "")
-        run_dir = self.session_dir / f"run_{run_index:03d}_{timestamp_str}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = self.session_dir / f"run_{run_index:06d}"
+        run_dir.mkdir()
         payload = {
             "timestamp_ms": run_ts,
             "score_vector": score_vector,

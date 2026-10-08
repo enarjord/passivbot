@@ -30,7 +30,7 @@ use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
     EquityHardStopLossConfig, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
     OrderBook, Position, RuntimeOrderContext, StateParams, StrategyParamsPairValue,
-    TrailingPriceBundle, TwelEnforcerPolicy, WeExcessAllowanceMode,
+    TrailingPriceBundle, TwelEnforcerPolicy,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -1744,6 +1744,7 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
             dict,
             &[
                 "enabled",
+                "scale_budget_with_excess_allowance",
                 "red_threshold",
                 "ema_span_minutes",
                 "cooldown_minutes_after_red",
@@ -1753,6 +1754,12 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
         )?;
         Ok(Policy {
             enabled: extract_value(dict, "enabled")?,
+            scale_budget_with_excess_allowance: match dict
+                .get_item("scale_budget_with_excess_allowance")?
+            {
+                Some(value) => value.extract::<bool>()?,
+                None => false,
+            },
             red_threshold: extract_value(dict, "red_threshold")?,
             ema_span_minutes: extract_value(dict, "ema_span_minutes")?,
             cooldown_minutes_after_red: extract_value(dict, "cooldown_minutes_after_red")?,
@@ -2130,25 +2137,6 @@ fn extract_optional_string(dict: &PyDict, key: &str, default: &str) -> PyResult<
     })
 }
 
-fn extract_optional_we_excess_allowance_mode(dict: &PyDict) -> PyResult<WeExcessAllowanceMode> {
-    Ok(match dict.get_item("risk_we_excess_allowance_mode")? {
-        Some(item) => {
-            if item.is_none() {
-                WeExcessAllowanceMode::default()
-            } else {
-                let raw = item.extract::<String>()?;
-                WeExcessAllowanceMode::from_str(raw.trim()).map_err(|_| {
-                    PyValueError::new_err(format!(
-                        "risk_we_excess_allowance_mode must be one of: bounded, legacy_raw; got {:?}",
-                        raw
-                    ))
-                })?
-            }
-        }
-        None => WeExcessAllowanceMode::default(),
-    })
-}
-
 fn extract_optional_twel_enforcer_policy(dict: &PyDict) -> PyResult<TwelEnforcerPolicy> {
     Ok(match dict.get_item("risk_twel_enforcer_policy")? {
         Some(item) => {
@@ -2169,6 +2157,16 @@ fn extract_optional_twel_enforcer_policy(dict: &PyDict) -> PyResult<TwelEnforcer
 }
 
 fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
+    // Retired producer fields must not silently change native risk semantics.
+    for key in ["risk_we_excess_allowance_mode", "we_excess_allowance_mode"] {
+        if dict.contains(key)? {
+            return Err(PyValueError::new_err(format!(
+                "{key} is retired; normalize the config with the current loader. \
+                 Excess allowance is always bounded by side TWEL; explicit raw sizing \
+                 cannot be migrated automatically. Review headroom and re-backtest before removing the field."
+            )));
+        }
+    }
     let risk_wel_enforcer_threshold: f64 = extract_value(dict, "risk_wel_enforcer_threshold")?;
     let risk_twel_enforcer_threshold: f64 = extract_value(dict, "risk_twel_enforcer_threshold")?;
     let risk_we_excess_allowance_pct: f64 = extract_value(dict, "risk_we_excess_allowance_pct")?;
@@ -2307,7 +2305,6 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         risk_twel_enforcer_policy: extract_optional_twel_enforcer_policy(dict)?,
         risk_twel_enforcer_threshold,
         risk_we_excess_allowance_pct,
-        risk_we_excess_allowance_mode: extract_optional_we_excess_allowance_mode(dict)?,
         unstuck_enabled: extract_optional_bool(dict, "unstuck_enabled", true)?,
         unstuck_ema_gating_enabled: extract_optional_bool(
             dict,
@@ -2699,18 +2696,6 @@ fn bot_params_from_trailing_grid_v7_diagnostic_json(value: &Value) -> PyResult<B
     bot.risk_we_excess_allowance_pct = json_f64(value, "risk_we_excess_allowance_pct", 0.0);
     bot.risk_wel_enforcer_enabled = json_bool(value, "risk_wel_enforcer_enabled", true);
     bot.risk_wel_enforcer_threshold = json_f64(value, "risk_wel_enforcer_threshold", 0.0);
-    if let Some(raw) = value
-        .get("risk_we_excess_allowance_mode")
-        .and_then(Value::as_str)
-    {
-        bot.risk_we_excess_allowance_mode =
-            WeExcessAllowanceMode::from_str(raw.trim()).map_err(|_| {
-                PyValueError::new_err(format!(
-                    "risk_we_excess_allowance_mode must be one of: bounded, legacy_raw; got {:?}",
-                    raw
-                ))
-            })?;
-    }
     Ok(bot)
 }
 

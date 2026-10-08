@@ -93,6 +93,9 @@ passivbot tool pareto-dash --data-root optimize_results
 passivbot tool verify-hlcvs-data
 passivbot tool ohlcvs-doctor --repair-catalog
 passivbot tool streamline-json configs/examples/default_trailing_martingale_long.json
+passivbot tool clean-config configs/private/input.json configs/private/clean.json
+passivbot tool clean-config configs/private/input.json configs/private/live.json --mode live
+passivbot tool clean-config configs/private/raw --dry-run --max-depth 2
 passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
 passivbot tool migrate-config-v7 config_v7.json config_v8.json
 passivbot tool compare-backtests path/to/v7/result path/to/v8/result

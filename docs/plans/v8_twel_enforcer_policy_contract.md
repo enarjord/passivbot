@@ -89,10 +89,9 @@ Important distinction:
   because the current number of open positions differs from configured `n_positions`.
 - Backtest `dynamic_wel_by_tradability` is the explicit exception. It may change runtime WEL
   denominators to handle early backtest periods with fewer tradable coins than later periods.
-- Standard v8 `risk_we_excess_allowance_mode=bounded` caps `effective_wel <= raw_twel`.
-- `risk_we_excess_allowance_mode=legacy_raw` exists only for improved v7 compatibility through
-  `trailing_grid_v7`; it may make WEL exceed raw TWEL, but it never bypasses TWEL entry gating or
-  TWEL auto-reduce.
+- Excess allowance is always bounded; it cannot expand an authored base WEL past raw TWEL.
+  An explicitly authored base WEL above TWEL is not itself reduced by this headroom clamp.
+  Neither authored WEL nor excess allowance bypasses TWEL entry gating or TWEL auto-reduce.
 - `twel_entry_cap` governs portfolio-level entry blocking when the entry gate is enabled.
 - `twel_repair_target` governs TWEL auto-reduce when auto-reduce is enabled.
 - Entry-gate TWE is computed from snapped/hysteresis balance.
@@ -550,7 +549,7 @@ Add focused Rust/Python tests around the JSON orchestrator boundary:
 13. TWEL auto-reduce is computed before WEL; WEL skips positions that already have TWEL auto-reduce.
 14. `raw_twel == 0.0` disables TWEL for that side.
 15. Invalid/non-finite/negative TWEL inputs fail loudly.
-16. `legacy_raw` excess allowance can make WEL exceed raw TWEL, but does not bypass TWEL entry
+16. Excess allowance is always bounded by raw TWEL and does not bypass TWEL entry
     gating or TWEL auto-reduce.
 17. `graceful_stop` blocks initial entries only; with an existing position it behaves like `normal`
     and continuation entries are TWEL-gated when the entry gate is enabled.

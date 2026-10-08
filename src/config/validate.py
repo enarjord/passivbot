@@ -1,7 +1,6 @@
 import math
 
 from live.event_bus import STARTUP_TIMING_PHASES
-from risk_limits import normalize_we_excess_allowance_mode
 
 from .access import require_config_dict
 from .bot import (
@@ -177,10 +176,6 @@ def validate_config(
         )
         if entry_cooldown_minutes < 0.0:
             raise ValueError(f"bot.{pside}.entry_cooldown.base_duration_minutes must be >= 0.0")
-        normalize_we_excess_allowance_mode(
-            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
-            path=f"bot.{pside}.risk.we_excess_allowance_mode",
-        )
         normalize_twel_enforcer_policy(
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
             path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
@@ -192,38 +187,6 @@ def validate_config(
             raise ValueError(
                 f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
             )
-    coin_overrides = config.get("coin_overrides")
-    if isinstance(coin_overrides, dict):
-        for coin, override in coin_overrides.items():
-            if not isinstance(override, dict):
-                continue
-            override_bot = override.get("bot")
-            if not isinstance(override_bot, dict):
-                continue
-            for pside in BOT_POSITION_SIDES:
-                override_side = override_bot.get(pside)
-                if not isinstance(override_side, dict):
-                    continue
-                if "risk_we_excess_allowance_mode" in override_side:
-                    normalize_we_excess_allowance_mode(
-                        override_side.get("risk_we_excess_allowance_mode"),
-                        path=(
-                            f"coin_overrides.{coin}.bot.{pside}."
-                            "risk_we_excess_allowance_mode"
-                        ),
-                    )
-                risk_cfg = override_side.get("risk")
-                if (
-                    isinstance(risk_cfg, dict)
-                    and "we_excess_allowance_mode" in risk_cfg
-                ):
-                    normalize_we_excess_allowance_mode(
-                        risk_cfg.get("we_excess_allowance_mode"),
-                        path=(
-                            f"coin_overrides.{coin}.bot.{pside}.risk."
-                            "we_excess_allowance_mode"
-                        ),
-                    )
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
     _validate_startup_phase_budgets(config["live"])
     ticker_strategy = str(

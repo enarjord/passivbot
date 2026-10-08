@@ -17,16 +17,16 @@ Throughout:
 * `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
   In live mode this is derived from a fixed denominator (`n_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
-* With the default `we_excess_allowance_mode = "bounded"`,
+* Excess allowance is always bounded:
   `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
   max(0, total_wallet_exposure_limit / wel_base - 1))`.
-  If `wel_base` is non-positive/non-finite, bounded mode treats the effective
+  If `wel_base` is non-positive/non-finite, Passivbot treats the effective
   allowance and allowed exposure as zero. If `total_wallet_exposure_limit` is
-  non-positive/non-finite, bounded mode grants no excess headroom.
-  With `we_excess_allowance_mode = "legacy_raw"`, the raw
-  `max(0, risk_we_excess_allowance_pct)` is used instead.
+  non-positive/non-finite, Passivbot grants no excess headroom.
 * `wel_allowed = wel_base * (1 + we_excess_effective)`, so per-position excess allowance never
-  expands a symbol above the side's configured `total_wallet_exposure_limit`.
+  expands a base WEL past the side's configured `total_wallet_exposure_limit`.
+  An authored base WEL already above TWEL receives no excess headroom; the headroom
+  clamp does not reduce that authored base itself.
 
 ## Trailing Martingale Entries
 

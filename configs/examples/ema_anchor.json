@@ -57,6 +57,7 @@
                 "unilateralness_ema_span_1m": 60.0
             },
             "hsl": {
+                "scale_budget_with_excess_allowance": false,
                 "cooldown_minutes_after_red": 3270.0,
                 "ema_span_minutes": 427.0,
                 "enabled": false,
@@ -79,7 +80,6 @@
                 "total_exposure_enforcer_threshold": 1.0,
                 "total_exposure_entry_gate_enabled": true,
                 "total_wallet_exposure_limit": 2.5,
-                "we_excess_allowance_mode": "bounded",
                 "we_excess_allowance_pct": 0.0
             },
             "strategy": {
@@ -121,6 +121,7 @@
                 "unilateralness_ema_span_1m": 60.0
             },
             "hsl": {
+                "scale_budget_with_excess_allowance": false,
                 "cooldown_minutes_after_red": 3270.0,
                 "ema_span_minutes": 427.0,
                 "enabled": false,
@@ -143,7 +144,6 @@
                 "total_exposure_enforcer_threshold": 1.0,
                 "total_exposure_entry_gate_enabled": true,
                 "total_wallet_exposure_limit": 2.5,
-                "we_excess_allowance_mode": "bounded",
                 "we_excess_allowance_pct": 0.0
             },
             "strategy": {

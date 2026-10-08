@@ -602,6 +602,24 @@ def capture(
             cooldown_ms=math.floor(policy["cooldown_minutes_after_red"] * 60_000 + 0.5),
             restart=policy["restart_after_red_policy"],
         )
+        payload["scale_budget_with_excess_allowance"] = policy[
+            "scale_budget_with_excess_allowance"
+        ]
+        if policy["scale_budget_with_excess_allowance"]:
+            side_config = bot.config["bot"][scope.pside]
+            override = (
+                bot.coin_overrides.get(scope.symbol, {})
+                .get("bot", {}).get(scope.pside, {})
+            )
+            payload["exposure_budget"] = dict(
+                wallet_exposure_limit=override.get(
+                    "wallet_exposure_limit", side_config.get("wallet_exposure_limit", -1.0)
+                ),
+                total_wallet_exposure_limit=side_config["risk"]["total_wallet_exposure_limit"],
+                we_excess_allowance_pct=override.get("risk", {}).get(
+                    "we_excess_allowance_pct", side_config["risk"]["we_excess_allowance_pct"]
+                ),
+            )
         reasons = set(global_reasons)
         # An attributed row may have no usable timestamp and therefore cannot
         # establish a price-bearing contributor. Its quality still belongs to

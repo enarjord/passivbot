@@ -442,6 +442,18 @@ OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
 }
 
 
+for _pside in ("long", "short"):
+    _path = f"bot.{_pside}.hsl.scale_budget_with_excess_allowance"
+    OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS[_path] = {
+        "visible": [f"--{_path}"],
+        "hidden": [],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"optimize"},
+        "help": "Scale the coin HSL budget by bounded excess headroom for this optimize run.",
+    }
+
+
 def get_field_runtime_rule(full_name: str) -> dict:
     return FIELD_RUNTIME_RULES.get(full_name, {})
 
@@ -774,14 +786,15 @@ def clean_config(config: dict) -> dict:
     """
     from config.hsl import FIELDS, normalization_template
     from config.migrations.gpu_screening import migrate_gpu_screening
+    from config.migrations.excess_allowance import retire_excess_allowance_mode
 
-    source = config or {}
+    source = deepcopy(config or {})
+    retire_excess_allowance_mode(source)
     optimize_section = source.get("optimize")
     legacy_gpu = (
         optimize_section.get("gpu") if isinstance(optimize_section, dict) else None
     )
     if isinstance(legacy_gpu, dict) and "successive_halving" in legacy_gpu:
-        source = deepcopy(source)
         migrate_gpu_screening(source)
     template = normalization_template(get_template_config(), source)
     if "hsl" in source.get("bot", {}):
@@ -964,6 +977,7 @@ def create_acronym(full_name, acronyms=set()):
 #   config_key -> {
 #       "visible": ["--preferred-name", "-x"],
 #       "hidden": ["--legacy_name", "--legacy_name_with_dots"],
+#       "command_aliases": {"optimize": ["-x"]},
 #       "commands": {"live", "backtest", "optimize"},
 #       "group": {"live": "Coin Selection", ...},
 #       "type": type_converter,
@@ -1529,6 +1543,20 @@ for _pside in ("long", "short"):
             "help": f"{_help} for the {_pside} side.",
         }
 
+# Optimizer shortcuts set search bounds rather than live/backtest bot values.
+for _pside in ("long", "short"):
+    _key = f"optimize.bounds.{_pside}.risk.total_wallet_exposure_limit"
+    RESERVED_CLI_ARGS[_key] = {
+        "visible": [f"--{_key}"],
+        "command_aliases": {"optimize": [f"-{_pside[0]}twel"]},
+        "hidden": [f"--{_key.replace('.', '_')}", f"-{_pside[0]}rtwel"],
+        "type": comma_separated_values_float,
+        "metavar": "VALUE_OR_RANGE",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimize Bounds"},
+        "help": f"Wallet exposure bounds for the {_pside} side: VALUE or LOW,HIGH[,STEP].",
+    }
+
 RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
 
 
@@ -1701,6 +1729,10 @@ CLI_HELP_OVERRIDES = {
 for _pside in ("long", "short"):
     CLI_HELP_OVERRIDES.update(
         {
+            f"bot.{_pside}.hsl.scale_budget_with_excess_allowance": (
+                "Scale coin HSL balance budget by effective bounded excess allowance. "
+                "Default false; global per side; requires coin HSL mode."
+            ),
             f"bot.{_pside}.hsl.enabled": f"Enable HSL for the {_pside} side.",
             f"bot.{_pside}.hsl.red_threshold": (
                 f"RED drawdown trigger for {_pside} HSL, as part-per-one."
@@ -1734,10 +1766,6 @@ for _pside in ("long", "short"):
             f"bot.{_pside}.risk.total_exposure_enforcer_threshold": (
                 f"Fraction of {_pside} TWEL used by entry gating and TWEL "
                 "auto-reduce repair."
-            ),
-            f"bot.{_pside}.risk.we_excess_allowance_mode": (
-                "Allowed values: bounded or legacy_raw. bounded caps per-symbol "
-                "excess by side TWEL; legacy_raw preserves raw v7-style allowance."
             ),
             f"bot.{_pside}.risk.we_excess_allowance_pct": (
                 f"Per-symbol allowance above the configured {_pside} WEL before "
@@ -2015,15 +2043,16 @@ def add_reserved_arguments(
             if "choices" in spec:
                 register_kwargs["choices"] = spec["choices"]
 
+        visible_names = [*spec["visible"], *spec.get("command_aliases", {}).get(command, [])]
         _register_argument(
             container,
-            spec["visible"],
+            visible_names,
             spec["hidden"],
             **register_kwargs,
         )
         visible_shorts = [
             name[1:]
-            for name in spec["visible"]
+            for name in visible_names
             if name.startswith("-") and not name.startswith("--")
         ]
         for short_name in visible_shorts:

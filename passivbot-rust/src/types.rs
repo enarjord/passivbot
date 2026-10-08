@@ -396,17 +396,6 @@ fn default_true() -> bool {
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum WeExcessAllowanceMode {
-    #[default]
-    Bounded,
-    LegacyRaw,
-}
-
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumString, Display,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
 pub enum TwelEnforcerPolicy {
     #[default]
     ReduceOverweight,
@@ -554,8 +543,6 @@ pub struct BotParams {
     pub risk_twel_enforcer_policy: TwelEnforcerPolicy,
     pub risk_twel_enforcer_threshold: f64,
     pub risk_we_excess_allowance_pct: f64,
-    #[serde(default)]
-    pub risk_we_excess_allowance_mode: WeExcessAllowanceMode,
     #[serde(default = "default_true")]
     pub unstuck_enabled: bool,
     #[serde(default = "default_true")]
@@ -615,7 +602,6 @@ impl Default for BotParams {
             risk_twel_enforcer_policy: TwelEnforcerPolicy::default(),
             risk_twel_enforcer_threshold: 0.0,
             risk_we_excess_allowance_pct: 0.0,
-            risk_we_excess_allowance_mode: WeExcessAllowanceMode::default(),
             unstuck_enabled: true,
             unstuck_ema_gating_enabled: true,
             unstuck_close_pct: 0.0,

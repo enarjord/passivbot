@@ -34,6 +34,7 @@ def _get_shared_bot_defaults():
                 "cooldown_minutes_after_red": 2160.0,
                 "ema_span_minutes": 720.0,
                 "enabled": False,
+                "scale_budget_with_excess_allowance": False,
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.15,
                 "restart_after_red_policy": "always",
@@ -53,7 +54,6 @@ def _get_shared_bot_defaults():
                 "total_exposure_enforcer_threshold": 1.0,
                 "total_exposure_entry_gate_enabled": True,
                 "total_wallet_exposure_limit": 1.5,
-                "we_excess_allowance_mode": "bounded",
                 "we_excess_allowance_pct": 0.37,
             },
             "unstuck": {
@@ -84,6 +84,7 @@ def _get_shared_bot_defaults():
                 "cooldown_minutes_after_red": 1.0,
                 "ema_span_minutes": 1.0,
                 "enabled": False,
+                "scale_budget_with_excess_allowance": False,
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.01,
                 "restart_after_red_policy": "always",
@@ -103,7 +104,6 @@ def _get_shared_bot_defaults():
                 "total_exposure_enforcer_threshold": 0.8,
                 "total_exposure_entry_gate_enabled": True,
                 "total_wallet_exposure_limit": 0.0,
-                "we_excess_allowance_mode": "bounded",
                 "we_excess_allowance_pct": 0.0,
             },
             "unstuck": {

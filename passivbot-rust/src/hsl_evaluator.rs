@@ -8,11 +8,68 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExposureBudget {
+    pub wallet_exposure_limit: f64,
+    pub total_wallet_exposure_limit: f64,
+    pub we_excess_allowance_pct: f64,
+}
+
+/// Configured headroom, never actual current exposure, scales the slot budget.
+pub(crate) fn budget(
+    balance: f64,
+    mode: &Mode,
+    slots: u64,
+    scale: bool,
+    exposure: Option<&ExposureBudget>,
+) -> Result<f64, String> {
+    if scale && !matches!(mode, Mode::Coin) {
+        return Err("HSL excess allowance budget scaling requires coin mode".into());
+    }
+    let divisor = if matches!(mode, Mode::Coin) { slots } else { 1 };
+    if divisor == 0 {
+        return Err("inactive HSL slot budget".into());
+    }
+    let mut multiplier = 1.0;
+    if scale {
+        let e = exposure.ok_or("HSL budget scaling requires current exposure configuration")?;
+        if !e.wallet_exposure_limit.is_finite()
+            || !e.total_wallet_exposure_limit.is_finite()
+            || e.total_wallet_exposure_limit < 0.0
+            || !e.we_excess_allowance_pct.is_finite()
+            || e.we_excess_allowance_pct < 0.0
+        {
+            return Err("invalid HSL exposure budget inputs".into());
+        }
+        let base = if e.wallet_exposure_limit < 0.0 {
+            e.total_wallet_exposure_limit / divisor as f64
+        } else {
+            e.wallet_exposure_limit
+        };
+        let params = crate::types::BotParams {
+            total_wallet_exposure_limit: e.total_wallet_exposure_limit,
+            risk_we_excess_allowance_pct: e.we_excess_allowance_pct,
+            ..Default::default()
+        };
+        multiplier += crate::entries::effective_we_excess_allowance_pct(&params, base);
+    }
+    let result = balance / divisor as f64 * multiplier;
+    if !result.is_finite() || result <= 0.0 {
+        return Err("invalid HSL balance budget".into());
+    }
+    Ok(result)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
     pub snapshot: Snapshot,
     pub slots: u64,
+    #[serde(default)]
+    pub scale_budget_with_excess_allowance: bool,
+    #[serde(default)]
+    pub exposure_budget: Option<ExposureBudget>,
     #[serde(deserialize_with = "crate::hsl_json::number")]
     pub span: f64,
     #[serde(deserialize_with = "crate::hsl_json::number")]
@@ -197,11 +254,13 @@ fn evaluate_inner<const SEED: bool>(mut input: Input) -> Result<Output, String> 
             cursor: None,
         });
     }
-    let budget = if matches!(input.snapshot.mode, Mode::Coin) {
-        input.snapshot.balance / input.slots as f64
-    } else {
-        input.snapshot.balance
-    };
+    let budget = budget(
+        input.snapshot.balance,
+        &input.snapshot.mode,
+        input.slots,
+        input.scale_budget_with_excess_allowance,
+        input.exposure_budget.as_ref(),
+    )?;
     let trace = if already_normalized(&input.snapshot)? {
         compose_prepared(&input.snapshot, prepared, false)?
     } else {
@@ -400,5 +459,41 @@ mod tests {
             }
             assert!(!already_normalized(snapshot).unwrap());
         }
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    #[test]
+    fn bounded_headroom_scales_only_explicit_coin_budgets() {
+        let mut e = ExposureBudget {
+            wallet_exposure_limit: -1.0,
+            total_wallet_exposure_limit: 2.5,
+            we_excess_allowance_pct: 0.44,
+        };
+        assert_eq!(budget(1000.0, &Mode::Coin, 10, false, None).unwrap(), 100.0);
+        assert_eq!(
+            budget(1000.0, &Mode::Coin, 10, true, Some(&e)).unwrap(),
+            144.0
+        );
+        assert_eq!(
+            budget(1000.0, &Mode::Coin, 1, true, Some(&e)).unwrap(),
+            1000.0
+        );
+        e.wallet_exposure_limit = 2.0;
+        assert_eq!(
+            budget(1000.0, &Mode::Coin, 10, true, Some(&e)).unwrap(),
+            125.0
+        );
+        e.total_wallet_exposure_limit = 0.0;
+        assert_eq!(
+            budget(1000.0, &Mode::Coin, 10, true, Some(&e)).unwrap(),
+            100.0
+        );
+        assert!(budget(1000.0, &Mode::Coin, 10, true, None).is_err());
+        assert!(budget(1000.0, &Mode::Pside, 1, true, Some(&e)).is_err());
+        e.we_excess_allowance_pct = f64::NAN;
+        assert!(budget(1000.0, &Mode::Coin, 10, true, Some(&e)).is_err());
     }
 }

@@ -6,6 +6,15 @@ import json
 
 import pytest
 
+
+@pytest.fixture(scope="module")
+def require_real_passivbot_rust_module():
+    import passivbot_rust as pbr
+
+    assert not getattr(pbr, "__is_stub__", False)
+    assert hasattr(pbr, "hsl_evaluate"), "rebuild the source-matched Rust extension"
+    return pbr
+
 from hsl_reference import Fill, dec
 from hsl_reference_candle_free import estimate_candle_free
 from hsl_reference_controller import replay
@@ -390,3 +399,65 @@ def test_reopening_diagnostic_uses_actual_open_time_without_inventing_a_risk_sam
         "exposure_resumed",
     )
     assert event["raw"] is None and event["ema"] is None
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_coin_allowance_budget_changes_current_and_terminal_red(
+    terminal, require_real_passivbot_rust_module
+):
+    pbr = require_real_passivbot_rust_module
+    fills = (
+        [Fill("open", M, 1, 100, 0, 0), Fill("close", 2 * M, -1, 78, -22, 0)]
+        if terminal
+        else []
+    )
+    pair = cases.pair(
+        size=0 if terminal else 1, basis=0 if terminal else 100, mark=78, fills=fills
+    )
+    snapshot = cases.frame(pair, balance=1000)
+    request = dict(
+        snapshot=payload(snapshot, "coin", quantity_step=0.1, pside="long", symbol="A"),
+        slots=10,
+        span=1,
+        threshold=0.15 if terminal else 0.2,
+        cooldown_ms=10 * M,
+        restart="always",
+    )
+    ordinary = json.loads(pbr.hsl_evaluate(json.dumps(request)))
+    request.update(
+        scale_budget_with_excess_allowance=True,
+        exposure_budget=dict(
+            wallet_exposure_limit=-1,
+            total_wallet_exposure_limit=2.5,
+            we_excess_allowance_pct=0.44,
+        ),
+    )
+    scaled = json.loads(pbr.hsl_evaluate(json.dumps(request)))
+    assert ordinary["decision"]["action"] == ("halted" if terminal else "panic")
+    assert scaled["decision"]["action"] == "normal"
+    if terminal:
+        assert ordinary["decision"]["red_at"] is not None
+        assert scaled["decision"]["red_at"] is None
+    else:
+        assert scaled["decision"]["raw"] < ordinary["decision"]["raw"]
+    assert json.loads(pbr.hsl_evaluate(json.dumps(request))) == scaled
+
+
+def test_scaling_requires_exposure_facts(require_real_passivbot_rust_module):
+    pair = cases.pair(size=1, basis=100, mark=78, fills=[])
+    request = dict(
+        snapshot=payload(
+            cases.frame(pair, balance=1000),
+            "coin",
+            quantity_step=0.1,
+            pside="long",
+            symbol="A",
+        ),
+        slots=10,
+        span=1,
+        threshold=0.2,
+        cooldown_ms=0,
+        restart="always",
+        scale_budget_with_excess_allowance=True,
+    )
+    with pytest.raises(ValueError, match="requires current exposure configuration"):
+        require_real_passivbot_rust_module.hsl_evaluate(json.dumps(request))

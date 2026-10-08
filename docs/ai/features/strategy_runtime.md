@@ -66,7 +66,9 @@ Optimizer selector contract:
 Seed evaluation contract:
 
 - Shared ingestion normalizes, clamps, quantizes, and deduplicates starting configs before each
-  backend applies its seed policy.
+  backend applies its seed policy. GPU preparation and proxy setup use the bounds-clamped
+  input seed after fixed runtime and optimizer overrides. Bounds may change its enabled
+  sides relative to the input bot values; enabledness must remain fixed across the search.
 - CPU optimization exact-Rust evaluates every deduplicated seed before population trimming.
 - GPU `seed_bootstrap.mode=auto` exact-evaluates small pools and full-history proxy-screens pools
   larger than `max_exact`. Screened pools exact-Rust validate a capped, constraint-aware diverse

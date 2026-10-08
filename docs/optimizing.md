@@ -43,6 +43,25 @@ Optimization requires the full install profile:
 pip install -e ".[full]"
 ```
 
+## Session identity and output names
+
+Optimizer sessions use the [shared session naming format](backtesting.md#backtest-results)
+under `optimize_results/`. Small suites include their actual coin names and the number of
+prepared scenarios. The deterministic setup fingerprint includes effective settings after CLI
+overrides, fixed evaluation policy, optimizer bounds/objectives/backend settings, resolved dates,
+actual prepared data and evaluator implementation, and selected starting-config contents in
+consumption order. Starting configs are frozen in a bounded-memory disk snapshot before hashing
+and execution; filenames, old metrics and output paths are not seed identity.
+
+An unspecified `optimize.seed` is resolved to a concrete random seed before a fresh search.
+It is recorded in `session.json` and saved candidates. New sessions with different actual seeds
+have different setup fingerprints. An explicit seed can be used to compare otherwise equivalent
+setups. `--resume` retains the original output directory and restores its recorded seed when the
+input seed is unspecified; existing checkpoint/evaluation compatibility checks still apply.
+Legacy sessions without `session.json` keep their original seed policy. Fresh runs always get a
+new random run ID, even when their setup fingerprints match. Full SHA-256 setup fingerprints,
+run IDs and canonical setup inputs are available in `session.json`.
+
 ## Running Optimization
 
 ```bash
@@ -61,6 +80,11 @@ Example:
 ```bash
 passivbot optimize configs/examples/default_trailing_martingale_long.json --start configs/starting_pool/
 ```
+
+Wallet exposure shortcuts `-ltwel` and `-stwel` set
+`optimize.bounds.long.risk.total_wallet_exposure_limit` and the short equivalent.
+Use a single value to fix exposure (for example `-ltwel 0`), or `LOW,HIGH[,STEP]`
+to set its search range. In live and backtest commands these shortcuts still set bot values.
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
 
@@ -217,7 +241,7 @@ The supported slice is intentionally narrow:
   per-coin
   `risk.position_exposure_enforcer_enabled` and
   `risk.position_exposure_enforcer_threshold`; per-coin
-  `risk.we_excess_allowance_mode`, modeled leaves for disabled sides, and other override leaves
+  `hsl.scale_budget_with_excess_allowance`, modeled leaves for disabled sides, and other override leaves
   fail closed. Non-`normal` forced modes remain accepted for either side because they are
   backtest-inert. Trailing
   Martingale also resolves all four `entry.ema_gate_mode` values per coin and side. In one-sided
@@ -584,6 +608,11 @@ effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
 prepared concrete dates. The checkpoint signature also records each scenario's ordered effective
 coins, side topology, and prepared candle window, so resume fails closed if preparation changes.
+
+GPU setup clamps the input bot values to optimizer bounds before determining enabled sides.
+For example, `-ltwel 0 -stwel 2,2` can switch a long-only input to short-only optimization
+when short positions and approved coins permit it. Each enabled GPU side must remain enabled
+across the entire search range; bounds that vary between disabled and enabled remain unsupported.
 
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the
