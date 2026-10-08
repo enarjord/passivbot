@@ -2515,6 +2515,7 @@ class MpsMulticoinProxy:
         interrupt_check=None,
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
         prepared_data_cache: dict | None = None,
+        factual_hsl: bool = False,
     ):
         try:
             import torch
@@ -2973,6 +2974,7 @@ class MpsMulticoinProxy:
             for side in self.sides
         )
         common_runner_kwargs["interrupt_check"] = self.interrupt_check
+        common_runner_kwargs["factual_hsl"] = factual_hsl
         loss_gate_enabled = common_runner_kwargs["max_realized_loss_pct"] < 1.0
         common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
             _fill_pnl_lookback_bars(backtest_params)

@@ -2810,3 +2810,66 @@ Historical observations do not supersede those requirements or prove current acc
   correction, with CPU simulation forbidden. All 54 affected suite-key/topology
   and fused-construction controls also pass. The GPU shader and compiled Rust
   artifact are unchanged by this host-side correction.
+
+
+### 2026-10-08 — Select factual HSL behind the native service boundary
+
+- The opt-in factual foundation completes current-head author and independent
+  review without findings. Rust and both Python CI jobs pass; the foundation
+  is integrated into the optimizer development branch.
+- Enable factual replay only in the native CUDA service. Determine capture needs
+  from effective dispatch parameters and coin overrides. Keep legacy screening
+  mode separate; an inactive HSL dispatch omits factual storage/capture and
+  preserves the existing one-side EMA disabled-HSL specialization.
+- Start with a conservative worker-owned factual capacity (at most 256 records
+  per pair), learn upward from rejected GPU overflow within the physical budget,
+  and retain that estimate across HSL-on/off/on dispatches on the same runner.
+  No new optimizer-facing tuning field or device ownership crosses the service API.
+- Version native saved-fitness semantics from execution one to two. Reject old
+  checkpoints instead of silently reusing their old HSL fitness; configurations
+  remain usable seeds. Preserve CPU contracts and the legacy CUDA runtime contract.
+- All 38 new actual device transition, override and asynchronous service controls
+  pass, along with ten host retry/fatal-policy checks and both checkpoint rejection
+  controls. The cutover stays local until its integrated result is validated
+  and reviewed; wider evidence follows below.
+
+- The wider native lifecycle/loss comparison passes all 42 cases against CPU
+  references outside optimization. The native request path stays CPU-free. The
+  documentation-adjusted source also passes 77 host session/data/tuning/retry/doc
+  checks and eighteen selected checkpoint contracts. All 56 broader device
+  controls also pass: 52 actual optimizer CLI cases, two canonical prepared-data
+  controls and two incremental service/resource cases. Source identity is
+  unchanged after the full lifecycle/CLI validation.
+- A deliberate duplicate initial candidate reproduces an existing anchor-resume
+  test's fixed-twelve assertion failure with fully evaluated/persisted 3/4/4
+  cohorts. Count actual distinct generations, reconcile durable records and
+  evaluator counts, require fully evaluated survivors and prove completed resume
+  performs no new evaluation. Both duplicate and ordinary controls, plus related
+  native host tests, pass (23 cases). Production search and replay are unchanged.
+
+- The final integrated cutover passes 140 host and 144 actual device controls.
+  Short-only and fused short-only coin policies are isolated. Omitting only fused
+  TM short override admission in a separate negative control fails its raw HSL
+  metric comparison, with the other seven override cases passing. This validates
+  the new regression without changing the production implementation.
+
+- Accept both independent worker-review findings: derive native capture from
+  effective per-coin enablement, preserving strict policy validation while omitting
+  unused history-readiness checks; refresh learned physical limits after successful
+  replay before subsequent queue claims. Validate disabled-policy GPU outputs and
+  fixed/automatic scheduling against the preceding implementation before publication.
+- The corrected source passes 220 host, 146 factual replay/capture CUDA, eighteen
+  execution-view (four CUDA/fourteen host) and twelve real CLI/data/service CUDA
+  controls. All six disabled-policy regressions and both scheduling controls fail
+  the preceding production. Preserve the single scratch-owner assertion through
+  residency metadata rather than relying on a bound-method implementation detail.
+  Recheck unchanged passing sources; require fresh independent review and all CI.
+- Prioritize compact factual storage, dataset-owned capacity retention across
+  residency eviction and representative long-held/many-coin scaling measurements.
+  The current layout calculation reserves about 109.95 MiB per candidate in a
+  25-coin/two-side/90-day example, only 0.61 MiB of which is factual storage. Preserve
+  legacy consumers while removing that cost from the replacement path.
+- Hold further launch tuning until these resource gates are addressed. Treat
+  guarded incremental reconstruction as a measured follow-up requiring parity;
+  shared strategy-neutral allocation/retry/dispatch extraction remains a focused
+  simplification candidate, without a general backend framework.

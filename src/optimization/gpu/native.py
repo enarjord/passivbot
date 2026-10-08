@@ -1,7 +1,8 @@
 """CUDA execution facade; dataset buffers and replay handles stay on the worker.
 
-This adapter is under development. Transport ownership does not establish parity
-acceptance of the existing replay engine, and optimizer cutover remains separate.
+The native worker selects factual HSL replay from effective request policies.
+Transport ownership alone does not establish general numerical acceptance; the
+optimizer acceptance map records the validated scope and remaining gates.
 """
 
 from contextlib import contextmanager
@@ -106,6 +107,7 @@ class CudaBacktestService:
                     needed_metrics=dataset.metrics, batch_size=self._batch_size,
                     max_dispatch_candidate_bars=self._dispatch_budget,
                     interrupt_check=self._interrupt_check, prepared_data_cache=self._prepared_cache,
+                    factual_hsl=True,
                 )
                 try:
                     # Discover physical limits after claiming one ownership request.
@@ -114,7 +116,14 @@ class CudaBacktestService:
                     self._residency.activate(replay)
                     self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
                     self._batch_policy.width(dataset_id, self._batch_size)
-                    yield SimpleNamespace(evaluate=replay.evaluate_results)
+                    def evaluate(candidates):
+                        results = replay.evaluate_results(candidates)
+                        # Successful replay may have learned a larger factual
+                        # history, or switched effective HSL policies off/on.
+                        # Apply its current physical limit before another claim.
+                        self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
+                        return results
+                    yield SimpleNamespace(evaluate=evaluate)
                 finally:
                     del replay
 

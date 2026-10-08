@@ -28,6 +28,8 @@ def make_proxy(
     coin_count=2,
     prepared_data_cache=None,
     interrupt_check=None,
+    factual_hsl=False,
+    override_side="long",
 ):
     config = generated_template(get_template_config(), mode)
     config["live"].update(hsl_signal_mode=mode)
@@ -65,7 +67,7 @@ def make_proxy(
             restart_after_red_policy="always",
         )
     if override:
-        config["coin_overrides"] = {"AAA": {"bot": {"long": {"hsl": override}}}}
+        config["coin_overrides"] = {"AAA": {"bot": {override_side: {"hsl": override}}}}
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     config["backtest"]["coins"] = {"binance": coins}
     candles, timestamps = _synthetic_hlcvs(minutes, len(coins), 43)
@@ -93,6 +95,7 @@ def make_proxy(
         needed_metrics={"adg_usd"},
         prepared_data_cache=prepared_data_cache,
         interrupt_check=interrupt_check,
+        factual_hsl=factual_hsl,
         max_dispatch_candidate_bars=(
             minutes * len(coins) * len(sides) if chunk else 1000000
         ),

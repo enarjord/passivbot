@@ -242,5 +242,6 @@ def test_cuda_variants_match_independent_replays_and_reuse_one_market_pack(monke
                     assert result.metrics == reference.metrics
                     assert result.liquidated == reference.liquidated
                     assert len(service._prepared_cache) == 1
-                    owners = [row.evaluate.__self__ for row in service._executor._replays.values()]
+                    owners = [owner for entry in service._residency._entries.values()
+                              for reference in entry["owners"] if (owner := reference()) is not None]
                     assert sum(bool(owner.runners or owner.fused_runner is not None) for owner in owners) == 1

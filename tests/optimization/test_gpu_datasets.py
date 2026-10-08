@@ -177,3 +177,56 @@ def test_attachment_cleanup_preserves_primary_failure_and_attempts_every_close(m
                 raise ValueError("primary body")
     assert closed == list(reversed(opened))
     assert "cleanup candles" in caplog.text
+
+
+@pytest.mark.parametrize("batch_size,tuning_mode", [(8, "off"), ("auto", "auto")])
+def test_cuda_facade_refreshes_learned_ceiling_before_claiming_more_work(monkeypatch, batch_size, tuning_mode):
+    from contextlib import contextmanager
+    from threading import Event
+    from types import SimpleNamespace
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu import service as replay_module
+
+    entered, release = Event(), Event()
+    batches = []
+    class Replay:
+        ceiling = 8
+        def __init__(self, **kwargs):
+            assert kwargs["factual_hsl"]
+            entered.set()
+            assert release.wait(3)
+        def evaluate_results(self, candidates):
+            batches.append(len(candidates))
+            self.ceiling = 2  # Successful GPU work learned a larger history.
+            return [{"fills_per_day": item["value"]} for item in candidates]
+
+    @contextmanager
+    def scope(self):
+        self._residency = SimpleNamespace(
+            activate=lambda _replay: None,
+            prepare_coin_subset=lambda candles, indices: candles[:, indices, :])
+        yield
+        self._residency = None
+    @contextmanager
+    def attach(self):
+        yield np.zeros((6, 3, 4)), np.ones(6), np.arange(6, dtype=np.int64)
+    monkeypatch.setattr(CudaBacktestService, "_worker_scope", scope)
+    monkeypatch.setattr(CudaBacktestService, "_dispatch_ceiling", staticmethod(lambda replay: replay.ceiling))
+    monkeypatch.setattr(PreparedGpuDataset, "attach", attach)
+    monkeypatch.setattr(replay_module, "MpsMulticoinProxy", Replay)
+    service = CudaBacktestService(batch_size=batch_size, tuning_mode=tuning_mode,
+                                  max_pending=32, max_batch_delay=0.02)
+    try:
+        service.register_dataset("market", PreparedGpuDataset(**inputs()))
+        futures = [service.submit(BacktestRequest("0", "market", {"value": 0}))]
+        assert entered.wait(3)
+        futures.extend(service.submit(BacktestRequest(str(i), "market", {"value": i}))
+                       for i in range(1, 16))
+        release.set()
+        assert [f.result(timeout=3).metrics["fills_per_day"] for f in futures] == list(range(16))
+        assert service._batch_policy._ceilings["market"] == 2
+    finally:
+        release.set()
+        service.close()
+    assert batches == [8, 2, 2, 2, 2]
