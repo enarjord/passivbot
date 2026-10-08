@@ -52,8 +52,10 @@ struct HslState {
 #endif
     HslController hsl;
     device HslNode* hsl_tree;
+#if !PASSIVBOT_HSL_FACTUAL_ONLY
     device int* hsl_times;
     device float* hsl_realized;
+#endif
     int hsl_lookback;
     bool hsl_owner;
     bool hsl_valid;
@@ -457,13 +459,22 @@ inline void bind_hsl(
     int scope, int capacity, int tree_size, int lookback, bool initialize, bool owner,
     int fact_capacity = 0
 ) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    h.hsl_tree = fact_capacity > 0
+        ? trees + scope * hsl_storage_nodes(capacity, tree_size, fact_capacity) : nullptr;
+#else
     h.hsl_tree = trees + scope * hsl_storage_nodes(capacity, tree_size, fact_capacity);
     h.hsl_times = rows + scope * capacity * 2;
     h.hsl_realized = reinterpret_cast<device float*>(h.hsl_times + capacity);
+#endif
     h.hsl_lookback = lookback;
     h.hsl_owner = owner;
 #if PASSIVBOT_HSL_FACTS_ENABLED > 0
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    const int fact_offset = 0;
+#else
     const int fact_offset = 2 * tree_size + (capacity + 3) / 4;
+#endif
     h.facts.state = reinterpret_cast<device HslPairRingState*>(h.hsl_tree + fact_offset);
     h.facts.records = reinterpret_cast<device HslPairRecord*>(h.hsl_tree + fact_offset + 2);
     h.fact_events = reinterpret_cast<device HslPairEvent*>(h.facts.records + fact_capacity);
@@ -603,11 +614,17 @@ inline void observe_hsl(
     } else
 #endif
     {
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // An enabled native policy requires a bound factual context. Never fall
+    // back to the bypassed observation evaluator or absent window buffers.
+    h.hsl_valid = false;
+#else
     h.hsl_valid = hsl_observe(h.hsl, h.hsl_tree,
         h.hsl_times, h.hsl_realized, minute, h.hsl_lookback,
         budget,
         realized, upnl, exposed, terminal, h.red_threshold,
         h.cooldown_minutes, h.restart_policy == 2);
+#endif
     }
     if (!h.hsl_valid) return;
     h.sampled_drawdown_raw = h.hsl.raw;
@@ -856,6 +873,7 @@ inline void update_coin_hsl(
     bool has_position, float last_fill_k, int k
 ) {
     const int minute = k + 1;
+#if !PASSIVBOT_HSL_FACTUAL_ONLY
     bool factual = false;
 #if PASSIVBOT_HSL_FACTS_ENABLED > 0
     factual = h.replay != nullptr && h.replay->enabled;
@@ -878,6 +896,7 @@ inline void update_coin_hsl(
         controller.scalar_ready = false;
         controller.exposed = true;
     }
+#endif
     observe_hsl(h, balance, realized_pnl, unrealized_pnl,
         has_position, minute, false);
 }

@@ -280,8 +280,10 @@ Completion requires:
   - [x] Add CPU-owned native survivor selection, full seed/bootstrap evaluation and checkpointed
     screening/promotion/full stages; exclude incomplete observations from fitness/storage.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
-  - [ ] Give native factual HSL compact storage independent of the bypassed legacy
+  - [x] Give native factual HSL compact storage independent of the bypassed legacy
     observation tree/window; preserve the legacy layout for remaining consumers.
+    Source-verified CUDA allocation and replay controls pass; reviewed development
+    integration and representative total-resource acceptance remain separate gates.
   - [ ] Retain small learned factual-capacity estimates in dataset execution metadata
     across residency eviction, without retaining device buffers or adding checkpoints.
   - [ ] Measure long-held, many-coin HSL reconstruction scaling before further launch
