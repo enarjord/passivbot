@@ -4,6 +4,8 @@ This is an evidence map for the [development contract](gpu_optimizer_contract.md
 not a simulator certification or permission to retire the existing `gpu` backend.
 The replacement remains experimental. Test coverage establishes the stated cases;
 it does not establish every feature combination or production search quality.
+Dated decisions and prior measurements are preserved in the
+[decision and progress log](gpu_optimizer_decision_log.md).
 
 ## Ownership and lifecycle foundation
 
