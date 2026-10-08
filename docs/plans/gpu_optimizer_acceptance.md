@@ -1474,8 +1474,14 @@ active episode, unchanged selected factual histories, consecutive minutes, uncha
 budget/smoothing and lookback start, stable endpoint inventory/basis and causal
 quotes. Missing/clipped history, same-minute fills, completed episodes, near-threshold
 numerical concerns and cache loss reconstruct fresh. It retains no action permission.
-Mixed candidate cohorts, added actual-native temporal controls, representative
-multi-entry/clipping cases, broader lifecycle/CLI/resource checks, independent
+The mixed candidate evidence below passes. Broader replay validation also passes
+350 cases, including 36 exact temporal controls covering both legacy and native
+factual layouts, one/two coins, long/short/both sides and coin/pside/unified HSL.
+All 42 native lifecycle/loss checks and twelve real CLI/data/service checks also
+pass. The latter include eight optimizer bootstrap/resume combinations with CPU
+simulation forbidden, lazy suite preparation and incremental resource admission.
+All 952 checked source files remain unchanged after the combined validation.
+Representative multi-entry/clipping pairs, total-resource checks, independent
 review and CI remain required before integration.
 
 

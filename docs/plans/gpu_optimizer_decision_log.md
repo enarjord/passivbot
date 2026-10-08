@@ -2993,3 +2993,15 @@ Historical observations do not supersede those requirements or prove current acc
 - All checked sources remain unchanged after paired comparisons. Continue
   actual-native temporal, lifecycle and real CLI tests, then representative
   multiple-entry and lookback-boundary controls before integration/review.
+
+
+### 2026-10-08 — Complete continuation replay and optimizer caller checks
+
+- Corrected continuation passes 350 broader replay checks, including 36 exact
+  temporal controls across retained/native factual layouts, 42 native lifecycle/loss
+  checks and twelve real CLI/data/service checks. Eight CLI combinations cover
+  bootstrap/resume with CPU simulation forbidden. All checked sources remain
+  unchanged; preserve the existing strict raw-output comparisons.
+- Keep representative fill/clipping comparisons and total-resource evidence
+  separate from these completed caller gates. Independent review and CI remain
+  required for development integration.
