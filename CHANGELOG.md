@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- GPU multicoin replay retains small fee/profit contributions with compensated f32 cash-balance accumulation, including across temporal dispatches.
+
 - GPU multicoin trailing-martingale recursive ladders update the initial sizing
   price with the simulated order-book touch, avoiding oversized short reentries.
 

@@ -327,6 +327,7 @@ inline RollingPnlSignal effective_rolling_pnl(
 // the realized-PnL scopes consumed by liquidation, loss gates, and HSL.
 struct JointPortfolioAccount {
     float balance;
+    float balance_correction;
     float realized_pnl_total;
     float realized_pnl_peak;
     float realized_pnl_long;
@@ -346,6 +347,7 @@ inline JointPortfolioAccount init_joint_portfolio_account(
 ) {
     JointPortfolioAccount account;
     account.balance = starting_balance;
+    account.balance_correction = 0.0f;
     account.realized_pnl_total = 0.0f;
     account.realized_pnl_peak = 0.0f;
     account.realized_pnl_long = 0.0f;
@@ -374,7 +376,12 @@ inline void record_joint_portfolio_fill(
         PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS, true, net_pnl
     );
 #endif
-    account.balance += net_pnl;
+    // Keep small fees/profits from disappearing into the larger cash balance.
+    // The residual travels with account state through temporal dispatches.
+    float adjusted = net_pnl - account.balance_correction;
+    float next = account.balance + adjusted;
+    account.balance_correction = (next - account.balance) - adjusted;
+    account.balance = next;
     account.realized_pnl_total += net_pnl;
     account.realized_pnl_peak = fmax(
         account.realized_pnl_peak, account.realized_pnl_total
