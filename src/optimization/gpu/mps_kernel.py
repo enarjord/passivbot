@@ -101,20 +101,27 @@ _TM_LOSS_GATE_DISABLED_DEFINE = "#define PASSIVBOT_TM_LOSS_GATE_DISABLED 1\n"
 _TM_VOLATILITY_DISABLED_DEFINE = "#define PASSIVBOT_TM_VOLATILITY_DISABLED 1\n"
 
 
-def _hsl_layout(capacity: int) -> tuple[int, int]:
+def _hsl_layout(capacity: int, fact_capacity: int = 0) -> tuple[int, int]:
     blocks = (capacity + 63) // 64
     tree_size = 1 << (blocks - 1).bit_length()
+    if type(fact_capacity) is not int or fact_capacity < 0:
+        raise ValueError("Invalid GPU HSL factual capacity")
     storage_nodes = 2 * tree_size + (capacity + 3) // 4
+    if fact_capacity:
+        storage_nodes += 2 + fact_capacity + (fact_capacity + 1) // 2
     return tree_size, storage_nodes
 
 
-def _with_hsl(source: str, capacity: int) -> str:
+def _with_hsl(source: str, capacity: int, fact_capacity: int = 0) -> str:
+    if fact_capacity and not capacity:
+        raise ValueError("GPU HSL facts require an HSL window")
     if not capacity:
         return source
     if not 1 <= capacity <= 90 * 1440 + 2:
         raise ValueError("Invalid GPU HSL window capacity")
-    tree_size, _ = _hsl_layout(capacity)
+    tree_size, _ = _hsl_layout(capacity, fact_capacity)
     return (
+        f"#define PASSIVBOT_HSL_FACTS_ENABLED {int(bool(fact_capacity))}\n"
         f"#define PASSIVBOT_HSL 1\n"
         f"#define PASSIVBOT_HSL_CAPACITY {capacity}\n"
         f"#define PASSIVBOT_HSL_TREE_SIZE {tree_size}\n" + source
@@ -1118,6 +1125,7 @@ def _ema_anchor_multicoin_shader_library(
     weighted_account_equity_enabled: bool = False,
     hsl_raw_tail_capacity: int = 1,
     unstuck_ema_enabled: bool = True,
+    hsl_fact_capacity: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1149,7 +1157,7 @@ def _ema_anchor_multicoin_shader_library(
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     if hsl_capacity:
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
-            source, hsl_capacity
+            source, hsl_capacity, hsl_fact_capacity
         )
     source = _with_unstuck_pnl_window(source, unstuck_pnl_lookback_bars, unstuck_pnl_capacity)
     if mps_coin_capacity is not None:
@@ -1186,6 +1194,7 @@ def _trailing_martingale_multicoin_shader_library(
     weighted_account_equity_enabled: bool = False,
     hsl_raw_tail_capacity: int = 1,
     unstuck_ema_enabled: bool = True,
+    hsl_fact_capacity: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1230,7 +1239,7 @@ def _trailing_martingale_multicoin_shader_library(
         source = "#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1\n" + source
     if hsl_capacity:
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
-            source, hsl_capacity
+            source, hsl_capacity, hsl_fact_capacity
         )
     source = _with_unstuck_pnl_window(source, unstuck_pnl_lookback_bars, unstuck_pnl_capacity)
     if mps_coin_capacity is not None:
@@ -1367,6 +1376,10 @@ def _recovery_history_bytes(sample_capacity: int):
     return int(sample_capacity) * 16 + MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS * 8
 
 
+class HslFactHistoryOverflow(RuntimeError):
+    """A rejected GPU attempt may be repeated with larger worker-owned storage."""
+
+
 def _require_available_held_valuation(scalars):
     # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
     # Metal writes -2 and returns immediately if a held coin has no price.
@@ -1374,6 +1387,8 @@ def _require_available_held_valuation(scalars):
         raise RuntimeError("GPU fill-PnL history overflow")
     if bool((scalars[:, 9] == -5.0).any()):
         raise RuntimeError("GPU close-admission invariant failed")
+    if bool((scalars[:, 9] == -7.0).any()):
+        raise RuntimeError("GPU HSL malformed factual history")
     invalid_hsl = scalars[:, 9] == -4.0
     if bool(invalid_hsl.any()):
         indices = invalid_hsl.nonzero().flatten()
@@ -1392,6 +1407,11 @@ def _require_available_held_valuation(scalars):
             "valid range or missing finite positive H/L/C; "
             f"candidate rows {rows}{suffix}"
         )
+
+    # Capacity is recoverable only when every other candidate is valid. Never
+    # retry a mixed batch containing an unavailable input or malformed fact.
+    if bool((scalars[:, 9] == -6.0).any()):
+        raise HslFactHistoryOverflow("GPU HSL factual history overflow")
 
 
 def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
@@ -2287,12 +2307,14 @@ class MpsEmaAnchorMulticoinRunner:
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
         unstuck_pnl_lookback_bars: int = 0,
+        interrupt_check=None,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
                 f"MPS multicoin runner side must be long or short, got {side!r}"
             )
         self.side = side
+        self.interrupt_check = interrupt_check or (lambda: None)
         self.collect_coin_fill_counts = bool(collect_coin_fill_counts)
         self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
@@ -2519,6 +2541,8 @@ class MpsEmaAnchorMulticoinRunner:
                 float(bool(market_orders_allowed)),
                 market_order_near_touch_threshold,
                 float(bool(filter_by_min_effective_cost)),
+                0.0,  # Runtime factual-ring capacity; absent from compile identity.
+                0.0,  # Internal factual evaluation control, independently of capture.
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -2686,6 +2710,8 @@ class MpsEmaAnchorMulticoinRunner:
         return loader(*args)
 
     def _use_disabled_hsl_specialization(self, matrix):
+        if getattr(self, "hsl_fact_capacity", 0):
+            return False
         # Coin-mode forced delists still report per-coin panic segments when
         # HSL is disabled. The compact layout preserves only aggregate state.
         # Fused and TM kernels do not implement this one-side EMA layout.
@@ -2729,12 +2755,13 @@ class MpsEmaAnchorMulticoinRunner:
             self.weighted_account_equity_enabled,
             self.hsl_raw_tail_capacity,
             getattr(self, "dispatch_unstuck_ema_enabled", True),
+            int(bool(getattr(self, "hsl_fact_capacity", 0))),
         )
 
     def _hsl_history_bytes_per_candidate(self):
         if not self.hsl_capacity:
             return 0
-        _, nodes = _hsl_layout(self.hsl_capacity)
+        _, nodes = _hsl_layout(self.hsl_capacity, getattr(self, "hsl_fact_capacity", 0))
         return self.hsl_scopes * (nodes * 32 + self.hsl_capacity * 8)
 
     def _history_bytes_per_candidate(self):
@@ -2768,15 +2795,16 @@ class MpsEmaAnchorMulticoinRunner:
         return self._unstuck_pnl_buffers[batch_size]
 
     def _hsl_buffers(self, batch_size):
-        _, nodes = _hsl_layout(self.hsl_capacity)
+        _, nodes = _hsl_layout(self.hsl_capacity, getattr(self, "hsl_fact_capacity", 0))
         if (
             batch_size * self._history_bytes_per_candidate()
             > self.hsl_scratch_budget_bytes
         ):
             raise ValueError("GPU history batch exceeds its scratch budget")
-        if batch_size not in self._hsl_scratch_buffers:
+        key = (batch_size, getattr(self, "hsl_fact_capacity", 0))
+        if key not in self._hsl_scratch_buffers:
             self._hsl_scratch_buffers = {
-                batch_size: (
+                key: (
                     torch.empty(
                         (batch_size, self.hsl_scopes, nodes, 32),
                         dtype=torch.uint8,
@@ -2789,7 +2817,7 @@ class MpsEmaAnchorMulticoinRunner:
                     ),
                 )
             }
-        return self._hsl_scratch_buffers[batch_size]
+        return self._hsl_scratch_buffers[key]
 
     def _run_history_batches(self, params, *, profile, end_steps):
         limit = self.hsl_scratch_budget_bytes // self._history_bytes_per_candidate()
@@ -2967,7 +2995,40 @@ class MpsEmaAnchorMulticoinRunner:
             self._entry_interval_count_buffers[batch_size],
         )
 
-    def run(
+    def run(self, params, *, profile=False, end_steps=None):
+        """Grow bounded factual storage from rejected GPU work, without publishing it."""
+        count_before = getattr(self, "hsl_fact_retry_count_total", 0)
+        seconds_before = getattr(self, "hsl_fact_retry_seconds_total", 0.0)
+        while True:
+            started = time.perf_counter()
+            try:
+                output = self._run_factual_attempt(params, profile=profile, end_steps=end_steps)
+            except HslFactHistoryOverflow:
+                capacity = getattr(self, "hsl_fact_capacity", 0)
+                if capacity < 1:
+                    raise
+                self.interrupt_check()
+                self.hsl_fact_capacity = capacity * 2
+                if self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+                    self.hsl_fact_capacity = capacity
+                    raise HslFactHistoryOverflow(
+                        "GPU HSL factual history overflow exceeds single-candidate scratch budget"
+                    ) from None
+                # The rejected attempt completed before decoding. Its histories
+                # have no authority; a fresh replay resets all device cursors.
+                self._hsl_scratch_buffers.clear()
+                self.hsl_fact_retry_count_total = getattr(self, "hsl_fact_retry_count_total", 0) + 1
+                self.hsl_fact_retry_seconds_total = (getattr(self, "hsl_fact_retry_seconds_total", 0.0)
+                                                     + time.perf_counter() - started)
+                continue
+            self.last_hsl_fact_retries = getattr(self, "hsl_fact_retry_count_total", 0) - count_before
+            if profile and self.last_hsl_fact_retries:
+                self.last_profile["hsl_fact_retry_count"] = self.last_hsl_fact_retries
+                self.last_profile["hsl_fact_retry_seconds"] = (self.hsl_fact_retry_seconds_total
+                                                                - seconds_before)
+            return output
+
+    def _run_factual_attempt(
         self,
         params: np.ndarray,
         *,
@@ -2991,6 +3052,12 @@ class MpsEmaAnchorMulticoinRunner:
                 policy_matrix = np.concatenate((policy_matrix, policy_matrix), axis=1)
             MpsEmaAnchorRunner._validate_hsl_params(self, policy_matrix, keys)
         started = time.perf_counter() if profile else 0.0
+        if getattr(self, "hsl_fact_capacity", 0):
+            self.settings[-2] = self.hsl_fact_capacity
+        factual_replay = bool(getattr(self, "hsl_factual_replay", False))
+        if factual_replay and not getattr(self, "hsl_fact_capacity", 0):
+            raise ValueError("GPU factual HSL evaluation requires retained fill capacity")
+        self.settings[-1] = float(factual_replay)
         matrix = self._pack_params(params)
         self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(matrix)
         self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(matrix)
@@ -3146,6 +3213,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
         unstuck_pnl_lookback_bars: int = 0,
+        interrupt_check=None,
     ):
         super().__init__(
             run,
@@ -3175,6 +3243,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
             unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
+            interrupt_check=interrupt_check,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -3232,6 +3301,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 float(bool(market_orders_allowed)),
                 market_order_near_touch_threshold,
                 float(bool(filter_by_min_effective_cost)),
+                0.0,  # Runtime factual-ring capacity; absent from compile identity.
+                0.0,  # Internal factual evaluation control, independently of capture.
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -3418,7 +3489,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
             raise ValueError("max_dispatch_candidate_bars must be positive")
         self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
-        self.interrupt_check = interrupt_check or (lambda: None)
         self._replay_state_bytes = None
         self._replay_state_sizes = {}
         self._replay_states = {}
@@ -3453,6 +3523,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
             unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
+            interrupt_check=interrupt_check,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -3505,6 +3576,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.weighted_account_equity_enabled,
             self.hsl_raw_tail_capacity,
             getattr(self, "dispatch_unstuck_ema_enabled", True),
+            int(bool(getattr(self, "hsl_fact_capacity", 0))),
         )
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -3787,6 +3859,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 float(bool(market_orders_allowed)),
                 float(market_order_near_touch_threshold),
                 float(bool(filter_by_min_effective_cost)),
+                0.0,  # Runtime factual-ring capacity; absent from compile identity.
+                0.0,  # Internal factual evaluation control, independently of capture.
             ],
             dtype=torch.float32,
             device=gpu_device(),

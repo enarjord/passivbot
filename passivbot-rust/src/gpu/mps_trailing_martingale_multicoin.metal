@@ -1434,6 +1434,9 @@ struct TrailingMartingaleMulticoinFillState {
     float profit_sum_short;
     float loss_sum_short;
     float fill_count;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    int hsl_fill_sequence;
+#endif
     float fill_count_entry;
     float fill_count_long;
     float held_max_min;
@@ -1462,6 +1465,9 @@ init_trailing_martingale_multicoin_fill_state() {
     fills.profit_sum_short = 0.0f;
     fills.loss_sum_short = 0.0f;
     fills.fill_count = 0.0f;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    fills.hsl_fill_sequence = 0;
+#endif
     fills.fill_count_entry = 0.0f;
     fills.fill_count_long = 0.0f;
     fills.held_max_min = 0.0f;
@@ -1519,6 +1525,9 @@ inline void record_tm_multicoin_close_fill(
     float gross_pnl,
     float net_pnl,
     float qty,
+    float fill_price,
+    float fill_fee,
+    float actual_size_after,
     float position_price,
     float mark_price,
     float c_mult,
@@ -1542,6 +1551,16 @@ inline void record_tm_multicoin_close_fill(
             );
         }
     }
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslPairFact fact;
+    fact.delta = short_side ? qty : -qty;
+    fact.price = fill_price;
+    fact.realized = gross_pnl;
+    fact.fee = -fill_fee;
+    hsl_pair_ring_capture(side.coin_hsl[coin].facts, fact, k,
+        fills.hsl_fill_sequence++, short_side ? -actual_size_after : actual_size_after,
+        actual_size_after == 0.0f ? 0.0f : position_price, short_side);
+#endif
     record_tm_multicoin_gross_pnl(gross_pnl, fills, short_side);
     record_realized_net(
         net_pnl, account,
@@ -1664,7 +1683,9 @@ inline void apply_tm_multicoin_entry_position(
     float fill_price,
     float qty_step,
     float c_mult,
-    float balance
+    float balance,
+    float fee,
+    bool short_side
 ) {
     bool was_flat = side.psize[coin] <= 0.0f;
     float new_size = round_step(side.psize[coin] + qty, qty_step);
@@ -1675,6 +1696,15 @@ inline void apply_tm_multicoin_entry_position(
     if (was_flat) side.position_open_k[coin] = float(k);
     side.psize[coin] = new_size;
     side.pprice[coin] = new_price;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslPairFact fact;
+    fact.delta = short_side ? -qty : qty;
+    fact.price = fill_price;
+    fact.realized = 0.0f;
+    fact.fee = -fee;
+    hsl_pair_ring_capture(side.coin_hsl[coin].facts, fact, k,
+        fills.hsl_fill_sequence++, short_side ? -new_size : new_size, new_price, short_side);
+#endif
     side.last_increase_k[coin] = float(k);
     record_tm_multicoin_volume(fills, qty, fill_price, balance);
     side.entry_qty[coin] = 0.0f;
@@ -1787,7 +1817,8 @@ inline bool force_close_tm_multicoin_delisted_position(
     record_tm_multicoin_close_fill(
         side, account, fills, coin_fill_counts,
         candidate_index, coin_count, coin, k, pnl, net_pnl,
-        close_qty, position_price, close, c_mult, short_side,
+        close_qty, close_price, close_qty * close_price * c_mult * taker_fee,
+        0.0f, position_price, close, c_mult, short_side,
         true, collect_coin_fill_counts, hsl_equity_before_close,
         opposite_hsl, opposite_has_position
     );
@@ -2296,6 +2327,8 @@ inline bool process_tm_multicoin_side_fills(
                     record_tm_multicoin_close_fill(
                         side, account, fills, coin_fill_counts,
                         int(b), C, c, k, pnl, net_pnl, qty,
+                        fill_price, qty * fill_price * c_mult * reducer_fee_rate,
+                        fmax(round_step(psize[c] - qty, qty_step), 0.0f),
                         pprice[c], close, c_mult, short_side,
                         false, collect_coin_fill_counts,
                         hsl_equity_before_fills, opposite_hsl, opposite_has_position
@@ -2332,7 +2365,9 @@ inline bool process_tm_multicoin_side_fills(
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, grid_pnl, grid_net_pnl,
-                    grid_qty, pprice[c], close, c_mult, short_side,
+                    grid_qty, group_fill_price, grid_qty * group_fill_price * c_mult * group_fee_rate,
+                    fmax(round_step(psize[c] - grid_qty, qty_step), 0.0f),
+                    pprice[c], close, c_mult, short_side,
                     false, collect_coin_fill_counts,
                     hsl_equity_before_fills, opposite_hsl, opposite_has_position
                 );
@@ -2383,6 +2418,8 @@ inline bool process_tm_multicoin_side_fills(
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, pnl, net_pnl, qty,
+                    price, qty * price * c_mult * fee_rate,
+                    fmax(round_step(psize[c] - qty, qty_step), 0.0f),
                     pprice[c], close, c_mult, short_side,
                     is_hsl_panic, collect_coin_fill_counts,
                     hsl_equity_before_fills, opposite_hsl, opposite_has_position
@@ -2483,7 +2520,7 @@ inline bool process_tm_multicoin_side_fills(
                     );
                     apply_tm_multicoin_entry_position(
                         side, fills, c, k, adjusted, fill_price,
-                        qty_step, c_mult, balance
+                        qty_step, c_mult, balance, fee, short_side
                     );
                     any_fill = true;
                 } else if (rung > 0 && selected) {
@@ -2568,7 +2605,7 @@ inline bool process_tm_multicoin_side_fills(
                 );
                 apply_tm_multicoin_entry_position(
                     side, fills, c, k, adjusted, fill_price,
-                    qty_step, c_mult, balance
+                    qty_step, c_mult, balance, fee, short_side
                 );
                 any_fill = true;
 
@@ -2619,7 +2656,7 @@ inline bool process_tm_multicoin_side_fills(
             );
             apply_tm_multicoin_entry_position(
                 side, fills, c, k, adjusted, fill_price,
-                qty_step, c_mult, balance
+                qty_step, c_mult, balance, fee, short_side
             );
             any_fill = true;
         }
@@ -5383,10 +5420,24 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const bool hsl_unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
     bind_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl,
         hsl_trees, hsl_rows, int(b) * 2 * (C + 1), C, begin_k <= 1,
-        !hsl_unified || hsl_long_owner);
+        !hsl_unified || hsl_long_owner
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[14])
+#endif
+    );
     bind_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl,
         hsl_trees, hsl_rows, int(b) * 2 * (C + 1) + C + 1, C, begin_k <= 1,
-        !hsl_unified || !hsl_long_owner);
+        !hsl_unified || !hsl_long_owner
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[14])
+#endif
+    );
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslReplayContext factual_context = hsl_replay_context(
+        bars, coin_settings, C, COIN_COLS, run_settings[15] > 0.5f);
+    attach_hsl_replay_side(factual_context, long_side.hsl, long_side.coin_hsl, 0, false);
+    attach_hsl_replay_side(factual_context, short_side.hsl, short_side.coin_hsl, 1, true);
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     if (scalars[int(b) * FUSED_SCALAR_COLS + 9] == -3.0f) return;
     bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
@@ -5600,7 +5651,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 starting_balance, interval_ms
             );
             if (!hsl_valid) {
-                scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
+                scalars[int(b) * FUSED_SCALAR_COLS + 9] = fmin(
+                    hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C),
+                    hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C));
                 return;
             }
         }
@@ -5981,7 +6034,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         );
 #endif
         if (!(valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = fmin(
+                    hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C),
+                    hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C));
             return;
         }
 }
@@ -6602,7 +6657,16 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
 
     bind_hsl_multicoin_hsl(side.hsl, side.coin_hsl,
-        hsl_trees, hsl_rows, int(b) * (C + 1), C, begin_k <= 1, true);
+        hsl_trees, hsl_rows, int(b) * (C + 1), C, begin_k <= 1, true
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[12])
+#endif
+    );
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslReplayContext factual_context = hsl_replay_context(
+        bars, coin_settings, C, COIN_COLS, run_settings[13] > 0.5f);
+    attach_hsl_replay_side(factual_context, side.hsl, side.coin_hsl, 0, short_side);
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     if (scalars[int(b) * SCALAR_COLS + 9] == -3.0f) return;
     bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
@@ -6777,7 +6841,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
 #if !PASSIVBOT_HSL_DISABLED
         if (!valid_hsl_multicoin_hsl(hsl, coin_hsl, C)) {
-            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+            scalars[int(b) * SCALAR_COLS + 9] = hsl_multicoin_failure_status(side.hsl, side.coin_hsl, C);
             return;
         }
 #endif
@@ -7033,7 +7097,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         );
 #endif
         if (!(valid_hsl_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
-            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+            scalars[int(b) * SCALAR_COLS + 9] = hsl_multicoin_failure_status(side.hsl, side.coin_hsl, C);
             return;
         }
 }

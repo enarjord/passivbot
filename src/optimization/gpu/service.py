@@ -82,6 +82,10 @@ from optimization.gpu.model import (
     validate_single_coin_hsl_signal_topology,
 )
 
+def _noop_interrupt_check():
+    return None
+
+
 CORE_OUTPUT_KEYS = {
     "hsl_drawdown_ema_mean_worst_1pct_portfolio",
     *WEIGHTED_EQUITY_METRICS,
@@ -2558,7 +2562,7 @@ class MpsMulticoinProxy:
         btc_values = np.ascontiguousarray(np.asarray(btc, dtype=np.float64).reshape(-1))
         self.batch_size = max(1, int(batch_size))
         self.max_dispatch_candidate_bars = int(max_dispatch_candidate_bars)
-        self.interrupt_check = interrupt_check or (lambda: None)
+        self.interrupt_check = interrupt_check or _noop_interrupt_check
         self.profile_enabled = os.environ.get(
             "PASSIVBOT_GPU_PROFILE", ""
         ).strip().lower() in {"1", "true", "yes", "y"}
@@ -2968,6 +2972,7 @@ class MpsMulticoinProxy:
             for item in projected
             for side in self.sides
         )
+        common_runner_kwargs["interrupt_check"] = self.interrupt_check
         loss_gate_enabled = common_runner_kwargs["max_realized_loss_pct"] < 1.0
         common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
             _fill_pnl_lookback_bars(backtest_params)

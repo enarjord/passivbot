@@ -1,3 +1,7 @@
+#ifndef PASSIVBOT_HSL_FACTS_ENABLED
+#define PASSIVBOT_HSL_FACTS_ENABLED 0
+#endif
+
 // HSL arithmetic over factual PNL + UPNL samples. No trading state or
 // episode inference lives here. Both Metal and CUDA consume this scalar source.
 // A candidate owns a bounded ring of compact samples and a tree over 64-sample
@@ -49,9 +53,13 @@ inline HslNode hsl_join(HslNode l, HslNode r) {
     return n;
 }
 
-inline int hsl_storage_nodes(int capacity, int tree_size) {
+inline int hsl_storage_nodes(int capacity, int tree_size, int fact_capacity = 0) {
     // Four two-float samples fit in one 32-byte node-sized allocation.
-    return 2 * tree_size + (capacity + 3) / 4;
+    int nodes = 2 * tree_size + (capacity + 3) / 4;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    nodes += 2 + fact_capacity + (fact_capacity + 1) / 2;
+#endif
+    return nodes;
 }
 
 inline device float2* hsl_samples(device HslNode* tree, int tree_size) {

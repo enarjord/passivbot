@@ -26,10 +26,13 @@ def make_proxy(
     chunk=False,
     lookback=1,
     coin_count=2,
+    prepared_data_cache=None,
+    interrupt_check=None,
 ):
     config = generated_template(get_template_config(), mode)
     config["live"].update(hsl_signal_mode=mode)
-    coins = ["AAA", "BBB"] + [f"COIN{i}" for i in range(2, coin_count)]
+    assert coin_count >= 1
+    coins = (["AAA", "BBB"] + [f"COIN{i}" for i in range(2, coin_count)])[:coin_count]
     config["live"].update(
         strategy_kind=strategy,
         approved_coins={s: coins if s in sides else [] for s in ("long", "short")},
@@ -88,6 +91,8 @@ def make_proxy(
         exchange="binance",
         batch_size=3,
         needed_metrics={"adg_usd"},
+        prepared_data_cache=prepared_data_cache,
+        interrupt_check=interrupt_check,
         max_dispatch_candidate_bars=(
             minutes * len(coins) * len(sides) if chunk else 1000000
         ),

@@ -244,6 +244,15 @@ Completion requires:
 - [ ] Resolve material differences and record accepted numerical discrepancies.
   - [x] Align active coin HSL's empty retained-fill history with Rust's fresh
     current-position loss estimate; retained-fill and aggregate differences remain open.
+  - [x] Develop opt-in retained factual-fill reconstruction, bounded device storage,
+    actual scope episode boundaries and disposable cutoff caching. Component,
+    native full/chunk/growth/discard and matched candidate evidence is recorded in
+    the acceptance map. The known material HSL cohort discrepancy is resolved;
+    remaining small numerical differences are accepted only for those fixtures.
+  - [ ] Adopt factual replay in the default native worker, version the semantic
+    checkpoint contract and consolidate wider feature/lifecycle, specialization,
+    scenario, resource and performance acceptance. Keep the old optimizer until
+    its replacement passes the relevant gates.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
 - [x] Replace hourly recovery distribution sampling with per-step GPU observations,
   budget their replay/reduction storage, and isolate mutable reduction scratch.
