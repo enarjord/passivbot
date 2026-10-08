@@ -286,8 +286,11 @@ Completion requires:
     integration and representative total-resource acceptance remain separate gates.
   - [ ] Retain small learned factual-capacity estimates in dataset execution metadata
     across residency eviction, without retaining device buffers or adding checkpoints.
-  - [ ] Measure long-held, many-coin HSL reconstruction scaling before further launch
-    tuning; consider guarded incremental reconstruction only with measured need and parity.
+  - [x] Measure held, many-coin HSL reconstruction scaling before further launch
+    tuning. Matched 2/25-coin, 512/1024/2048-bar cases show roughly quadratic
+    warm replay cost with HSL enabled; wider acceptance remains separate.
+  - [ ] Evaluate guarded incremental reconstruction against fresh factual replay,
+    including cache loss, fills, budgets, clipping, numerical conditions and CPU parity.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
     from CPU cost, and keep suite notification fan-in independent of persistence batches.
   - [x] Let execution tuning learn actual warm partial dispatches and explore smaller

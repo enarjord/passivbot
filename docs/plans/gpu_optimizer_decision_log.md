@@ -2893,3 +2893,23 @@ Historical observations do not supersede those requirements or prove current acc
 - Continue dataset-owned capacity retention and representative long-held/many-coin
   scaling measurements before additional launch tuning. Keep the service API and
   factual signal semantics unchanged by this storage simplification.
+
+
+### 2026-10-08 — Measure the held-history reconstruction bottleneck
+
+- Twelve source-verified native request cases cover EMA/TM, 2/25 long-side coins
+  and 512/1024/2048 minute histories. Isolated CPU references prove the intended
+  entry-at-64/no-close trajectory; dataset identities and five requested metrics
+  agree within the stated tolerance. GPU on/off/on-repeat results agree exactly;
+  all checked source files remain unchanged.
+- Both strategies show roughly fourfold warm HSL-enabled cost when history doubles.
+  At 25 coins and 2048 bars, warm requests take about 22.5 seconds with HSL enabled,
+  versus 0.34 seconds for EMA and 0.46 seconds for TM with HSL off. This is measured
+  single-candidate synthetic scaling, not universal optimizer throughput or a
+  90-day simulation result. Record the public recipe and bounded resource limitations
+  in acceptance; do not claim Torch counters measure all device allocations.
+- Prioritize a compact guarded active-episode recurrence over further launch tuning.
+  Retain fresh reconstruction as the reference/fallback for changed facts, budgets,
+  clipping, causal phase and numerical concerns. Require cache-loss/temporal controls,
+  paired factual and CPU parity, resource evidence and review before adoption.
+  The strategy-neutral shared-runner extraction remains a separate focused follow-up.

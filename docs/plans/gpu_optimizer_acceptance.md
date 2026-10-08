@@ -1359,3 +1359,48 @@ A focused strategy-neutral extraction is a follow-up simplification candidate. I
 must preserve the existing service boundary and avoid introducing a general backend
 framework. These resource and scaling gates take priority over additional small-fixture
 test counts or marginal launch gains.
+
+### Held-position reconstruction scaling
+
+The compact native service is measured on twelve matched synthetic cases: EMA
+Anchor/TM, 2/25 long-side coins, and 512/1024/2048 minute bars. Start from the public
+parity fixture with seed 7, unified HSL threshold 0.99, span 2.5 and 90-day lookback.
+Replace high/low/close/volume with 100.1/99.9/100/100, except low 97 at bar 64.
+EMA uses spans 10/20, offset 0.02, base quantity 0.02, doubling factor 1 and zero
+inventory/volatility offset weights. TM entry uses spans 10/20, initial distance
+0.01, quantity 0.02, doubling factor 1, threshold 0.9 and zero threshold weights;
+close uses quantity 1, threshold 0.5 and zero threshold weights. Apply these strategy
+parameters to both sides, retaining the fixture's disabled short side. Other settings,
+BTC prices, markets and date alignment are unchanged. Request `adg_strategy_eq`,
+`drawdown_worst_strategy_eq`, `fills_per_day`, `position_held_hours_max` and
+`hard_stop_time_in_red_pct`.
+
+Source-verified CPU references prove every coin enters at bar 64 and makes no
+closes, with held durations 7.43, 15.97 and 33.03 hours. GPU requests use the native
+future API, batch width one and tuning off. Each HSL-on/off/on-repeat phase contains
+an initial request and two warm repeats; explicit factual-mode/capacity assertions
+verify the phase switch. CPU simulations are forbidden in GPU requests and run
+separately as references. Dataset identity and all five requested metrics agree
+within 1e-6 absolute/relative tolerance; GPU repeats and phases agree exactly.
+All 951 checked source files remain unchanged.
+
+| Strategy / coins | Warm HSL-on, 512 bars | 1024 bars | 2048 bars |
+|---|---:|---:|---:|
+| EMA / 2 | 0.148 s | 0.594 s | 2.447 s |
+| EMA / 25 | 1.388 s | 5.602 s | 22.450 s |
+| TM / 2 | 0.148 s | 0.607 s | 2.484 s |
+| TM / 25 | 1.321 s | 5.450 s | 22.500 s |
+
+On-repeat measurements reproduce this shape. For 25 coins, HSL-off warm medians
+are 0.098/0.172/0.341 s for EMA and 0.124/0.227/0.459 s for TM. Compilation is
+excluded from warm timings. These single-candidate synthetic requests demonstrate
+the repeated historical reconstruction bottleneck; they are not a whole-optimizer
+throughput comparison or a 90-day simulation benchmark. Torch allocation counters
+exclude driver/compiler allocations, and process peak RSS includes cold compilation;
+total host/device/disk acceptance remains open.
+
+Evaluate a compact, guarded active-episode cursor using the existing scope recurrence.
+Fresh reconstruction remains the reference and fallback when facts, budgets, clipping,
+causal phase or numerical conditions invalidate reuse. Require paired fresh/cached
+outputs, reset/temporal controls, CPU parity and measured resource/performance evidence
+before adoption. Do not add launch tuning or a general backend framework for this fix.
