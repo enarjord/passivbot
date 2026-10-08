@@ -256,7 +256,7 @@ def test_native_weighted_service_adapts_admission_without_cpu(monkeypatch, strat
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
-    base = mps_kernel.MpsEmaAnchorMulticoinRunner
+    base = mps_kernel._MulticoinReplayRunner
     init, run = base.__init__, base.run
     flags, dispatches = [], []
     def prepare(self, *args, **kwargs):

@@ -136,7 +136,7 @@ def test_native_recovery_observes_raw_strategy_liquidation_equity(
     assert equities[-1, 3] < 0 < equities[-1, 1]
     expected = equities[:, 3]
     observed = []
-    base = mps_kernel.MpsEmaAnchorMulticoinRunner
+    base = mps_kernel._MulticoinReplayRunner
     original = base.run
 
     def capture(self, *args, **kwargs):
@@ -185,7 +185,7 @@ def test_native_dispatch_accounts_for_opt_in_recovery_memory(
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
-    base = mps_kernel.MpsEmaAnchorMulticoinRunner
+    base = mps_kernel._MulticoinReplayRunner
     original_init, original_run = base.__init__, base.run
     dispatches = []
     def prepare(self, *args, **kwargs):

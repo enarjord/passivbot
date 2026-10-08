@@ -182,7 +182,7 @@ def test_native_volume_capture_is_optional_bounded_and_cpu_simulation_free(
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
-    base = mps_kernel.MpsEmaAnchorMulticoinRunner
+    base = mps_kernel._MulticoinReplayRunner
     init, run = base.__init__, base.run
     dispatches, flags = [], []
     def prepare(self, *args, **kwargs):
