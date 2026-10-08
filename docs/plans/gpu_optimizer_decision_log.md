@@ -2873,3 +2873,19 @@ Historical observations do not supersede those requirements or prove current acc
   guarded incremental reconstruction as a measured follow-up requiring parity;
   shared strategy-neutral allocation/retry/dispatch extraction remains a focused
   simplification candidate, without a general backend framework.
+
+
+### 2026-10-08 — Retain capacity estimates independently of residency
+
+- Keep only small integer factual-capacity hints in service-owned dataset metadata.
+  Restore them before recreated runner admission and remember successful learned
+  capacity even after an HSL-off dispatch. Release device buffers normally; add no
+  checkpoint or persistent replay state. Reject malformed/over-budget hints.
+- Source-verified host checks pass, including four production-residency eviction
+  controls with fake device transport/computation. A restoration-omission control
+  makes all four fail at the reset capacity. Four actual CUDA scenario/owner-switch
+  controls cover EMA/TM, unchanged metrics, zero repeated overflow retries and
+  evicted-runner release. CPU backtests remain forbidden inside the native service.
+- Require integrated compact-storage validation, current-head independent review
+  and CI before development merge. Representative suite/total-resource acceptance
+  and long-held reconstruction scaling remain separate gates.

@@ -2516,6 +2516,7 @@ class MpsMulticoinProxy:
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
         prepared_data_cache: dict | None = None,
         factual_hsl: bool = False,
+        factual_capacity_hints: dict | None = None,
     ):
         try:
             import torch
@@ -2917,6 +2918,9 @@ class MpsMulticoinProxy:
         self.runners = {}
         self.fused_runner = None
         self._runner_specs = {}
+        # Small service-owned estimates outlive residency eviction. This mapping
+        # contains integers only, never runners, tensors or checkpoint state.
+        self._factual_capacity_hints = factual_capacity_hints
         common_runner_kwargs = {
             "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
             "max_realized_loss_pct": float(
@@ -3018,7 +3022,7 @@ class MpsMulticoinProxy:
                 fused_kwargs["interrupt_check"] = self.interrupt_check
             self._runner_specs["fused"] = (fused_runner_cls, fused_kwargs)
             if self._cuda_residency is None:
-                self.fused_runner = fused_runner_cls(self.run, self.data, **fused_kwargs)
+                self.fused_runner = self._construct_runner("fused", fused_runner_cls, fused_kwargs)
         else:
             runner_cls = (
                 MpsTrailingMartingaleMulticoinRunner
@@ -3046,17 +3050,38 @@ class MpsMulticoinProxy:
                     runner_kwargs["interrupt_check"] = self.interrupt_check
                 self._runner_specs[side] = (runner_cls, runner_kwargs)
                 if self._cuda_residency is None:
-                    self.runners[side] = runner_cls(self.run, self.data, **runner_kwargs)
+                    self.runners[side] = self._construct_runner(side, runner_cls, runner_kwargs)
         if self._cuda_residency is not None:
             self._cuda_residency.register(self)
 
     def _create_runners(self):
         for side, (runner_cls, kwargs) in self._runner_specs.items():
-            runner = runner_cls(self.run, self.data, **kwargs)
+            runner = self._construct_runner(side, runner_cls, kwargs)
             if side == "fused":
                 self.fused_runner = runner
             else:
                 self.runners[side] = runner
+
+    def _construct_runner(self, key, runner_cls, kwargs):
+        runner = runner_cls(self.run, self.data, **kwargs)
+        if self._factual_capacity_hints is not None and runner.native_factual_hsl:
+            capacity = self._factual_capacity_hints.get(key, runner.hsl_fact_capacity_learned)
+            if type(capacity) is not int or capacity < 1:
+                raise ValueError("Invalid learned GPU HSL factual capacity")
+            capacity = max(capacity, runner.hsl_fact_capacity_learned)
+            runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = capacity
+            if runner._history_bytes_per_candidate() > runner.hsl_scratch_budget_bytes:
+                raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
+        return runner
+
+    def _remember_factual_capacities(self):
+        if self._factual_capacity_hints is None:
+            return
+        owners = ([("fused", self.fused_runner)] if self.fused_runner is not None
+                  else self.runners.items())
+        for key, runner in owners:
+            if runner.native_factual_hsl:
+                self._factual_capacity_hints[key] = runner.hsl_fact_capacity_learned
 
     def _parameter_matrix(
         self, candidates: list[dict], side: str | None = None

@@ -282,8 +282,10 @@ Completion requires:
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
   - [ ] Give native factual HSL compact storage independent of the bypassed legacy
     observation tree/window; preserve the legacy layout for remaining consumers.
-  - [ ] Retain small learned factual-capacity estimates in dataset execution metadata
+  - [x] Retain small learned factual-capacity estimates in dataset execution metadata
     across residency eviction, without retaining device buffers or adding checkpoints.
+    Host eviction/error-policy and actual CUDA scenario/owner switches pass;
+    reviewed integration and representative suite acceptance remain separate gates.
   - [ ] Measure long-held, many-coin HSL reconstruction scaling before further launch
     tuning; consider guarded incremental reconstruction only with measured need and parity.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping

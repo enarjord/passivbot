@@ -200,6 +200,8 @@ def test_cuda_facade_refreshes_learned_ceiling_before_claiming_more_work(monkeyp
             batches.append(len(candidates))
             self.ceiling = 2  # Successful GPU work learned a larger history.
             return [{"fills_per_day": item["value"]} for item in candidates]
+        def _remember_factual_capacities(self):
+            pass
 
     @contextmanager
     def scope(self):
