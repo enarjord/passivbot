@@ -2468,6 +2468,216 @@ Historical observations do not supersede those requirements or prove current acc
   rebuilt extension passes 332 Rust tests with one existing ignore, default-feature
   test compilation, source verification and five documentation checks.
 
+### 2026-10-08 — Develop retained-fill reconstruction before native integration
+
+- Keep the current Rust HSL history/controller contract as the reference. A GPU
+  reconstruction component uses retained finite linear simulator fills, a reverse
+  reduction-requirement pass and a forward inventory/basis/cashflow pass. It reads
+  an ordered clipped ring and writes disposable events; it does not own evolution,
+  controller permission or an earlier inferred history.
+- Fractional and mixed-magnitude cases exposed cancellation in ordinary float32
+  accumulation. Use compensated float32 sums for inventory, reduction requirements
+  and cashflows, and a stable weighted basis update. Keep the exchange-quantum
+  guard around zero rounding so a genuine remaining lot cannot be erased.
+- All 22 CUDA cases in `test_gpu_hsl_history.py` pass with a separately rebuilt,
+  source-verified extension. Four parameterized cases compare 996 generated and
+  targeted histories with Rust across long/short and both same-time candle phases;
+  18 cases reject malformed facts, ring metadata or current inputs. Compare exact
+  flatness and a single remaining lot independently of magnitude-conditioned
+  float32 sample/event guards. These guards do not change native metric policy.
+  Rust passes 332 tests with one existing ignore and default-feature compilation.
+- This component is not yet called by native backtests. Do not claim resolution of
+  retained-fill or aggregate HSL discrepancies from its unit coverage. Native work
+  still requires bounded factual storage, actual fill-order/flat-boundary ownership,
+  scope composition, cache-loss/rebuild and temporal-state equivalence, then full
+  replay and candidate-front comparisons.
+- Investigate coalescing only consecutive same-pair, same-direction, same-time
+  executions. Preserve the first reduction price, weighted addition basis, net
+  cashflows and actual flat/reopen ordering. Recursive TM can execute hundreds of
+  entry rungs in one candle, so a fixed record for every fill is an expensive
+  storage baseline. No compressor, record-count bound or overflow policy has been
+  accepted or integrated yet; never silently drop facts to satisfy a memory cap.
+
+
+### 2026-10-08 — Own factual capture and capacity recovery inside the GPU worker
+
+- Develop opt-in native EMA/TM factual capture before replacing HSL evaluation.
+  Keep records resident and metrics payloads modest. Record actual signed fills,
+  fees, post-fill positions and global chronology; aggregate controllers borrow
+  pair facts. Coalesce only consecutive same-pair/direction/time executions and
+  preserve actual flat boundaries. No factual history may be silently truncated.
+- Reject overflow explicitly, learn larger storage within the physical scratch
+  budget, and retry only GPU work. Check cancellation before changing capacity;
+  propagate malformed facts and other fatal inputs without capacity retries.
+  Native testing exposed missing EMA callback ownership in the first recovery
+  path; make the callback explicit for both strategies and worker construction.
+- Initial compile-time capacities required another kernel compilation on each
+  growth. Separate runtime capacity from compiled feature enablement. Keep learned
+  storage size out of compilation identity while retaining it in scratch allocation
+  identity and physical candidate partitioning.
+- Develop factual scope-prefix selection separately from reconstructed valuation.
+  Reverse actual post-fill inventory using the simulator's exchange-quantum rule,
+  retaining the current/latest completed episode and its consumed global prefix.
+  Same-minute flats/reopens must remain distinct; clipped exposed prefixes cannot
+  acquire an invented flat seed. Thirteen real CUDA scope cases and the 47 preceding
+  pair-history/writer cases pass. They do not establish native controller parity.
+- Source-verified Rust validation passes 332 tests with one existing ignore and
+  default-feature compilation. Keep native capture/recovery/temporal validation
+  and subsequent controller/cache integration open; do not publish this opt-in
+  foundation as a completed correction of the material retained-history gap.
+
+- The current rebuilt source passes all 110 factual checks: 100 actual CUDA and
+  ten host policy cases. All forty native capture/storage/retry/interruption cases
+  preserve returned metrics and complete chronology; new temporal controls prove
+  that later dispatches cannot erase overflow and a fresh retry resets factual
+  state. The initial short temporal fixture produced too few fills to exercise
+  overflow; extend the fixture instead of weakening its prerequisite.
+  Mixed fatal/overflow marker tests require fatal input propagation before any
+  retry. The separate current-build host suite passes 319 checks with forty device-
+  named cases deselected. The preceding capture build also passes four actual
+  coupled-request comparisons and all 52 native CUDA CLI checks. Native controller
+  integration and candidate-front parity remain open.
+
+### 2026-10-08 — Rebuild scoped permission from factual observations
+
+- Compose global fill chronology, reconstructed pair inventory and current endpoint
+  facts in a Rust-owned shared GPU component. Center cashflow against the common
+  endpoint; retain terminal accounting, flat seeds, estimated entry references and
+  per-minute EMA semantics. No previous panic decision is an input. Debug point
+  traces are optional; ordinary evaluation returns compact scalars.
+- Source-verified CUDA comparisons pass 36 tests covering 375 snapshots against
+  Rust's full trace and controller. Preserve exact timestamps, flatness, exposure
+  and actions with local float32 guards for numerical columns. This is component
+  evidence, not acceptance of the native simulator's HSL objectives or Pareto front.
+  Compact output and latest terminal scores agree without a full point trace.
+- The first comparison exposed a one-observation cooldown delay: pre-fill price
+  sampling delayed recognition of same-time exposure. Derive lifecycle reopening
+  from the retained episode's causal fill time, independently of candle valuation
+  phase. Add explicit completed, reopened, missing-close, current-opening and
+  same-time round-trip comparisons; do not loosen action assertions.
+- Retain actual current position size/basis in the unused bytes of the existing
+  factual header. Close producers know their endpoint before the caller applies
+  the mutation; entry producers supply the updated weighted basis. This avoids
+  coupling a common evaluator to strategy-specific position arrays or opposite-side
+  fill-helper parameters. Malformed endpoints remain fatal producer facts.
+  All 157 endpoint/history/scope/capture/policy checks pass, including twelve
+  malformed/normal endpoint probes and actual basis inspection in forty native
+  caller cases. Nine temporal controls also preserve endpoint headers exactly.
+- Native wiring still needs budgeted disposable events, selected scope prefixes,
+  explicit ordinary/terminal phases, temporal/checkpoint ownership and reporting
+  that does not recount historical lifecycle events on each rebuild. Start from
+  fresh reconstruction as the reference; add disposable caches only with rebuild
+  equivalence. Do not merge this foundation as a completed HSL parity correction.
+
+### 2026-10-08 — Attach the factual evaluator to native simulation
+
+- Attach one shared evaluation context to the single/fused EMA/TM kernel paths.
+  Selected scopes read current factual headers and reconstruct into resident scratch;
+  strategy-specific position arrays and evolutionary state are outside this interface.
+  Ordinary close-time and terminal fill-time observations remain distinct.
+- Reserve and budget sixteen bytes of disposable events per factual capacity slot,
+  rounded to allocation nodes. Capacity growth retains compiled identity and retries
+  only GPU work. A separate internal runtime control distinguishes evaluation from
+  capture while independent comparison work is pending.
+- Rebind every controller/context after loading a temporal chunk, before observation.
+  The first 33 source-verified CUDA controls pass: eighteen topology cases, nine
+  full/chunk comparisons, two growth/retry cases and four disabled-policy comparisons.
+  Rust passes 332 tests with one existing ignore and default-feature test compilation.
+  All 119 integration checks pass: 109 CUDA and ten host policy controls, including
+  existing capture/recovery and scope comparisons. Six independent stressed two-coin
+  comparisons cover both strategies and all HSL scopes. The five requested HSL metrics
+  agree exactly; EMA fill rates agree, while TM retains twelve missing fills and small
+  worst-drawdown differences. Sub-day ADG values are zero and prove no growth parity.
+  Cold-start observations include host compilation and must not be
+  reported as simulator throughput.
+- Keep default worker adoption and semantic checkpoint cutover pending actual metric
+  and candidate-front evidence. Full reconstruction is the initial reference; add
+  disposable caching only with rebuild equivalence. No correctness or performance
+  acceptance is inferred from dispatch/repetition equivalence alone.
+
+### 2026-10-08 — Assess factual replay on matched candidate cohorts
+
+- Repeat the preceding four sixteen-candidate, 3000-bar stressed cohorts with
+  identical input/candidate identities and independent CPU references. All 64
+  CPU rows match the prior nine metrics exactly. For EMA seeds 7/43 and TM seed 7,
+  factual replay now preserves all five HSL metrics, Pareto membership and pair
+  orderings. TM seed 43 still differs materially for candidates zero/two: halt
+  durations differ by 148/149 minutes and time in RED by about five percentage
+  points, changing Pareto membership. Preserve these outliers for investigation;
+  do not explain them away with a general float32 tolerance.
+- No authored limit flips or CPU ADG regret at the GPU's best candidate occur
+  in these cohorts. These limited observations do not establish general search
+  equivalence. Keep default worker adoption pending the remaining trajectory,
+  checkpoint, lifecycle and resource evidence.
+- Correct the multicoin test fixture to produce exactly its requested coin count.
+  Expand actual single/fused dispatch and temporal controls to one/two coins.
+  An initial assertion incorrectly used an absent proxy config attribute; replace
+  it with the prepared coin identity. This was a test failure before GPU execution.
+- Full reconstruction exposes significant hot execution cost. Before introducing
+  a cache, test a simpler evaluation-local shortcut for fully consumed, flat,
+  exact-zero signal tails. Keep real endpoint evaluation, logical observation
+  counts and complete optional debug traces. Fresh reconstruction remains the
+  reference. The rebuilt optimization passes 62 composer checks against 651
+  Rust snapshots, 332 Rust tests with one existing ignore, default-feature
+  compilation and ten host policy checks. All 100 actual native caller checks
+  also pass, for 172 component/caller/policy checks overall. Matched cohort
+  output/performance comparisons remain pending; cold compilation is outside
+  simulator throughput claims. The preceding integration build now passes all
+  sixty corrected one/two-coin dispatch, temporal, growth and disabled controls.
+
+### 2026-10-08 — Preserve cohort output and isolate the remaining outliers
+
+- All 64 matched candidates preserve all nine GPU metrics exactly after flat-tail
+  compaction, both initially and in three warm repeats. Warm median times for
+  sixteen candidates are 85.55/72.06 seconds for EMA seeds 7/43 and 37.64/36.87
+  for TM seeds 7/43. No matched warm preceding-build measurement exists; report
+  these as observations, not a speedup or performance acceptance.
+- Detailed CPU exports preserve every fill and all nine metrics for the two TM
+  outliers. Detailed reporting still uses CPU caches. A fresh standalone Rust
+  scope/controller evaluation, supplied with the captured GPU facts, reproduces
+  the divergent GPU restart decisions. Candidate zero flattens one minute later
+  on GPU; candidate two flattens at the same minute on both. At the earlier
+  restart boundary, candidate two's reconstructed terminal EMA differs by about
+  0.00000334, straddling its 0.002 threshold. Window clipping amplifies an already
+  different simulation history into a material halt-duration/ranking difference.
+  Investigate the first differing executions before choosing a numerical policy;
+  do not widen global tolerances or blame the new scope composer for these facts.
+- Early captured execution facts expose a concrete upstream semantic difference:
+  multicoin TM recursive sizing freezes its initial sizing price, while Rust's
+  recursive generator advances the simulated book touch and recomputes that
+  floor. Generation balance stays fixed on both. The short canonical sixteen-rung
+  regression fails on thirteen quantities before correction; its long control
+  passes. Update the shared helper's sizing anchor with the simulated touch.
+  The rebuilt source passes both regressions, 37 affected recursive gate/market/
+  fused caller checks, 332 Rust tests with one existing ignore and default-feature
+  test compilation. Repeating the sixteen-candidate TM seed-43 cohort resolves
+  candidate zero's HSL differences and restores full Pareto membership and
+  drawdown pair ordering. Candidate two still restarts 149 minutes earlier,
+  leaving two RED pair-order disagreements. No authored limit flips or regret
+  at the GPU's best candidate occur. The remaining outlier is not accepted;
+  this partial repair does not establish general search equivalence.
+
+### 2026-10-08 — Separate accumulation drift from HSL transport precision
+
+- The recursive sizing repair completed independent current-head review and Rust /
+  Python 3.12 / Python 3.14 CI before merging to development. Preserve the broader
+  factual-HSL work separately; master remains unchanged.
+- Candidate two's next discrete quantity change is a near-half-step initial order
+  at minute 393. Naively accumulating its independently recorded cashflows in f32
+  reproduces the balance drift. A compensated-f32 diagnostic removes that first
+  change, without requiring f64 replay state or different sizing rules.
+- The same sixteen-candidate diagnostic retains the full Pareto front and ADG/DD
+  pair order, with no authored limit flips. The 149-minute HSL restart difference
+  persists. CPU-fact f32 encoding alone does not reproduce it. Keep later trajectory
+  differences and materiality open; do not generalize this into parity acceptance.
+
+- An independent CPU-only control preserves the original outlier's full exported
+  fills and nine metrics. Starting-balance perturbations of plus/minus 0.003 change
+  four quantity groups each, including two observed early rounding boundaries,
+  while its 1401-minute halt remains unchanged. This does not explain or accept
+  the GPU's 149-minute discrepancy. Keep localizing the remaining history change
+  rather than generalizing the first repaired rounding boundary.
+
 ### 2026-10-08 — Retain small cashflows in f32 account balances
 
 - A long sequence of small encoded fees/profits loses contributions when repeatedly
@@ -2488,6 +2698,27 @@ Historical observations do not supersede those requirements or prove current acc
   pass in separate fresh processes. Production specialized replay checks pass.
   This test-resource limitation does not justify bypassing memory admission or
   establish general resource acceptance.
+
+### 2026-10-08 — Verify the combined numerical and factual-HSL foundation
+
+- The compensated account correction completed exact-head independent review and
+  Rust / Python 3.12 / Python 3.14 CI before merging into development. The
+  unpublished factual-HSL foundation retains identical tested code after integration;
+  default worker adoption and checkpoint cutover remain pending.
+- The verified combined build passes 216 focused controls: 62 CUDA composer cases
+  against 651 Rust snapshots, ten host capacity/error policies, sixty actual native
+  factual dispatch/temporal/growth/disabled cases, six cashflow continuity cases,
+  72 checkpoint contracts and six documentation checks. Rust also passes 332 tests
+  with one existing ignore and default-feature test compilation.
+- Repeat all 64 matched candidates against the unchanged independent CPU references.
+  Initial and warm GPU output agree exactly. All four Pareto fronts, all ADG/DD pair
+  orderings and authored limit classifications match. All five HSL metrics match
+  for both EMA cohorts and TM seed seven; TM seed 43 candidate two retains its
+  149-minute early restart and two RED pair-order disagreements. No global numeric
+  acceptance follows from these observations.
+- Warm seconds per sixteen-candidate cohort are 85.27/67.12 for EMA seeds 7/43 and
+  36.56/34.77 for TM seeds 7/43. These describe opt-in reconstruction on the
+  reference device; no matched speedup or general performance acceptance is claimed.
 
 ### 2026-10-08 — Quantize partial-entry differences without losing aligned steps
 
@@ -2514,3 +2745,68 @@ Historical observations do not supersede those requirements or prove current acc
   A small DD ordering/front difference remains in TM seed seven, with DD regret
   about 0.00000022 at the GPU's minimum-DD candidate. Preserve this numerical
   observation; resolving the material HSL outlier is not general parity acceptance.
+
+### 2026-10-08 — Memoize only the factual scope cutoff
+
+- Preserve fresh retained-fill reconstruction and current controller inputs. A
+  simulator-owned memo stores only the factual flat-prefix cutoff, keyed by exact
+  selected/exposed pair identities and the sum of monotonic fact versions. Native
+  fill append, coalescence and pruning advance those versions; new candidate/retry
+  initialization discards both rings and memo. Quantity quanta stay immutable for
+  a prepared replay. No old signal, budget, price or permission is cached.
+- Validate headers before every hit. The optional compile-time cache switch also
+  removes its temporal-state fields, and actual compiled state-size queries retain
+  allocation ownership. All 21 prefix/memo device controls pass, including selected
+  and unrelated fills, pruning, exposure changes, explicit discard and malformed
+  headers. The 62 composer cases against 651 Rust snapshots and ten host policy
+  cases also pass. Rust passes 333 tests with one existing ignore and default-feature
+  test compilation. Native full/chunk/growth cases and performance remain pending.
+- The partial-entry correction completed current-head author and independent review
+  and Rust / Python 3.12 / Python 3.14 CI before merging to development. Integrate
+  it without changing the unpublished factual/cache source. Default adoption and
+  checkpoint semantic cutover remain open; master is unchanged.
+
+- Accept the remaining measured near-indifference for these four synthetic cohorts,
+  rather than chasing identical f32/f64 trajectories. All five HSL metrics and the
+  authored feasibility checks match; ADG/RED ordering is preserved. The single DD
+  ordering/front difference has selected-candidate regret about 0.000000220.
+  The observed ADG/DD/fill-rate residual envelopes are retained as bounded evidence,
+  not promoted into a universal tolerance. Broader lifecycle/metric/resource gates
+  still apply; this small difference alone does not block worker adoption.
+
+- All sixty native factual dispatch, temporal continuation, bounded growth and
+  disabled-policy controls pass on the cache-enabled build, plus six actual
+  compensated-cashflow continuity controls. Eighteen selected checkpoint checks
+  and five AI-documentation checks also pass. Cached-versus-fresh matched cohort
+  measurements are running; no throughput gain is claimed from these tests.
+
+- The first two paired cache experiments preserve every requested metric on all
+  32 EMA candidates, both initially and in two warm repeats. Warm uncached/cached
+  seconds per sixteen candidates are 85.25/85.27 versus 9.30/9.32 for seed seven,
+  and 68.12/72.85 versus 10.54/10.61 for seed 43. The measured ratios are about
+  9.16x and 6.67x. Torch allocation peaks agree in each pair; that is not a total
+  driver/host memory measurement. TM measurements remain pending. Reuse only the
+  cutoff, not a prior controller signal. These observations support keeping this
+  small memo; they do not establish whole-optimizer or general workload speedups.
+
+- All four alternating-process paired cohorts finish successfully. All nine
+  metrics remain identical across uncached/cached runs, initial execution and two
+  warm repeats, with both Python and Rust CPU backtests forbidden. The two TM
+  cohorts improve from warm medians 37.64/37.77 seconds to 31.63/31.77, about
+  1.19x each. Keep the small factual-cutoff memo. All five HSL metrics agree with
+  the corrected independent CPU references; the previously bounded small TM
+  drawdown/front difference is unchanged. Torch allocation peaks match each pair,
+  without establishing total driver/host memory or full optimizer performance.
+
+- The final history/capture recheck passes all 99 cases: 59 pair reconstruction,
+  endpoint, ring and compacted-view controls (including 996 generated/targeted
+  histories against Rust), and forty real native chronology, storage, temporal,
+  retry and interruption controls.
+- Author inspection finds that universal runner interruption wiring gives separate
+  default lambdas to compatible scenarios, changing their batch keys. Use one
+  shared no-op for the multicoin constructor while preserving explicitly distinct
+  callback ownership. The real shared-packing/default-callback regression fails
+  before correction; its explicit shared-callback control passes. Both pass after
+  correction, with CPU simulation forbidden. All 54 affected suite-key/topology
+  and fused-construction controls also pass. The GPU shader and compiled Rust
+  artifact are unchanged by this host-side correction.

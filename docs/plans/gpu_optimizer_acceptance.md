@@ -937,3 +937,301 @@ These are isolated warm replay/storage controls with identical candidate rows,
 not search throughput, a cold-start benchmark, total VRAM/RAM bounds or an optimal
 batch/chunk size. Compiler attributes and small timing gains are workload/device
 observations, not requirements imposed on other architectures.
+
+## Retained factual history component — development evidence
+
+`test_gpu_hsl_history.py` compiles the Rust-owned `mps_hsl_history.metal` component
+and compares its pair histories with the source-verified Rust `hsl_history`
+reference. All 22 CUDA cases pass: four parameterized batches cover 996 histories,
+and eighteen malformed-input cases cover quantities, prices, cashflows, current
+facts and ring metadata. Generated tapes use seed 7121, 64 executions, five quantity
+steps from 1e-6 to 100, clipped prefixes, wrapped storage and same-time cohorts.
+Targeted cases cover empty/held histories, missing closes, reduction-only prefixes,
+local quantity repair, full closes, reopenings, a remaining lot after large
+inventory, and small fees surviving large cancelling cashflows.
+
+Inventory and sample flatness must agree exactly. Quantity error remains below a
+quarter of the exchange quantum. Basis, cashflow and UPNL checks use their contributing
+magnitudes to distinguish float32 conditioning from a near-zero result; exact cashflow
+checks additionally cover the cancellation fixture. These are component-test bounds,
+not acceptance policies for optimizer objectives, feasibility or candidate ranking.
+Rust reference tests pass 332 cases with one existing ignore, and default-feature
+compilation passes.
+
+The reconstruction component does not yet supply native HSL evaluation.
+Opt-in native factual capture is being developed separately below; neither
+component coverage nor capture proves aggregate controller observations or native
+trading/Pareto parity. Bounded factual storage,
+actual scope episode boundaries, cache-loss and checkpoint identity, full caller
+coverage and the matched HSL candidate cohorts remain open. Existing native retained-
+fill discrepancies remain classified as material until that integration is verified.
+
+
+## Native factual capture and scope selection — work in progress
+
+Native multicoin EMA/TM fill paths now support internal, opt-in factual capture.
+Each worker retains signed quantity, actual execution price, gross PnL, fee,
+actual post-fill position and global sequence. Its existing two-slot header also
+retains the actual current size and basis, including when close accounting precedes
+the caller's position mutation. Consecutive same-pair, same-direction,
+same-minute executions may share a record; a reduction never merges through an
+actual flat. Aggregate scopes borrow pair facts. Normal result payloads remain
+metrics; full factual scratch readback belongs only to the tests.
+
+A distinct overflow marker rejects the whole result. The worker may double its
+factual capacity and repeat GPU work only within the existing one-candidate scratch
+budget, checking interruption before growth and preserving the learned capacity.
+Malformed facts and other fatal candidate errors must take precedence over capacity
+recovery. No truncated history or partial result is admitted; no CPU backtest is
+used for recovery. Capacity is a runtime storage control; only feature enablement
+participates in kernel compilation. This avoids recompiling on each growth step.
+
+The scope selector reverse-walks globally ordered factual post-fill positions on
+each exchange quantity quantum. Exposed scopes retain the latest actual flat prefix;
+flat scopes retain the preceding one to preserve the just-completed episode.
+Its consumed sequence distinguishes a flatten from a same-minute reopen. A clipped
+exposed prefix receives no invented flat seed. This selector is not yet called by
+native HSL evaluation.
+
+Thirteen real CUDA scope-selection cases and the preceding 47 pair-history/writer
+cases pass. Scope cases cover coin/side/portfolio selection, same-minute reopening,
+multiple completed episodes, fractional quantities, clipped exposure and invalid
+current inputs. These are authored cutoff/transport controls, not full Rust
+scope/controller parity.
+
+With the current rebuilt extension, all 110 checks pass: 100 actual CUDA controls
+and ten host execution-policy cases. Forty native caller cases cover EMA/TM,
+long/short/fused paths and coin/side/unified modes. Capture preserves every returned
+metric exactly, including NaN masks. Global fill ordinals remain complete; physical
+candidate partitioning includes factual scratch. Full and temporally chunked tapes
+agree exactly. Capacity growth reuses compiled identity and warm storage; cancellation
+propagates before growth. Later temporal chunks preserve overflow, and a fresh retry
+restores complete factual chronology and unchanged metrics. The host attempts are
+explicit fakes around production capacity and decoder policy, including mixed fatal
+and recoverable markers. No native optimizer parity policy is widened.
+
+Rust passes 332 tests with one existing ignore and default-feature compilation;
+319 host/preparation/service/documentation checks pass with 40 device-named cases
+deselected. The preceding capture build also passes four coupled CUDA request
+comparisons and all 52 native CUDA CLI checks with CPU backtests forbidden.
+Controller integration, cache-loss/checkpoint equivalence, resource acceptance and
+matched candidate-front comparisons remain required.
+
+The expanded endpoint build passes all 157 checks: 147 actual CUDA and ten host
+policy cases. Twelve additional endpoint probes reject malformed basis/flat
+inputs and preserve factual endpoints after failure. All forty native capture
+cases now inspect actual size and weighted basis; nine temporal controls also
+require exact header equivalence across chunks. These fields fit in the existing
+64-byte header, with 56 bytes used. Rust still passes 332 tests with one existing
+ignore, including default-feature test compilation.
+
+## Reconstructed scope/controller component — development evidence
+
+`mps_hsl_scope.metal` composes a fresh scope from causally clipped pair histories,
+current positions and aligned minute marks. It merges factual global execution
+order, centers cashflow against a common current prefix, preserves exact consumed
+flat boundaries, and evaluates terminal accounting before resetting each episode.
+Estimated opening references do not invent an EMA observation. Current positions
+without a supported historical opening discard idle observations from the current
+episode while retaining earlier completed episodes.
+
+The composer consumes the same observation phase as Rust: a pre-fill same-time
+candle may value the earlier inventory, while lifecycle reopening uses the causal
+fill timestamp. The initial prototype incorrectly prolonged cooldown by one
+observation in this case; the Rust comparison exposed it and the episode metadata
+now clears cooldown at the factual reopening time. The shared kernel source owns
+this component; no Python decision formula or prior permission supplies its signal.
+Optional full point traces exist only for test inspection. Ordinary callers can
+request compact scalar results without allocating or returning a trace.
+
+All 36 source-verified CUDA composer tests pass, comparing 375 scope snapshots with
+Rust `hsl_trace` and `hsl_controller`: 288 generated one/two/three-pair snapshots,
+three empty-current cases, sixty authored terminal/reopening cases, and 24 compact
+evaluations with no point trace. These cover
+long/short, clipped and wrapped histories, both candle phases, EMA spans 1/2.5/25,
+always/never restart, same-minute round trips, missing closes and unexplained current
+openings. Every point's timestamp, exposure, flattening and action agrees; cashflow,
+UPNL, raw and EMA use explicit local float32 component bounds. These bounds do not
+accept optimizer ranking, feasibility or trajectory differences.
+
+The compact evaluations also compare final action, raw/EMA, cooldown timestamp
+and latest terminal scores with Rust. A one-row unused test buffer proves that
+the no-trace path writes no points and requires no full trace allocation. Normal
+result payloads therefore need not expose histories for independent inspection.
+
+An internal opt-in route now drives actual native EMA/TM kernels through this
+evaluator. The default optimizer worker has not adopted it. Each selected coin/side
+uses its factual endpoint header, a clipped scope prefix and disposable resident event
+scratch. The physical budget reserves 16 bytes per factual capacity slot for events,
+rounded to 32-byte allocation nodes. Ordinary observations use the current candle's
+close time; terminal fills use only causal preceding closes or retained execution prices.
+The terminal score remains available for reporting before episode reset.
+
+All four single/fused EMA/TM entry paths attach the common evaluation context.
+Temporal TM reconstructs these bindings after every chunk; serialized thread pointers
+are never inputs to the next evaluation. A separate runtime control enables evaluation
+without changing compiled capacity identity. Capture-only and disabled-policy controls
+remain available during development. All 33 actual CUDA caller controls pass:
+18 topology cases, nine chunk/full equivalence cases, two GPU-only growth cases and
+four disabled-policy cases. The full 119-check integration suite passes: 109 actual
+CUDA cases and ten host policy cases, including the composer and capture/recovery
+controls. Rust passes 332 tests with one existing ignore and default-feature test
+compilation.
+
+Six independent stressed two-coin comparisons use both strategies, all three HSL
+scopes, 256 minute bars, seed 43, threshold 0.002, EMA span 2.5 and ten-minute cooldown.
+Apply persistent price shocks at bars 96/150, multiplying coins zero/one by 0.7/1.3.
+Time in RED, triggers, restarts and mean/maximum halt duration agree exactly in every
+case. EMA fill rates also agree. TM has twelve fewer fills and worst-drawdown residuals
+up to 0.00002991. Both ADG values are zero on this sub-day fixture and therefore do
+not establish growth parity. CPU references run independently; CPU execution is
+forbidden during each GPU request. This is opt-in kernel evidence, not default
+service adoption or general parity acceptance.
+
+The longer diagnostic repeats four sixteen-candidate cohorts: both strategies,
+seeds 7/43, both sides, two coins and 3000 minute bars. Use unified HSL, threshold
+0.002, span 2.5, cooldown 10000 minutes and one-day lookback; multiply coins zero/one
+by 0.7/1.3 from bars 1500/1800. Candidate generation is the public cohort tool's
+quantity/EMA sweep. Input and candidate identities match the preceding materiality
+experiment; all 64 newly evaluated CPU rows match its nine metrics exactly.
+
+The factual opt-in GPU route matches all five HSL metrics, Pareto membership and
+all pair orderings for EMA seeds 7/43 and TM seed 7. TM seed 43 retains two material
+trajectory discrepancies: candidates zero/two differ by 148/149 halt minutes and
+about five percentage points in RED. Its Pareto membership differs. No authored
+limit flips occur, and CPU ADG regret at the GPU's best-ADG candidate is zero in
+each cohort. Remaining numeric/fill discrepancies and the TM trajectory outliers
+are not accepted by this evidence. In particular, unchanged best-candidate regret
+does not establish general ranking or feasibility equivalence.
+
+These initial GPU calls include compilation and bounded capacity retries. They
+also expose hot execution cost from reconstructing flat idle tails at every
+observation. Evaluation-local compaction is under validation: a trace-free scope
+with every fill consumed, no reconstructed/current exposure and an exact zero
+raw/EMA signal may jump to its endpoint while preserving logical observation
+counts and current cooldown/lookback timing. It retains fresh reconstruction and
+introduces no persistent permission cache.
+
+The expanded 60 native caller controls pass on the preceding integration build:
+36 one/two-coin topology cases, eighteen temporal equivalence cases, two growth
+cases and four disabled-policy cases. The flat-tail build separately passes all
+62 composer checks against 651 Rust trace/controller snapshots, including 216
+long idle cases covering clipped starts, both candle phases, three EMA spans,
+zero/short/long cooldowns and always/never restart. Observation counts, actions,
+flat timestamps and terminal scores preserve the existing reference contract.
+Its 332 Rust tests (one existing ignore), default-feature compilation and ten
+host capacity/error-policy checks pass. All 100 actual native caller checks also
+pass: sixty dispatch/temporal/growth/disabled controls and forty factual capture,
+storage, interruption and recovery controls. Together this is 172 checks, including
+162 actual CUDA cases. The same 64 matched candidates preserve all nine GPU metrics
+exactly after compaction, on their initial evaluation and three warm repeats.
+Warm median seconds per sixteen-candidate cohort are 85.55/72.06 for EMA seeds
+7/43 and 37.64/36.87 for TM seeds 7/43. These measure the opt-in reconstruction
+path, not general optimizer throughput. There is no matched warm pre-compaction
+measurement, so they establish neither a speedup nor performance acceptance.
+
+Independent outlier traces preserve CPU fills and all nine metrics when detailed
+reporting is enabled. That control does not disable CPU caches. Fresh standalone
+Rust reconstruction from the captured GPU facts reproduces the GPU restart
+decisions: candidate zero flattens at minute 1555 rather than the CPU's 1554;
+candidate two flattens at 1539 on both. At minute 2791, candidate two's reconstructed
+terminal EMA is approximately 0.00199878 from GPU facts and 0.00200212 from CPU
+facts, straddling the 0.002 threshold. Candidate zero's GPU facts remain halted
+until minute 2940, while CPU facts release at 2791. Thus the remaining trajectories
+are already different upstream of scope reconstruction; this evidence is not a
+precision-policy acceptance or proof of the first divergent execution's cause.
+
+Early execution inspection identifies a separate TM ladder bug: Rust advances
+the simulated book touch and reprices its initial sizing floor at each recursive
+rung; the multicoin GPU helper kept its original sizing price. A short-side
+sixteen-rung canonical-order regression fails on thirteen quantities before the
+correction; the long control passes. Updating that anchor passes both cases and
+37 affected recursive gate, market and fused caller checks on CUDA. The rebuilt
+extension also passes 332 Rust tests (one existing ignore) and default-feature
+test compilation. The corrected TM seed-43 cohort restores all Pareto members
+and drawdown pair ordering, and resolves candidate zero's HSL mismatch. Candidate
+two retains its 149-minute early restart and two RED pair-order disagreements.
+No authored limit flips occur. This evidence does not accept the remaining
+trajectory discrepancy or establish general optimizer quality.
+
+A later sizing control isolates candidate two's first remaining discrete quantity
+change at minute 393. The CPU cash balance is 1020.43430834 and the f32 GPU balance
+1020.43072510; the initial quantity falls just above/below 53.5 quantity steps.
+Accumulating the same CPU-encoded cashflows naively in f32 produces 1020.43023682,
+while summing those encoded net values in f64 preserves 1020.43430835. Simply
+encoding the CPU's completed HSL facts and marks in f32 does not reproduce the
+early restart, so transport rounding alone is not its explanation.
+
+A diagnostic-only compensated-f32 account variant removes this first quantity
+change. Its same sixteen-candidate cohort preserves Pareto membership and ADG/DD
+pair ordering, with no authored limit flips, but retains the 149-minute restart
+difference and two RED pair-order disagreements. Later rounding/trajectory
+changes remain. This supports a small accumulation improvement; it does not
+accept the remaining HSL discrepancy or authorize default factual-worker adoption.
+
+The combined factual-HSL, recursive-sizing and compensated-account build passes
+216 focused controls, including the actual native temporal cases and all 72
+checkpoint contracts. Its matched 64-candidate comparison preserves every Pareto
+front and all ADG/DD pair orderings, with no authored limit flips and identical
+initial/warm GPU results. All five HSL metrics agree in three cohorts. TM seed 43
+candidate two still restarts 149 minutes early, leaving two RED pair-order
+disagreements unresolved. Warm seconds per sixteen candidates are 85.27/67.12 for
+EMA seeds 7/43 and 36.56/34.77 for TM seeds 7/43. These are observations, not
+matched speedup evidence or general numeric/search acceptance.
+
+Subsequent independent producer checks supersede the remaining 149-minute outlier
+above. CPU partial-initial subtraction can turn two mathematically aligned exchange
+quantities into a representation just below their step. All four affected CPU
+branches now apply the existing representation tolerance before downward rounding;
+true below-step controls retain their original floor. Recomputing the 64 independent
+CPU reference rows resolves all five HSL metrics in all four cohorts, all ADG/RED
+pair orderings and all authored limit classifications. TM seed seven retains a tiny
+worst-drawdown ordering/front difference: the CPU drawdown regret of the GPU's best
+DD candidate is about 0.000000220. Accept this near-indifference for these four synthetic cohorts: no authored limit
+classification flips occur, ADG/RED ordering is preserved, and selected-candidate
+regret is negligible. Across all 64 candidates the maximum ADG/DD/fill-rate
+residuals are about 0.00007293 / 0.000003829 / 4.903 fills per day. These describe
+observed fixture-specific envelopes, not universal error bounds. Preserve the
+strict comparison results; no rounding-policy change, bitwise trajectory repair
+or broader search-equivalence claim follows from this bounded acceptance.
+
+Full-window composition remains the correctness baseline. Develop a disposable
+factual-cutoff memo using immutable pair identity/exposure and monotonically
+advancing simulator fact versions. A cache hit skips only the reverse prefix walk;
+pair reconstruction, prices, budgets, lookback and controller evaluation remain
+fresh. Invalid headers still reject before a hit. The first 21 CUDA prefix/memo
+controls and 62 composer cases against 651 Rust snapshots, plus ten host policy
+cases, pass. All sixty native dispatch, temporal, growth/retry and disabled-policy controls
+also pass, with six compensated-cashflow continuity cases. Eighteen selected
+checkpoint and five documentation checks pass. All four paired cohorts preserve all nine metrics exactly in the initial and
+both warm repeats, for 64 distinct candidates across both strategies and seeds
+seven/43. Each fresh process forbids Python and Rust CPU backtests and reuses the
+independent corrected CPU references. Alternate uncached/cached processes for each
+cohort; compile the diagnostic uncached variant with
+`PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED=0`, including its actual temporal-state size
+queries. Inputs and candidate identities match the recipe above.
+
+| Strategy / seed | Uncached warm median, seconds | Cached warm median, seconds | Measured ratio |
+| --- | ---: | ---: | ---: |
+| EMA / 7 | 85.26 | 9.31 | 9.16x |
+| EMA / 43 | 70.49 | 10.57 | 6.67x |
+| TM / 7 | 37.64 | 31.63 | 1.19x |
+| TM / 43 | 37.77 | 31.77 | 1.19x |
+
+Each median contains two warm observations. Torch peak allocated/reserved bytes
+are unchanged within every pair; private kernel storage and total driver/host
+memory are outside that measurement. Initial times include compilation and are
+excluded from the warm ratios. This fixture-specific gain supports keeping the
+small cutoff memo, without claiming optimizer throughput or general resource
+acceptance. Checkpoint semantic cutover, default worker adoption and representative
+resource/performance acceptance remain required.
+No global parity policy is widened.
+
+The subsequent source-verified history/capture recheck passes all 99 cases:
+59 reconstruction, endpoint, ring and compacted-view controls, including 996
+Rust-referenced histories, and forty native capture/storage/retry/temporal controls.
+Universal interruption wiring uses a shared no-op callback so compatible scenarios
+retain the same batch key; distinct explicit callback owners remain separate.
+The real-construction regression fails before that correction and passes afterward,
+with CPU simulation forbidden. All 54 affected host suite-key/topology/fused-
+construction controls pass. This host-only fix preserves the tested GPU source.

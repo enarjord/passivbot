@@ -1,0 +1,298 @@
+// Compose a fresh, causally clipped scope from reconstructed pair facts. No
+// previous panic decision or reconstructed curve is accepted as authority.
+struct HslScopePair {
+    HslPairFacts facts;
+    HslPairHistory history;
+    device HslPairEvent* events;
+    device const int* sequences; // Global sequence, with a caller-owned stride.
+    int sequence_stride;
+    device const float* prices; // Aligned minute marks for this exact snapshot.
+    int price_stride;
+    constant float* candles; // Native aligned close grid; null for prepared prices.
+    int candle_stride;
+    int candle_first;
+    int candle_last;
+    float fallback_price;
+    float current_size;
+    float current_basis;
+    float current_mark;
+    float multiplier;
+    bool short_side;
+    int consumed;
+    float boundary_size;
+};
+
+inline float hsl_scope_price_at(thread const HslScopePair& pair, int minute, int start, int end) {
+    if (pair.candles == nullptr) return pair.prices[(minute - start) * pair.price_stride];
+    // Candles name their open; close j becomes available at minute j+1.
+    // Projection is evaluation-local: forward-fill gaps, then backfill a missing
+    // prefix from the first causal close. Never read the end minute's future bar.
+    int first = max(max(start - 1, 0), pair.candle_first);
+    int last = min(end - 1, pair.candle_last);
+    for (int j = min(max(minute - 1, 0), last); j >= first; --j) {
+        float value = pair.candles[j * pair.candle_stride];
+        if (isfinite(value) && value > 0.0f) return value;
+    }
+    for (int j = first; j <= last; ++j) {
+        float value = pair.candles[j * pair.candle_stride];
+        if (isfinite(value) && value > 0.0f) return value;
+    }
+    return pair.fallback_price;
+}
+
+struct HslScopePoint {
+    int minute;
+    float pnl; // Centered against the common current factual cashflow prefix.
+    float upnl;
+    int exposed;
+    int flatten;
+    float raw;
+    float ema;
+    int action; // 0 normal, 1 halted, 3 panic; same as the native controller.
+};
+
+struct HslScopeResult {
+    float raw;
+    float ema;
+    int action;
+    int flat_minute;
+    int point_count;
+    int latest_flat_minute;
+    float latest_flat_raw;
+    float latest_flat_ema;
+};
+
+struct HslScopeSignal {
+    float peak;
+    float raw;
+    float ema;
+    float baseline;
+    float reference;
+    int minute;
+    bool ready;
+    bool baseline_ready;
+};
+
+inline void hsl_scope_signal_reset(thread HslScopeSignal& s, float reference) {
+    s.peak = -INFINITY;
+    s.raw = s.ema = s.baseline = 0.0f;
+    s.reference = reference;
+    s.minute = -1;
+    s.ready = s.baseline_ready = false;
+}
+
+inline float hsl_scope_cash_difference(
+    thread const HslPairSum& prefix, thread const HslPairSum& anchor
+) {
+    HslPairSum centered;
+    hsl_pair_sum_reset(centered, 0.0f);
+    hsl_pair_sum_add(centered, prefix.value);
+    hsl_pair_sum_add(centered, prefix.correction);
+    hsl_pair_sum_add(centered, -anchor.value);
+    hsl_pair_sum_add(centered, -anchor.correction);
+    return hsl_pair_sum_value(centered);
+}
+
+inline bool hsl_scope_visit(
+    thread HslScopeSignal& signal, float budget, float alpha, float threshold,
+    float cooldown, bool never_restart, int start, bool reopened,
+    thread HslScopePoint& point, thread HslScopeResult& result,
+    device HslScopePoint* trace, int trace_capacity
+) {
+    float delta = point.pnl + point.upnl;
+    if (!isfinite(delta)) return false;
+    if (signal.minute != point.minute) {
+        signal.baseline = signal.ema;
+        signal.baseline_ready = signal.ready;
+    }
+    if (!signal.ready) signal.peak = fmax(signal.reference, delta);
+    else signal.peak = fmax(signal.peak, delta);
+    float denominator = budget + signal.peak;
+    signal.raw = denominator > 0.0f ? (signal.peak - delta) / denominator : 1.0f;
+    signal.ema = signal.baseline_ready
+        ? alpha * signal.raw + (1.0f - alpha) * signal.baseline : signal.raw;
+    if (!isfinite(signal.raw) || !isfinite(signal.ema)) return false;
+    signal.ready = true;
+    signal.minute = point.minute;
+    if (point.exposed || reopened) result.flat_minute = -1;
+    bool red = fmin(signal.raw, signal.ema) > threshold;
+    if (point.flatten) {
+        result.flat_minute = red ? point.minute : -1;
+        result.latest_flat_minute = point.minute;
+        result.latest_flat_raw = signal.raw;
+        result.latest_flat_ema = signal.ema;
+    }
+    if (result.flat_minute >= 0 && (result.flat_minute < start
+        || (!never_restart && float(point.minute - result.flat_minute) >= cooldown)))
+        result.flat_minute = -1;
+    result.raw = point.raw = signal.raw;
+    result.ema = point.ema = signal.ema;
+    result.action = point.action = point.exposed && red ? 3
+        : (!point.exposed && result.flat_minute >= 0 ? 1 : 0);
+    if (trace != nullptr) {
+        if (result.point_count >= trace_capacity) return false;
+        trace[result.point_count] = point;
+    }
+    ++result.point_count;
+    return true;
+}
+
+inline int hsl_scope_pair_sequence(thread const HslScopePair& pair, int logical) {
+    return pair.sequences[hsl_pair_slot(pair.facts, logical) * pair.sequence_stride];
+}
+
+inline int hsl_scope_next_opening(thread HslScopePair* pairs, int pair_count) {
+    int opening = -1;
+    for (int p = 0; p < pair_count; ++p) {
+        thread HslScopePair& pair = pairs[p];
+        for (int i = pair.consumed; i < pair.facts.count; ++i) {
+            if (pair.events[i].before == 0.0f && pair.events[i].after > 0.0f) {
+                int minute = hsl_pair_minute(pair.facts, i);
+                opening = opening < 0 ? minute : min(opening, minute);
+                break;
+            }
+        }
+    }
+    return opening;
+}
+
+inline bool hsl_compose_scope(
+    thread HslScopePair* pairs, int pair_count, int start, int end,
+    bool before_price, float budget, float span, float threshold,
+    float cooldown, bool never_restart, thread HslScopeResult& result,
+    device HslScopePoint* trace = nullptr, int trace_capacity = 0
+) {
+    result.raw = result.ema = result.latest_flat_raw = result.latest_flat_ema = 0.0f;
+    result.action = result.point_count = 0;
+    result.flat_minute = result.latest_flat_minute = -1;
+    if (pair_count < 1 || end < start || !isfinite(budget) || budget <= 0.0f
+        || !isfinite(span) || span < 1.0f || !isfinite(threshold)
+        || threshold <= 0.0f || threshold > 1.0f || !isfinite(cooldown)
+        || cooldown < 0.0f) return false;
+    HslPairSum anchor, cash;
+    hsl_pair_sum_reset(anchor, 0.0f);
+    hsl_pair_sum_reset(cash, 0.0f);
+    bool estimated = false, current_exposed = false, reconstructed_flat = true;
+    for (int p = 0; p < pair_count; ++p) {
+        thread HslScopePair& pair = pairs[p];
+        if (pair.sequence_stride < 1 || pair.price_stride < 1) return false;
+        pair.consumed = 0;
+        pair.boundary_size = fabs(pair.history.opening_size);
+        estimated = estimated || pair.history.opening_size != 0.0f;
+        current_exposed = current_exposed || pair.current_size != 0.0f;
+        reconstructed_flat = reconstructed_flat && (pair.facts.count == 0
+            ? pair.history.opening_size == 0.0f
+            : pair.events[pair.facts.count - 1].after == 0.0f);
+        for (int i = 0; i < pair.facts.count; ++i) {
+            HslPairFact f = hsl_pair_fact(pair.facts, i);
+            hsl_pair_sum_add(anchor, f.realized);
+            hsl_pair_sum_add(anchor, f.fee);
+        }
+    }
+    if (!isfinite(hsl_pair_sum_value(anchor))) return false;
+    HslScopeSignal signal;
+    hsl_scope_signal_reset(signal, estimated ? -hsl_pair_sum_value(anchor) : -INFINITY);
+    float alpha = 2.0f / (span + 1.0f);
+    int episode_trace_start = 0;
+    int episode_opening = -1;
+    for (int minute = start; minute <= end; ++minute) {
+        while (true) {
+            int selected = -1, selected_minute = 0, sequence = 0;
+            for (int p = 0; p < pair_count; ++p) {
+                thread HslScopePair& pair = pairs[p];
+                int i = pair.consumed;
+                if (i >= pair.facts.count) continue;
+                int t = hsl_pair_minute(pair.facts, i);
+                if (!hsl_pair_fill_precedes_price(t, minute, end, before_price)) continue;
+                int seq = hsl_scope_pair_sequence(pair, i);
+                if (selected < 0 || t < selected_minute
+                    || (t == selected_minute && seq < sequence)) {
+                    selected = p; selected_minute = t; sequence = seq;
+                }
+            }
+            if (selected < 0) break;
+            thread HslScopePair& pair = pairs[selected];
+            int i = pair.consumed++;
+            HslPairEvent event = pair.events[i];
+            bool had_exposure = event.before > 0.0f || event.after > 0.0f;
+            for (int p = 0; p < pair_count; ++p)
+                had_exposure = had_exposure || pairs[p].boundary_size != 0.0f;
+            pair.boundary_size = i + 1 == pair.facts.count
+                && pair.history.flat_correction_minute >= 0 ? 0.0f : event.after;
+            HslPairFact fact = hsl_pair_fact(pair.facts, i);
+            hsl_pair_sum_add(cash, fact.realized);
+            hsl_pair_sum_add(cash, fact.fee);
+            bool flat = true;
+            for (int p = 0; p < pair_count; ++p)
+                flat = flat && pairs[p].boundary_size == 0.0f;
+            if (flat && had_exposure) {
+                HslScopePoint point;
+                point.minute = selected_minute;
+                point.pnl = hsl_scope_cash_difference(cash, anchor);
+                point.upnl = 0.0f;
+                point.exposed = 0; point.flatten = 1;
+                bool reopened = result.point_count > episode_trace_start
+                    && episode_opening >= 0 && point.minute >= episode_opening;
+                if (!hsl_scope_visit(signal, budget, alpha, threshold, cooldown,
+                    never_restart, start, reopened, point, result, trace, trace_capacity))
+                    return false;
+                // A genuine flat seeds the following episode at exactly the
+                // consumed cashflow prefix, including its closing fee.
+                hsl_scope_signal_reset(signal, -INFINITY);
+                episode_trace_start = result.point_count;
+                // Lifecycle uses the causal fill time, even when the caller's
+                // candle phase samples inventory before a same-time fill.
+                episode_opening = hsl_scope_next_opening(pairs, pair_count);
+                point.flatten = 0;
+                if (!hsl_scope_visit(signal, budget, alpha, threshold, cooldown,
+                    never_restart, start, false, point, result, trace, trace_capacity)) return false;
+            }
+        }
+        HslPairSum upnl;
+        hsl_pair_sum_reset(upnl, 0.0f);
+        bool exposed = false;
+        for (int p = 0; p < pair_count; ++p) {
+            thread HslScopePair& pair = pairs[p];
+            HslPairSample sample;
+            float price = hsl_scope_price_at(pair, minute, start, end);
+            if (!hsl_sample_pair(pair.history, pair.events, pair.consumed,
+                pair.facts.count, minute, end, before_price, pair.current_size,
+                pair.current_basis, pair.current_mark, price, pair.multiplier,
+                pair.short_side, sample)) return false;
+            hsl_pair_sum_add(upnl, sample.upnl);
+            exposed = exposed || sample.size != 0.0f;
+        }
+        if (minute == end && current_exposed && reconstructed_flat) {
+            // Current positions prove a new opening absent from the retained
+            // tail. Its scoped entry value seeds one real current observation.
+            hsl_scope_signal_reset(signal, 0.0f);
+            result.point_count = episode_trace_start;
+        }
+        HslScopePoint point;
+        point.minute = minute;
+        point.pnl = hsl_scope_cash_difference(cash, anchor);
+        point.upnl = hsl_pair_sum_value(upnl);
+        point.exposed = exposed ? 1 : 0; point.flatten = 0;
+        bool reopened = result.point_count > episode_trace_start
+            && episode_opening >= 0 && minute >= episode_opening;
+        if (!hsl_scope_visit(signal, budget, alpha, threshold, cooldown,
+            never_restart, start, reopened, point, result, trace, trace_capacity)) return false;
+        // A completed flat episode seeds an exact zero signal. With every fill
+        // consumed and no current exposure, later idle marks cannot change it.
+        // Keep the logical observation count, then visit the real endpoint so
+        // cooldown/lookback expiry still uses current time. Debug traces retain
+        // every observation; this is evaluation-local compaction, not a cache.
+        if (trace == nullptr && !current_exposed && !exposed
+            && signal.raw == 0.0f && signal.ema == 0.0f && minute + 1 < end) {
+            bool complete = true;
+            for (int p = 0; p < pair_count; ++p)
+                complete = complete && pairs[p].consumed == pairs[p].facts.count
+                    && pairs[p].boundary_size == 0.0f;
+            if (complete) {
+                result.point_count += end - minute - 1;
+                minute = end - 1;
+            }
+        }
+    }
+    return true;
+}

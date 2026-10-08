@@ -13,6 +13,8 @@ const MPS_UNSTUCK_EMA_COMMON_SOURCE: &str = include_str!("gpu/mps_unstuck_ema_co
 const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
 const MPS_HSL_SOURCE: &str = include_str!("gpu/mps_hsl.metal");
+const MPS_HSL_HISTORY_SOURCE: &str = include_str!("gpu/mps_hsl_history.metal");
+const MPS_HSL_SCOPE_SOURCE: &str = include_str!("gpu/mps_hsl_scope.metal");
 const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
 const MPS_BTC_RISK_COMMON_SOURCE: &str = include_str!("gpu/mps_btc_risk_common.metal");
 const MPS_EQUITY_BALANCE_DIFF_MARKER: &str = "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON";
@@ -67,7 +69,10 @@ fn compose_hsl_source(body: &str) -> String {
         .replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
         .replacen(
             MPS_HSL_MARKER,
-            &format!("{}\n{}", MPS_HSL_SOURCE, MPS_HSL_COMMON_SOURCE),
+            &format!(
+                "{}\n{}\n{}\n{}",
+                MPS_HSL_SOURCE, MPS_HSL_HISTORY_SOURCE, MPS_HSL_SCOPE_SOURCE, MPS_HSL_COMMON_SOURCE
+            ),
             1,
         )
         .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
@@ -183,6 +188,13 @@ mod tests {
     fn assert_shared_hsl_contract(source: &str) {
         assert!(!source.contains(MPS_HSL_MARKER));
         assert!(source.contains(MPS_HSL_COMMON_SOURCE));
+        assert!(source.contains(MPS_HSL_HISTORY_SOURCE));
+        assert!(source.contains(MPS_HSL_SCOPE_SOURCE));
+        assert_eq!(source.matches("struct HslScopePair").count(), 1);
+        assert_eq!(source.matches("inline bool hsl_compose_scope(").count(), 1);
+        assert_eq!(source.matches("struct HslPairFact {").count(), 1);
+        assert_eq!(source.matches("struct HslPairRingState {").count(), 1);
+        assert_eq!(source.matches("inline bool hsl_pair_ring_append(").count(), 1);
         assert_eq!(source.matches("struct HslState").count(), 1);
         assert_eq!(source.matches("inline HslState load_hsl(").count(), 1);
         assert_eq!(source.matches("inline void observe_hsl(").count(), 1);
@@ -757,7 +769,9 @@ mod tests {
         assert!(source.contains("position_size <= requested_qty"));
         assert!(source.contains("remainder + tolerance < minimum_qty"));
         assert!(!source.contains("accumulate_min_cost_balance_error"));
-        assert_eq!(source.matches("= fma(").count(), 10);
+        // Five ordinary strategy EMA updates belong to this body; shared
+        // HSL/unstuck arithmetic has independent source-ownership checks.
+        assert_eq!(MPS_EMA_ANCHOR_BODY.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
@@ -840,7 +854,8 @@ mod tests {
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains("net_position_cost -= short_side.psize[c]"));
         assert!(source.contains("float twe_abs = fabs(net_position_cost / account.balance)"));
-        assert!(source.contains("scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;"));
+        assert!(source.contains("hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C)"));
+        assert!(source.contains("hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C)"));
         assert!(source.contains("select_ema_multicoin_unstuck_coin("));
         assert!(source.contains("int forced_unstuck_coin"));
         assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));
@@ -1089,7 +1104,8 @@ mod tests {
             source.matches("if (twel_boundary_partial) break;").count(),
             2
         );
-        assert_eq!(source.matches("= fma(").count(), 10);
+        // Count the five strategy EMA updates independently of shared helpers.
+        assert_eq!(MPS_TRAILING_MARTINGALE_BODY.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
@@ -1333,7 +1349,8 @@ mod tests {
         assert!(source.contains("const TrailingMartingaleMulticoinSideConfig long_config ="));
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains("net_position_cost -= short_side.psize[c]"));
-        assert!(source.contains("scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;"));
+        assert!(source.contains("hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C)"));
+        assert!(source.contains("hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C)"));
         assert!(source.contains("select_tm_multicoin_unstuck_coin("));
         assert!(source.contains("int forced_unstuck_coin"));
         assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));

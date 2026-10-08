@@ -219,6 +219,9 @@ struct EmaMulticoinFillState {
     float profit_sum_short;
     float loss_sum_short;
     float fill_count;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    int hsl_fill_sequence;
+#endif
     float fill_count_entry;
     float fill_count_long;
     float held_max_min;
@@ -246,6 +249,9 @@ inline EmaMulticoinFillState init_ema_multicoin_fill_state() {
     fills.profit_sum_short = 0.0f;
     fills.loss_sum_short = 0.0f;
     fills.fill_count = 0.0f;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    fills.hsl_fill_sequence = 0;
+#endif
     fills.fill_count_entry = 0.0f;
     fills.fill_count_long = 0.0f;
     fills.held_max_min = 0.0f;
@@ -303,6 +309,9 @@ inline void record_ema_multicoin_close_fill(
     float gross_pnl,
     float net_pnl,
     float qty,
+    float fill_price,
+    float fill_fee,
+    float actual_size_after,
     float position_price,
     float mark_price,
     float c_mult,
@@ -335,6 +344,16 @@ inline void record_ema_multicoin_close_fill(
             );
         }
     }
+#endif
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslPairFact fact;
+    fact.delta = short_side ? qty : -qty;
+    fact.price = fill_price;
+    fact.realized = gross_pnl;
+    fact.fee = -fill_fee;
+    hsl_pair_ring_capture(side.coin_hsl[coin].facts, fact, k,
+        fills.hsl_fill_sequence++, short_side ? -actual_size_after : actual_size_after,
+        actual_size_after == 0.0f ? 0.0f : position_price, short_side);
 #endif
     record_ema_multicoin_gross_pnl(gross_pnl, fills, short_side);
     record_realized_net(
@@ -2580,7 +2599,10 @@ inline bool process_ema_multicoin_side_fills(
             record_ema_multicoin_close_fill(
                 side, account, fills, coin_fill_counts,
                 candidate_index, coin_count, c, k, pnl, net_pnl,
-                adjusted, pprice[c], close, c_mult, short_side,
+                adjusted, fill_price, adjusted * fill_price * c_mult
+                    * (market_execution ? taker_fee : maker_fee),
+                fmax(round_step(psize[c] - adjusted, qty_step), 0.0f),
+                pprice[c], close, c_mult, short_side,
                 is_hsl_panic, collect_coin_fill_counts,
                 hsl_equity_before_fills, opposite_hsl, opposite_has_position
             );
@@ -2660,6 +2682,16 @@ inline bool process_ema_multicoin_side_fills(
             if (was_flat) position_open_k[c] = float(k);
             psize[c] = new_size;
             pprice[c] = new_price;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+            HslPairFact fact;
+            fact.delta = short_side ? -adjusted : adjusted;
+            fact.price = fill_price;
+            fact.realized = 0.0f;
+            fact.fee = -fee;
+            hsl_pair_ring_capture(side.coin_hsl[c].facts, fact, k,
+                fills.hsl_fill_sequence++, short_side ? -new_size : new_size,
+                new_price, short_side);
+#endif
             last_increase_k[c] = float(k);
             record_ema_multicoin_volume(fills, adjusted, fill_price, balance);
             entry_qty[c] = 0.0f;
@@ -2746,7 +2778,8 @@ inline bool force_close_ema_multicoin_delisted_position(
     record_ema_multicoin_close_fill(
         side, account, fills, coin_fill_counts,
         candidate_index, coin_count, coin, k, pnl, net_pnl,
-        close_qty, position_price, close, c_mult, short_side,
+        close_qty, close_price, close_qty * close_price * c_mult * taker_fee,
+        0.0f, position_price, close, c_mult, short_side,
         true, collect_coin_fill_counts, hsl_equity_before_close,
         opposite_hsl, opposite_has_position
     );
@@ -3034,7 +3067,16 @@ inline void passivbot_ema_anchor_multicoin_impl(
 
 #if !PASSIVBOT_HSL_DISABLED
     bind_hsl_multicoin_hsl(side.hsl, side.coin_hsl,
-        hsl_trees, hsl_rows, int(b) * (C + 1), C, true, true);
+        hsl_trees, hsl_rows, int(b) * (C + 1), C, true, true
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[12])
+#endif
+    );
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslReplayContext factual_context = hsl_replay_context(
+        bars, coin_settings, C, COIN_COLS, run_settings[13] > 0.5f);
+    attach_hsl_replay_side(factual_context, side.hsl, side.coin_hsl, 0, short_side);
+#endif
 #endif
     for (int k = 1; k < stop_k; ++k) {
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
@@ -3205,7 +3247,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #endif
 #if !PASSIVBOT_HSL_DISABLED
         if (!valid_hsl_multicoin_hsl(hsl, coin_hsl, C)) {
-            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+            scalars[int(b) * SCALAR_COLS + 9] = hsl_multicoin_failure_status(side.hsl, side.coin_hsl, C);
             return;
         }
 #endif
@@ -3449,7 +3491,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         );
 #endif
         if (!(valid_hsl_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
-            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+            scalars[int(b) * SCALAR_COLS + 9] = hsl_multicoin_failure_status(side.hsl, side.coin_hsl, C);
             return;
         }
 }
@@ -3982,10 +4024,24 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const bool hsl_unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
     bind_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl,
         hsl_trees, hsl_rows, int(b) * 2 * (C + 1), C, true,
-        !hsl_unified || hsl_long_owner);
+        !hsl_unified || hsl_long_owner
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[14])
+#endif
+    );
     bind_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl,
         hsl_trees, hsl_rows, int(b) * 2 * (C + 1) + C + 1, C, true,
-        !hsl_unified || !hsl_long_owner);
+        !hsl_unified || !hsl_long_owner
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[14])
+#endif
+    );
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslReplayContext factual_context = hsl_replay_context(
+        bars, coin_settings, C, COIN_COLS, run_settings[15] > 0.5f);
+    attach_hsl_replay_side(factual_context, long_side.hsl, long_side.coin_hsl, 0, false);
+    attach_hsl_replay_side(factual_context, short_side.hsl, short_side.coin_hsl, 1, true);
+#endif
     for (int k = 1; k < stop_k; ++k) {
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
         fills.step_volume = 0.0f;
@@ -4177,7 +4233,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 starting_balance, interval_ms
             );
             if (!hsl_valid) {
-                scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
+                scalars[int(b) * FUSED_SCALAR_COLS + 9] = fmin(
+                    hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C),
+                    hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C));
                 return;
             }
         }
@@ -4545,7 +4603,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         );
 #endif
         if (!(valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = fmin(
+                    hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C),
+                    hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C));
             return;
         }
 }
