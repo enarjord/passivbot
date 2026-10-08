@@ -1,3 +1,7 @@
+#ifndef PASSIVBOT_HSL_FACTUAL_ONLY
+#define PASSIVBOT_HSL_FACTUAL_ONLY 0
+#endif
+
 #ifndef PASSIVBOT_HSL_FACTS_ENABLED
 #define PASSIVBOT_HSL_FACTS_ENABLED 0
 #endif
@@ -17,6 +21,21 @@ struct HslNode {
     int rising;
 };
 
+inline int hsl_storage_nodes(int capacity, int tree_size, int fact_capacity = 0) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Native replay owns only factual headers, records and disposable events.
+    return fact_capacity > 0 ? 2 + fact_capacity + (fact_capacity + 1) / 2 : 0;
+#else
+    // Four two-float samples fit in one 32-byte node-sized allocation.
+    int nodes = 2 * tree_size + (capacity + 3) / 4;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    nodes += 2 + fact_capacity + (fact_capacity + 1) / 2;
+#endif
+    return nodes;
+#endif
+}
+
+#if !PASSIVBOT_HSL_FACTUAL_ONLY
 struct HslWindow {
     int head;
     int count;
@@ -53,14 +72,6 @@ inline HslNode hsl_join(HslNode l, HslNode r) {
     return n;
 }
 
-inline int hsl_storage_nodes(int capacity, int tree_size, int fact_capacity = 0) {
-    // Four two-float samples fit in one 32-byte node-sized allocation.
-    int nodes = 2 * tree_size + (capacity + 3) / 4;
-#if PASSIVBOT_HSL_FACTS_ENABLED > 0
-    nodes += 2 + fact_capacity + (fact_capacity + 1) / 2;
-#endif
-    return nodes;
-}
 
 inline device float2* hsl_samples(device HslNode* tree, int tree_size) {
     return reinterpret_cast<device float2*>(tree + 2 * tree_size);
@@ -240,6 +251,31 @@ inline float2 hsl_signal(
     return hsl_signal_peak(w, tree, offset, entry_reference, peak);
 }
 
+#endif // Legacy observation window.
+
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+// Reporting/control state shared with fresh factual reconstruction. No window,
+// retained observation caches or device pointers belong to this controller.
+struct HslController {
+    float raw;
+    float ema;
+    int last_observed;
+    int flat_minute;
+    int action;
+    bool exposed;
+};
+
+inline HslController hsl_controller_init(
+    device HslNode* tree, int capacity, int tree_size, float span
+) {
+    HslController h;
+    h.raw = h.ema = 0.0f;
+    h.last_observed = h.flat_minute = -1;
+    h.action = 0;
+    h.exposed = false;
+    return h;
+}
+#else
 // Simulator policy over the latest factual episode. Storage is caller-owned so
 // temporal replay can rebind buffers without retaining device pointers in state.
 struct HslController {
@@ -439,3 +475,5 @@ inline bool hsl_observe(
     h.exposed = exposed;
     return true;
 }
+
+#endif // Legacy observation controller.

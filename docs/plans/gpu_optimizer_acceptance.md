@@ -1309,13 +1309,37 @@ Current-head independent review and CI remain required before integration.
 
 ### Resource design gates before further tuning
 
-Native factual replay currently retains the bypassed observation tree/window.
+Before the compact-layout change, native factual replay retained the bypassed observation tree/window.
 For 25 coins, two sides, 52 scopes, a 90-day minute lookback and 256 factual records
 per pair, the actual allocation formula reserves about 109.95 MiB per candidate:
 109.33 MiB of legacy observation storage and 0.61 MiB of factual storage. A 512 MiB
 scratch allowance admits at most four candidates before other histories are counted.
 This is an allocation calculation, not a measured device-memory peak. Give native
 factual replay its own compact layout and retain the old layout only for its consumers.
+
+The compact native layout now reserves only pair headers, retained factual records
+and disposable reconstruction events. Its controller omits observation-window
+state, and an HSL-off dispatch allocates neither factual scratch nor legacy rows.
+The retained observation route keeps its original layout and controller. The native
+layout is part of shader-cache identity, including TM's opaque replay-state sizing.
+
+Actual CUDA allocation controls prepare the same 25-coin, two-side, 90-day input
+for EMA Anchor and Trailing Martingale. Both request 642,304 bytes of native HSL
+scratch versus 115,287,744 bytes for the legacy layout with factual storage appended.
+Buffer sizes and the allocator's requested-byte counter agree. Allocated-block
+padding is measured separately; this is HSL scratch evidence, not a total-memory
+peak or whole-optimizer throughput claim. Both regressions fail the preceding
+implementation at the legacy-storage assertion.
+
+Source-verified validation includes 333 Rust tests (one existing ignore), default
+test compilation, 156 host storage/service/residency/tuning controls, ten direct
+shader-library/source callers, 22 targeted CUDA transition/partition controls,
+326 broader replay/capture/legacy-window/execution-view controls (312 CUDA,
+fourteen host), twelve actual CUDA CLI/data/service controls, two allocation
+controls and 42 native lifecycle/loss controls. The partition controls compare all
+returned raw metrics with factual replay using the retained layout. Lifecycle/loss
+checks include CPU references outside optimization. Checked sources remain unchanged.
+Current-head review, CI and development integration remain required.
 
 Runner-local learned capacity previously disappeared when residency cleared the
 runners. The service now retains only integer capacity estimates per dataset and

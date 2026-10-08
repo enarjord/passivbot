@@ -141,6 +141,13 @@ def test_native_policy_transitions_preserve_learned_storage_and_factual_results(
     assert learned == runner.hsl_fact_capacity > 1
     active_library = runner._library_cache_call()
     active_cost = runner._history_bytes_per_candidate()
+    trees, rows = runner._hsl_buffers(1)
+    assert rows.numel() == 0
+    assert trees.numel() == runner._hsl_history_bytes_per_candidate()
+    # The compact kernel owns no observation-window allocation even when its
+    # conservative factual seed happens to exceed the retained fill count.
+    old_runner = explicit.fused_runner or explicit.runners[sides[0]]
+    assert runner._hsl_history_bytes_per_candidate() < old_runner._hsl_history_bytes_per_candidate()
 
     disabled = {f"{side}_hsl_enabled": 0.0 for side in sides}
     general = make_proxy(mode, strategy, sides, minutes=256)
@@ -150,6 +157,8 @@ def test_native_policy_transitions_preserve_learned_storage_and_factual_results(
     assert runner.hsl_fact_capacity == 0 and runner.settings[-2:].tolist() == [0.0, 0.0]
     assert runner.hsl_fact_capacity_learned == learned
     assert runner._history_bytes_per_candidate() < active_cost
+    assert runner._hsl_history_bytes_per_candidate() == 0
+    assert all(buffer.numel() == 0 for buffer in runner._hsl_buffers(1))
     assert runner._library_cache_call() != active_library
     if strategy == "ema_anchor" and len(sides) == 1 and mode != "coin":
         assert runner.dispatch_hsl_disabled
@@ -260,6 +269,63 @@ def test_disabling_every_effective_coin_policy_omits_factual_storage(reference, 
         _, actual = raw(native, [{}])
         _equal(actual, expected)
         assert runner.hsl_factual_replay and runner.hsl_fact_capacity > 0
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", [("long",), ("long", "short")])
+def test_compact_factual_budget_partitions_candidates_without_changing_results(reference, forbid_cpu, strategy, sides):
+    from test_gpu_hsl_multicoin import make_proxy, raw
+
+    options = dict(mode="coin", strategy=strategy, sides=sides, minutes=256)
+    native, explicit = make_proxy(**options, factual_hsl=True), make_proxy(**options)
+    _enable(explicit, 256)
+    candidates = [{f"{sides[0]}_hsl_red_threshold": 0.002 + i * 0.0001} for i in range(5)]
+    _, expected = raw(explicit, candidates)
+    runner = native.fused_runner or native.runners[sides[0]]
+    old_runner = explicit.fused_runner or explicit.runners[sides[0]]
+    compact_cost = runner._history_bytes_per_candidate()
+    runner.hsl_scratch_budget_bytes = 3 * compact_cost
+    assert runner.hsl_scratch_budget_bytes // old_runner._history_bytes_per_candidate() < 3
+    _, actual = raw(native, candidates, profile=True)
+    _equal(actual, expected)
+    assert runner.last_profile["candidate_batch_count"] == 2
+    assert runner.last_profile["dispatch_count"] == 2
+    assert runner.last_hsl_fact_retries == 0
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_native_factual_scratch_omits_legacy_storage_on_90day_25coin_inputs(reference, forbid_cpu, strategy, record_property):
+    from test_gpu_hsl_multicoin import make_proxy
+
+    # This measures actual HSL scratch allocation on prepared long inputs. It
+    # does not time simulation or assert a whole-optimizer memory/throughput gain.
+    options = dict(mode="pside", strategy=strategy, sides=("long", "short"),
+                   minutes=90 * 1440, coin_count=25, lookback=90,
+                   dispatch_budget=500_000_000)
+    native = make_proxy(**options, factual_hsl=True)
+    legacy = make_proxy(**options)
+    _enable(legacy, 256)
+    compact, old = native.fused_runner, legacy.fused_runner
+    assert compact.hsl_scopes == old.hsl_scopes == 52
+    assert compact.hsl_capacity == old.hsl_capacity == 129602
+    expected = {compact: 642304, old: 115287744}
+    for runner, size in expected.items():
+        torch.cuda.synchronize()
+        before = torch.cuda.memory_allocated()
+        requested_before = torch.cuda.memory_stats()["requested_bytes.all.current"]
+        buffers = runner._hsl_buffers(1)
+        torch.cuda.synchronize()
+        allocated = torch.cuda.memory_allocated() - before
+        requested = torch.cuda.memory_stats()["requested_bytes.all.current"] - requested_before
+        assert sum(buffer.numel() * buffer.element_size() for buffer in buffers) == size
+        assert runner._hsl_history_bytes_per_candidate() == size
+        assert requested == size
+        assert allocated >= requested  # Cache-block padding is allocator state.
+        label = "native" if runner is compact else "legacy"
+        record_property(label + "_requested_hsl_bytes", requested)
+        record_property(label + "_allocated_hsl_bytes", allocated)
+    assert compact._hsl_buffers(1)[1].numel() == 0
+    assert old._hsl_buffers(1)[1].numel() > 0
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

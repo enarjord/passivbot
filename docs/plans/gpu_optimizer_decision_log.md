@@ -2875,6 +2875,26 @@ Historical observations do not supersede those requirements or prove current acc
   simplification candidate, without a general backend framework.
 
 
+### 2026-10-08 — Separate native factual HSL storage from observation replay
+
+- Native factual shaders own compact headers, records and disposable events,
+  without observation-window/controller storage or initialization. Preserve the
+  old layout for retained observation consumers; include layout mode in compiled
+  library identity and TM replay-state sizing. Disabled native HSL owns no scratch.
+- Actual CUDA allocation on 25 coins, both sides and a 90-day lookback requests
+  642,304 HSL bytes per candidate instead of 115,287,744 bytes. Buffer size and
+  allocator requested bytes agree for both strategies. Measure allocator padding
+  separately; do not claim total-resource or end-to-end throughput improvement.
+- Both new device allocation regressions fail preceding production on the legacy
+  allocation assertion. Source-verified Rust/default compilation, host callers,
+  actual CUDA replay/partition/lifecycle/reference checks and real CLI callers pass;
+  the acceptance document records the bounded validation surface. Independent
+  current-head review, CI and development integration remain required.
+- Continue dataset-owned capacity retention and representative long-held/many-coin
+  scaling measurements before additional launch tuning. Keep the service API and
+  factual signal semantics unchanged by this storage simplification.
+
+
 ### 2026-10-08 — Retain capacity estimates independently of residency
 
 - Keep only small integer factual-capacity hints in service-owned dataset metadata.

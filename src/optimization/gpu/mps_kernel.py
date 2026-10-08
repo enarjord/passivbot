@@ -101,11 +101,14 @@ _TM_LOSS_GATE_DISABLED_DEFINE = "#define PASSIVBOT_TM_LOSS_GATE_DISABLED 1\n"
 _TM_VOLATILITY_DISABLED_DEFINE = "#define PASSIVBOT_TM_VOLATILITY_DISABLED 1\n"
 
 
-def _hsl_layout(capacity: int, fact_capacity: int = 0) -> tuple[int, int]:
+def _hsl_layout(capacity: int, fact_capacity: int = 0, *, factual_only: bool = False) -> tuple[int, int]:
     blocks = (capacity + 63) // 64
     tree_size = 1 << (blocks - 1).bit_length()
     if type(fact_capacity) is not int or fact_capacity < 0:
         raise ValueError("Invalid GPU HSL factual capacity")
+    if factual_only:
+        nodes = 2 + fact_capacity + (fact_capacity + 1) // 2 if fact_capacity else 0
+        return tree_size, nodes
     storage_nodes = 2 * tree_size + (capacity + 3) // 4
     if fact_capacity:
         storage_nodes += 2 + fact_capacity + (fact_capacity + 1) // 2
@@ -1126,6 +1129,7 @@ def _ema_anchor_multicoin_shader_library(
     hsl_raw_tail_capacity: int = 1,
     unstuck_ema_enabled: bool = True,
     hsl_fact_capacity: int = 0,
+    hsl_factual_only: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1137,6 +1141,7 @@ def _ema_anchor_multicoin_shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
         raw_tail_capacity=hsl_raw_tail_capacity,
     )
+    source = f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
     # Keep diagnostics for forced delist panic-loss parity even when the HSL
     # controllers and their per-candle scans are compiled away.
@@ -1195,6 +1200,7 @@ def _trailing_martingale_multicoin_shader_library(
     hsl_raw_tail_capacity: int = 1,
     unstuck_ema_enabled: bool = True,
     hsl_fact_capacity: int = 0,
+    hsl_factual_only: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1215,6 +1221,7 @@ def _trailing_martingale_multicoin_shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
         raw_tail_capacity=hsl_raw_tail_capacity,
     )
+    source = f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     if weighted_raw_equity_enabled:
@@ -2768,13 +2775,16 @@ class MpsEmaAnchorMulticoinRunner:
             self.hsl_raw_tail_capacity,
             getattr(self, "dispatch_unstuck_ema_enabled", True),
             int(bool(getattr(self, "hsl_fact_capacity", 0))),
+            getattr(self, "native_factual_hsl", False),
         )
 
     def _hsl_history_bytes_per_candidate(self):
         if not self.hsl_capacity:
             return 0
-        _, nodes = _hsl_layout(self.hsl_capacity, getattr(self, "hsl_fact_capacity", 0))
-        return self.hsl_scopes * (nodes * 32 + self.hsl_capacity * 8)
+        factual_only = getattr(self, "native_factual_hsl", False)
+        _, nodes = _hsl_layout(self.hsl_capacity, getattr(self, "hsl_fact_capacity", 0),
+                               factual_only=factual_only)
+        return self.hsl_scopes * (nodes * 32 + (0 if factual_only else self.hsl_capacity * 8))
 
     def _history_bytes_per_candidate(self):
         return (
@@ -2807,7 +2817,9 @@ class MpsEmaAnchorMulticoinRunner:
         return self._unstuck_pnl_buffers[batch_size]
 
     def _hsl_buffers(self, batch_size):
-        _, nodes = _hsl_layout(self.hsl_capacity, getattr(self, "hsl_fact_capacity", 0))
+        factual_only = getattr(self, "native_factual_hsl", False)
+        _, nodes = _hsl_layout(self.hsl_capacity, getattr(self, "hsl_fact_capacity", 0),
+                               factual_only=factual_only)
         if (
             batch_size * self._history_bytes_per_candidate()
             > self.hsl_scratch_budget_bytes
@@ -2823,7 +2835,7 @@ class MpsEmaAnchorMulticoinRunner:
                         device=gpu_device(),
                     ),
                     torch.empty(
-                        (batch_size, self.hsl_scopes, self.hsl_capacity * 2),
+                        (batch_size, self.hsl_scopes, 0 if factual_only else self.hsl_capacity * 2),
                         dtype=torch.int32,
                         device=gpu_device(),
                     ),
@@ -3631,6 +3643,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.hsl_raw_tail_capacity,
             getattr(self, "dispatch_unstuck_ema_enabled", True),
             int(bool(getattr(self, "hsl_fact_capacity", 0))),
+            getattr(self, "native_factual_hsl", False),
         )
         return _trailing_martingale_multicoin_shader_library, args
 

@@ -26,6 +26,23 @@ def _runner(capacity=1):
     return runner
 
 
+def test_native_storage_budget_excludes_legacy_window_and_disabled_storage():
+    runner = _runner(256)
+    runner.hsl_capacity = 90 * 1440 + 2
+    runner.hsl_scopes = 2 * (25 + 1)
+    legacy = runner._hsl_history_bytes_per_candidate()
+    runner.native_factual_hsl = True
+    compact = runner._hsl_history_bytes_per_candidate()
+    assert compact == 52 * (2 + 256 + 128) * 32
+    assert legacy - compact == 52 * ((4096 + 32401) * 32 + 129602 * 8)
+    assert (512 * 1024**2) // legacy == 4
+    assert (512 * 1024**2) // compact == 835
+    runner.hsl_fact_capacity = 0
+    assert runner._hsl_history_bytes_per_candidate() == 0
+    runner.native_factual_hsl = False
+    assert runner._hsl_history_bytes_per_candidate() == legacy - compact
+
+
 def test_capacity_learning_repeats_only_rejected_attempts_and_keeps_successful_size():
     runner = _runner()
     attempts = []
