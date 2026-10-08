@@ -431,3 +431,76 @@ def test_late_chunk_tick_failure_removes_all_partial_market_files(runtime, monke
         assert list(Path(manager._directory.name).iterdir()) == []
     finally:
         manager.close()
+
+
+@pytest.mark.parametrize("runner_key", ["long", "fused"])
+@pytest.mark.parametrize("eviction", ["dataset", "owner"])
+def test_factual_capacity_survives_production_residency_eviction(runtime, runner_key, eviction):
+    import weakref
+    from optimization.gpu.service import MpsMulticoinProxy
+
+    # Device transport and runner computation are fakes; residency and replay
+    # construction/estimate retention are the actual production implementations.
+    class Runner:
+        native_factual_hsl = True
+        hsl_scratch_budget_bytes = 70000
+        def __init__(self, *args, **kwargs):
+            self.hsl_fact_capacity = self.hsl_fact_capacity_learned = 256
+        def _history_bytes_per_candidate(self):
+            return self.hsl_fact_capacity * 16
+    manager = CudaSuiteResidency()
+    estimates = {}
+    def owner(key, hints):
+        stub = proxy(manager, key, 1)
+        result = object.__new__(MpsMulticoinProxy)
+        result.data = stub.data
+        result.run = None
+        result.runners = {}
+        result.fused_runner = None
+        result._factual_capacity_hints = hints
+        result._runner_specs = {runner_key: (Runner, {})}
+        manager.register(result)
+        return result
+    def runner(owner):
+        return owner.fused_runner or owner.runners[runner_key]
+    try:
+        first = owner("a", estimates)
+        other = owner("b" if eviction == "dataset" else "a", {})
+        manager.activate(first)
+        learned = runner(first)
+        learned.hsl_fact_capacity = learned.hsl_fact_capacity_learned = 4096
+        first._remember_factual_capacities()
+        # An HSL-off dispatch must retain the learned estimate rather than zero.
+        learned.hsl_fact_capacity = 0
+        first._remember_factual_capacities()
+        old = weakref.ref(learned)
+        del learned
+        assert estimates == {runner_key: 4096}
+        manager.activate(other)
+        assert old() is None
+        assert not first.runners and first.fused_runner is None
+        manager.activate(first)
+        assert runner(first).hsl_fact_capacity == 4096
+        assert runner(first).hsl_fact_capacity_learned == 4096
+        assert not other.runners and other.fused_runner is None
+        assert estimates == {runner_key: 4096}
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("hint", [False, 0, -1, 4096.0, 8192])
+def test_capacity_restore_rejects_malformed_or_over_budget_estimates(hint):
+    from optimization.gpu.service import MpsMulticoinProxy
+    class Runner:
+        native_factual_hsl = True
+        hsl_fact_capacity_learned = 256
+        hsl_scratch_budget_bytes = 70000
+        def __init__(self, *args, **kwargs):
+            pass
+        def _history_bytes_per_candidate(self):
+            return self.hsl_fact_capacity * 16
+    owner = object.__new__(MpsMulticoinProxy)
+    owner.run = owner.data = None
+    owner._factual_capacity_hints = {"long": hint}
+    with pytest.raises(ValueError, match="Invalid learned|exceeds scratch budget"):
+        owner._construct_runner("long", Runner, {})
