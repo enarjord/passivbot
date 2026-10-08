@@ -134,8 +134,26 @@ def test_two_side_choices_prepare_only_supported_topologies_and_reject_zero_side
             assert len(set(choices.values())) == 3
 
 
-def test_native_anchors_survive_interrupt_and_resume_without_seed_files(monkeypatch, tmp_path):
+@pytest.mark.parametrize("duplicate_initial", [False, True])
+def test_native_anchors_survive_interrupt_and_resume_without_seed_files(monkeypatch, tmp_path, duplicate_initial):
+    from optimization.backends import gpu_native_backend as backend
+
     guard_cpu(monkeypatch)
+    cohorts = {}
+    evaluate = backend._Search.evaluate_population
+    def observe_cohort(search):
+        # Resume re-enters the interrupted generation; count that cohort once.
+        generation = search.state["algorithm"].n_iter or 1
+        cohorts[generation] = len(search.state["population"])
+        return evaluate(search)
+    monkeypatch.setattr(backend._Search, "evaluate_population", observe_cohort)
+    if duplicate_initial:
+        sampling = backend._build_random_sampling
+        def with_duplicate(bounds, count):
+            values = sampling(bounds, count)
+            values[1] = values[0].copy()
+            return values
+        monkeypatch.setattr(backend, "_build_random_sampling", with_duplicate)
     with managed_arrays() as manager:
         base = variable_base(manager, anchor=True)
         records, path = [], tmp_path / "checkpoint.pkl"
@@ -156,7 +174,18 @@ def test_native_anchors_survive_interrupt_and_resume_without_seed_files(monkeypa
         assert len(resumed.bounds) == 2
         execute(resumed, SimpleNamespace(record=records.append), path, resume=True)
         done = load_checkpoint(path, resumed.config)
-        assert done["phase"] == "idle" and done["completed"] == len(records) == 12
+        assert done["phase"] == "idle" and done["population"] is None
+        assert set(cohorts) == {1, 2, 3} and done["algorithm"].n_iter == 4
+        # Duplicate elimination may shrink an asked population. Require every
+        # actual candidate's durable result, rather than three fixed-width batches.
+        assert done["completed"] == len(records) == sum(cohorts.values())
+        assert done["algorithm"].evaluator.n_eval == len(records)
+        assert all({"F", "G", "H"} <= individual.evaluated for individual in done["algorithm"].pop)
+        if duplicate_initial:
+            assert cohorts[1] < 4
+        count = len(records)
+        execute(resumed, SimpleNamespace(record=records.append), path, resume=True)
+        assert len(records) == count
         restored[ANCHOR_PLAN_KEY]["anchors"][0]["fixed_values"][0]["value"] += 0.01
         with pytest.raises(ValueError, match="evaluation contract changed"):
             load_checkpoint(path, restored)
