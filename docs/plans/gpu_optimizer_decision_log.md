@@ -2354,3 +2354,41 @@ Historical observations do not supersede those requirements or prove current acc
   resource acceptance remain open.
 - Current-head automatic review, author review, all required Rust/Python CI and
   fresh unchanged publication metadata remain mandatory before integration.
+
+### 2026-10-08 — Match coin HSL when all retained fills expire
+
+- A held position with no retained fills has no evidenced historical duration in
+  Rust's reconstruction. Its current size, basis, mark and budget define a fresh
+  single-sample loss signal. Keeping a GPU rolling profit peak in that case can
+  produce a protective close that the Rust current-position estimate does not.
+- Use the existing per-coin last factual position-fill timestamp in shared-account
+  EMA/TM callers. After it leaves the inclusive lookback, clear only the disposable
+  signal cache and seed the current entry-loss reference. Preserve reporting and
+  let the ordinary current observation retire or create RED intent. Add no replay
+  state, CPU validation, optimizer controls or CPU/live semantic changes.
+- All 66 new source-verified CUDA regressions pass against Rust's empty-history
+  evaluator: both sides and strategies, positive/negative UPNL, fractional spans,
+  scaled coin budgets, repeated observations, scalar-cache rebuilding and the
+  retained-fill boundary. Unknown fill times, flat/disabled scopes and aggregate
+  modes keep their preceding controller behavior. Local Rust validation passes
+  332 tests with one existing ignore and default-feature compilation.
+- The broader source-verified HSL suite passes 244 cases with 13 Apple-only skips;
+  all 72 checkpoint contract cases also pass with that extension. Eleven fused
+  temporal CUDA tests preserve all outputs across chunk sizes, unequal endpoints,
+  failure markers and interrupted service futures. Four actual native CLI cases
+  preserve standalone/suite results and resume with scaled coin budgets while
+  forbidding CPU backtests and worker pools. Six documentation tests pass.
+- This change does not solve partially retained fill reconstruction or establish
+  general HSL parity, selected-config materiality, resource or replacement acceptance.
+  Current-head automatic review, author review, all required CI and fresh unchanged
+  publication metadata remain mandatory before integration.
+
+- Automatic review found that direct helper probes alone did not establish caller
+  wiring. Add sixteen full native replay cases across both strategies and long-only,
+  short-only and fused paths. Real initial fills precede or remain within the one-day
+  lookback; a later profit peak/drop distinguishes their signals. Mixed-age fused
+  sides distinguish each side's timestamp. Assert actual CPU/GPU fill counts,
+  per-side GPU triggers and the intended fused path, without injecting positions
+  or modifying the trading simulation.
+  All 82 final CUDA cases pass. Keep the original review thread open for the
+  updated-head review and require fresh author review and CI before integration.

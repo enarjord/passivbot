@@ -671,6 +671,36 @@ inline void update_hsl(
         has_position, int(kf) + 1, false);
 }
 
+// No retained fill proves only the current coin position. Rust reconstructs a
+// fresh estimated opening at each observation, not exposure across old marks.
+// The adapter supplies the last factual fill from the existing position state;
+// the point-tape controller and aggregate reconstructions retain their contract.
+inline void update_coin_hsl(
+    thread HslState& h, float balance, float realized_pnl, float unrealized_pnl,
+    bool has_position, float last_fill_k, int k
+) {
+    const int minute = k + 1;
+    if (h.enabled && h.hsl_valid && h.signal_mode == HSL_SIGNAL_COIN
+        && has_position && isfinite(last_fill_k) && last_fill_k >= 0.0f
+        && last_fill_k < float(minute - h.hsl_lookback)) {
+        thread HslController& controller = h.hsl;
+        controller.window.head = controller.window.count = 0;
+        controller.window.last_minute = -1;
+        controller.window.block_prefix = hsl_empty_node();
+        controller.origin = realized_pnl;
+        // Seed the current entry-loss reference, even when UPNL is negative.
+        // A one-point curve otherwise has zero drawdown against its own peak.
+        controller.episode_seed = minute - h.hsl_lookback - 1;
+        controller.completed = false;
+        controller.completed_entry_reference = -INFINITY;
+        controller.completed_reference_minute = -1;
+        controller.scalar_ready = false;
+        controller.exposed = true;
+    }
+    observe_hsl(h, balance, realized_pnl, unrealized_pnl,
+        has_position, minute, false);
+}
+
 // A real closing fill samples its final fee-inclusive drawdown before an ordinary
 // episode reset. Proven-flat RED boundaries finalize before later fills can reopen.
 inline bool finish_hsl_episode_at_flat(

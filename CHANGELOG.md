@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- GPU shared-account coin HSL uses a fresh current-position estimate after all
+  fills expire from its lookback, preserving current loss protection without
+  retaining unproven historical exposure.
+
 - Long CUDA trailing-martingale multicoin replays retain both sides and shared
   account state across bounded history chunks, allowing interruption between
   dispatches without returning partial backtest metrics.
