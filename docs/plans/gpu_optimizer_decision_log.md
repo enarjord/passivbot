@@ -2976,3 +2976,20 @@ Historical observations do not supersede those requirements or prove current acc
 - Continue paired mixed-candidate, actual-native temporal, lifecycle/CLI and
   multi-entry/clipping controls before publication. Keep fresh factual replay as
   reference/fallback, with no action cached and no new optimizer tuning knob.
+
+
+### 2026-10-08 — Bound continuation claims with mixed candidate evidence
+
+- Four paired cohorts preserve all nine GPU metrics for 64 distinct candidates
+  exactly against preceding factual replay and between fresh/continued variants.
+  Refreshed CPU references preserve exact agreement on all five HSL lifecycle
+  metrics; existing trajectory differences and the TM seed-7 drawdown near-tie
+  are unchanged, with zero limit flips. No numerical policy is widened.
+- Busy-cohort warm medians remain essentially unchanged (EMA about 9.3/9.7
+  seconds; TM about 8.5/8.2). Keep the large held-episode improvement scoped to
+  stable exposed histories. Continuation adds 320/336 compiler-reported local
+  bytes for EMA/TM, with 255 registers unchanged. Torch peaks match; post-replay
+  whole-device free snapshots differ by about 22 MiB. These are not total peaks.
+- All checked sources remain unchanged after paired comparisons. Continue
+  actual-native temporal, lifecycle and real CLI tests, then representative
+  multiple-entry and lookback-boundary controls before integration/review.

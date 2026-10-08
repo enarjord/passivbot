@@ -1477,3 +1477,32 @@ numerical concerns and cache loss reconstruct fresh. It retains no action permis
 Mixed candidate cohorts, added actual-native temporal controls, representative
 multi-entry/clipping cases, broader lifecycle/CLI/resource checks, independent
 review and CI remain required before integration.
+
+
+The paired continuation experiment also refreshes the four unified HSL cohorts
+above: sixteen distinct candidates per EMA/TM seed 7/43, two coins, both sides and
+3000 bars. CPU references run separately with the current verified extension.
+Both GPU variants forbid CPU simulation. Each comparison has an initial replay
+and two warm repeats; the same compiled variant is used for TM state sizing.
+
+All nine GPU metrics agree exactly with preceding factual reconstruction and
+across variants, as do measured limit/ranking outcomes. All five HSL lifecycle
+metrics equal the refreshed CPU references exactly. Existing ADG/fill trajectory
+residuals and the TM seed-7 drawdown near-tie remain visible: its CPU regret at
+the GPU drawdown winner is 2.196e-7, with no limit flips. This is unchanged
+fixture-specific evidence, not a new general tolerance approval.
+
+| Cohort | Fresh warm median | Continued warm median | Fresh / continued CUDA local bytes |
+|---|---:|---:|---:|
+| EMA / 7 | 9.347 s | 9.253 s | 5,776 / 6,096 |
+| EMA / 43 | 9.686 s | 9.572 s | 5,776 / 6,096 |
+| TM / 7 | 8.508 s | 8.489 s | 6,320 / 6,656 |
+| TM / 43 | 8.154 s | 8.154 s | 6,320 / 6,656 |
+
+Treat these busy-cohort timings as essentially unchanged; do not extrapolate
+the held-episode speedup to arbitrary search traffic. Registers remain 255.
+Torch allocated/reserved peaks match, but post-replay whole-device free-memory
+snapshots are about 22 MiB lower with continuation for each strategy. Those
+snapshots include driver/compiler effects and are not device peak measurements
+or exclusive ownership accounting. Record the extra private storage explicitly
+while keeping representative total-resource acceptance open.
