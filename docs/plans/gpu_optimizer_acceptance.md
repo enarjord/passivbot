@@ -733,7 +733,7 @@ preparation plus reference simulation, not CPU optimizer throughput.
 The shared stress CLI reproduces all nine CPU/GPU metrics, candidate parameter
 fingerprints and ranking results for all 64 measured candidates exactly; native
 width-16 and automatic runs both retain exact direct-GPU values in these cases.
-All 36 new recipe/validation/provenance checks pass. A wider focused run has one
+All 49 new recipe/validation/provenance checks pass. A wider focused run has one
 remaining pre-existing passive-TM fixture failure: its both-side ADG comparison
 exceeds the local 0.1% trajectory guard (CPU 0.02232715, GPU 0.02235809). Untouched
 target-branch tool sources reproduce those values with identical default fixture

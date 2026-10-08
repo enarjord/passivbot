@@ -16,6 +16,7 @@ import json
 import logging
 import math
 from pathlib import Path
+import struct
 import sys
 import time
 
@@ -92,6 +93,14 @@ def resolve_fixture_args(args):
         if not math.isfinite(value) or not lower <= value <= upper or (
                 name == "hsl_red_threshold" and value == 0):
             raise ValueError(f"invalid fixture --{name.replace('_', '-')}")
+        try:
+            encoded = struct.unpack("f", struct.pack("f", value))[0]
+        except OverflowError as error:
+            raise ValueError(f"fixture --{name.replace('_', '-')} exceeds GPU float32 range") from error
+        if not math.isfinite(encoded):
+            raise ValueError(f"fixture --{name.replace('_', '-')} exceeds GPU float32 range")
+        if name == "hsl_red_threshold" and encoded <= 0:
+            raise ValueError("fixture --hsl-red-threshold must remain positive in GPU float32")
     shocks = []
     # Rust converts this duration to an i64 millisecond timestamp.
     if args.hsl_cooldown_minutes * 60_000 >= float(2**63 - 1):
@@ -109,22 +118,33 @@ def resolve_fixture_args(args):
     return args
 
 
+def _fixture_candles(args):
+    """Apply the normalized recipe and check the encoding before either backtest."""
+    import numpy as np
+    from tools.synthetic_backtest_data import synthetic_hlcvs
+
+    hlcvs, timestamps = synthetic_hlcvs(args.bars, args.coins, args.seed)
+    try:
+        with np.errstate(over="raise", invalid="raise", under="ignore"):
+            for coin, bar, factor in args.price_shocks:
+                hlcvs[bar:, coin, :3] *= factor
+            encoded = hlcvs[:, :, :3].astype(np.float32)
+    except FloatingPointError as error:
+        raise ValueError("fixture high/low/close must encode as positive finite GPU float32") from error
+    if not np.isfinite(encoded).all() or np.any(encoded <= 0):
+        raise ValueError("fixture high/low/close must encode as positive finite GPU float32")
+    return hlcvs, timestamps
+
+
 def fixture_inputs(args):
     import numpy as np
     from config import prepare_config
     from config.schema import get_template_config
     from config.hsl import generated_template
-    from tools.synthetic_backtest_data import synthetic_hlcvs
 
     args = resolve_fixture_args(args)
     coins = [f"COIN{i:02d}" for i in range(args.coins)]
-    hlcvs, timestamps = synthetic_hlcvs(args.bars, args.coins, args.seed)
-    try:
-        with np.errstate(over="raise", invalid="raise"):
-            for coin, bar, factor in args.price_shocks:
-                hlcvs[bar:, coin, :3] *= factor
-    except FloatingPointError as error:
-        raise ValueError("fixture price shocks overflow high/low/close") from error
+    hlcvs, timestamps = _fixture_candles(args)
     # The canonical backtest end date has UTC-day precision. Align the synthetic
     # exclusive endpoint to midnight so both engines see exactly the same span,
     # including small fixtures which do not contain a whole number of days.

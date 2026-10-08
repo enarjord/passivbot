@@ -2535,7 +2535,7 @@ Completion requires:
   the new GPU path appear conformant. Investigate a bounded GPU reconstruction
   that preserves Rust's current facts, history clipping and cache independence.
   Complexity and throughput must be measured before selecting a producer design.
-- All 36 new recipe, validation and report-provenance checks pass. The documented
+- All 49 new recipe, validation and report-provenance checks pass. The documented
   four-cohort command reproduces all nine measured CPU/GPU values, candidate
   parameter fingerprints and rankings for all 64 candidates; native results are
   exact against direct GPU at both measured widths. An existing passive-TM
@@ -2548,3 +2548,8 @@ Completion requires:
   millisecond range before device access and retain resolved recipes in both
   tools' failure reports. Regression coverage includes the exclusive timestamp
   boundary, the adjacent valid value and saved strict-JSON failure reports.
+- Follow-up automatic review identified finite CPU values that overflow GPU
+  float32 encoding. Check policy encoding and final stressed candles before any
+  simulation; preflight shocked cohort seeds before CUDA initialization. Include
+  compounded shocks and underflow-to-zero regressions, while keeping valid
+  fixture arrays and the ordinary success recipe unchanged.

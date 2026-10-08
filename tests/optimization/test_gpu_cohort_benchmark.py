@@ -42,6 +42,30 @@ def test_cohort_accepts_cooldown_just_inside_rust_timestamp_range():
     assert options("--hsl", "unified", "--hsl-cooldown-minutes", str(value)).hsl_cooldown_minutes == value
 
 
+@pytest.mark.parametrize("flags", [
+    ("--hsl-ema-span-minutes", "1e300"), ("--hsl-red-threshold", "1e-300"),
+    ("--price-shock", "0", "64", "1e40"),
+    ("--price-shock", "0", "64", "1e-100"),
+    ("--price-shock", "0", "64", "1e20", "--price-shock", "0", "64", "1e20"),
+    ("--price-shock", "0", "64", "1e-20", "--price-shock", "0", "64", "1e-20",
+     "--price-shock", "0", "64", "1e-20"),
+])
+def test_gpu_encoding_rejected_before_benchmark(monkeypatch, flags):
+    def forbidden(*a):
+        pytest.fail("invalid float32 recipe must not initialize CUDA or run backtests")
+    monkeypatch.setattr(benchmark, "run_benchmark", forbidden)
+    with pytest.raises(SystemExit) as error:
+        benchmark.main(["--bars", "128", "--coins", "1", "--hsl", "unified", *flags])
+    assert error.value.code == 2
+
+
+def test_gpu_policy_encoding_accepts_float32_boundaries():
+    args = options("--hsl-ema-span-minutes", str(float.fromhex("0x1.fffffep127")),
+                   "--hsl-red-threshold", str(2**-149))
+    assert args.hsl_ema_span_minutes == float.fromhex("0x1.fffffep127")
+    assert args.hsl_red_threshold == 2**-149
+
+
 def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     import numpy as np
     flags = ["--hsl", "unified", "--bars", "128", "--coins", "2", "--sides", "both",

@@ -39,7 +39,9 @@ lookbacks remain floats. Lookback also controls the fixture's ordinary PnL histo
 Repeat `--price-shock COIN_INDEX BAR FACTOR` to multiply high, low and close from
 that zero-based bar onward. Volume, BTC and timestamps are unchanged; overlapping
 shocks compound in authored order. Invalid indexes and nonpositive/nonfinite factors
-are rejected. The report's `fixture_recipe` records the resolved public synthetic
+are rejected. HSL policies and final shocked candles must remain valid in the GPU's
+float32 encoding; overflow and positive-value underflow are rejected before either
+simulator runs. The report's `fixture_recipe` records the resolved public synthetic
 settings, including post-input execution failures. Cooldowns must also fit Rust's
 signed 64-bit millisecond range. Prepared config comparisons reject all these switches,
 including defaults.

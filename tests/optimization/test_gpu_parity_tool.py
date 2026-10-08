@@ -47,6 +47,7 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
 @pytest.mark.parametrize("flags", [
     ("--hsl-red-threshold", "0"), ("--hsl-red-threshold", "1.1"),
     ("--hsl-ema-span-minutes", ".9"), ("--hsl-ema-span-minutes", "nan"),
+    ("--hsl-ema-span-minutes", "1e300"), ("--hsl-red-threshold", "1e-300"),
     ("--hsl-cooldown-minutes", "-1"), ("--hsl-cooldown-minutes", "inf"),
     ("--hsl-lookback-days", ".9"), ("--hsl-lookback-days", "91"),
     ("--price-shock", "2", "64", ".7"), ("--price-shock", "0", "128", ".7"),
@@ -56,6 +57,26 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
 def test_malformed_stress_recipe_is_rejected(flags):
     with pytest.raises(ValueError):
         gpu_parity.resolve_fixture_args(args("--fixture", "ema_anchor", "--bars", "128", *flags))
+
+
+@pytest.mark.parametrize("factors", [("1e40",), ("1e-100",),
+                                    ("1e20", "1e20"), ("1e-20", "1e-20", "1e-20")])
+def test_shocked_fixture_rejects_final_gpu_encoding_before_simulation(monkeypatch, capsys, factors):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
+        validate_gpu_metric_names=lambda names: names))
+    def forbidden(*a, **kw):
+        pytest.fail("invalid candles must not execute either CPU or GPU backtests")
+    monkeypatch.setattr(gpu_parity, "run_comparison", forbidden)
+    flags = ["--fixture", "ema_anchor", "--bars", "128"]
+    for factor in factors:
+        flags.extend(["--price-shock", "0", "64", factor])
+    assert gpu_parity.main(flags) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "input_failed"
+    assert "positive finite GPU float32" in report["error"]["message"]
+    assert report["fixture_recipe"]["price_shocks"] == [[0, 64, float(f)] for f in factors]
 
 
 @pytest.mark.parametrize("flags", [

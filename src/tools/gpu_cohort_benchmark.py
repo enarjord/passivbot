@@ -125,6 +125,14 @@ def validate_args(parser, args):
                 args.policies[canonicalize_metric_name(name)] = gpu_parity.MetricTolerance(**value)
     except (OSError, TypeError, ValueError) as error:
         parser.error(str(error))
+    if args.price_shocks:
+        # Candles depend on the seed, not the strategy. Check stressed seeds one
+        # at a time before CUDA access; do not retain whole cohorts for preflight.
+        try:
+            for seed in args.seeds:
+                gpu_parity._fixture_candles(argparse.Namespace(**vars(args), seed=seed))
+        except ValueError as error:
+            parser.error(str(error))
 
 
 def _timing_summary(samples, count):
