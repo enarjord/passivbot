@@ -27,6 +27,21 @@ def test_cohort_stress_options_are_checked_before_device_access(flags):
     assert error.value.code == 2
 
 
+@pytest.mark.parametrize("value", [1e300, (2**63 - 1) / 60_000])
+def test_cohort_rejects_unsupported_cooldown_before_benchmark(monkeypatch, value):
+    def forbidden(*a):
+        pytest.fail("invalid timestamp policy must not initialize a benchmark/device")
+    monkeypatch.setattr(benchmark, "run_benchmark", forbidden)
+    with pytest.raises(SystemExit) as error:
+        benchmark.main(["--hsl", "unified", "--hsl-cooldown-minutes", str(value)])
+    assert error.value.code == 2
+
+
+def test_cohort_accepts_cooldown_just_inside_rust_timestamp_range():
+    value = math.nextafter((2**63 - 1) / 60_000, 0)
+    assert options("--hsl", "unified", "--hsl-cooldown-minutes", str(value)).hsl_cooldown_minutes == value
+
+
 def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     import numpy as np
     flags = ["--hsl", "unified", "--bars", "128", "--coins", "2", "--sides", "both",
@@ -198,10 +213,15 @@ def test_failed_execution_is_structured_and_report_file_matches_stdout(monkeypat
         raise RuntimeError("CUDA unavailable")
     monkeypatch.setattr(benchmark, "run_benchmark", fail)
     report_path = tmp_path / "report.json"
-    assert benchmark.main(["--report", str(report_path), "--compact"]) == 2
+    assert benchmark.main(["--report", str(report_path), "--compact",
+        "--hsl", "unified", "--hsl-red-threshold", ".002",
+        "--price-shock", "0", "64", ".7"]) == 2
     text = capsys.readouterr().out
     assert report_path.read_text() == text
     assert json.loads(text)["status"] == "execution_failed"
+    assert json.loads(text)["recipe"]["hsl_red_threshold"] == .002
+    assert json.loads(text)["recipe"]["price_shocks"] == [[0, 64, .7]]
+    assert "report" not in json.loads(text)["recipe"]
 
 
 def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():

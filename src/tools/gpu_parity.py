@@ -93,6 +93,9 @@ def resolve_fixture_args(args):
                 name == "hsl_red_threshold" and value == 0):
             raise ValueError(f"invalid fixture --{name.replace('_', '-')}")
     shocks = []
+    # Rust converts this duration to an i64 millisecond timestamp.
+    if args.hsl_cooldown_minutes * 60_000 >= float(2**63 - 1):
+        raise ValueError("fixture --hsl-cooldown-minutes exceeds Rust's timestamp range")
     for coin, bar, factor in args.price_shocks:
         try:
             coin, bar, factor = int(coin), int(bar), float(factor)
@@ -481,6 +484,7 @@ def main(argv=None):
         parser.error("--dataset/--markets are only used with --config")
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
     report = None
+    fixture_recipe = None
     stage = "metric_contract"
     try:
         from config.metrics import canonicalize_metric_name
@@ -497,6 +501,10 @@ def main(argv=None):
         if args.tolerances:
             for name, value in json.loads(Path(args.tolerances).read_text()).items():
                 policies[canonicalize_metric_name(name)] = MetricTolerance(**value)
+        if args.fixture:
+            recipe = resolve_fixture_args(args)
+            fixture_recipe = {name: getattr(recipe, name) for name in FIXTURE_DEFAULTS}
+            fixture_recipe.update(fixture=args.fixture, exchange=args.exchange)
         inputs = fixture_inputs(args) if args.fixture else prepared_inputs(args)
         config = inputs[0]
         weights = default_scoring_weights()
@@ -513,10 +521,6 @@ def main(argv=None):
         with redirect_stdout(sys.stderr):
             report = run_comparison(inputs, args.exchange, metrics, policies, checks,
                                     diagnostics=args.diagnostics, gpu_engine=args.gpu_engine)
-        if args.fixture:
-            recipe = resolve_fixture_args(args)
-            report["fixture_recipe"] = {name: getattr(recipe, name) for name in FIXTURE_DEFAULTS}
-            report["fixture_recipe"].update(fixture=args.fixture, exchange=args.exchange)
         code = 0 if report["passed"] else 1
     except Exception as error:
         # Diagnostic boundary: failed execution is never reported as a metric match.
@@ -527,6 +531,8 @@ def main(argv=None):
                   "gpu_engine": args.gpu_engine,
                   "error": {"type": type(error).__name__, "message": str(error)}}
         code = 2
+    if fixture_recipe is not None:
+        report["fixture_recipe"] = fixture_recipe
     rendered = json.dumps(report, allow_nan=False, indent=None if args.compact else 2, sort_keys=True)
     print(rendered)
     if args.report:

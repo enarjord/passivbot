@@ -40,7 +40,9 @@ Repeat `--price-shock COIN_INDEX BAR FACTOR` to multiply high, low and close fro
 that zero-based bar onward. Volume, BTC and timestamps are unchanged; overlapping
 shocks compound in authored order. Invalid indexes and nonpositive/nonfinite factors
 are rejected. The report's `fixture_recipe` records the resolved public synthetic
-settings. Prepared config comparisons reject all these switches, including defaults.
+settings, including post-input execution failures. Cooldowns must also fit Rust's
+signed 64-bit millisecond range. Prepared config comparisons reject all these switches,
+including defaults.
 
 For a retained-history expiry diagnostic:
 

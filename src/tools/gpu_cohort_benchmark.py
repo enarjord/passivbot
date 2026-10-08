@@ -409,8 +409,7 @@ def run_benchmark(args):
         direct_first_use_cache="not_cleared",
         native_first_use_cache="after_direct_runs_not_cleared",
         latency="caller_observed_since_submission", memory="torch_allocations_only",
-        dispatch_candidate_bars=DISPATCH_BUDGET), recipe={
-        key: value for key, value in vars(args).items() if key not in {"report", "compact", "tolerances", "policies"}},
+        dispatch_candidate_bars=DISPATCH_BUDGET), recipe=_recipe(args),
         tolerance_policy={name: vars(args.policies[name]) if name in args.policies else None
                           for name in args.metrics},
         runtime=dict(rust_source_fingerprint=runtime["expected_source_fingerprint"],
@@ -419,6 +418,11 @@ def run_benchmark(args):
                      torch=torch.__version__, cuda=torch.version.cuda, cupy=cupy.__version__,
                      gpu=device.name, gpu_total_memory_bytes=device.total_memory),
         cases=[_measure(torch, args, strategy, seed) for strategy in args.strategies for seed in args.seeds])
+
+
+def _recipe(args):
+    return {key: value for key, value in vars(args).items()
+            if key not in {"report", "compact", "tolerances", "policies"}}
 
 
 def main(argv=None):
@@ -430,7 +434,7 @@ def main(argv=None):
             report = run_benchmark(args)
         code = 0
     except Exception as error:
-        report = dict(schema_version=1, status="execution_failed",
+        report = dict(schema_version=1, status="execution_failed", recipe=_recipe(args),
                       error=dict(type=type(error).__name__, message=str(error)))
         code = 2
     rendered = json.dumps(report, allow_nan=False, indent=None if args.compact else 2, sort_keys=True)

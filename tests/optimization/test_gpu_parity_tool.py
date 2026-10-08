@@ -374,7 +374,7 @@ def test_prepared_snapshot_roundtrip_and_coin_order_guard(tmp_path):
         gpu_parity.prepared_inputs(options)
 
 
-def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys):
+def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys, tmp_path):
     from types import SimpleNamespace
     import sys
     # Exercise the CLI error boundary without installing an optional GPU runtime.
@@ -384,10 +384,19 @@ def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys):
     def failed(*_args, **_kwargs):
         raise RuntimeError("device launch failed")
     monkeypatch.setattr(gpu_parity, "run_comparison", failed)
-    assert gpu_parity.main(["--fixture", "trailing_martingale", "--bars", "128"]) == 2
+    saved = tmp_path / "failed.json"
+    assert gpu_parity.main(["--fixture", "trailing_martingale", "--bars", "128",
+        "--hsl", "unified", "--hsl-red-threshold", ".002",
+        "--hsl-ema-span-minutes", "2.5", "--hsl-cooldown-minutes", "10000",
+        "--price-shock", "0", "64", ".7", "--price-shock", "1", "96", "1.3",
+        "--report", str(saved)]) == 2
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "execution_failed"
     assert report["error"]["message"] == "device launch failed"
+    assert json.loads(saved.read_text()) == report
+    assert report["fixture_recipe"]["price_shocks"] == [[0, 64, .7], [1, 96, 1.3]]
+    assert report["fixture_recipe"]["hsl_ema_span_minutes"] == 2.5
+    assert report["fixture_recipe"]["hsl_cooldown_minutes"] == 10000
 
 
 def test_main_rejects_boolean_policy_before_simulation(monkeypatch, capsys, tmp_path):

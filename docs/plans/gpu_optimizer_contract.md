@@ -2535,10 +2535,16 @@ Completion requires:
   the new GPU path appear conformant. Investigate a bounded GPU reconstruction
   that preserves Rust's current facts, history clipping and cache independence.
   Complexity and throughput must be measured before selecting a producer design.
-- All 33 new recipe, validation and report-provenance checks pass. The documented
+- All 36 new recipe, validation and report-provenance checks pass. The documented
   four-cohort command reproduces all nine measured CPU/GPU values, candidate
   parameter fingerprints and rankings for all 64 candidates; native results are
   exact against direct GPU at both measured widths. An existing passive-TM
   both-side 0.1% ADG assertion remains exceeded by 0.00003094 absolute; untouched
   target-branch tools reproduce it with identical default fixture inputs. Keep
   that existing discrepancy visible without widening policy in this tooling slice.
+
+- Automatic review identified unsupported extreme cooldowns and missing fixture
+  provenance after execution failures. Reject cooldowns outside Rust's signed
+  millisecond range before device access and retain resolved recipes in both
+  tools' failure reports. Regression coverage includes the exclusive timestamp
+  boundary, the adjacent valid value and saved strict-JSON failure reports.

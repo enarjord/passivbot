@@ -24,7 +24,9 @@ guarantee controller transitions. No production configuration is accepted.
 
 The [parity fixture stress options](gpu_parity.md#reproducible-fixtures) are shared:
 explicit HSL threshold/span/cooldown/lookback and repeatable price shocks. Resolved
-values and ordered shocks appear in the cohort recipe. For the unified HSL history
+values and ordered shocks appear in the cohort recipe, including execution failures.
+Cooldowns outside Rust's timestamp range are rejected before device work.
+For the unified HSL history
 expiry and three-objective materiality measurement:
 
 ```sh
