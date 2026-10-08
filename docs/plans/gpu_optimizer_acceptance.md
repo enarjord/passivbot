@@ -867,6 +867,14 @@ CPU simulations and worker pools forbidden. These are correctness controls,
 not evidence of an optimal width, representative throughput improvement or a
 duration guarantee. Representative tuning quality and resource acceptance remain open.
 
+The public cohort benchmark's evidence adapter uses the same actual-count,
+warm-shape eligibility rules. Its cumulative sample/time and consumed-window
+reports include partial cohorts without counting their first cold use or invalid
+observations. All 141 cohort-reporting, execution-policy, legacy-tuner and
+documentation checks pass with the current extension, one existing skip and three
+cohort device cases deselected. This reporting suite is separate from the eight
+service CUDA controls above.
+
 ## Unstuck EMA consumer specialization
 
 Multicoin EMA/TM execution proves the effective enabled/gating flags across every

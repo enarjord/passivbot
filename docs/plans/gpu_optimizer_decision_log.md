@@ -2446,3 +2446,8 @@ Historical observations do not supersede those requirements or prove current acc
   Representative tuning quality, duration control and resource acceptance remain
   open. Require current-head automatic review, author review, all required CI and
   fresh unchanged publication metadata before development integration.
+- A follow-up caller audit found the public cohort report still classified partial
+  shapes as ineligible. Update its evidence adapter and documentation, and add
+  regressions for warm partial windows and invalid observations. The current-build
+  reporting/policy/docs suite passes 141 cases with one existing skip and three
+  cohort device cases deselected. Require fresh-head review and CI for this addition.

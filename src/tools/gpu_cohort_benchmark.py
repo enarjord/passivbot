@@ -227,8 +227,9 @@ def _observe_batches(policy, batches):
     def observe(dataset_id, count, seconds, **kwargs):
         batches.append(dict(count=count, seconds=seconds))
         controller = policy.controllers.get(dataset_id)
-        eligible = (controller is not None and count == controller.width
-                    and controller.width in controller.seen
+        eligible = (controller is not None and 1 <= count <= controller.width
+                    and (controller.allow_partial_batches or count == controller.width)
+                    and count in controller.seen
                     and math.isfinite(seconds) and seconds > 0)
         if eligible:
             evidence["samples"] += 1
