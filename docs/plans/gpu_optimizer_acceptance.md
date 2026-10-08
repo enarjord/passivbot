@@ -581,6 +581,29 @@ Another case retains 90 versus 91 fills and a 3.366703 versus 2.608437-day recov
 p95. Keep those residuals visible and assess optimizer materiality separately;
 general standalone-tool tolerances are unchanged.
 
+## Current native approximation inventory
+
+This inventory follows the shared-account execution used by the native service.
+It distinguishes approximate values from corrected input definitions; it does not
+approve every listed metric as an objective or tight limit. Eligibility is defined
+by `metric_registry.py` and `metrics.SUPPORTED_METRICS`, including canonical aliases.
+An existing reducer or output field does not establish native support.
+
+| Surface | Current calculation and evidence | Acceptance question |
+| --- | --- | --- |
+| Trading trajectories | Shared EMA/TM kernels use float32 strategy/account state. Native and specialized/general tests cover the stated topology, order, risk and replay cases. | Threshold rounding can alter later fills; assess risk, feasibility and selected configs rather than demand identical long trajectories. |
+| Completed HSL episodes | `mps_hsl.metal` replays retained observations with an explicit terminal estimate lifetime; Rust retained-fill reconstruction can re-estimate an opening basis after clipping. Controller/snapshot/native expiry cases below separate these paths. | Unified long-history reconstruction materiality remains open; same-observation equality cannot certify reconstructed observations. |
+| HSL EMA and side raw drawdown tails | `mps_hsl_common.metal` uses 32 logarithmic bins with actual sums/counts. Only a partially consumed cutoff bin averages its members. The raw daily one-sample tail uses the actual maximum. `test_gpu_portfolio_ema_tail.py` and raw-risk tests cover observation ownership and reductions. | Partial-bin ordering can affect close tail objectives/limits; measure selected configs and constraints. This is separate from missing portfolio observations, which were corrected. |
+| Fill-gap percentiles | `_fill_gap_metrics` uses 512 logarithmic positive-gap bins, upper-edge decoding, actual boundary gaps and restored same-candle zero multiplicity. Multiplicity/reducer tests and the three-objective cohorts above expose the remaining residuals. | The same gap population can still be quantized; upper edges are not a universal CPU/GPU trajectory error bound. |
+| Initial-entry interval percentiles | `_entry_interval_metrics` retains 128 bins for TM; streamed mean/maximum are separate. `test_gpu_metrics.py` checks totals, malformed counts, upper-edge percentiles and EMA's canonical zero case. | Median/p95/p99 are approximations even when mean/maximum agree; representative selection/limit materiality remains unassessed. |
+| Recovery, weighted volume and weighted equity | Requested per-step GPU histories feed strict recovery and canonical suffix/daily reducers. Recovery-resolution, weighted-volume and weighted-equity tests isolate input definitions, cutoffs, optional capture and dispatch bounds. | Input-definition repairs do not remove float32 curve/trajectory sensitivity, especially strict recovery ordering near plateaus. Full histories remain on device. |
+| Legacy-only fallbacks | Directional single-coin volume/tail helpers and daily peak-recovery helpers still exist. The native service uses shared replay, requires the observed portfolio tail, and rejects exact-only metric names. | Do not count an unused fallback as accepted native behavior or retain the old optimizer merely to preserve its approximations. |
+
+Per-metric policy and measured feasibility/selection evidence remain required for
+acceptance. The all-supported-metric audit checks presence and finite/sentinel
+handling; its undefined policies are explicitly unassessed. Neither this table nor
+finite output alone closes the numerical gate.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account
@@ -610,3 +633,58 @@ general standalone-tool tolerances are unchanged.
 5. Reconcile delivered user/AI contracts, complete exact-head automatic review and CI,
    and audit every completion criterion. Development acceptance does not authorize
    integration into master.
+
+
+## Completed HSL history expiry
+
+`test_gpu_hsl_window_expiry.py` separates a completed episode's observed peak from
+an active position's estimated entry loss. Integer-valued reference streams cover
+inclusive expiry at 10, 65 and 1440 minutes, fractional smoothing spans, both restart
+policies and positive historical peaks. Active and terminal loss-estimate controls
+use the real Rust snapshot evaluator. Same-time flat observations and budget changes
+compare cached replay with forced scalar rebuilding and the Rust incomplete-episode
+entry reference. An entry estimate has a first-observation lifetime; expiration must
+not create another one for a completed flat episode.
+
+The original source fails 24 rolling-controller and four real-backtest regressions;
+16 related controls pass. The initial correction exposed four cache-dependent action
+cases. The final source passes all 48 new cases and 158 preceding rolling/controller
+checks. This evidence is separate from broader replay, temporal and optimizer checks.
+
+The broader replay run records 197 passes, 13 Apple-only skips and 51 failures in
+old episode-boundary reporting assertions. Three original-controller probes reproduce
+one failure from each family. An earlier observed RED remains a historical trigger
+when current permission becomes GREEN, a scope stays held, or a terminal budget is
+unusable. Repair those counter expectations while retaining permission/cooldown,
+scope-flatness and invalid-budget checks; the unusable-budget probe additionally
+checks that the controller's prior permission is unchanged. All 84 repaired probes
+pass. Sixteen specialized/full-capacity and temporal-state controls and four actual
+CPU-forbidden optimizer interruption/resume cases also pass. The six twenty-day
+shock audits return all 157 requested metrics with no missing/non-finite outputs;
+every GPU value is unchanged from the preceding raw-recovery source. Undefined
+comparison policies remain unassessed. Six documentation tests pass.
+
+Four actual two-coin, 3000-minute, seed-43 comparisons use both sides, threshold 0.002,
+EMA span 2.5, cooldown 10000 minutes and one-day retained history. Coin/pside duration
+maxima match the CPU at 1439/1415 minutes for EMA and 1438/1408 for TM; RED time and
+lifecycle checks remain strict. Small ADG/fill residuals use fixture-local bounds.
+EMA retains two fewer fills over CPU counts 1942 and 1902, bounded by one fill per day;
+TM retains the existing local 0.1% fill-rate bound. General tool policy is unchanged.
+
+A different unified EMA fixture exposes reconstruction, rather than decimal error.
+Rust's actual retained-fill evaluator matches the CPU backtest and remains halted
+through minute 2995, retiring cooldown at 2996. Applying the same Rust controller to
+its frozen terminal observations retires it at 2955. After clipping the opening fills,
+the retained-fill evaluator supplies an estimated opening basis and entry peak. A
+same-observation controller test cannot certify that both simulators produce the same
+reconstructed observations. Unified long-history materiality remains separate
+acceptance work; this correction does not certify arbitrary tight HSL constraints.
+
+The final ten-recipe history measurement has exact duration and RED-time agreement
+for all eight coin/pside cases. Unified EMA remains 1441/1400 minutes (CPU/GPU),
+with ADG difference 0.00003638, worst drawdown difference 0.00001038 and 16 more GPU
+fills. Unified TM improves from 1385/1440 to 1385/1386 minutes, with ADG difference
+0.00003011, worst drawdown difference 0.00000555 and 16 more GPU fills. Both use
+the same public recipe and strict measurement policies above; their mismatches are
+reported without widening general policy. Same-observation correctness does not
+approve the separate unified reconstruction/selection difference.

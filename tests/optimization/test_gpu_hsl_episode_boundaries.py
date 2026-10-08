@@ -145,7 +145,9 @@ def test_green_terminal_voids_prior_red_without_cooldown(name, mode):
     values = _run(name, mode, loss=10)
     assert values[:3] == [1, 1, 0]
     assert values[3] == pytest.approx(0.01)
-    assert values[4:] == [0, 0, 0, 0, 0, 0, 0, 1]
+    # The earlier observed RED is a report event; GREEN removes permission,
+    # not the historical counter. It creates no terminal cooldown.
+    assert values[4:] == [1, 0, 0, 0, 0, 0, 0, 1]
 
 
 @pytest.mark.parametrize(
@@ -164,7 +166,7 @@ def test_only_configured_scope_flatness_finalizes_episode(
     values = _run(_KERNELS[0], mode, scope_held=scope_held, opposite_held=opposite_held)
     assert values[1] == int(finished)
     assert values[2] == (1 if finished else 3)
-    assert values[4] == int(finished)
+    assert values[4] == 1  # RED was already observed before testing flatness.
 
 
 @pytest.mark.parametrize("name", _KERNELS)
@@ -195,7 +197,8 @@ def test_terminal_cash_exhaustion_leaves_liquidation_to_kernel(name, mode, balan
     )
     values = output.cpu().tolist()
     assert values[1] == 1
-    assert values[4] == 0  # No invented terminal RED/cooldown event.
+    assert values[4] == 1  # Retain the observed RED; no additional terminal event.
+    assert values[2] == 3  # The unusable terminal budget did not change permission.
     assert values[7] == int(balance == balance)
     assert values[8] == 1  # No observation with a depleted or unusable budget.
 

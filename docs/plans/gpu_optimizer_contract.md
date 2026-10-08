@@ -86,19 +86,21 @@ while bounding queue memory and starvation. Device errors and malformed output p
 never fabricate successful metrics or silently substitute CPU backtests. Preserve the
 original failure if cleanup also fails.
 
-The current service accepts `register_dataset_factory(dataset_id, factory)`, where
+The internal executor accepts `register_dataset_factory(dataset_id, factory)`, where
 the factory returns a replay resource context. Its first request creates the replay on
 the owning worker; repeated requests reuse it, and shutdown exits all entered contexts
 on that worker. Registration and unused/cancelled datasets do not initialize device state.
-Prepared-input immutability is the factory adapter's responsibility; the final dataset
-registry and residency policy are still separate work. Preconstructed replay registration
-remains a temporary compatibility path.
+Preconstructed replay registration remains a temporary compatibility path.
 
-The [prepared CUDA facade](../gpu_backtest_service.md) snapshots CPU metadata and borrows
-shared arrays with explicit source-column identities. It owns lazy worker-side attachment,
-packing and a one-active-dataset/scratch residency policy. Caller-owned shared segments
-remain immutable/live until shutdown. Full evaluation identity, adaptive residency and
-optimizer integration remain subsequent work.
+The [prepared CUDA facade](../gpu_backtest_service.md) registers `PreparedGpuDataset`
+metadata and borrows shared arrays with explicit source-column identities. It owns lazy
+worker-side attachment, packing reuse, compatible subset caching and a one-active-dataset/
+scratch residency policy. Caller-owned shared segments remain immutable/live until
+shutdown. `NativeDatasetRegistry` binds canonical CPU scenario preparation to this
+interface; the native optimizer already uses it for bootstrap, screening and resume.
+The CPU orchestrator owns persistent content/evaluation fingerprints, precision stamps
+and resume compatibility. Broader residency and multi-GPU routing remain future service
+work; simulator acceptance and legacy retirement remain separate gates.
 
 ## Scheduling, tuning and specialization
 
@@ -2435,3 +2437,81 @@ Completion requires:
   optimizer cases pass interruption/resume and prompt result/Pareto persistence
   with CPU simulation prohibited. Seven disabled-HSL policy/specialization controls
   also pass. Require current-head review/CI before integrating the correction.
+
+
+### 2026-10-07 — Separate completed-episode expiry from active entry estimates
+
+- The clipped GPU controller unconditionally added the first retained realized
+  cashflow as an entry-value peak, including completed flat episodes. Controlled
+  integer-valued observations show that this can preserve cooldown after the
+  in-window terminal signal becomes GREEN. Thirty-eight original-source probes
+  produce 24 failures and 14 controls which pass; four real coin/pside long-cooldown
+  regressions also fail while two clipped active-to-terminal controls pass.
+- Restrict the synthetic entry reference to active exposure and its terminal
+  accounting sample. Once a completed episode's window clips, rebuild its signal
+  from retained observations like the Rust controller. Bind a terminal entry estimate
+  to its first retained observation, preserving it across same-time budget changes or
+  scalar-cache rebuilds, and drop it when that observation expires. Keep the active
+  current-entry-loss estimate, terminal classification, request/output packing and
+  optional HSL compilation. Two controller scalars record the reference and its time;
+  temporal replay queries the compiled state size rather than assuming a fixed layout.
+- Blanket removal of entry references was rejected: current exposed inventory can
+  still require the Rust estimator's entry-loss signal after opening history expires.
+  Removing that reference at the terminal sample could also suppress valid cooldown.
+- Same-data CPU reconstruction and frozen-episode replay isolate a separate unified
+  limitation. On the public two-coin, 3,000-minute EMA seed-43 shock fixture with
+  threshold/span/cooldown 0.002/2.5/10000 and one-day retained history, the latest stop
+  is at minute 1555. At minute 2955, retained closing fills cause Rust reconstruction
+  to supply an estimated opening basis/entry peak. Reconstructing those fills matches
+  the actual CPU backtest: halted through minute 2995, normal at 2996. Evaluating the
+  frozen terminal observations with the same Rust controller becomes normal at 2955.
+  This is a difference in reconstructed observations, not float32 decimal error.
+- The earlier matched synthetic assessment is now repeated with the raw-recovery
+  correction: all 1,068 accepted GPU requests preserve every unchanged requested
+  metric exactly; canonical rescoring of 160 complete six-scenario candidates selects
+  the same 11 CPU/GPU Pareto members, with no actual feasibility/liquidation change or
+  CPU regret at the GPU-best candidates. Recovery p95's maximum absolute difference
+  decreases from 0.95625 to 0.75827 days; 94 objective-axis pair orders differ. This is
+  one matched candidate set with generous actual limits, not an independent CPU search
+  or general approval of tight limits. It precedes the current controller change.
+- The first rebuilt 202-case controller/real-backtest run passes 200. Two EMA
+  integration cases fail only the local 0.1% fill-rate bound: measured counts are
+  1942/1940 and 1902/1900 (CPU/GPU), while corrected durations, RED time, drawdown
+  and bounded ADG checks pass. Keep a fixture-local absolute one-fill-per-day
+  bound for those two recipes; the two TM cases retain their existing local 0.1%
+  bound. General parity defaults remain unchanged. Rust passes 332 tests with one
+  ignored, and default-feature test compilation passes.
+- Four additional probes reproduce cache-dependent permission in the first simple
+  revision: a same-time flat observation or budget change rebuilds without the entry
+  reference that a cached terminal signal retained. Explicit reference/time ownership
+  fixes all four against the Rust initial-incomplete-episode reference. The final
+  rebuilt source passes those four and the remaining 202 rolling-controller and
+  actual coin/pside regression checks; Rust again passes 332 tests with one ignored,
+  and default-feature test compilation passes. Wider replay controls are running.
+- The wider replay run passes 197 cases and skips 13 Apple-only cases. Its 51
+  failures are episode-boundary reporting assertions which expect the already
+  observed RED trigger to disappear at GREEN, a held scope or an unusable terminal
+  budget. Three original-controller controls reproduce one failure from each
+  assertion family. Correct those expectations to retain the observed event, like
+  Rust reporting, while preserving permission/flatness/cooldown checks and adding
+  an explicit unchanged-permission check for the unusable terminal budget. No
+  producer change is made for these reporting-fixture repairs.
+- Reconcile stale service ownership prose with the implemented prepared registry,
+  native optimizer integration and CPU-owned persistent evaluation identity. The
+  acceptance map consolidates deliberate native approximations by actual consumer;
+  it does not turn their pending numerical/materiality decisions into passes.
+- All 84 repaired episode probes pass, as do 16 specialized/full-capacity and
+  temporal-layout controls and four CPU-forbidden optimizer interruption/resume
+  cases. The six twenty-day shock audits return all 157 requested metrics with no
+  missing/non-finite values and no GPU value changes from the raw-recovery source.
+  Their undefined comparison policies remain unassessed. Ten long-history recipes
+  give exact duration/RED-time agreement in eight coin/pside cases. Unified EMA
+  retains CPU/GPU duration 1441/1400 minutes, ADG difference 0.00003638 and worst
+  drawdown difference 0.00001038; unified TM retains 1385/1386 minutes, ADG
+  difference 0.00003011 and worst drawdown difference 0.00000555. Strict measurement
+  mismatches remain visible; general policies are unchanged. Six documentation
+  tests pass, with no checker errors and the two existing size warnings.
+- Final publication metadata verification, automatic review and required CI remain mandatory
+  before integration. Long unified reconstruction differences remain explicit
+  acceptance work; do not widen general parity policy or declare simulator cutover
+  from these controlled expiry cases alone.

@@ -246,6 +246,8 @@ struct HslController {
     int mark_observed;
     int episode_seed;
     int flat_minute;
+    float completed_entry_reference;
+    int completed_reference_minute;
     int action; // 0 normal, 1 cooldown, 3 current panic
     bool exposed;
     bool completed;
@@ -267,6 +269,8 @@ inline HslController hsl_controller_init(
     h.last_observed = h.episode_seed = h.flat_minute = -1;
     h.mark_head = h.mark_count = 0;
     h.mark_observed = -1;
+    h.completed_entry_reference = -INFINITY;
+    h.completed_reference_minute = -1;
     h.action = 0;
     h.exposed = h.completed = h.scalar_ready = false;
     h.scalar_offset = h.scalar_peak = h.scalar_raw = h.scalar_ema = h.scalar_baseline = 0.0f;
@@ -342,6 +346,8 @@ inline bool hsl_observe(
         h.window.last_minute = -1;
         h.origin = h.last_realized;
         h.completed = false;
+        h.completed_entry_reference = -INFINITY;
+        h.completed_reference_minute = -1;
         h.scalar_ready = false;
         h.flat_minute = -1;
         h.episode_seed = max(start, h.last_observed >= 0 ? h.last_observed : minute);
@@ -365,10 +371,24 @@ inline bool hsl_observe(
     h.action = 0;
     h.raw = h.ema = 0.0f;
     if (exposed || terminal || (h.completed && h.flat_minute >= start)) {
-        // Once the opening leaves the bounded tape, its synthetic entry basis
-        // contributes a peak reference but never an extra EMA time step.
-        float reference = start > h.episode_seed && h.window.count > 0
-            ? realized_rows[h.window.head] : -INFINITY;
+        // An active incomplete episode needs its estimated entry-loss peak.
+        // At flattening, bind that reference to the first retained observation,
+        // like Rust's initial entry_reference_delta. Budget changes or rebuilding
+        // the scalar cache preserve it, but expiration of that observation drops
+        // it. Never synthesize a new reference for a completed flat episode.
+        float reference = -INFINITY;
+        if (exposed || terminal) {
+            if (start > h.episode_seed && h.window.count > 0) {
+                reference = realized_rows[h.window.head];
+            }
+            if (terminal) {
+                h.completed_entry_reference = reference;
+                h.completed_reference_minute = isfinite(reference)
+                    ? times[h.window.head] : -1;
+            }
+        } else if (h.completed_reference_minute >= start) {
+            reference = h.completed_entry_reference;
+        }
         float offset = budget - (realized - h.origin);
         float2 score;
         if (h.scalar_ready && !clipped && offset == h.scalar_offset) {
@@ -403,6 +423,8 @@ inline bool hsl_observe(
             : (red && (never_restart || float(minute) < float(h.flat_minute) + cooldown) ? 1 : 0);
     } else if (h.completed && h.flat_minute < start) {
         h.completed = false;
+        h.completed_entry_reference = -INFINITY;
+        h.completed_reference_minute = -1;
     }
     h.last_observed = minute;
     h.last_realized = realized;
