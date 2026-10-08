@@ -593,7 +593,8 @@ An existing reducer or output field does not establish native support.
 | --- | --- | --- |
 | Trading trajectories | Shared EMA/TM kernels use float32 strategy/account state. Native and specialized/general tests cover the stated topology, order, risk and replay cases. | Threshold rounding can alter later fills; assess risk, feasibility and selected configs rather than demand identical long trajectories. |
 | Completed HSL episodes | `mps_hsl.metal` replays retained observations with an explicit terminal estimate lifetime; Rust retained-fill reconstruction can re-estimate an opening basis after clipping. Controller/snapshot/native expiry cases below separate these paths. | Unified long-history reconstruction materiality remains open; same-observation equality cannot certify reconstructed observations. |
-| HSL EMA and side raw drawdown tails | `mps_hsl_common.metal` uses 32 logarithmic bins with actual sums/counts. Only a partially consumed cutoff bin averages its members. The raw daily one-sample tail uses the actual maximum. `test_gpu_portfolio_ema_tail.py` and raw-risk tests cover observation ownership and reductions. | Partial-bin ordering can affect close tail objectives/limits; measure selected configs and constraints. This is separate from missing portfolio observations, which were corrected. |
+| HSL EMA drawdown tails | `mps_hsl_common.metal` uses 32 logarithmic bins with actual sums/counts. Only a partially consumed cutoff bin averages its members. `test_gpu_portfolio_ema_tail.py` covers portfolio observation ownership and reductions. | Partial-bin ordering can affect close tail objectives/limits; measure selected configs and constraints. This is separate from missing portfolio observations, which were corrected. |
+| Side raw daily drawdown tails | Retain a bounded sorted list of daily maxima. Capacity covers the worst floor(1%) of the prepared UTC horizon and belongs to shader-cache identity. Current-day queries do not flush or mutate replay state. `test_gpu_daily_tail.py` covers selection, horizon bounds and CUDA replay isolation. | Selection is exact on the GPU's observed float32 curve; CPU/GPU curves may still differ. Full replay and matched kernel evidence are recorded below; this does not accept unrelated trajectory or HSL reconstruction differences. |
 | Fill-gap percentiles | `_fill_gap_metrics` uses 512 logarithmic positive-gap bins, upper-edge decoding, actual boundary gaps and restored same-candle zero multiplicity. Multiplicity/reducer tests and the three-objective cohorts above expose the remaining residuals. | The same gap population can still be quantized; upper edges are not a universal CPU/GPU trajectory error bound. |
 | Initial-entry interval percentiles | `_entry_interval_metrics` retains 128 bins for TM; streamed mean/maximum are separate. `test_gpu_metrics.py` checks totals, malformed counts, upper-edge percentiles and EMA's canonical zero case. | Median/p95/p99 are approximations even when mean/maximum agree; representative selection/limit materiality remains unassessed. |
 | Recovery, weighted volume and weighted equity | Requested per-step GPU histories feed strict recovery and canonical suffix/daily reducers. Recovery-resolution, weighted-volume and weighted-equity tests isolate input definitions, cutoffs, optional capture and dispatch bounds. | Input-definition repairs do not remove float32 curve/trajectory sensitivity, especially strict recovery ordering near plateaus. Full histories remain on device. |
@@ -603,6 +604,45 @@ Per-metric policy and measured feasibility/selection evidence remain required fo
 acceptance. The all-supported-metric audit checks presence and finite/sentinel
 handling; its undefined policies are explicitly unassessed. Neither this table nor
 finite output alone closes the numerical gate.
+
+## Exact side raw daily tails
+
+The requested side metric retains the largest daily maxima needed for the worst
+`max(floor(observed_days / 100), 1)` samples. Its compile-time capacity is the
+next power of two covering the prepared UTC calendar horizon. Current-day queries
+are pure, and observed day counts govern early truncation. Inactive tail state is
+compiled away; no equity history is transferred or CPU simulation repeated.
+
+`test_gpu_daily_tail.py` passes all 24 checks with CUDA available: capacity boundaries,
+invalid direct capacities, same-bin values, intraday and skipped-day samples, unfinished days, early
+truncation, repeated queries and snapshots, plus both strategies' long/short/fused
+replay ablation and capacity equivalence. TM temporal replay matches unchunked
+outputs exactly. Independent float32 daily references use a 1e-7 absolute bound.
+
+A matched whole-kernel control uses the public `_multicoin_exposure_fixture` with
+long exposure, two coins, 20,167 fifteen-minute bars and 16 identical candidates.
+The close curves are `100 - arange(n) / n * 25` and
+`120 - arange(n) / n * 30`; other inputs/parameters are the fixture defaults.
+Raw side drawdown/tail and portfolio raw daily risk are requested. The prepared
+horizon is 211 UTC days, giving capacity two. Swap only the shared HSL-common
+source between the histogram implementation and this implementation, clear the
+shader-library cache, then measure first use and five synchronized warm replays.
+Every non-tail output is identical, and all repeats within each design agree.
+The separate portfolio daily summaries provide a CPU-sort reference on the same
+observed GPU curve, avoiding a CPU/GPU trajectory comparison.
+
+| Strategy | Histogram tail error | Exact tail error | Warm candidates/s, histogram → exact | CUDA local bytes, histogram → exact | Registers |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| EMA anchor | 8.97e-6 | 4.55e-13 | 47.6 → 46.7 | 1,472 → 1,232 | 154 → 154 |
+| Trailing martingale | 0.01427 | 7.45e-9 | 30.4 → 30.7 | 2,896 → 2,656 | 232 → 232 |
+
+Errors are absolute drawdown fractions. First-use replay times are 12.0/10.2
+seconds for EMA and 59.9/57.0 seconds for TM (histogram/exact), including
+compilation and dispatch. This small isolated single-side control establishes
+reduction accuracy and lower local storage for its capacity; it does not establish
+optimizer throughput, a general speedup, or total GPU memory bounds. Larger date
+ranges require larger capacity. CPU/GPU curve differences, minute EMA-tail bins
+and HSL retained-fill reconstruction remain separate acceptance work.
 
 ## Work still required before legacy retirement
 
