@@ -2424,3 +2424,30 @@ Historical observations do not supersede those requirements or prove current acc
   throughput, total resource bounds and optimal scheduling claims.
 - Current-head automatic review, author review, all required CI and fresh unchanged
   publication metadata remain mandatory before development integration.
+
+### 2026-10-08 — Learn from warm underfilled service dispatches
+
+- Full-batch-only evidence can leave a bounded producer unable to tune: a nominal
+  width of 64 with repeated warm cohorts of 63 records no window. The service now
+  uses actual successful candidate counts and rejects each actual shape's first
+  use. Dataset evidence, median smoothing, production thresholds, cooldowns and
+  slower-trial rollback remain execution-owned.
+- When queued demand or device headroom blocks growth, allow a smaller-width
+  probe using subsequent real requests. Preserve fixed widths and the retained
+  screening/validation tuner's full-batch policy. Add no user knob, extra replay,
+  CPU validation, numerical mode or evolutionary behavior.
+- The source-verified device suite passes 151 cases with one existing skip.
+  Two new EMA/TM CUDA controls compare 36 requests each against fixed execution,
+  count every request once and preserve every returned metric exactly. Their
+  accelerated windows test integration; default-window host cases exercise the
+  production evidence thresholds. Eight existing standalone/suite CLI controls
+  pass with clean interruption/resumption and CPU simulation/pools forbidden.
+- See the [acceptance map](gpu_optimizer_acceptance.md#underfilled-execution-tuning).
+  Representative tuning quality, duration control and resource acceptance remain
+  open. Require current-head automatic review, author review, all required CI and
+  fresh unchanged publication metadata before development integration.
+- A follow-up caller audit found the public cohort report still classified partial
+  shapes as ineligible. Update its evidence adapter and documentation, and add
+  regressions for warm partial windows and invalid observations. The current-build
+  reporting/policy/docs suite passes 141 cases with one existing skip and three
+  cohort device cases deselected. Require fresh-head review and CI for this addition.

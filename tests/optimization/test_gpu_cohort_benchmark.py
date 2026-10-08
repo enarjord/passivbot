@@ -257,7 +257,7 @@ def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():
     assert policy.width("cohort", 2) == 2
     batches = []
     evidence = benchmark._observe_batches(policy, batches)
-    # Cold first use and underfilled work are successful but ineligible evidence.
+    # Each actual shape's cold first use is successful but ineligible evidence.
     policy.observe("cohort", 1, 2.0, backlog=0, closing=False)
     policy.observe("cohort", 2, 2.0, backlog=4, closing=False)
     for _ in range(WINDOW):
@@ -271,7 +271,8 @@ def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():
         width=2, samples=WINDOW, seconds=WINDOW * 2.0,
         median_candidates_per_second=1.0, resulting_width=1)]
     # The smaller trial loses throughput and rolls back; its window is retained too.
-    for _ in range(WINDOW + 1):
+    # Count one was already seen before the initial width-two evidence window.
+    for _ in range(WINDOW):
         policy.observe("cohort", 1, 2.0, backlog=4, closing=False)
     assert controller.width == 2
     assert evidence["samples"] == WINDOW * 2
@@ -279,7 +280,42 @@ def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():
     policy.observe("cohort", 2, 2.0, backlog=4, closing=False)
     assert evidence["samples"] == WINDOW * 2 + 1
     assert len(controller.samples) == 1 and controller.seconds == 2.0
-    assert len(batches) == WINDOW * 2 + 4
+    assert len(batches) == WINDOW * 2 + 3
+
+
+def test_tuning_report_counts_warm_partial_shapes_and_their_consumed_window():
+    from optimization.gpu.autotune import WINDOW
+    from optimization.gpu.execution_tuning import ExecutionBatchTuner
+
+    policy = ExecutionBatchTuner(initial=64)
+    policy.constrain("cohort", 128)
+    assert policy.width("cohort", 128) == 64
+    batches = []
+    evidence = benchmark._observe_batches(policy, batches)
+    policy.observe("cohort", 63, 1000, backlog=0, closing=False)
+    for _ in range(WINDOW):
+        policy.observe("cohort", 63, 2, backlog=0, closing=False)
+    assert evidence["samples"] == WINDOW
+    assert evidence["seconds"] == WINDOW * 2
+    assert evidence["completed_windows"] == [dict(
+        width=64, samples=WINDOW, seconds=WINDOW * 2,
+        median_candidates_per_second=31.5, resulting_width=32)]
+    assert len(batches) == WINDOW + 1
+
+
+def test_tuning_report_excludes_invalid_partial_observations():
+    from optimization.gpu.execution_tuning import ExecutionBatchTuner
+
+    policy = ExecutionBatchTuner(initial=4)
+    policy.constrain("cohort", 16)
+    policy.width("cohort", 16)
+    evidence = benchmark._observe_batches(policy, [])
+    policy.observe("cohort", 3, 1000, backlog=0, closing=False)
+    for count, seconds in ((0, 1), (5, 1), (3, 0), (3, float("nan")), (3, float("inf"))):
+        policy.observe("cohort", count, seconds, backlog=0, closing=False)
+    assert evidence == dict(samples=0, seconds=0.0, completed_windows=[])
+    policy.observe("cohort", 3, 2, backlog=0, closing=False)
+    assert evidence["samples"] == 1 and evidence["seconds"] == 2
 
 
 def test_cli_dispatches_benchmark_help_without_full_dependency_gate(monkeypatch):

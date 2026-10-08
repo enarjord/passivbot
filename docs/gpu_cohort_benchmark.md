@@ -105,7 +105,8 @@ and controller evidence distinguish configured width from actual demand; a final
 automatic width alone is not evidence that tuning improved performance.
 The tuning report preserves cumulative eligible samples/seconds and completed
 windows, including rejected trials; pending-window fields describe only the
-unconsumed remainder. Cold shapes and underfilled batches remain ineligible.
+unconsumed remainder. Each actual shape's first cold use remains ineligible;
+successful warm partial batches contribute their actual candidate counts.
 
 Interpret timings by their scope:
 

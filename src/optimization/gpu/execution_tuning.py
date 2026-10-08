@@ -34,6 +34,7 @@ class ExecutionBatchTuner:
         if controller is None or controller.ceiling != limit:
             controller = BatchController(
                 limit, min(self.initial, limit),
+                allow_partial_batches=True,
                 can_grow=lambda: (
                     self._demand >= min(controller.ceiling, controller.width * 2)
                     and self.headroom()

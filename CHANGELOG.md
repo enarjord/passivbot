@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native GPU batch tuning learns from warm partial request cohorts and can probe
+  smaller widths when queued demand or memory headroom prevents growth.
+
 - GPU EMA/TM portfolio replays compile out unstuck EMA state and updates when
   no effective candidate or coin-side override uses EMA gating.
 
