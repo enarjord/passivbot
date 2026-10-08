@@ -30,6 +30,7 @@ def make_proxy(
     interrupt_check=None,
     factual_hsl=False,
     override_side="long",
+    dispatch_budget=1000000,
 ):
     config = generated_template(get_template_config(), mode)
     config["live"].update(hsl_signal_mode=mode)
@@ -97,7 +98,7 @@ def make_proxy(
         interrupt_check=interrupt_check,
         factual_hsl=factual_hsl,
         max_dispatch_candidate_bars=(
-            minutes * len(coins) * len(sides) if chunk else 1000000
+            minutes * len(coins) * len(sides) if chunk else dispatch_budget
         ),
     )
     if chunk:
