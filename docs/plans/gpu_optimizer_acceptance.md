@@ -1426,3 +1426,54 @@ Fresh reconstruction remains the reference and fallback when facts, budgets, cli
 causal phase or numerical conditions invalidate reuse. Require paired fresh/cached
 outputs, reset/temporal controls, CPU parity and measured resource/performance evidence
 before adoption. Do not add launch tuning or a general backend framework for this fix.
+
+
+### Guarded active-episode continuation — paired development evidence
+
+The same twelve held-position recipes above compare fresh reconstruction with
+native continuation in isolated processes. Prefix each compiled source with
+`PASSIVBOT_HSL_INCREMENTAL_ENABLED` set to zero or one; include TM replay-state
+sizing in the same process-wide variant. Keep the native future API, width one,
+tuning off and HSL-on/off/on-repeat requests unchanged. All five raw returned
+metrics agree exactly across variants and repeats; independently run CPU references
+agree within 1e-6 absolute/relative tolerance. Input identities agree, and all checked
+source files remain unchanged after the matrix.
+
+Each cell below is fresh / continued warm seconds, excluding first-use compilation.
+
+| Strategy / coins | 512 bars | 1024 bars | 2048 bars |
+|---|---:|---:|---:|
+| EMA / 2 | 0.148 / 0.042 | 0.594 / 0.087 | 2.453 / 0.070 |
+| EMA / 25 | 1.391 / 0.139 | 5.607 / 0.279 | 22.480 / 0.561 |
+| TM / 2 | 0.149 / 0.076 | 0.602 / 0.055 | 2.473 / 0.074 |
+| TM / 25 | 1.320 / 0.156 | 5.451 / 0.316 | 22.497 / 0.649 |
+
+The 25-coin cases improve from roughly fourfold to twofold growth as history
+doubles. On-repeat timings reproduce this shape. Small cases have noisier timings:
+for example TM/2/512 improves from 0.149 to 0.076 seconds initially, but its
+on-repeat continued median is 0.023 seconds. These are bounded synthetic service
+requests, not whole optimizer throughput or a 90-day simulation claim. Cold
+compilation remains substantial and is outside warm speedup ratios.
+
+All recorded Torch allocated/reserved peaks match between variants. At 25 coins
+and 2048 bars, requested allocator peaks are 2,646,016 bytes for EMA and 2,647,552
+bytes for TM, with 4,194,304 bytes reserved for each. Compiler/private kernel storage,
+driver allocations, process memory including compilation, and disk are separate
+resource surfaces. Unchanged Torch peaks do not close total-resource acceptance.
+
+Corrected source-verified validation passes 82 actual CUDA component cases, including
+20 continuation/seed-denial controls and 62 preceding fresh-composer references.
+Eighteen native policy/on-off-on/capacity comparisons preserve every raw output
+exactly, including fields that differed in the initial draft. Three seed-guard
+omission controls and six scalar-guard omission controls fail as expected without
+changing production source. Rust tests and default test compilation pass with a
+rebuilt, source-verified extension. No comparison tolerance was widened.
+
+Reuse stores only scalar peak/EMA/PnL and continuation identity. It requires a known
+active episode, unchanged selected factual histories, consecutive minutes, unchanged
+budget/smoothing and lookback start, stable endpoint inventory/basis and causal
+quotes. Missing/clipped history, same-minute fills, completed episodes, near-threshold
+numerical concerns and cache loss reconstruct fresh. It retains no action permission.
+Mixed candidate cohorts, added actual-native temporal controls, representative
+multi-entry/clipping cases, broader lifecycle/CLI/resource checks, independent
+review and CI remain required before integration.

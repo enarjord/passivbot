@@ -2955,3 +2955,24 @@ Historical observations do not supersede those requirements or prove current acc
 - Extend temporal controls to both retained factual and native factual layouts;
   the earlier controls exercised only the retained factual layout. Keep the shared
   runner extraction separate from this numerical/performance change.
+
+
+### 2026-10-08 — Verify stable continuation and paired held-request scaling
+
+- Corrected validation passes 82 actual CUDA components and eighteen native
+  policy/on-off-on/capacity comparisons with exact raw-output agreement. All
+  checked sources remain unchanged. Three stable-prefix and six scalar-guard
+  omission regressions fail as expected. Retain the strict comparisons; the
+  initial draft's residuals are not an accepted numerical exception.
+- Twelve paired native future cases preserve input identity, all five returned
+  GPU metrics exactly and independent CPU references within 1e-6 absolute/relative
+  tolerance. At 25 coins and 2048 bars, warm EMA/TM requests improve from
+  22.480/22.497 seconds to 0.561/0.649 seconds. The 25-coin history-doubling
+  shape becomes approximately linear; smaller cases have noisier timings.
+- Torch allocation peaks match across every measured variant/phase. This does
+  not measure compiler/private kernel, total driver, host or disk resources.
+  Exclude cold compilation from the warm ratios and keep whole optimizer/search
+  claims separate. Record the public recipe and full bounded table in acceptance.
+- Continue paired mixed-candidate, actual-native temporal, lifecycle/CLI and
+  multi-entry/clipping controls before publication. Keep fresh factual replay as
+  reference/fallback, with no action cached and no new optimizer tuning knob.
