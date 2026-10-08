@@ -850,11 +850,11 @@ inline bool update_ema_multicoin_dual_side_hsl(
                     long_effective_n_positions, long_coin_overrides, c,
                     11, 12, long_config.allowance_pct
                 );
-                update_hsl(
-                    long_side.coin_hsl[c], account.balance, starting_balance,
+                update_coin_hsl(
+                    long_side.coin_hsl[c], account.balance,
                     long_side.coin_realized_pnl[c], long_coin_unrealized,
                     long_side.psize[c] > 0.0f,
-                    long_coin_has_blocking_orders, float(k), interval_ms
+                    long_side.position_last_fill_k[c], k
                 );
             }
             if (short_active) {
@@ -866,11 +866,11 @@ inline bool update_ema_multicoin_dual_side_hsl(
                     short_effective_n_positions, short_coin_overrides, c,
                     11, 12, short_config.allowance_pct
                 );
-                update_hsl(
-                    short_side.coin_hsl[c], account.balance, starting_balance,
+                update_coin_hsl(
+                    short_side.coin_hsl[c], account.balance,
                     short_side.coin_realized_pnl[c], short_coin_unrealized,
                     short_side.psize[c] > 0.0f,
-                    short_coin_has_blocking_orders, float(k), interval_ms
+                    short_side.position_last_fill_k[c], k
                 );
             }
         }
@@ -3176,11 +3176,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
                         config.scale_hsl_budget, config.twel, effective_n_positions,
                         coin_overrides, c, 11, 12, config.allowance_pct
                     );
-                    update_hsl(
-                        coin_hsl[c], balance, starting_balance,
+                    update_coin_hsl(
+                        coin_hsl[c], balance,
                         coin_realized_pnl[c], coin_hsl_unrealized,
-                        psize[c] > 0.0f, coin_hsl_has_blocking_orders,
-                        float(k), interval_ms
+                        psize[c] > 0.0f, position_last_fill_k[c], k
                     );
                 }
             } else {

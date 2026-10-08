@@ -358,6 +358,13 @@ one-coin measurements show a substantial throughput disadvantage against the old
 single-coin implementation. Kernel ablation and representative measurements are required
 before selecting the final native optimizer's default execution policy.
 
+Shared-account EMA/TM coin HSL uses the current position's last factual fill to
+detect when no fills remain in the inclusive lookback. Held exposure then uses a
+fresh current-position loss estimate on each observation, matching Rust's empty-
+history reconstruction rather than preserving exposure across older marks. This
+uses existing replay state and leaves aggregate controllers and partially retained
+fill-history reconstruction unchanged. It is not general HSL parity acceptance.
+
 Single-side multicoin EMA replay selects a compact HSL layout only when every request
 in the dispatch disables HSL, no effective coin override can enable it, and all signal
 modes are side or unified. The specialized kernel removes controller/history binding

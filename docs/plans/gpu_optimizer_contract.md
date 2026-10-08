@@ -242,6 +242,8 @@ Completion requires:
 - [x] Implement standalone GPU/CPU parity tooling with structured diagnostics.
 - [ ] Audit approximation inventory against representative correctness cases.
 - [ ] Resolve material differences and record accepted numerical discrepancies.
+  - [x] Align active coin HSL's empty retained-fill history with Rust's fresh
+    current-position loss estimate; retained-fill and aggregate differences remain open.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
 - [x] Replace hourly recovery distribution sampling with per-step GPU observations,
   budget their replay/reduction storage, and isolate mutable reduction scratch.
