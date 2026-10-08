@@ -2451,3 +2451,19 @@ Historical observations do not supersede those requirements or prove current acc
   regressions for warm partial windows and invalid observations. The current-build
   reporting/policy/docs suite passes 141 cases with one existing skip and three
   cohort device cases deselected. Require fresh-head review and CI for this addition.
+
+### 2026-10-08 — Follow the recursive simulated touch in TM sizing
+
+- Rust advances the simulated order-book bid/ask after each entry rung and
+  recomputes the initial sizing floor. The multicoin GPU helper kept its original
+  sizing price, oversizing short recursive additions. Advance that anchor with
+  the simulated touch while preserving the original raw price when it controls.
+- Compare sixteen-rung long/short GPU helper output with canonical Rust orders.
+  Before correction the short case differs on thirteen quantities; the long
+  control passes. Keep this narrow strategy correction separate from ongoing
+  HSL reconstruction and default-worker adoption.
+- The isolated correction passes 39 actual CUDA checks: both canonical-rung
+  comparisons and 37 recursive gate/market/fused controls. A bounded real native
+  optimizer CLI start/resume also passes with CPU simulations forbidden. The
+  rebuilt extension passes 332 Rust tests with one existing ignore, default-feature
+  test compilation, source verification and five documentation checks.
