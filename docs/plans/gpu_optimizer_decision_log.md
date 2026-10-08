@@ -2914,3 +2914,22 @@ Historical observations do not supersede those requirements or prove current acc
   actual CUDA service controls, including all four eviction regressions. All checked
   sources remain unchanged; Rust/shaders use the reviewed compact extension.
   Require a fresh independent review and CI for this integrated head.
+
+
+### 2026-10-08 — Give multicoin replay a strategy-neutral owner
+
+- Extract the existing multicoin allocation, history, retry and result-decoding
+  lifecycle into a private replay base. EMA Anchor and Trailing Martingale are
+  sibling adapters; each owns its parameter layout, override columns, packing,
+  library identity and kernel dispatch. Diagnostic names no longer select binary
+  layouts or capabilities. Preserve existing public runner names and the separate
+  directional single-coin family; introduce no general backend framework.
+- Preserve fused strategy dispatch methods and shared numerical behavior. Host
+  controls change diagnostic labels while checking actual layout selection, native
+  HSL enablement/learned capacity and unstuck specialization. All four regressions
+  fail the preceding implementation and pass the extracted owner. These are
+  source-only checks, not GPU simulations.
+- Require actual CUDA replay, temporal/retry, residency and real native optimizer
+  callers with a verified extension, plus independent current-head review and CI,
+  before integration. Keep this ownership cleanup separate from guarded HSL
+  continuation and its numerical/performance acceptance.
