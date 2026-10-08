@@ -9,7 +9,8 @@ since the latest release tag; these features may already be available when insta
 - Native CUDA optimization reconstructs HSL scopes from retained simulation fill
   facts. Worker-owned factual storage grows within its scratch budget and is
   omitted when effective HSL policies are off. Native replay reserves only factual
-  HSL scratch, without the legacy observation tree/window. Earlier native fitness checkpoints
+  HSL scratch, without the legacy observation tree/window. Learned factual capacity
+  survives scenario residency switches without retaining device buffers. Earlier native fitness checkpoints
   require a fresh run; saved configurations remain usable as seeds.
 
 - Trailing-martingale partial initial entries preserve aligned quantity differences instead of losing one step to floating-point subtraction; genuine fractional differences still round down.

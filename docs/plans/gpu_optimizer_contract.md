@@ -284,8 +284,10 @@ Completion requires:
     observation tree/window; preserve the legacy layout for remaining consumers.
     Source-verified CUDA allocation and replay controls pass; reviewed development
     integration and representative total-resource acceptance remain separate gates.
-  - [ ] Retain small learned factual-capacity estimates in dataset execution metadata
+  - [x] Retain small learned factual-capacity estimates in dataset execution metadata
     across residency eviction, without retaining device buffers or adding checkpoints.
+    Host eviction/error-policy and actual CUDA scenario/owner switches pass;
+    reviewed integration and representative suite acceptance remain separate gates.
   - [ ] Measure long-held, many-coin HSL reconstruction scaling before further launch
     tuning; consider guarded incremental reconstruction only with measured need and parity.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping

@@ -1341,10 +1341,32 @@ returned raw metrics with factual replay using the retained layout. Lifecycle/lo
 checks include CPU references outside optimization. Checked sources remain unchanged.
 Current-head review, CI and development integration remain required.
 
-Runner-local learned capacity also disappears when residency clears the runners.
-Keep small dataset-owned capacity estimates across eviction without preserving
-device buffers or adding persistent checkpoint machinery. Verify production
-residency switches and successful replay scheduling together.
+Runner-local learned capacity previously disappeared when residency cleared the
+runners. The service now retains only integer capacity estimates per dataset and
+runner role, restores them before computing the recreated runner's physical limits,
+and refreshes them after successful replay. An HSL-off request remembers the learned
+capacity rather than its active zero allocation. Device buffers remain disposable;
+no checkpoint state is added. Malformed and over-budget estimates fail before HSL
+scratch allocation, and closing the service clears its metadata.
+
+The source-verified change passes 154 host residency/dataset/executor/tuning checks.
+Four production-residency controls use fake device transport and runner computation;
+omitting only restoration makes all four fail at the reset-to-256 assertion.
+Four actual CUDA service controls cover both strategies, different scenario data
+and compatible-data owner switches. Initial GPU replay grows beyond its 256-record
+seed; returning to the first scenario uses the same learned capacity with identical
+metrics and zero overflow retries. Weak references prove that estimate retention
+does not pin the evicted runner. CPU backtests are forbidden in those service checks.
+Checked source files remain unchanged. Development integration, independent
+current-head review and CI remain required.
+
+The compact-storage development merge is integrated without changing the checked
+capacity implementation or host regressions. The combined source passes all 154
+host checks and sixteen actual CUDA service checks: the four capacity-eviction
+controls plus twelve existing authoritative factual-service callers. All 951
+checked files remain unchanged after validation. Rust/shader sources and the
+verified extension are the reviewed compact-storage build; this slice changes
+only Python execution ownership and its regressions.
 
 Fresh scope composition can repeatedly traverse historical minutes for long exposed
 episodes. This is a scaling risk, not an established performance regression. Measure

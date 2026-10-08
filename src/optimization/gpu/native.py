@@ -44,6 +44,7 @@ class CudaBacktestService:
         self._interrupt_check = interrupt_check
         self._prepared_cache = {}
         self._subset_cache = {}
+        self._factual_capacities = {}
         self._residency = None
         self._executor = GpuBacktestService(
             batch_size=requested_width, max_pending=max_pending,
@@ -85,10 +86,12 @@ class CudaBacktestService:
             self._residency = None
             self._prepared_cache.clear()
             self._subset_cache.clear()
+            self._factual_capacities.clear()
 
     def register_dataset(self, dataset_id, dataset: PreparedGpuDataset):
         if not isinstance(dataset, PreparedGpuDataset):
             raise TypeError("dataset must be CPU-prepared shared-array inputs")
+        capacity_hints = {}
 
         @contextmanager
         def factory():
@@ -108,6 +111,7 @@ class CudaBacktestService:
                     max_dispatch_candidate_bars=self._dispatch_budget,
                     interrupt_check=self._interrupt_check, prepared_data_cache=self._prepared_cache,
                     factual_hsl=True,
+                    factual_capacity_hints=capacity_hints,
                 )
                 try:
                     # Discover physical limits after claiming one ownership request.
@@ -118,6 +122,7 @@ class CudaBacktestService:
                     self._batch_policy.width(dataset_id, self._batch_size)
                     def evaluate(candidates):
                         results = replay.evaluate_results(candidates)
+                        replay._remember_factual_capacities()
                         # Successful replay may have learned a larger factual
                         # history, or switched effective HSL policies off/on.
                         # Apply its current physical limit before another claim.
@@ -128,12 +133,16 @@ class CudaBacktestService:
                     del replay
 
         self._executor.register_dataset_factory(dataset_id, factory)
+        self._factual_capacities[dataset_id] = capacity_hints
 
     def submit(self, request):
         return self._executor.submit(request)
 
     def close(self, *, cancel_pending=False):
-        self._executor.close(cancel_pending=cancel_pending)
+        try:
+            self._executor.close(cancel_pending=cancel_pending)
+        finally:
+            self._factual_capacities.clear()
 
     def __enter__(self):
         return self

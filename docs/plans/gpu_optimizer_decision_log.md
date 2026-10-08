@@ -2893,3 +2893,24 @@ Historical observations do not supersede those requirements or prove current acc
 - Continue dataset-owned capacity retention and representative long-held/many-coin
   scaling measurements before additional launch tuning. Keep the service API and
   factual signal semantics unchanged by this storage simplification.
+
+
+### 2026-10-08 — Retain capacity estimates independently of residency
+
+- Keep only small integer factual-capacity hints in service-owned dataset metadata.
+  Restore them before recreated runner admission and remember successful learned
+  capacity even after an HSL-off dispatch. Release device buffers normally; add no
+  checkpoint or persistent replay state. Reject malformed/over-budget hints.
+- Source-verified host checks pass, including four production-residency eviction
+  controls with fake device transport/computation. A restoration-omission control
+  makes all four fail at the reset capacity. Four actual CUDA scenario/owner-switch
+  controls cover EMA/TM, unchanged metrics, zero repeated overflow retries and
+  evicted-runner release. CPU backtests remain forbidden inside the native service.
+- Require integrated compact-storage validation, current-head independent review
+  and CI before development merge. Representative suite/total-resource acceptance
+  and long-held reconstruction scaling remain separate gates.
+- The reviewed compact layout is integrated with unchanged capacity production
+  and host regression hashes. Combined validation passes 154 host and sixteen
+  actual CUDA service controls, including all four eviction regressions. All checked
+  sources remain unchanged; Rust/shaders use the reviewed compact extension.
+  Require a fresh independent review and CI for this integrated head.

@@ -326,3 +326,63 @@ def test_native_factual_scratch_omits_legacy_storage_on_90day_25coin_inputs(refe
         record_property(label + "_allocated_hsl_bytes", allocated)
     assert compact._hsl_buffers(1)[1].numel() == 0
     assert old._hsl_buffers(1)[1].numel() > 0
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("eviction", ["dataset", "owner"])
+def test_service_retains_gpu_learned_capacity_after_scenario_eviction(reference, forbid_cpu, monkeypatch, strategy, eviction):
+    from copy import deepcopy
+    import weakref
+    from optimization.gpu.datasets import PreparedGpuDataset
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.service import MpsMulticoinProxy
+    from shared_arrays import SharedArrayManager
+    from tools.gpu_parity import build_parser, fixture_inputs
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rust CPU simulation called during native capacity retention")
+    monkeypatch.setattr(reference, "run_backtest_bundle", forbidden)
+    config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", "both", "--coins", "2", "--bars", "3000",
+        "--hsl", "coin", "--hsl-red-threshold", ".99", "--hsl-ema-span-minutes", "2.5",
+    ]))
+    observed = []
+    original = MpsMulticoinProxy.evaluate_results
+    def inspect(self, parameters):
+        result = original(self, parameters)
+        runner = self.fused_runner
+        assert runner is not None
+        observed.append((weakref.ref(runner), runner.hsl_fact_capacity_learned,
+                         runner.last_hsl_fact_retries))
+        return result
+    monkeypatch.setattr(MpsMulticoinProxy, "evaluate_results", inspect)
+    manager = SharedArrayManager()
+    try:
+        specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
+        common = dict(markets=markets, exchange="binance", hlcvs=specs[0], btc=specs[1],
+                      timestamps=specs[2], candle_coins=tuple(config["backtest"]["coins"]["binance"]),
+                      metrics=("fills_per_day", "hard_stop_time_in_red_pct"))
+        other_config = deepcopy(config)
+        for side in ("long", "short"):
+            other_config["bot"][side]["hsl"]["red_threshold"] = .98
+        first = PreparedGpuDataset(config=config, **common)
+        other = PreparedGpuDataset(config=other_config, **common,
+            **({"time_range": (256, 3000), "timestamp_range": (256, 3000)}
+               if eviction == "dataset" else {}))
+        with CudaBacktestService(batch_size=1, tuning_mode="off") as service:
+            service.register_dataset("a", first)
+            service.register_dataset("b", other)
+            initial = service.submit(BacktestRequest("a:0", "a", {})).result(timeout=180)
+            learned = observed[0][1]
+            assert learned > 256 and observed[0][2] > 0
+            assert service._factual_capacities["a"] == {"fused": learned}
+            service.submit(BacktestRequest("b:0", "b", {})).result(timeout=180)
+            assert observed[0][0]() is None  # Estimate retention cannot pin scratch.
+            returned = service.submit(BacktestRequest("a:1", "a", {})).result(timeout=180)
+            assert returned.metrics == initial.metrics
+            assert observed[2][1:] == (learned, 0)
+            assert len(service._residency._entries) == (2 if eviction == "dataset" else 1)
+        assert not service._factual_capacities
+    finally:
+        manager.cleanup()
