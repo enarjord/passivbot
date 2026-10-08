@@ -2852,3 +2852,24 @@ Historical observations do not supersede those requirements or prove current acc
   TM short override admission in a separate negative control fails its raw HSL
   metric comparison, with the other seven override cases passing. This validates
   the new regression without changing the production implementation.
+
+- Accept both independent worker-review findings: derive native capture from
+  effective per-coin enablement, preserving strict policy validation while omitting
+  unused history-readiness checks; refresh learned physical limits after successful
+  replay before subsequent queue claims. Validate disabled-policy GPU outputs and
+  fixed/automatic scheduling against the preceding implementation before publication.
+- The corrected source passes 220 host, 146 factual replay/capture CUDA, eighteen
+  execution-view (four CUDA/fourteen host) and twelve real CLI/data/service CUDA
+  controls. All six disabled-policy regressions and both scheduling controls fail
+  the preceding production. Preserve the single scratch-owner assertion through
+  residency metadata rather than relying on a bound-method implementation detail.
+  Recheck unchanged passing sources; require fresh independent review and all CI.
+- Prioritize compact factual storage, dataset-owned capacity retention across
+  residency eviction and representative long-held/many-coin scaling measurements.
+  The current layout calculation reserves about 109.95 MiB per candidate in a
+  25-coin/two-side/90-day example, only 0.61 MiB of which is factual storage. Preserve
+  legacy consumers while removing that cost from the replacement path.
+- Hold further launch tuning until these resource gates are addressed. Treat
+  guarded incremental reconstruction as a measured follow-up requiring parity;
+  shared strategy-neutral allocation/retry/dispatch extraction remains a focused
+  simplification candidate, without a general backend framework.

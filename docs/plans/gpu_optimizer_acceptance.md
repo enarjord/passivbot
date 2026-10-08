@@ -1288,3 +1288,50 @@ override admission fails the targeted raw HSL metric comparison while the other
 seven override controls pass. All 951 passing source files remain unchanged;
 production code is unchanged by that coverage extension. Reviewed development
 integration and representative acceptance remain separate gates.
+
+Two current-head review findings require corrections before integration. Native
+capture must use effective coin policies: a base-enabled coin scope with every
+coin explicitly disabled needs no factual storage or history-readiness requirement.
+Policy-value validation still applies. After successful replay grows its factual
+history, the service must refresh the physical dispatch ceiling before claiming
+more work; both fixed and automatic scheduling are covered.
+
+The corrected production source passes 220 host contracts, all 146 factual replay
+and capture device cases, eighteen execution-view controls (four CUDA, fourteen
+host), and twelve real CUDA CLI/data/service cases. Six new disabled-coin policy
+cases cover both strategies and long/short/fused execution, including restored
+inheritance and rejection of malformed policy values. All six fail the preceding
+production; both new fixed/automatic ceiling controls likewise fail that version.
+An initial execution-view assertion depended on a bound-method implementation;
+the revised assertion checks the residency-owned proxies and still requires exactly
+one resident replay scratch owner. All passing source files remain unchanged.
+Current-head independent review and CI remain required before integration.
+
+### Resource design gates before further tuning
+
+Native factual replay currently retains the bypassed observation tree/window.
+For 25 coins, two sides, 52 scopes, a 90-day minute lookback and 256 factual records
+per pair, the actual allocation formula reserves about 109.95 MiB per candidate:
+109.33 MiB of legacy observation storage and 0.61 MiB of factual storage. A 512 MiB
+scratch allowance admits at most four candidates before other histories are counted.
+This is an allocation calculation, not a measured device-memory peak. Give native
+factual replay its own compact layout and retain the old layout only for its consumers.
+
+Runner-local learned capacity also disappears when residency clears the runners.
+Keep small dataset-owned capacity estimates across eviction without preserving
+device buffers or adding persistent checkpoint machinery. Verify production
+residency switches and successful replay scheduling together.
+
+Fresh scope composition can repeatedly traverse historical minutes for long exposed
+episodes. This is a scaling risk, not an established performance regression. Measure
+long-held, many-coin workloads, useful throughput and total host/device/disk resources
+before further launch tuning. If reconstruction dominates, evaluate guarded incremental
+advancement against fresh reconstruction and CPU references. Keep factual fallback
+and invalidation explicit; do not infer parity from matching allocation sizes.
+
+Shared allocation/retry/dispatch responsibilities still sit in EMA-named base classes
+inherited by TM, with strategy-specific parameter switches and fused overrides.
+A focused strategy-neutral extraction is a follow-up simplification candidate. It
+must preserve the existing service boundary and avoid introducing a general backend
+framework. These resource and scaling gates take priority over additional small-fixture
+test counts or marginal launch gains.

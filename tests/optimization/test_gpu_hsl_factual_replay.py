@@ -227,3 +227,36 @@ def test_authoritative_service_uses_factual_replay_without_cpu_backtests(referen
         assert observed and all(native and factual and cap > 0 for native, factual, cap in observed)
     finally:
         manager.cleanup()
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
+def test_disabling_every_effective_coin_policy_omits_factual_storage(reference, forbid_cpu, strategy, sides):
+    from test_gpu_hsl_multicoin import make_proxy, raw
+
+    # Fused: disable the inherited long policy in the candidate and override
+    # the enabled short policy off. Both effective sides are then off.
+    override_side = sides[-1]
+    options = dict(mode="coin", strategy=strategy, sides=sides, minutes=256,
+                   coin_count=1, enabled=True, override={"enabled": False},
+                   override_side=override_side)
+    native = make_proxy(**options, factual_hsl=True)
+    legacy = make_proxy(**options)
+    candidate = {"long_hsl_enabled": 0.0} if len(sides) == 2 else {}
+    fully_disabled = candidate | {f"{side}_hsl_enabled": 0.0 for side in sides}
+    _, expected = raw(legacy, [fully_disabled])
+    runner, actual = raw(native, [candidate])
+    _equal(actual, expected)
+    assert runner.hsl_fact_capacity == 0 and not runner.hsl_factual_replay
+    assert runner.settings[-2:].tolist() == [0.0, 0.0]
+    # Omitting unused history must not silently accept malformed policy values.
+    with pytest.raises(ValueError, match="Invalid GPU HSL policy"):
+        raw(native, [candidate | {f"{override_side}_hsl_red_threshold": 0.0}])
+    # Removing that long-side disable restores one effective inherited policy.
+    if len(sides) == 2:
+        explicit = make_proxy(**options)
+        _enable(explicit)
+        _, expected = raw(explicit, [{}])
+        _, actual = raw(native, [{}])
+        _equal(actual, expected)
+        assert runner.hsl_factual_replay and runner.hsl_fact_capacity > 0

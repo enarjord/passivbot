@@ -280,6 +280,12 @@ Completion requires:
   - [x] Add CPU-owned native survivor selection, full seed/bootstrap evaluation and checkpointed
     screening/promotion/full stages; exclude incomplete observations from fitness/storage.
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
+  - [ ] Give native factual HSL compact storage independent of the bypassed legacy
+    observation tree/window; preserve the legacy layout for remaining consumers.
+  - [ ] Retain small learned factual-capacity estimates in dataset execution metadata
+    across residency eviction, without retaining device buffers or adding checkpoints.
+  - [ ] Measure long-held, many-coin HSL reconstruction scaling before further launch
+    tuning; consider guarded incremental reconstruction only with measured need and parity.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
     from CPU cost, and keep suite notification fan-in independent of persistence batches.
   - [x] Let execution tuning learn actual warm partial dispatches and explore smaller

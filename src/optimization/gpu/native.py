@@ -116,7 +116,14 @@ class CudaBacktestService:
                     self._residency.activate(replay)
                     self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
                     self._batch_policy.width(dataset_id, self._batch_size)
-                    yield SimpleNamespace(evaluate=replay.evaluate_results)
+                    def evaluate(candidates):
+                        results = replay.evaluate_results(candidates)
+                        # Successful replay may have learned a larger factual
+                        # history, or switched effective HSL policies off/on.
+                        # Apply its current physical limit before another claim.
+                        self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
+                        return results
+                    yield SimpleNamespace(evaluate=evaluate)
                 finally:
                     del replay
 

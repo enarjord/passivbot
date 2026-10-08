@@ -1953,7 +1953,7 @@ class MpsEmaAnchorRunner:
         self._buffers[batch_size][0][:, :, 1].fill_(float("inf"))
         return self._buffers[batch_size]
 
-    def _validate_hsl_params(self, params, keys):
+    def _validate_hsl_params(self, params, keys, *, effective_enabled=None):
         width = len(keys)
         for side, active in enumerate((self.long_enabled, self.short_enabled)):
             if not active:
@@ -1975,7 +1975,9 @@ class MpsEmaAnchorRunner:
                 raise ValueError("GPU HSL enablement must be finite")
             if not np.any(enabled):
                 continue
-            if (
+            needs_history = (enabled if effective_enabled is None
+                             else enabled & effective_enabled[:, side])
+            if np.any(needs_history) and (
                 self.interval_minutes != 1
                 or not 1440 <= self.pnl_lookback_bars <= 90 * 1440
             ):
@@ -2496,6 +2498,7 @@ class MpsEmaAnchorMulticoinRunner:
                      if self.coin_override_label == "Trailing Martingale"
                      else EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN)
         hsl_overrides = coin_overrides[:, hsl_start]
+        self._coin_hsl_enabled_overrides = (hsl_overrides.copy(),)
         self.coin_hsl_may_enable = bool(
             np.any(np.isfinite(hsl_overrides) & (hsl_overrides > 0.5))
         )
@@ -3004,6 +3007,20 @@ class MpsEmaAnchorMulticoinRunner:
             self._entry_interval_count_buffers[batch_size],
         )
 
+    def _native_hsl_effective_enablement(self, matrix, keys):
+        modes = keys.index("hsl_signal_mode")
+        enables = keys.index("hsl_enabled")
+        effective = []
+        for side, overrides in enumerate(self._coin_hsl_enabled_overrides):
+            offset = side * len(keys)
+            enabled = matrix[:, enables + offset] > 0.5
+            coin_mode = matrix[:, modes + offset] == 2
+            explicit = np.isfinite(overrides)
+            override_on = bool(np.any(explicit & (overrides > 0.5)))
+            inherited = bool(np.any(~explicit))
+            effective.append(np.where(coin_mode, override_on | (inherited & enabled), enabled))
+        return np.stack(effective, axis=1)
+
     def _prepare_native_factual_hsl(self, params):
         if not getattr(self, "native_factual_hsl", False):
             return
@@ -3013,9 +3030,7 @@ class MpsEmaAnchorMulticoinRunner:
         matrix = np.asarray(params, dtype=np.float32)
         if matrix.ndim != 2 or matrix.shape[1] != len(keys) * self.hsl_replay_sides:
             raise ValueError("invalid native GPU candidate parameter shape")
-        columns = [keys.index("hsl_enabled") + side * len(keys)
-                   for side in range(self.hsl_replay_sides)]
-        active = self.coin_hsl_may_enable or bool(np.any(matrix[:, columns] > 0.5))
+        active = bool(np.any(self._native_hsl_effective_enablement(matrix, keys)))
         capacity = self.hsl_fact_capacity_learned if active else 0
         if capacity != self.hsl_fact_capacity:
             self._hsl_scratch_buffers.clear()
@@ -3078,9 +3093,14 @@ class MpsEmaAnchorMulticoinRunner:
                 else EMA_ANCHOR_MULTICOIN_PARAM_KEYS
             )
             policy_matrix = np.asarray(params, dtype=np.float32)
+            effective = (self._native_hsl_effective_enablement(policy_matrix, keys)
+                         if getattr(self, "native_factual_hsl", False) else None)
             if policy_matrix.ndim == 2 and policy_matrix.shape[1] == len(keys):
                 policy_matrix = np.concatenate((policy_matrix, policy_matrix), axis=1)
-            MpsEmaAnchorRunner._validate_hsl_params(self, policy_matrix, keys)
+                if effective is not None:
+                    effective = np.repeat(effective, 2, axis=1)
+            MpsEmaAnchorRunner._validate_hsl_params(
+                self, policy_matrix, keys, effective_enabled=effective)
         started = time.perf_counter() if profile else 0.0
         self.settings[-2] = getattr(self, "hsl_fact_capacity", 0)
         factual_replay = bool(getattr(self, "hsl_factual_replay", False))
@@ -3296,6 +3316,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             self.coin_hsl_may_enable
             or np.any(np.isfinite(short_hsl_overrides) & (short_hsl_overrides > 0.5))
         )
+        self._coin_hsl_enabled_overrides += (short_hsl_overrides.copy(),)
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
             short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
         )),)
@@ -3864,6 +3885,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         short_hsl_overrides = short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN]
         self.coin_hsl_may_enable = bool(self.coin_hsl_may_enable or np.any(
             np.isfinite(short_hsl_overrides) & (short_hsl_overrides > 0.5)))
+        self._coin_hsl_enabled_overrides += (short_hsl_overrides.copy(),)
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
             short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
         )),)
