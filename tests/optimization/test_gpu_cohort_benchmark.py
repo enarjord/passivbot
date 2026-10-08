@@ -15,6 +15,78 @@ def options(*values):
     return args
 
 
+@pytest.mark.parametrize("flags", [
+    ("--hsl-red-threshold", "nan"), ("--hsl-ema-span-minutes", "0"),
+    ("--hsl-cooldown-minutes", "-1"), ("--hsl-lookback-days", "91"),
+    ("--price-shock", "4", "64", ".7"), ("--price-shock", "0", "10080", ".7"),
+    ("--price-shock", "0", "64", "inf"),
+])
+def test_cohort_stress_options_are_checked_before_device_access(flags):
+    with pytest.raises(SystemExit) as error:
+        options(*flags)
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("value", [1e300, (2**63 - 1) / 60_000])
+def test_cohort_rejects_unsupported_cooldown_before_benchmark(monkeypatch, value):
+    def forbidden(*a):
+        pytest.fail("invalid timestamp policy must not initialize a benchmark/device")
+    monkeypatch.setattr(benchmark, "run_benchmark", forbidden)
+    with pytest.raises(SystemExit) as error:
+        benchmark.main(["--hsl", "unified", "--hsl-cooldown-minutes", str(value)])
+    assert error.value.code == 2
+
+
+def test_cohort_accepts_cooldown_just_inside_rust_timestamp_range():
+    value = math.nextafter((2**63 - 1) / 60_000, 0)
+    assert options("--hsl", "unified", "--hsl-cooldown-minutes", str(value)).hsl_cooldown_minutes == value
+
+
+@pytest.mark.parametrize("flags", [
+    ("--hsl-ema-span-minutes", "1e300"), ("--hsl-red-threshold", "1e-300"),
+    ("--price-shock", "0", "64", "1e40"),
+    ("--price-shock", "0", "64", "1e-100"),
+    ("--price-shock", "0", "64", "1e20", "--price-shock", "0", "64", "1e20"),
+    ("--price-shock", "0", "64", "1e-20", "--price-shock", "0", "64", "1e-20",
+     "--price-shock", "0", "64", "1e-20"),
+])
+def test_gpu_encoding_rejected_before_benchmark(monkeypatch, flags):
+    def forbidden(*a):
+        pytest.fail("invalid float32 recipe must not initialize CUDA or run backtests")
+    monkeypatch.setattr(benchmark, "run_benchmark", forbidden)
+    with pytest.raises(SystemExit) as error:
+        benchmark.main(["--bars", "128", "--coins", "1", "--hsl", "unified", *flags])
+    assert error.value.code == 2
+
+
+def test_gpu_policy_encoding_accepts_float32_boundaries():
+    args = options("--hsl-ema-span-minutes", str(float.fromhex("0x1.fffffep127")),
+                   "--hsl-red-threshold", str(2**-149))
+    assert args.hsl_ema_span_minutes == float.fromhex("0x1.fffffep127")
+    assert args.hsl_red_threshold == 2**-149
+
+
+def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
+    import numpy as np
+    flags = ["--hsl", "unified", "--bars", "128", "--coins", "2", "--sides", "both",
+             "--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
+             "--hsl-cooldown-minutes", "10000", "--price-shock", "0", "64", ".7"]
+    args = options("--candidates", "2", *flags)
+    inputs, configs, parameters = benchmark._cohort(args, "ema_anchor", 7)
+    reference = benchmark.gpu_parity.fixture_inputs(
+        benchmark.gpu_parity.build_parser().parse_args(["--fixture", "ema_anchor", *flags]))
+    np.testing.assert_array_equal(inputs[1], reference[1])
+    assert benchmark.gpu_parity._identity(
+        inputs[0], (inputs[1], inputs[3], inputs[4]), inputs[2], "binance"
+    ) == benchmark.gpu_parity._identity(
+        reference[0], (reference[1], reference[3], reference[4]), reference[2], "binance"
+    )
+    assert len(configs) == len(parameters) == 2
+    assert all(c["bot"]["hsl"]["red_threshold"] == .002 for c in configs)
+    assert args.price_shocks == [[0, 64, .7]]
+    assert args.hsl_lookback_days == 1
+
+
 @pytest.mark.parametrize("flags", [("--widths", "0"), ("--widths", "broken"),
                                    ("--warm-runs", "0"), ("--candidates", "129"),
                                    ("--adg-floor", "nan"), ("--drawdown-ceiling", "inf"),
@@ -165,10 +237,15 @@ def test_failed_execution_is_structured_and_report_file_matches_stdout(monkeypat
         raise RuntimeError("CUDA unavailable")
     monkeypatch.setattr(benchmark, "run_benchmark", fail)
     report_path = tmp_path / "report.json"
-    assert benchmark.main(["--report", str(report_path), "--compact"]) == 2
+    assert benchmark.main(["--report", str(report_path), "--compact",
+        "--hsl", "unified", "--hsl-red-threshold", ".002",
+        "--price-shock", "0", "64", ".7"]) == 2
     text = capsys.readouterr().out
     assert report_path.read_text() == text
     assert json.loads(text)["status"] == "execution_failed"
+    assert json.loads(text)["recipe"]["hsl_red_threshold"] == .002
+    assert json.loads(text)["recipe"]["price_shocks"] == [[0, 64, .7]]
+    assert "report" not in json.loads(text)["recipe"]
 
 
 def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():

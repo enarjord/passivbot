@@ -22,6 +22,33 @@ on each active side. Other settings come from the public parity fixture. HSL and
 unstuck default off; explicit toggles prepare additional workloads but do not
 guarantee controller transitions. No production configuration is accepted.
 
+The [parity fixture stress options](gpu_parity.md#reproducible-fixtures) are shared:
+explicit HSL threshold/span/cooldown/lookback and repeatable price shocks. Resolved
+values and ordered shocks appear in the cohort recipe, including execution failures.
+Cooldowns outside Rust's timestamp range and policies outside the GPU float32
+encoding are rejected before device work. With shocks, preflight each synthetic
+seed's final high/low/close encoding on CPU, one seed at a time, before initializing
+CUDA. This preparation is outside the measured simulation timing.
+For the unified HSL history
+expiry and three-objective materiality measurement:
+
+```sh
+passivbot tool gpu-cohort-benchmark --seeds 7 43 --coins 2 --bars 3000 \
+  --candidates 16 --warm-runs 1 --widths 16 auto --hsl unified \
+  --hsl-red-threshold 0.002 --hsl-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
+  --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
+  --objective adg_strategy_eq max --objective drawdown_worst_strategy_eq min \
+  --objective hard_stop_time_in_red_pct min \
+  --metrics hard_stop_duration_minutes_mean hard_stop_duration_minutes_max \
+  hard_stop_triggers_per_year hard_stop_restarts_per_year backtest_completion_ratio \
+  --limit adg_strategy_eq less_than 0 --limit drawdown_worst_strategy_eq greater_than 0.005 \
+  --limit hard_stop_time_in_red_pct greater_than 0.5 \
+  --limit backtest_completion_ratio less_than 0.99 --report hsl-cohort.json
+```
+
+This stress measurement exposes a known acceptance gap: agreement at the chosen
+limits does not establish agreement of HSL objectives or tighter constraints.
+
 The JSON report includes fixture/candidate and implementation fingerprints,
 per-candidate strict CPU/GPU metric comparisons, Pareto membership for the requested
 objective vector, pair-order disagreements including ties, and CPU regret at each
