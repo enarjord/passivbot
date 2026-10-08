@@ -178,14 +178,16 @@ def test_native_producer_failure_preserves_original_and_checkpoint(monkeypatch, 
         assert len(records) == 8
 
 
-def test_native_contract_and_checkpoint_reject_other_engines_or_precision(monkeypatch, tmp_path):
+@pytest.mark.parametrize("changed_execution", [{"precision": "other"}, {"version": 1}])
+def test_native_contract_and_checkpoint_reject_other_engines_or_precision(monkeypatch, tmp_path, changed_execution):
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:
         base = inputs(manager)
         checkpoint = tmp_path / "checkpoint.pkl"
         execute(base, SimpleNamespace(record=lambda _row: None), checkpoint)
         state = load_checkpoint(checkpoint, base.config)
-        state[CONTRACT_KEY]["execution"]["precision"] = "other"
+        assert state[CONTRACT_KEY]["execution"]["version"] == 2
+        state[CONTRACT_KEY]["execution"].update(changed_execution)
         checkpoint.write_bytes(pickle.dumps(state))
         with pytest.raises(ValueError, match="contract changed"):
             load_checkpoint(checkpoint, base.config)

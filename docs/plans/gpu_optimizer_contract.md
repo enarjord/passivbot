@@ -253,6 +253,11 @@ Completion requires:
     checkpoint contract and consolidate wider feature/lifecycle, specialization,
     scenario, resource and performance acceptance. Keep the old optimizer until
     its replacement passes the relevant gates.
+    Local worker validation proves effective candidate/coin-policy dispatch,
+    capacity learning across HSL-on/off/on transitions, preserved existing EMA
+    disabled-HSL ablation and asynchronous service delivery. All 42 wider native
+    HSL lifecycle/loss and 56 optimizer CLI/data/service controls also pass.
+    Representative acceptance and reviewed development integration remain required.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
 - [x] Replace hourly recovery distribution sampling with per-step GPU observations,
   budget their replay/reduction storage, and isolate mutable reduction scratch.

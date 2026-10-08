@@ -594,8 +594,8 @@ An existing reducer or output field does not establish native support.
 | Surface | Current calculation and evidence | Acceptance question |
 | --- | --- | --- |
 | Trading trajectories | Shared EMA/TM kernels use float32 strategy/account state. Native and specialized/general tests cover the stated topology, order, risk and replay cases. | Threshold rounding can alter later fills; assess risk, feasibility and selected configs rather than demand identical long trajectories. |
-| Completed HSL episodes | `mps_hsl.metal` replays retained observations with an explicit terminal estimate lifetime; Rust retained-fill reconstruction can re-estimate an opening basis after clipping. Controller/snapshot/native expiry cases below separate these paths. | Unified long-history reconstruction materiality remains open; same-observation equality cannot certify reconstructed observations. |
-| Active coin HSL without retained fills | Shared-account EMA/TM callers use the existing last factual position-fill timestamp to rebuild a fresh current estimate after that fill leaves the inclusive lookback. All 82 CUDA cases in `test_gpu_hsl_empty_history.py` pass with a source-verified Rust extension: 66 signal/cache/boundary probes and 16 native full-replay cases across both strategies and long-only, short-only and fused paths. Actual old/recent fills and mixed-age fused sides verify caller timestamp wiring and protective closes. | This aligns the empty-history current signal; it does not establish parity for partially retained fills or aggregate reconstruction, or accept all downstream float32 trajectory differences. |
+| Completed HSL episodes | The native worker reconstructs current scope episodes from retained simulator fill facts and causal closes, with fresh current budgets and an explicitly disposable cutoff memo. The component, temporal, matched-cohort and native lifecycle checks below distinguish this from retained observation replay, which remains on the legacy screening route. | The material HSL cohort outlier is resolved and all 42 wider native lifecycle/loss cases pass; general numerical and risk acceptance still requires the stated representative gates. |
+| Active coin HSL without retained fills | Factual native reconstruction evaluates an exposed current position from its actual endpoint when clipped facts no longer establish historical exposure. The earlier 82 empty-history controls (66 probes and 16 real caller cases) validate the retained legacy observation route; factual pair/scope endpoint controls and native replay/temporal checks validate the replacement. | Current-position loss protection must remain available after expiry. Keep these route-specific controls distinct, and assess downstream float32 trajectories rather than treating component equality as universal simulator acceptance. |
 | HSL EMA drawdown tails | `mps_hsl_common.metal` uses 32 logarithmic bins with actual sums/counts. Only a partially consumed cutoff bin averages its members. `test_gpu_portfolio_ema_tail.py` covers portfolio observation ownership and reductions. | Partial-bin ordering can affect close tail objectives/limits; measure selected configs and constraints. This is separate from missing portfolio observations, which were corrected. |
 | Side raw daily drawdown tails | Retain a bounded sorted list of daily maxima. Capacity covers the worst floor(1%) of the prepared UTC horizon and belongs to shader-cache identity. Current-day queries do not flush or mutate replay state. `test_gpu_daily_tail.py` covers selection, horizon bounds and CUDA replay isolation. | Selection is exact on the GPU's observed float32 curve; CPU/GPU curves may still differ. Full replay and matched kernel evidence are recorded below; this does not accept unrelated trajectory or HSL reconstruction differences. |
 | Fill-gap percentiles | `_fill_gap_metrics` uses 512 logarithmic positive-gap bins, upper-edge decoding, actual boundary gaps and restored same-candle zero multiplicity. Multiplicity/reducer tests and the three-objective cohorts above expose the remaining residuals. | The same gap population can still be quantized; upper edges are not a universal CPU/GPU trajectory error bound. |
@@ -1235,3 +1235,56 @@ retain the same batch key; distinct explicit callback owners remain separate.
 The real-construction regression fails before that correction and passes afterward,
 with CPU simulation forbidden. All 54 affected host suite-key/topology/fused-
 construction controls pass. This host-only fix preserves the tested GPU source.
+
+
+### Native factual worker cutover
+
+The local native service enables factual HSL behind its existing prepared-request
+API; CPU orchestration receives the same compact results. Retained legacy screening
+keeps its previous mode. Every dispatch checks effective candidate HSL flags and
+coin overrides, rather than the base config alone. An HSL-off dispatch omits factual
+capture and storage; existing one-side EMA disabled-HSL specialization still
+applies where supported. The GPU owner starts with at most 256 factual records per
+pair, grows within its scratch budget after rejected GPU work and retains that
+learned estimate when subsequent HSL-off/on traffic reuses the same runner. This
+initial estimate is execution policy, not a user config requirement or claim of an
+optimal universal capacity. Other physical batch/history guards remain active.
+
+The native evaluation contract advances from execution version one to two. Old
+native checkpoints reject saved fitness under the previous semantics, while saved
+configurations remain valid seeds. CPU evaluation contracts and the retained
+screening backend's CUDA runtime contract do not change.
+
+The source-verified local cutover passes 38 actual CUDA controls: eighteen
+HSL-on/off/on transitions across both strategies, all scopes and side topologies,
+eight base-off/coin-on overrides, and twelve asynchronous service requests compared
+with explicit factual replay. Transition checks force growth, verify learned
+capacity reuse, compare every returned native raw output and restore the original
+compiled identity. HSL-off controls preserve legacy outputs and reduce scratch
+cost. Python CPU simulation is forbidden in these controls, with the Rust CPU
+simulation API also forbidden in actual service cases. Ten host retry/fatal-policy
+checks and both old-precision/old-version checkpoint rejection controls pass.
+The lifecycle and caller checks below extend this evidence; representative
+metric, resource and performance acceptance remains pending.
+
+
+The wider default-worker check also passes all 42 actual native HSL lifecycle
+and loss-reporting comparisons against current CPU references, including unfinished
+panic/halt durations, scoped trigger/restart attribution and halt-to-restart loss.
+The documentation-adjusted source passes 77 host session, dataset, tuning, retry and
+documentation checks plus eighteen selected checkpoint contracts. All 56 wider CUDA controls
+also pass: 52 real optimizer CLI cases, two canonical prepared-dataset cases and
+two incremental service controls. They cover automatic/fixed dispatch, clean
+interruption/resume, scenario screening, seed anchors/coupling and current HSL
+without CPU simulation during optimization. All 951 source files remain unchanged
+after device validation. Representative metric/resource/performance acceptance
+and reviewed development integration remain open.
+
+The final integrated source passes 140 host/session/contract/anchor controls and
+144 actual device replay/capture/variant controls. Short-only and fused short-only
+coin-policy cases isolate the effective short override independently of the base
+and long-side policies. A separate negative control omitting only fused TM short
+override admission fails the targeted raw HSL metric comparison while the other
+seven override controls pass. All 951 passing source files remain unchanged;
+production code is unchanged by that coverage extension. Reviewed development
+integration and representative acceptance remain separate gates.

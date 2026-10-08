@@ -120,3 +120,110 @@ def test_shared_scenario_inputs_keep_compatible_interruption_ownership(reference
     other = make_proxy(**(kwargs | {"interrupt_check": lambda: None}))
     assert other.data is first.data
     assert other.suite_batch_key() != first.suite_batch_key()
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
+def test_native_policy_transitions_preserve_learned_storage_and_factual_results(reference, forbid_cpu, strategy, mode, sides):
+    from test_gpu_hsl_multicoin import make_proxy, raw
+
+    native = make_proxy(mode, strategy, sides, minutes=256, factual_hsl=True)
+    explicit = make_proxy(mode, strategy, sides, minutes=256)
+    _enable(explicit)
+    _, expected = raw(explicit, [{}])
+    runner = native.fused_runner or native.runners[sides[0]]
+    runner.hsl_fact_capacity_learned = 1
+    _, actual = raw(native, [{}])
+    _equal(actual, expected)
+    assert runner.last_hsl_fact_retries > 0
+    learned = runner.hsl_fact_capacity_learned
+    assert learned == runner.hsl_fact_capacity > 1
+    active_library = runner._library_cache_call()
+    active_cost = runner._history_bytes_per_candidate()
+
+    disabled = {f"{side}_hsl_enabled": 0.0 for side in sides}
+    general = make_proxy(mode, strategy, sides, minutes=256)
+    _, off_expected = raw(general, [disabled])
+    _, off_actual = raw(native, [disabled])
+    _equal(off_actual, off_expected)
+    assert runner.hsl_fact_capacity == 0 and runner.settings[-2:].tolist() == [0.0, 0.0]
+    assert runner.hsl_fact_capacity_learned == learned
+    assert runner._history_bytes_per_candidate() < active_cost
+    assert runner._library_cache_call() != active_library
+    if strategy == "ema_anchor" and len(sides) == 1 and mode != "coin":
+        assert runner.dispatch_hsl_disabled
+
+    _, restored = raw(native, [{}])
+    _equal(restored, expected)
+    assert runner.hsl_fact_capacity == learned and runner.last_hsl_fact_retries == 0
+    assert runner._library_cache_call() == active_library
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides,override_side", [
+    (("long",), "long"), (("short",), "short"),
+    (("long", "short"), "long"), (("long", "short"), "short"),
+])
+def test_native_coin_override_enables_factual_replay_with_base_hsl_off(reference, forbid_cpu, strategy, sides, override_side):
+    from test_gpu_hsl_multicoin import make_proxy, raw
+
+    options = dict(mode="coin", strategy=strategy, sides=sides, minutes=256,
+                   enabled=False, override={"enabled": True}, override_side=override_side)
+    native, explicit = make_proxy(**options, factual_hsl=True), make_proxy(**options)
+    _enable(explicit)
+    _, expected = raw(explicit, [{}])
+    runner, actual = raw(native, [{}])
+    _equal(actual, expected)
+    assert runner.hsl_factual_replay and runner.hsl_fact_capacity > 0
+    assert not runner.dispatch_hsl_disabled
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("sides", ["long", "both"])
+def test_authoritative_service_uses_factual_replay_without_cpu_backtests(reference, forbid_cpu, monkeypatch, strategy, mode, sides):
+    from optimization.gpu.datasets import PreparedGpuDataset
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.service import MpsMulticoinProxy
+    from shared_arrays import SharedArrayManager
+    from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Rust CPU simulation called during authoritative service replay")
+    monkeypatch.setattr(reference, "run_backtest_bundle", forbidden)
+    inputs = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", sides, "--coins", "2", "--bars", "512",
+        "--hsl", mode, "--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
+        "--price-shock", "0", "256", ".7",
+    ]))
+    config, candles, markets, btc, timestamps = inputs
+    metrics = (*DEFAULT_METRICS, "hard_stop_time_in_red_pct", "hard_stop_duration_minutes_max",
+               "hard_stop_triggers_per_year", "hard_stop_restarts_per_year")
+    explicit = MpsMulticoinProxy(config=config, hlcvs=candles, mss=markets, btc=btc,
+        timestamps=timestamps, exchange="binance", batch_size=1, needed_metrics=metrics)
+    _enable(explicit, 1024)
+    expected = explicit.evaluate_results([{}])[0]
+    observed = []
+    original = MpsMulticoinProxy.evaluate_results
+    def inspect(self, parameters):
+        result = original(self, parameters)
+        runners = [self.fused_runner] if self.fused_runner else list(self.runners.values())
+        observed.extend((r.native_factual_hsl, r.hsl_factual_replay, r.hsl_fact_capacity) for r in runners)
+        return result
+    monkeypatch.setattr(MpsMulticoinProxy, "evaluate_results", inspect)
+    manager = SharedArrayManager()
+    try:
+        specs = [manager.create_from(a)[0] for a in (candles, btc, timestamps)]
+        dataset = PreparedGpuDataset(config=config, markets=markets, exchange="binance",
+            hlcvs=specs[0], btc=specs[1], timestamps=specs[2],
+            candle_coins=tuple(config["backtest"]["coins"]["binance"]), metrics=metrics)
+        with CudaBacktestService(batch_size=1, tuning_mode="off") as service:
+            service.register_dataset("factual", dataset)
+            actual = service.submit(BacktestRequest("one", "factual", {})).result(timeout=120)
+        assert actual.metrics == expected.metrics
+        assert actual.liquidated == expected.liquidated
+        assert observed and all(native and factual and cap > 0 for native, factual, cap in observed)
+    finally:
+        manager.cleanup()

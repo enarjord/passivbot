@@ -140,7 +140,7 @@ def build_evaluation_contract(config: dict) -> dict:
         # replay shader, CUDA lowering and host metric implementation.
         contract["execution"] = {
             "engine": "cuda_native",
-            "version": 1,
+            "version": 2,
             "precision": "f32_replay_integer_tick_boundaries_f64_host",
         }
     return contract
