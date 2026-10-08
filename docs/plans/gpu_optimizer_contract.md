@@ -2553,3 +2553,32 @@ Completion requires:
   simulation; preflight shocked cohort seeds before CUDA initialization. Include
   compounded shocks and underflow-to-zero regressions, while keeping valid
   fixture arrays and the ordinary success recipe unchanged.
+
+### 2026-10-08 — Bound exact side drawdown tails by the registered timeline
+
+- A raw side drawdown tail needs only the worst floor(1%) of observed daily
+  maxima. Retain those values directly, replacing the cutoff-bin approximation.
+  Compile a power-of-two capacity from the prepared UTC day count; expose no
+  new optimizer setting and include the capacity in shader-cache identity.
+- Keep the unfinished current day separate and merge it only during a pure
+  metric query. Early liquidation/truncation uses its actual observed day count.
+  Temporal replay snapshots retain the complete bounded state, and requested-only
+  feature guards remove it when unused. An undersized direct shader returns an
+  invalid metric rather than fabricating a partial tail.
+- The change concerns metric reduction, not HSL protection or CPU/live
+  reconstruction. HSL EMA tails and the retained-history reconstruction gap
+  remain separate acceptance work. Verify full replay/ablation/temporal outputs,
+  source-verified Python callers and resource/throughput evidence before publishing.
+- All 24 new capacity/diagnostic/full-replay tests pass with CUDA using the
+  source-verified Rust extension; Rust tests pass (332, one ignored) and the
+  default-feature check succeeds. The matched 211-day single-side control
+  preserves every non-tail output. Independent daily-sort errors fall from
+  8.97e-6/0.01427 to 4.55e-13/7.45e-9 for EMA/TM; CUDA local storage falls by
+  240 bytes at capacity two, with unchanged registers. Warm throughput varies
+  by -1.8%/+1.1%; claim no general speedup. See the
+  [acceptance evidence](gpu_optimizer_acceptance.md#exact-side-raw-daily-tails).
+- Focused validation also passes 20 shader/packing, 135 metric/scoring/doc,
+  12 CPU/GPU side-parity, two shared raw/EMA reducer and four actual native CLI
+  checks. The CLI cases interrupt/resume standalone and suite runs for both
+  strategies while forbidding CPU backtests and CPU worker creation. Current-head
+  automatic review and required CI remain mandatory before development integration.

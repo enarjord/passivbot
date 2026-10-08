@@ -466,6 +466,7 @@ def test_hsl_raw_tail_source_variant_is_separately_opt_in_and_guarded():
         raw_drawdown_enabled=True,
         raw_tail_enabled=True,
     ) == (
+        "#define PASSIVBOT_HSL_RAW_TAIL_CAPACITY 1\n"
         "#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 1\n"
         "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n" + source
     )
@@ -691,6 +692,7 @@ def test_trailing_martingale_hsl_specialization_disables_unrequested_diagnostics
     def fake_base_init(self, *args, **kwargs):
 
         self.hsl_capacity = 0
+        self.hsl_raw_tail_capacity = 1
         self.long_enabled = True
         self.short_enabled = False
         self.hsl_ema_tail_enabled = False
@@ -717,7 +719,9 @@ def test_trailing_martingale_hsl_specialization_disables_unrequested_diagnostics
 
     assert runner.shader_topology == "generic"
     assert runner.hsl_diagnostics_enabled is False
-    assert runner._shader_library_cache_call()[1][-3] is False
+    import inspect
+    loader, arguments = runner._shader_library_cache_call()
+    assert inspect.signature(loader).bind(*arguments).arguments["hsl_diagnostics_enabled"] is False
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")

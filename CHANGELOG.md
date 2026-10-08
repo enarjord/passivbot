@@ -10,6 +10,10 @@ since the latest release tag; these features may already be available when insta
   repeatable price shocks, making long-history expiry and selection comparisons
   reproducible without custom fixture scripts.
 
+- GPU long/short strategy-equity worst-1% drawdown metrics retain the actual worst
+  daily values instead of averaging a histogram cutoff. Optional tail state is
+  sized automatically from the prepared date range.
+
 - GPU HSL cooldown re-evaluates completed episodes from retained observations
   after their peak leaves the history window. Preserve current entry-loss
   estimates for active exposure and the terminal accounting sample.

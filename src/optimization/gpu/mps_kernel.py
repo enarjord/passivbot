@@ -126,6 +126,14 @@ def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
     return _HSL_EMA_TAIL_DEFINE + source
 
 
+def _raw_drawdown_tail_capacity(n_days: int) -> int:
+    """Bound the worst 1% by the prepared UTC horizon, sharing power-of-two variants."""
+    if type(n_days) is not int or n_days < 1:
+        raise ValueError("raw drawdown tail requires a positive prepared day count")
+    needed = max(n_days // 100, 1)
+    return 1 << (needed - 1).bit_length()
+
+
 def _with_hsl_features(
     source: str,
     *,
@@ -133,6 +141,7 @@ def _with_hsl_features(
     raw_drawdown_enabled: bool,
     raw_tail_enabled: bool,
     diagnostics_enabled: bool = True,
+    raw_tail_capacity: int = 1,
 ) -> str:
     if raw_tail_enabled and not raw_drawdown_enabled:
         raise ValueError("HSL raw-tail metrics require raw-drawdown metrics")
@@ -154,9 +163,12 @@ def _with_hsl_features(
             )
         source = _HSL_RAW_DRAWDOWN_DEFINE + source
     if raw_tail_enabled:
+        if type(raw_tail_capacity) is not int or raw_tail_capacity < 1:
+            raise ValueError("HSL raw-tail capacity must be a positive integer")
         if "#ifndef PASSIVBOT_HSL_RAW_TAIL_ENABLED" not in source:
             raise RuntimeError("MPS source is missing the HSL raw-tail feature guard")
-        source = _HSL_RAW_TAIL_DEFINE + source
+        source = (f"#define PASSIVBOT_HSL_RAW_TAIL_CAPACITY {raw_tail_capacity}\n"
+                  + _HSL_RAW_TAIL_DEFINE + source)
     return source
 
 
@@ -790,6 +802,7 @@ def _shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     hsl_capacity: int = 0,
+    hsl_raw_tail_capacity: int = 1,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -799,6 +812,7 @@ def _shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        raw_tail_capacity=hsl_raw_tail_capacity,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_btc_risk(source, btc_risk_enabled)
@@ -861,6 +875,7 @@ def _trailing_martingale_shader_library(
     hsl_diagnostics_enabled: bool = True,
     temporal_chunking: bool = False,
     hsl_capacity: int = 0,
+    hsl_raw_tail_capacity: int = 1,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -880,6 +895,7 @@ def _trailing_martingale_shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        raw_tail_capacity=hsl_raw_tail_capacity,
         diagnostics_enabled=hsl_diagnostics_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
@@ -908,6 +924,7 @@ def _trailing_martingale_long_hsl_shader_library(
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
     hsl_diagnostics_enabled: bool = True,
+    hsl_raw_tail_capacity: int = 1,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -927,6 +944,7 @@ def _trailing_martingale_long_hsl_shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        raw_tail_capacity=hsl_raw_tail_capacity,
         diagnostics_enabled=hsl_diagnostics_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
@@ -953,6 +971,7 @@ def _trailing_martingale_short_hsl_shader_library(
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
     hsl_diagnostics_enabled: bool = True,
+    hsl_raw_tail_capacity: int = 1,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -972,6 +991,7 @@ def _trailing_martingale_short_hsl_shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        raw_tail_capacity=hsl_raw_tail_capacity,
         diagnostics_enabled=hsl_diagnostics_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
@@ -1085,6 +1105,7 @@ def _ema_anchor_multicoin_shader_library(
     raw_strategy_growth_enabled: bool = False,
     weighted_raw_equity_enabled: bool = False,
     weighted_account_equity_enabled: bool = False,
+    hsl_raw_tail_capacity: int = 1,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1094,6 +1115,7 @@ def _ema_anchor_multicoin_shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        raw_tail_capacity=hsl_raw_tail_capacity,
     )
     # Keep diagnostics for forced delist panic-loss parity even when the HSL
     # controllers and their per-candle scans are compiled away.
@@ -1149,6 +1171,7 @@ def _trailing_martingale_multicoin_shader_library(
     raw_strategy_growth_enabled: bool = False,
     weighted_raw_equity_enabled: bool = False,
     weighted_account_equity_enabled: bool = False,
+    hsl_raw_tail_capacity: int = 1,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1167,6 +1190,7 @@ def _trailing_martingale_multicoin_shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        raw_tail_capacity=hsl_raw_tail_capacity,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     if weighted_raw_equity_enabled:
@@ -1710,6 +1734,9 @@ class MpsEmaAnchorRunner:
         self.hsl_capacity = min(self.n + 2, pnl_lookback_bars + 2)
         self.shader_topology = "generic"
         self.n_days = int(data["n_days"])
+        self.hsl_raw_tail_capacity = (
+            _raw_drawdown_tail_capacity(self.n_days) if self.hsl_raw_tail_enabled else 1
+        )
         self.btc_prices = _btc_risk_price_tensor(btc_prices, expected_count=self.n)
         self.equity_balance_diff_enabled = bool(equity_balance_diff_enabled)
         self.btc_risk_enabled = (
@@ -1823,6 +1850,7 @@ class MpsEmaAnchorRunner:
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
             self.hsl_capacity,
+            self.hsl_raw_tail_capacity,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -2312,6 +2340,9 @@ class MpsEmaAnchorMulticoinRunner:
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
         self.n_days = int(data["n_days"])
+        self.hsl_raw_tail_capacity = (
+            _raw_drawdown_tail_capacity(self.n_days) if self.hsl_raw_tail_enabled else 1
+        )
         if unstuck_pnl_lookback_bars < 0:
             raise ValueError("unstuck_pnl_lookback_bars must be nonnegative")
         self.unstuck_pnl_lookback_bars = int(unstuck_pnl_lookback_bars)
@@ -2669,6 +2700,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.raw_strategy_growth_enabled,
             self.weighted_raw_equity_enabled,
             self.weighted_account_equity_enabled,
+            self.hsl_raw_tail_capacity,
         )
 
     def _hsl_history_bytes_per_candidate(self):
@@ -3436,6 +3468,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.raw_strategy_growth_enabled,
             self.weighted_raw_equity_enabled,
             self.weighted_account_equity_enabled,
+            self.hsl_raw_tail_capacity,
         )
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -3907,6 +3940,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
                 self.hsl_diagnostics_enabled,
+                self.hsl_raw_tail_capacity,
             )
         if self.shader_topology == "short_hsl":
             return _trailing_martingale_short_hsl_shader_library, (
@@ -3919,6 +3953,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
                 self.hsl_diagnostics_enabled,
+                self.hsl_raw_tail_capacity,
             )
         if self.shader_topology == "long_no_hsl":
             return _trailing_martingale_long_no_hsl_shader_library, (
@@ -3952,6 +3987,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 else temporal_chunking
             ),
             self.hsl_capacity,
+            self.hsl_raw_tail_capacity,
         )
 
     def _entry_interval_buffers(self, batch_size: int):

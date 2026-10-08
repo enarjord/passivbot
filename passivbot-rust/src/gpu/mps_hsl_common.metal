@@ -15,6 +15,14 @@
 #define PASSIVBOT_HSL_RAW_TAIL_ENABLED 0
 #endif
 
+#ifndef PASSIVBOT_HSL_RAW_TAIL_CAPACITY
+#define PASSIVBOT_HSL_RAW_TAIL_CAPACITY 1
+#endif
+
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED && PASSIVBOT_HSL_RAW_TAIL_CAPACITY < 1
+#error Raw drawdown tail capacity must be positive
+#endif
+
 #ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
 #define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 1
 #endif
@@ -93,9 +101,9 @@ struct HslStrategyEquityStats {
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
     int current_drawdown_day;
     float current_day_drawdown_worst;
-    float completed_day_count;
-    float daily_drawdown_counts[HSL_EMA_TAIL_BINS];
-    float daily_drawdown_sums[HSL_EMA_TAIL_BINS];
+    int completed_day_count;
+    int daily_tail_count;
+    float daily_drawdown_top[PASSIVBOT_HSL_RAW_TAIL_CAPACITY];
 #endif
 };
 
@@ -112,23 +120,12 @@ inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
     stats.current_drawdown_day = -1;
     stats.current_day_drawdown_worst = 0.0f;
-    stats.completed_day_count = 0.0f;
-    for (int i = 0; i < HSL_EMA_TAIL_BINS; ++i) {
-        stats.daily_drawdown_counts[i] = 0.0f;
-        stats.daily_drawdown_sums[i] = 0.0f;
-    }
+    stats.completed_day_count = 0;
+    stats.daily_tail_count = 0;
+    for (int i = 0; i < PASSIVBOT_HSL_RAW_TAIL_CAPACITY; ++i)
+        stats.daily_drawdown_top[i] = 0.0f;
 #endif
     return stats;
-}
-
-inline int hsl_drawdown_tail_bin(float value) {
-    // Cover fourteen octaves over [2^-14, 1) so low-drawdown Pareto members
-    // remain rankable without increasing thread-local state. Edge bins retain
-    // smaller values and overflow respectively. Actual sums are not clamped,
-    // so values outside the covered range keep their magnitude.
-    float scaled = (log2(fmax(value, 0.00006103515625f)) + 14.0f)
-        * 2.2857142857142856f;
-    return clamp(int(floor(scaled)), 0, HSL_EMA_TAIL_BINS - 1);
 }
 
 inline void flush_hsl_strategy_equity_daily_drawdown(
@@ -136,10 +133,20 @@ inline void flush_hsl_strategy_equity_daily_drawdown(
 ) {
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
     if (stats.current_drawdown_day < 0) return;
-    int bin = hsl_drawdown_tail_bin(stats.current_day_drawdown_worst);
-    stats.completed_day_count += 1.0f;
-    stats.daily_drawdown_counts[bin] += 1.0f;
-    stats.daily_drawdown_sums[bin] += stats.current_day_drawdown_worst;
+    stats.completed_day_count += 1;
+    // The registered timeline bounds floor(observed days / 100). Keep only
+    // that many largest daily maxima, with no approximate cutoff-bin mean.
+    const float value = stats.current_day_drawdown_worst;
+    if (stats.daily_tail_count == PASSIVBOT_HSL_RAW_TAIL_CAPACITY
+        && value <= stats.daily_drawdown_top[PASSIVBOT_HSL_RAW_TAIL_CAPACITY - 1])
+        return;
+    int position = min(stats.daily_tail_count, PASSIVBOT_HSL_RAW_TAIL_CAPACITY - 1);
+    while (position > 0 && value > stats.daily_drawdown_top[position - 1]) {
+        stats.daily_drawdown_top[position] = stats.daily_drawdown_top[position - 1];
+        --position;
+    }
+    stats.daily_drawdown_top[position] = value;
+    stats.daily_tail_count = min(stats.daily_tail_count + 1, PASSIVBOT_HSL_RAW_TAIL_CAPACITY);
 #endif
 }
 
@@ -204,28 +211,29 @@ inline float hsl_strategy_equity_drawdown_mean_worst_1pct(
     thread HslStrategyEquityStats& stats
 ) {
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    float sample_count = stats.completed_day_count
-        + (stats.current_drawdown_day >= 0 ? 1.0f : 0.0f);
-    if (!(sample_count > 0.0f)) return 0.0f;
-    float worst_n = fmax(floor(sample_count * 0.01f), 1.0f);
+    int sample_count = stats.completed_day_count
+        + (stats.current_drawdown_day >= 0 ? 1 : 0);
+    if (sample_count <= 0) return 0.0f;
+    int worst_n = max(sample_count / 100, 1);
 #if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    // Native tail requests already retain the maximum. A one-day tail is
-    // exactly that maximum; averaging its histogram bin biases the result.
-    if (worst_n == 1.0f) return stats.drawdown_max;
+    if (worst_n == 1) return stats.drawdown_max;
 #endif
-    float remaining = worst_n;
+    // An undersized direct shader invocation cannot supply a valid tail.
+    // Prepared runners specialize capacity from the complete input horizon.
+    if (worst_n > PASSIVBOT_HSL_RAW_TAIL_CAPACITY) return NAN;
+    int stored = 0;
+    bool current = stats.current_drawdown_day >= 0;
     float total = 0.0f;
-    int current_bin = stats.current_drawdown_day >= 0
-        ? hsl_drawdown_tail_bin(stats.current_day_drawdown_worst) : -1;
-    for (int i = HSL_EMA_TAIL_BINS - 1; i >= 0 && remaining > 0.0f; --i) {
-        float count = stats.daily_drawdown_counts[i]
-            + (i == current_bin ? 1.0f : 0.0f);
-        if (!(count > 0.0f)) continue;
-        float sum = stats.daily_drawdown_sums[i]
-            + (i == current_bin ? stats.current_day_drawdown_worst : 0.0f);
-        float take = fmin(count, remaining);
-        total += sum * (take / count);
-        remaining -= take;
+    // Merge the unflushed current day without mutating the retained state:
+    // repeated metric queries and temporal replay snapshots remain identical.
+    for (int i = 0; i < worst_n; ++i) {
+        if (current && (stored >= stats.daily_tail_count
+            || stats.current_day_drawdown_worst >= stats.daily_drawdown_top[stored])) {
+            total += stats.current_day_drawdown_worst;
+            current = false;
+        } else {
+            total += stats.daily_drawdown_top[stored++];
+        }
     }
     return total / worst_n;
 #else
@@ -275,7 +283,10 @@ inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats() {
 }
 
 inline int hsl_drawdown_ema_tail_bin(float value) {
-    return hsl_drawdown_tail_bin(value);
+    // EMA tails retain their existing histogram independently of raw daily tails.
+    float scaled = (log2(fmax(value, 0.00006103515625f)) + 14.0f)
+        * 2.2857142857142856f;
+    return clamp(int(floor(scaled)), 0, HSL_EMA_TAIL_BINS - 1);
 }
 
 inline void update_hsl_drawdown_ema_tail_stats(
