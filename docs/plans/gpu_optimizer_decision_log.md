@@ -2467,3 +2467,24 @@ Historical observations do not supersede those requirements or prove current acc
   optimizer CLI start/resume also passes with CPU simulations forbidden. The
   rebuilt extension passes 332 Rust tests with one existing ignore, default-feature
   test compilation, source verification and five documentation checks.
+
+### 2026-10-08 — Retain small cashflows in f32 account balances
+
+- A long sequence of small encoded fees/profits loses contributions when repeatedly
+  added to a much larger f32 cash balance. Small resulting balance errors can cross
+  quantity-rounding boundaries. Keep f32 execution and one residual in the shared
+  account; carry it with temporal state rather than changing the sizing policy.
+- This reduces accumulation drift, not every f32 execution difference. The independent
+  canonical sum controls distinguish encoded cashflow error from accumulation error;
+  real separate device dispatches verify residual continuity. All six new CUDA
+  cases fail before correction and pass afterward. Twelve canonical Rust entry
+  sizing controls, seven shared-account consumers and eleven production-capacity
+  temporal/interruption controls pass. Both standalone and automatic suite CLI
+  start/resume checks pass with CPU simulation forbidden. All 72 checkpoint
+  contracts and six documentation checks pass with the verified rebuilt extension,
+  alongside 332 Rust tests (one existing ignore) and default-feature compilation.
+- A grouped full-capacity order probe leaves no admission headroom for the next
+  fixture on CUDA. The same sequence fails on the preceding source; both probes
+  pass in separate fresh processes. Production specialized replay checks pass.
+  This test-resource limitation does not justify bypassing memory admission or
+  establish general resource acceptance.
