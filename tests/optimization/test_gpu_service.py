@@ -424,8 +424,14 @@ def test_single_coin_shader_topology_is_fail_closed(
 def test_mps_multicoin_temporal_plan_preserves_work_limit(
     strategy, batch, bars, sides, cap, expected, device
 ):
-    if device == "cuda" and expected == (True, 512, 4096):
-        expected = (True, 1024, 2048)
+    if device == "cuda" and strategy == "trailing_martingale" and bars > 8192:
+        expected = {
+            (4096, 900000, 1, 1_000_000_000): (True, 1024, 2048),
+            (4096, 60000, 1, 1_000_000_000): (True, 1024, 2048),
+            (16, 900000, 1, 1_000_000_000): (True, 16, 8192),
+            (4096, 900000, 2, 1_000_000_000): (True, 1024, 2048),
+            (4096, 900000, 1, 100): (True, 1, 3),
+        }[(batch, bars, sides, cap)]
     result = _mps_multicoin_dispatch_plan(
         strategy,
         batch,
@@ -438,6 +444,19 @@ def test_mps_multicoin_temporal_plan_preserves_work_limit(
     assert result == expected
     _, candidate_batch, history_chunk = result
     assert candidate_batch * history_chunk * 29 * sides <= cap
+
+
+@pytest.mark.parametrize("sides", [1, 2])
+@pytest.mark.parametrize("batch", [1, 64])
+@pytest.mark.parametrize("bars,expected", [(8192, (False, 8192)), (8193, (True, 8192))])
+def test_cuda_tm_long_history_has_interrupt_boundaries_below_work_cap(sides, batch, bars, expected):
+    temporal, candidates, history = _mps_multicoin_dispatch_plan(
+        "trailing_martingale", batch, n_bars=bars, n_coins=16,
+        n_sides=sides, max_candidate_bars=500_000_000, device="cuda",
+    )
+    assert (temporal, history) == expected
+    assert candidates == batch
+    assert candidates * history * 16 * sides <= 500_000_000
 
 
 @pytest.mark.parametrize("batch", [1, 17, 512, 513, 1024, 1025, 4096])

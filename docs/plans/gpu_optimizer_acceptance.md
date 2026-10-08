@@ -646,6 +646,55 @@ optimizer throughput, a general speedup, or total GPU memory bounds. Larger date
 ranges require larger capacity. CPU/GPU curve differences, minute EMA-tail bins
 and HSL retained-fill reconstruction remain separate acceptance work.
 
+## Shared-account TM temporal replay
+
+Long CUDA multicoin TM histories now retain both side states, shared accounting
+and requested metric accumulators between synchronized temporal dispatches. The
+work envelope counts both sides. Histories above 8,192 candles get interrupt
+boundaries even below the work cap; existing Apple activation remains unchanged.
+Dispatch-size caps do not guarantee a wall-clock bound for every strategy workload.
+
+Run the actual CUDA continuity/failure checks and proportional replay/CLI controls:
+
+```bash
+PYTHONPATH=src pytest tests/optimization/test_gpu_tm_fused_temporal.py -q
+PYTHONPATH=src pytest tests/optimization/test_gpu_daily_tail.py -q \
+  -k 'long_replay and trailing_martingale'
+PYTHONPATH=src pytest tests/optimization/test_gpu_cuda.py -q \
+  -k 'temporal_batch_increase and 3 and not 28 and not 64'
+PYTHONPATH=src pytest tests/optimization/test_native_backend_cuda.py -q \
+  -k portfolio_ema_cli
+```
+
+The continuity tests use three coins, both sides, all requested optional buffer
+families, three HSL modes, hedged/one-way accounts and unequal candidate endpoints.
+Raw tensors match unchunked replay exactly across repeated chunk sizes. A real
+prepared-service future propagates an interrupt after its first completed chunk;
+discarded partial state is reset on the next replay. Fatal-marker continuation
+coverage additionally verifies that later chunks cannot erase producer failure.
+
+A matched control uses `gpu_parity.fixture_inputs`: TM, both sides, three coins,
+16,385 minute bars, seed 43, coin HSL and unstuck. HSL threshold/span/cooldown/history
+are 0.002/2.5/10000/one day; shocks multiply COIN00 by 0.7 from bar 1500 and COIN01
+by 1.3 from bar 1800. Eight candidates vary long initial quantity as
+`0.01 + 0.004 * i`, retaining other fixture parameters. Request weighted raw/account
+growth, raw daily growth/risk, long raw/EMA tails, portfolio EMA tail, BTC risk and
+equity/balance difference, entry interval, weighted volume and recovery. Compare
+the fused runner with no temporal budget and budgets of
+`8 * 3 * 2 * chunk_bars`. Synchronize around each replay; measure first use and
+three warm repeats. All returned raw outputs agree exactly in every repeat.
+
+| History chunk | Warm median, seconds | Largest dispatch in final repeat, seconds | Dispatches | State bytes/candidate | CUDA local bytes | Registers |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Unchunked | 5.731 | Whole replay | 1 | — | 9,280 | 255 |
+| 8,192 bars | 5.768 | 2.976 | 2 | 7,472 | 9,312 | 255 |
+| 1,024 bars | 5.780 | 0.388 | 16 | 7,472 | 9,312 | 255 |
+
+Measured on an NVIDIA GeForce RTX 3070 Ti Laptop GPU. This small fixed replay
+control establishes state continuity and its measured overhead, not optimizer
+throughput, optimal chunk size or a general elapsed-time guarantee. Duration-based
+dispatch tuning and representative larger-suite resource acceptance remain open.
+
 ## Work still required before legacy retirement
 
 1. Finish the code-backed approximation inventory for the actual native shared-account

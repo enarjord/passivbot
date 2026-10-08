@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Long CUDA trailing-martingale multicoin replays retain both sides and shared
+  account state across bounded history chunks, allowing interruption between
+  dispatches without returning partial backtest metrics.
+
 - Offline GPU parity and cohort tools accept explicit synthetic HSL policies and
   repeatable price shocks, making long-history expiry and selection comparisons
   reproducible without custom fixture scripts.

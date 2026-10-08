@@ -341,6 +341,12 @@ failures fail admitted work and stop new admission; no CPU fallback supplies res
 Cleanup closes attachments and removes run-local packing/subset files, preserving an
 original failure if cleanup also fails.
 
+CUDA multicoin trailing-martingale histories above 8,192 candles use temporal
+dispatches for either one side or a shared account. The complete replay state and
+requested accumulators survive each boundary; partial chunks never become results.
+The interrupt callback runs between synchronized chunks. Candle/work caps bound
+dispatch size, not elapsed time for every candidate's strategy workload.
+
 The transport's optional service-owned batch policy runs on its execution owner. It selects
 widths within the fixed dispatch ceiling and observes only completely validated producer
 results. Width changes occur between dispatches; FIFO dataset choice, cancellation,

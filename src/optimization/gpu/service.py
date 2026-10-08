@@ -787,16 +787,16 @@ def _mps_multicoin_dispatch_plan(
 ) -> tuple[bool, int, int]:
     temporal_chunking = (
         strategy_kind == "trailing_martingale"
-        and n_sides == 1
         and n_bars > MPS_TM_MULTICOIN_CHUNK_BARS
-        and n_bars
-        * n_coins
-        * min(requested_batch_size, MPS_TM_MULTICOIN_CHUNK_CANDIDATES)
-        > max_candidate_bars
+        and (device == "cuda" or (
+            n_sides == 1 and n_bars * n_coins
+            * min(requested_batch_size, MPS_TM_MULTICOIN_CHUNK_CANDIDATES)
+            > max_candidate_bars
+        ))
     )
-    # Keep the temporal activation threshold and Apple allocation cap stable.
-    # CUDA can spread more candidates across SMs; shorter history chunks retain
-    # the same per-dispatch work envelope while bounding additional state.
+    # CUDA long-history TM replays need interrupt boundaries even when their
+    # batch is below the work cap. Both sides share the same candidate state.
+    # Retain the Apple work threshold and device-specific allocation ceilings.
     chunk_candidates = (
         CUDA_TM_MULTICOIN_CHUNK_CANDIDATES
         if device == "cuda"
@@ -812,7 +812,7 @@ def _mps_multicoin_dispatch_plan(
             n_bars,
             MPS_TM_MULTICOIN_CHUNK_BARS,
             MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // dispatch_candidates,
-            max(1, max_candidate_bars // n_coins),
+            max(1, max_candidate_bars // (n_coins * n_sides)),
         )
         if temporal_chunking
         else n_bars
@@ -3006,6 +3006,9 @@ class MpsMulticoinProxy:
                 hedge_mode=bool(backtest_params["hedge_mode"]),
                 **common_runner_kwargs,
             )
+            if self.temporal_chunking:
+                fused_kwargs["max_dispatch_candidate_bars"] = self.max_dispatch_candidate_bars
+                fused_kwargs["interrupt_check"] = self.interrupt_check
             self._runner_specs["fused"] = (fused_runner_cls, fused_kwargs)
             if self._cuda_residency is None:
                 self.fused_runner = fused_runner_cls(self.run, self.data, **fused_kwargs)
