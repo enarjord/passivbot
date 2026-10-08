@@ -832,6 +832,41 @@ target-branch tool sources reproduce those values with identical default fixture
 arrays and evaluation identity. Keep that measured discrepancy visible; this
 tooling change does not widen its assertion or the general comparison policy.
 
+## Underfilled execution tuning
+
+The asynchronous service now records successful warm dispatches by their actual
+candidate count, including partial cohorts. Each actual shape's first use remains
+excluded. Dataset-owned windows retain the normal 24-sample, 30-second minimum,
+median rate, cooldown and rollback policy. When demand or memory headroom prevents
+growth, the service may probe a smaller width using subsequent real requests.
+Fixed widths and the retained screening/validation tuner's full-batch policy keep
+their existing behavior. No calibration simulations or CPU validation are added.
+
+With a verified extension and CUDA device, run:
+
+```bash
+PYTHONPATH=src python -m pytest \
+  tests/optimization/test_gpu_execution_tuning.py \
+  tests/optimization/test_gpu_autotune.py \
+  tests/optimization/test_gpu_executor.py \
+  tests/optimization/test_gpu_coalescing.py \
+  tests/optimization/test_native_pipeline.py \
+  tests/optimization/test_gpu_execution_tuning_cuda.py -q -o addopts=
+```
+
+All 151 cases pass with one existing skip. Host controls cover the production
+evidence thresholds, cold partial shapes, independent datasets, invalid timings,
+shutdown, blocked growth and slower-trial rollback. Two added CUDA cases replay
+36 requests per strategy in three-candidate cohorts against a fixed-width control.
+They accelerate only the evidence thresholds, observe smaller-width trials,
+count every request once and preserve all metric values exactly across both
+dataset identities. The other six CUDA cases retain adaptive-width equivalence
+and physical dispatch bounds. Eight existing native CLI controls preserve
+standalone/suite results and interruption/resumption for both strategies with
+CPU simulations and worker pools forbidden. These are correctness controls,
+not evidence of an optimal width, representative throughput improvement or a
+duration guarantee. Representative tuning quality and resource acceptance remain open.
+
 ## Unstuck EMA consumer specialization
 
 Multicoin EMA/TM execution proves the effective enabled/gating flags across every

@@ -21,10 +21,6 @@ def evidence(policy, dataset="a", *, seconds=2, backlog=64, closing=False):
 
 def test_growth_uses_demand_and_headroom_then_rolls_back_slow_trial():
     policy = prepared_policy(initial=4, headroom=lambda: True)
-    evidence(policy, backlog=0)
-    assert policy.width("a", 16) == 4
-    evidence(policy, backlog=64)
-    assert policy.width("a", 16) == 4  # Retain the demand-limited trial cooldown.
     evidence(policy, backlog=64)
     assert policy.width("a", 16) == 8
     evidence(policy, seconds=5)
@@ -32,20 +28,74 @@ def test_growth_uses_demand_and_headroom_then_rolls_back_slow_trial():
     assert policy.controllers["a"].cooldown == 3
     other = prepared_policy(initial=4, headroom=lambda: False)
     evidence(other, backlog=64)
-    assert other.width("a", 16) == 4
+    assert other.width("a", 16) == 2  # Probe smaller work; never grow without headroom.
 
 
-def test_evidence_is_dataset_owned_and_partial_work_does_not_tune():
+def test_warm_partial_work_is_actual_count_evidence_and_dataset_owned():
     policy = prepared_policy(initial=4)
     policy.width("a", 16)
     policy.width("b", 16)
-    for _ in range(100):
+    for _ in range(autotune.WINDOW + 1):
         policy.observe("a", 3, 5, backlog=100, closing=False)
-    assert not policy.controllers["a"].samples
+    assert policy.controllers["a"].baseline == (4, 3 / 5)
     assert not policy.controllers["b"].samples
-    evidence(policy, "a")
     assert policy.width("a", 16) == 8
     assert policy.width("b", 16) == 4
+
+
+def test_underfilled_cohort_can_probe_smaller_then_reject_a_slow_trial():
+    def no_growth_query():
+        pytest.fail("insufficient queued demand must not query device headroom")
+    policy = ExecutionBatchTuner(initial=64, headroom=no_growth_query)
+    policy.constrain("scenario", 128)
+    assert policy.width("scenario", 128) == 64
+    for _ in range(autotune.WINDOW + 1):
+        policy.observe("scenario", 63, 2, backlog=0, closing=False)
+    controller = policy.controllers["scenario"]
+    assert controller.baseline == (64, 63 / 2)
+    assert controller.width == 32
+    # Distinct allocation shapes get distinct cold-use rejection. All warm
+    # trial work is slower per actual candidate, so the old width is restored.
+    for _ in range(autotune.WINDOW + 1):
+        policy.observe("scenario", 31, 2, backlog=0, closing=False)
+    assert controller.width == 64
+    assert controller.baseline is None
+    assert controller.cooldown == 3
+
+
+def test_partial_shapes_reject_cold_use_and_invalid_or_oversized_observations():
+    policy = prepared_policy(initial=4)
+    policy.width("a", 16)
+    controller = policy.controllers["a"]
+    for count in (3, 2):
+        policy.observe("a", count, 1000, backlog=0, closing=False)
+        policy.observe("a", count, 1, backlog=0, closing=False)
+    assert list(controller.samples) == [3, 2]
+    assert controller.seconds == 2
+    assert controller.seen == {2, 3}
+    for count, seconds in ((0, 1), (5, 1), (1, 0), (1, -1), (1, float("nan")),
+                           (1, float("inf"))):
+        policy.observe("a", count, seconds, backlog=0, closing=False)
+    assert list(controller.samples) == [3, 2]
+    assert controller.seconds == 2
+    assert controller.seen == {2, 3}
+
+
+def test_underfilled_shutdown_records_evidence_without_probing():
+    policy = prepared_policy(initial=4)
+    policy.width("a", 16)
+    for _ in range(autotune.WINDOW + 1):
+        policy.observe("a", 3, 2, backlog=0, closing=True)
+    assert policy.controllers["a"].seconds == 0  # The complete warm window was consumed.
+    assert policy.width("a", 16) == 4
+    assert policy.controllers["a"].baseline is None
+
+
+def test_one_candidate_width_cannot_shrink_to_zero_when_growth_is_blocked():
+    policy = prepared_policy(initial=1, headroom=lambda: False)
+    evidence(policy, backlog=0)
+    assert policy.width("a", 16) == 1
+    assert policy.controllers["a"].baseline is None
 
 
 def test_prepared_ceiling_clamps_policy_without_reusing_other_shape_evidence():

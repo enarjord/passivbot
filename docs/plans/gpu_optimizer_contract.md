@@ -268,6 +268,8 @@ Completion requires:
 - [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
     from CPU cost, and keep suite notification fan-in independent of persistence batches.
+  - [x] Let execution tuning learn actual warm partial dispatches and explore smaller
+    widths when growth is blocked; representative tuning quality remains open.
 - [x] Add service-owned production batch tuning and prepared work/scratch dispatch limits.
 - [x] Flush results/Pareto promptly; validate interruption and compatible resume.
 - [x] Prove no CPU backtest is invoked during GPU optimize/bootstrap/resume.

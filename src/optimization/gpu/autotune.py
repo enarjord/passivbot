@@ -132,12 +132,14 @@ class BatchController:
         save=lambda *args: None,
         can_grow=lambda: True,
         can_trial=lambda: True,
+        allow_partial_batches=False,
     ):
         self.ceiling = max(1, int(ceiling))
         self.width = max(1, min(int(initial), self.ceiling))
         self.save = save
         self.can_grow = can_grow
         self.can_trial = can_trial
+        self.allow_partial_batches = allow_partial_batches
         self.samples = deque(maxlen=WINDOW)
         self.seconds = 0.0
         self.seen = set()
@@ -147,11 +149,14 @@ class BatchController:
 
     def observe(self, count, seconds, *, evidence_seconds=None):
         """Return true when a complete evidence window has been consumed."""
-        # Remainders and cold first use of each allocation shape are not evidence.
-        if count != self.width or not math.isfinite(seconds) or seconds <= 0:
+        # Retained proxy tuning requires full batches. The async service learns
+        # actual dispatch shapes, including warm partial request cohorts.
+        if (not 1 <= count <= self.width
+                or (not self.allow_partial_batches and count != self.width)
+                or not math.isfinite(seconds) or seconds <= 0):
             return
-        if self.width not in self.seen:
-            self.seen.add(self.width)
+        if count not in self.seen:
+            self.seen.add(count)
             return
         self.samples.append(count / seconds)
         self.seconds += seconds if evidence_seconds is None else evidence_seconds
@@ -198,8 +203,13 @@ class BatchController:
             self.cooldown = 1
             return True
         if trial > self.width and not self.can_grow():
-            self.cooldown = 1
-            return True
+            if not self.allow_partial_batches or self.width == 1:
+                self.cooldown = 1
+                return True
+            # A bounded producer may never queue enough work for growth. Try a
+            # smaller allocation using subsequent real requests instead.
+            self.direction = -1
+            trial = max(1, self.width // 2)
         self.baseline = (self.width, rate)
         self.width = trial
         log_tokens("GPU auto-tune trial |", [

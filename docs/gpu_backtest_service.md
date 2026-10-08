@@ -248,13 +248,18 @@ the return of an oversized outer batch. Preparation retains no inactive runner r
 switching datasets can release their tensors and mutable scratch.
 
 Automatic widths start at the smaller of 64 and the prepared ceiling. Separate per-dataset
-controllers measure successful replay, reductions and host results; failed work, partial
-tails and each width's first cold use do not contribute to throughput trials. The existing
+controllers measure successful replay, reductions and host results using actual candidate
+counts, including partial request cohorts. Failed work and each actual count's first cold
+use do not contribute to throughput trials. The existing
 24-sample/30-second evidence window, median smoothing, growth threshold, smaller-plateau
 preference, cooldown and rollback apply. Growth also requires observed request demand and
-device memory headroom. Tuning submits no extra simulations and never changes precision
+device memory headroom. When growth is blocked, the service can probe a smaller width
+using subsequent submitted work; a slower trial rolls back. This prevents deduplication,
+screening or a bounded producer from indefinitely starving the tuner of evidence or
+smaller-width experiments. The retained screening backend keeps its full-batch evidence
+policy. Tuning submits no extra simulations and never changes precision
 or search policy. Measurements are run-local; `auto` and `refresh` currently both start
-fresh. Persistent advisory calibration, demand-limited classes, dispatch duration/delay,
+fresh. Persistent advisory calibration, richer workload classes, dispatch duration/delay,
 residency budgets and further CPU/evolution cadence experiments remain development work. This policy
 does not claim a globally optimal width or a representative optimizer speedup.
 
