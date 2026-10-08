@@ -1071,12 +1071,16 @@ def test_cuda_completion_keeps_short_wait_active(monkeypatch):
 
 @pytest.mark.parametrize("device", ["cuda", "mps"])
 @pytest.mark.parametrize("weighted_volume", [False, True])
-def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, weighted_volume):
+@pytest.mark.parametrize("fused", [False, True])
+def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, weighted_volume, fused):
     pytest.importorskip("torch")
     from optimization.gpu import mps_kernel
 
     monkeypatch.setattr(mps_kernel, "gpu_device", lambda *_: device)
-    runner = SimpleNamespace(
+    cls = (mps_kernel.MpsTrailingMartingaleMulticoinFusedRunner if fused
+           else mps_kernel.MpsTrailingMartingaleMulticoinRunner)
+    runner = cls.__new__(cls)
+    runner.__dict__.update(vars(SimpleNamespace(
         **{
             name: object()
             for name in (
@@ -1089,6 +1093,7 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, w
                 "hour_log_ranges",
                 "coin_settings",
                 "coin_overrides",
+                "short_coin_overrides",
                 "settings",
             )
         },
@@ -1101,23 +1106,21 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, w
         max_dispatch_candidate_bars=None,
         hsl_capacity=0,
         unstuck_pnl_capacity=0,
-    )
+    )))
     calls = []
-    library = SimpleNamespace(
-        passivbot_trailing_martingale_multicoin=lambda *args, **kwargs: calls.append(
-            (args, kwargs)
-        )
-    )
+    library = SimpleNamespace(**{
+        runner.replay_kernel_name: lambda *args, **kwargs: calls.append((args, kwargs))
+    })
     buffers = [object() for _ in range(12)]
-    mps_kernel.MpsTrailingMartingaleMulticoinRunner._dispatch(
-        runner, library, *buffers, weighted_equity_samples=None, batch_size=65
+    runner._dispatch(
+        library, *buffers, weighted_equity_samples=None, batch_size=65
     )
     assert len(calls) == 1
-    assert len(calls[0][0]) == 17 + int(weighted_volume)
+    assert len(calls[0][0]) == 17 + int(fused) + int(weighted_volume)
     if weighted_volume:
         assert calls[0][0][-1] is buffers[-1]
     expected = {"threads": (65, 1, 1)}
-    if device == "cuda":
+    if device == "cuda" and not fused:
         expected["group_size"] = (32, 1, 1)
     assert calls[0][1] == expected
 

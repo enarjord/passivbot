@@ -2320,3 +2320,37 @@ Historical observations do not supersede those requirements or prove current acc
   subject to the current acceptance map and source-specific validation limits.
 - This organization changes no implementation, numerical policy, completion criterion
   or branch/review gate. Future progress entries belong in this log.
+
+### 2026-10-08 — Bound shared-account TM temporal replay
+
+- Source inspection found that fused dual-side TM omitted the work budget and
+  interrupt callback forwarded to single-side runners. Its dispatch planner also
+  excluded two sides, and small long-history CUDA batches could bypass chunking.
+- Reuse the existing directional replay-state layout as the common portion of the
+  fused state, adding the short side and requested portfolio EMA-tail accumulator.
+  Keep the per-bar trading body and finalization unchanged; restore complete state
+  across chunks, initialize external output/HSL buffers only on the first chunk,
+  and finalize scores only at each candidate's actual endpoint.
+- Share one Python temporal dispatch loop and query each variant's actual state
+  size. Count both sides in the work envelope. CUDA TM histories above 8,192 bars
+  get interrupt boundaries below the work cap too; preserve Apple activation and
+  unchunked launch options. No new optimizer controls or CPU simulations.
+- Local checks pass 293 service cases, eight launch-contract cases, 332 Rust tests
+  with one existing ignore, and default-feature compilation. The source-verified
+  extension passes all eleven new actual CUDA regressions: requested optional
+  buffers, three HSL modes, hedge/one-way accounts, unequal endpoints, repeated
+  chunk sizes, fatal-marker continuity/reset and an actual prepared-service future
+  interrupted after a completed kernel. Three long-history raw-tail controls and
+  two directional partition controls preserve every raw output. Four actual CLI
+  interruption/resume cases pass while forbidding CPU backtests and worker pools.
+- The matched three-coin shared-account control preserves every raw output at
+  chunk sizes 8,192 and 1,024. Warm median replay times are 5.731 seconds unchunked
+  and 5.768/5.780 seconds chunked; final-repeat maximum dispatch times are
+  2.976/0.388 seconds. State is 7,472 bytes per candidate in that variant, CUDA
+  local storage grows by 32 bytes and registers remain 255. Record the complete
+  public recipe and scope in the [acceptance map](gpu_optimizer_acceptance.md#shared-account-tm-temporal-replay).
+  This is continuity/overhead evidence, not optimizer throughput, an optimal chunk
+  size or a general elapsed-time guarantee. Duration tuning and larger-suite
+  resource acceptance remain open.
+- Current-head automatic review, author review, all required Rust/Python CI and
+  fresh unchanged publication metadata remain mandatory before integration.

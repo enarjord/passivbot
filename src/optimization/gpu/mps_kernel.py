@@ -3341,6 +3341,10 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
 class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
     """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
 
+    replay_kernel_name = "passivbot_trailing_martingale_multicoin"
+    replay_state_size_kernel_name = "passivbot_tm_multicoin_replay_state_bytes"
+    replay_sides = 1
+
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
 
@@ -3528,26 +3532,30 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
+        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
+
+    def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size):
+        kernel = getattr(library, self.replay_kernel_name)
         if self.max_dispatch_candidate_bars is None:
             dispatch_options = {"threads": (batch_size, 1, 1)}
-            if gpu_device(torch) == "cuda":
+            if gpu_device(torch) == "cuda" and self.replay_sides == 1:
                 # Spread independent, state-heavy candidates across more SMs.
                 dispatch_options["group_size"] = (32, 1, 1)
-            library.passivbot_trailing_martingale_multicoin(
+            kernel(
                 *kernel_args, **dispatch_options
             )
             return
         chunk_bars = min(
             MPS_TM_MULTICOIN_CHUNK_BARS,
             MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // batch_size,
-            self.max_dispatch_candidate_bars // (batch_size * self.n_coins),
+            self.max_dispatch_candidate_bars // (batch_size * self.n_coins * self.replay_sides),
         )
         if chunk_bars < 1:
             raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
         _, library_args = self._library_cache_call()
         if library_args not in self._replay_state_sizes:
             size = torch.empty(1, dtype=torch.int32, device=gpu_device())
-            library.passivbot_tm_multicoin_replay_state_bytes(size, threads=1)
+            getattr(library, self.replay_state_size_kernel_name)(size, threads=1)
             self._replay_state_sizes[library_args] = int(size.item())
         self._replay_state_bytes = self._replay_state_sizes[library_args]
         state_key = (batch_size, self._replay_state_bytes)
@@ -3577,7 +3585,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
                 device=gpu_device(),
             )
             started = time.perf_counter()
-            library.passivbot_trailing_martingale_multicoin(
+            kernel(
                 *kernel_args,
                 replay_states,
                 replay_range,
@@ -3629,6 +3637,10 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
 class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRunner):
     """Persistent dual-side shared-account Trailing Martingale runner on MPS."""
 
+    replay_kernel_name = "passivbot_trailing_martingale_multicoin_fused"
+    replay_state_size_kernel_name = "passivbot_tm_multicoin_fused_replay_state_bytes"
+    replay_sides = 2
+
     scalar_cols = MPS_MULTICOIN_FUSED_SCALAR_COLS
 
     def __init__(
@@ -3663,6 +3675,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
         unstuck_pnl_lookback_bars: int = 0,
+        max_dispatch_candidate_bars: int | None = None,
+        interrupt_check=None,
     ):
         super().__init__(
             run,
@@ -3692,6 +3706,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
             unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
+            max_dispatch_candidate_bars=max_dispatch_candidate_bars,
+            interrupt_check=interrupt_check,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -3820,10 +3836,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        library.passivbot_trailing_martingale_multicoin_fused(
-            *kernel_args,
-            threads=(batch_size, 1, 1),
-        )
+        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
