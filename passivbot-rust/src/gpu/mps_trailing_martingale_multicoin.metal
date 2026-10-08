@@ -1048,7 +1048,13 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
         : int(floor(
             band * (1.0f - initial_ema_dist) / price_step + 1.0e-6f
         ));
-    float initial_price = generation_initial_price;
+    // Rust's recursive ladder advances the simulated book after each rung.
+    // Reprice its initial-quantity floor at that touch while keeping the
+    // original raw sizing price when it still controls (including EMA gating).
+    float touch_price = float(generation_touch_tick) * price_step;
+    float initial_price = short_side
+        ? fmax(generation_initial_price, touch_price)
+        : fmin(generation_initial_price, touch_price);
     float min_iq = min_entry_qty(
         initial_price, qty_step, min_qty, min_cost, c_mult
     );

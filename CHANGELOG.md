@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- GPU multicoin trailing-martingale recursive ladders update the initial sizing
+  price with the simulated order-book touch, avoiding oversized short reentries.
+
 - Native GPU batch tuning learns from warm partial request cohorts and can probe
   smaller widths when queued demand or memory headroom prevents growth.
 
