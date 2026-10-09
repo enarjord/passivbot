@@ -3005,3 +3005,19 @@ Historical observations do not supersede those requirements or prove current acc
 - Keep representative fill/clipping comparisons and total-resource evidence
   separate from these completed caller gates. Independent review and CI remain
   required for development integration.
+
+
+### 2026-10-08 — Bound continuation with additional entries and clipping
+
+- Four paired two-coin/2048-bar requests preserve every requested GPU metric
+  exactly, separate CPU references within 1e-6 absolute/relative tolerance and
+  matching Torch peaks. Additional-entry cases make four EMA/fourteen TM fills
+  at bars 64 and 128; one-day lookback cases exercise clipping. Sources remain
+  unchanged. Record the reproducible recipe and timing table in acceptance.
+- Multiple-entry warm cost remains about 2.5 seconds; clipping improves from
+  about 2.3 to 1.0 seconds. Retain conservative endpoint guards and the fresh
+  fallback. These constant-mark cases have zero risk metrics and do not replace
+  nonzero component, mixed-candidate or lifecycle evidence.
+- The bounded continuation slice is ready for independent review and CI. Broader
+  numerical, total-resource and whole-optimizer gates remain open; do not present
+  this slice as completion of the optimizer redesign.

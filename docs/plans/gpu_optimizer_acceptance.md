@@ -1481,8 +1481,9 @@ All 42 native lifecycle/loss checks and twelve real CLI/data/service checks also
 pass. The latter include eight optimizer bootstrap/resume combinations with CPU
 simulation forbidden, lazy suite preparation and incremental resource admission.
 All 952 checked source files remain unchanged after the combined validation.
-Representative multi-entry/clipping pairs, total-resource checks, independent
-review and CI remain required before integration.
+Representative multi-entry/clipping pairs also pass as recorded below. Total-resource
+checks remain a project-wide gate; independent review and CI are required before
+integration.
 
 
 The paired continuation experiment also refreshes the four unified HSL cohorts
@@ -1512,3 +1513,27 @@ snapshots are about 22 MiB lower with continuation for each strategy. Those
 snapshots include driver/compiler effects and are not device peak measurements
 or exclusive ownership accounting. Record the extra private storage explicitly
 while keeping representative total-resource acceptance open.
+
+
+Four paired boundary requests use the same held-position recipe with two coins and
+2048 bars. The multiple-entry profile adds a low of 94 at bar 128; TM uses entry
+threshold 0.01, zero retracement and zero retracement weights to admit further
+entries. EMA/TM make four/fourteen fills at bars 64 and 128, with no closes. The
+clipped profile instead uses a one-day lookback, retaining the two entries at bar
+64. All five GPU metrics agree exactly between fresh/continued variants and
+repeats; separate CPU references agree within 1e-6 absolute/relative tolerance.
+Torch peaks match, and all checked sources remain unchanged.
+
+| Boundary / strategy | Fresh warm median | Continued warm median |
+|---|---:|---:|
+| Multiple entries / EMA | 2.494 s | 2.482 s |
+| Multiple entries / TM | 2.511 s | 2.496 s |
+| Clipped lookback / EMA | 2.276 s | 1.003 s |
+| Clipped lookback / TM | 2.296 s | 1.017 s |
+
+Repeated measurements reproduce these timings. Multiple-entry performance is
+essentially unchanged; clipping improves by about 2.25 times in this fixture.
+Constant marks produce zero risk metrics here, so these cases establish boundary
+and performance behavior, not additional nonzero HSL-risk coverage. Component,
+mixed-candidate and lifecycle cases supply that separate evidence. Do not relax
+endpoint guards merely to obtain a larger speedup.
