@@ -177,17 +177,25 @@ def test_prepared_service_bounds_actual_dispatch_and_releases_inactive_runners(m
             self.hsl_scratch_budget_bytes = 2 * self._history_bytes_per_candidate()
         monkeypatch.setattr(cls, "__init__", initialize)
     original_evaluate = replay_module.MpsMulticoinProxy.evaluate_results
-    observed, references = [], []
+    observed, references, limits = [], [], {}
     submitted = Event()
     def evaluate(self, candidates):
+        # The owner updates this ceiling after accepted replay, including when
+        # disabled HSL releases its initial factual-history allowance.
+        assert 1 <= len(candidates) <= limits[id(self)]
         observed.append(len(candidates))
         return original_evaluate(self, candidates)
     monkeypatch.setattr(replay_module.MpsMulticoinProxy, "evaluate_results", evaluate)
     original_ceiling = CudaBacktestService._dispatch_ceiling
     def ceiling(replay):
-        references.append(weakref.ref(replay.fused_runner))
+        # Repeated post-replay checks observe the same owner; index owners,
+        # rather than assuming that factory creation is the only observation.
+        if not references or references[-1]() is not replay.fused_runner:
+            references.append(weakref.ref(replay.fused_runner))
         assert submitted.wait(10)
-        return original_ceiling(replay)
+        limit = original_ceiling(replay)
+        limits[id(replay)] = limit
+        return limit
     monkeypatch.setattr(CudaBacktestService, "_dispatch_ceiling", staticmethod(ceiling))
     manager = SharedArrayManager()
     try:
@@ -203,12 +211,18 @@ def test_prepared_service_bounds_actual_dispatch_and_releases_inactive_runners(m
             futures = [service.submit(BacktestRequest(str(i), "a", {})) for i in range(7)]
             submitted.set()
             results = [future.result(timeout=120) for future in futures]
-            assert observed == [2, 2, 2, 1]
+            assert observed[0] == 2 and sum(observed) == 7
+            if bound == "work":
+                assert max(observed) == 2
+            else:
+                assert observed == [2, 5]  # Inactive HSL has no retained history cost.
+            assert [result.request_id for result in results] == [str(i) for i in range(7)]
             assert all(result.metrics == results[0].metrics for result in results)
-            assert references[0]() is not None
+            assert len(references) == 1 and references[0]() is not None
             next_result = service.submit(BacktestRequest("b", "b", {})).result(timeout=120)
             assert next_result.metrics == results[0].metrics
             gc.collect()
+            assert len(references) == 2
             assert references[0]() is None
             assert references[1]() is not None
         gc.collect()

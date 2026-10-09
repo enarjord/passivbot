@@ -299,9 +299,9 @@ Completion requires:
     replay, including cache loss, fills, budgets, clipping, numerical conditions and
     CPU parity. Independent review and CI pass on development; broader resources
     and whole-optimizer performance remain separate gates.
-  - [ ] Integrate a focused strategy-neutral multicoin replay owner and compact
+  - [x] Integrate a focused strategy-neutral multicoin replay owner and compact
     physical recovery results. Affected host/CUDA/CLI and combined continuation
-    validation pass; current-head independent review/CI remain required.
+    validation, current-head independent review and required CI pass on development.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
     from CPU cost, and keep suite notification fan-in independent of persistence batches.
   - [x] Let execution tuning learn actual warm partial dispatches and explore smaller

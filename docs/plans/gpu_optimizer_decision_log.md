@@ -3102,3 +3102,161 @@ Historical observations do not supersede those requirements or prove current acc
   twelve real CLI/data/service cases. Rust/shaders match the reviewed continuation
   runtime exactly. All 952 checked sources remain unchanged. Current-head
   independent review and CI are still required for cleanup integration.
+
+
+### 2026-10-09 — Integrate shared replay ownership and measure service suites
+
+- [PR #1948](https://github.com/enarjord/passivbot/pull/1948) integrates the
+  strategy-neutral multicoin owner and compact physical recovery results on
+  development after clean independent current-head review and Rust/Python
+  3.12/Python 3.14 CI. The tested combined production tree is unchanged by the
+  development merge. Master remains unchanged.
+- Add a focused offline native service benchmark over three shared-data scenarios.
+  Keep CPU/GPU parity and evolutionary ranking in their existing tools. Measure
+  incremental completion, requested histories, residency, allocator/global device
+  resources, process-tree RSS and disk cleanup without CPU simulations.
+- Preserve default tuner evidence windows. Require completed windows per scenario
+  when requested, bound their automatic extension and report insufficient evidence
+  explicitly. A small underfilled cohort is insufficient evidence of tuning quality;
+  broader queue demand must exercise real width trials before drawing conclusions.
+
+
+### 2026-10-09 — Keep compatible demand through a tuning evidence window
+
+- A finite-cohort controller reproduction finishes a warm evidence window with
+  no backlog, although earlier work in that same window had enough compatible
+  requests for growth. The preceding policy probes width two instead of eight
+  from width four. Demand from the last completion alone loses this evidence.
+- Retain one compatible-demand maximum per scenario for the current window;
+  consume it when the window completes and reset it when the prepared ceiling
+  changes. Invalid observations and unrelated scenarios cannot supply demand.
+  Keep existing smoothing, cold-shape rejection, headroom, rollback and shutdown
+  policy. No new simulator, checkpoint or scheduling framework is introduced.
+- Five regression controls reproduce the tail failure before the change and pass
+  afterward, including dataset isolation, stale-window/ceiling reset and invalid
+  work. Actual CUDA/default-window resource and caller checks plus independent
+  current-head review and CI remain required before development integration.
+
+
+### 2026-10-09 — Validate current admission and native callers
+
+- The preceding development code reproduces two stale assertions in the CUDA
+  physical-bound control: post-replay ceiling checks produce repeated observations
+  of one runner, and HSL-off releases its initial factual allowance, allowing
+  seven requests to run as two then five instead of repeated width-two batches.
+  Correct tests to validate the current owner-owned ceiling, request identities,
+  equivalence and distinct-owner eviction/cleanup. No production change is needed
+  for these preceding-code test failures.
+- Four corrected actual CUDA bounds controls and twelve CPU-forbidden native
+  optimizer bootstrap/resume controls pass. Together with the completed current
+  tuning/host controls, 114 affected checks pass with one existing Metal-only skip.
+  Both fresh strategy preparation-only CLIs keep GPU imports absent. Rust and
+  shaders are unchanged. Complete the default-window resource comparisons before
+  publication and current-head independent review/CI.
+- Record the reproducible 33,408-result baseline separately in acceptance: all ten
+  metrics match isolated GPU references exactly, one dataset is resident, shared
+  arrays remain unchanged and spill cleanup/sampling succeed. This measures a
+  moderate synthetic suite, not long/busy HSL or evolutionary search quality.
+
+
+### 2026-10-09 — Keep bounded evidence failures explicit
+
+- A 128-round current-demand suite completes 51,072 requests with exact requested
+  metrics, unchanged arrays, clean spill removal and no sampling errors. Base
+  width-128 and width-32 trials reject insufficient gains; the faster early/late
+  width-128 trials still await the 30-second threshold. Extend the benchmark
+  within a larger bound instead of weakening production evidence requirements.
+- The final TM adaptive-accumulation caller completes 384 exact results and clean
+  resource cleanup. Its sixteen-candidate cohort does not complete tuning windows;
+  retain that limit rather than interpreting automatic execution as converged.
+- A deliberately short EMA run preserves all 36 valid results and exits two
+  for insufficient per-scenario evidence. Keep report completion separate from
+  tuner evidence sufficiency. Instrumentation is installed inside its cleanup
+  scope so early CUDA setup failures cannot leave the replay method replaced.
+
+
+### 2026-10-09 — Preserve benchmark checks under optimized Python
+
+- Author review finds that Python assertions can disable required benchmark
+  result/integrity checks under optimized execution. Replace them with explicit
+  failures, retaining the same identity, metric, liquidation, residency and array
+  conditions. No simulation or comparison tolerance changes.
+- Corrupt/inconsistent result controls and an actual optimized-Python subprocess
+  confirm that result validation remains enabled. The accepted-path measurements
+  remain applicable; refresh real CUDA tool callers and fault cleanup on the final
+  guard implementation before publication.
+
+
+### 2026-10-09 — Complete default-window scenario trials
+
+- The larger bound completes after 151 automatic rounds and 59,904 exact results.
+  Base retains width 64 after larger/smaller trials; both smaller scenarios accept
+  width 128 after complete evidence windows. This exercises growth, rollback and
+  distinct scenario decisions without weakening evidence thresholds.
+- Shared inputs, one-device-dataset ownership, compact requested metrics, packing
+  cleanup and resource sampling pass. Record measured rates/resources in acceptance
+  while keeping causal speedup, global tuning optimality and broader project
+  acceptance unclaimed. Refresh final explicit-guard callers before publication.
+
+
+- Final explicit-guard validation passes both optimized-Python CUDA callers with
+  72 exact results and clean resources. Injected comparator rejection propagates,
+  restores instrumentation/CPU guards and closes the worker. All 27 focused
+  tool/window controls pass; checked source remains unchanged. Documentation
+  checks pass with only the existing size warnings. The slice is ready for
+  current-head independent review and required CI on development.
+
+
+### 2026-10-09 — Correct worker-child RSS traversal after review
+
+- Independent review of PR #1950 identifies a valid Linux sampling gap: the
+  thread-specific child list of the process leader omits worker-spawned children.
+  Enumerate every task's child list, deduplicate processes and scope disappearing
+  thread races to the affected file. The offline regression fails preceding code
+  at 700 instead of 1,000 KiB and passes the correction.
+- Qualify the earlier historical RSS observations rather than presenting them as
+  complete process-tree accounting. Metric, device allocator and tuning evidence
+  remains valid. Validate actual Linux worker-child traversal and refresh CUDA
+  resource observations before requesting new-head review; no merge on old review.
+
+
+- The actual Linux worker-child regression also fails preceding source and passes
+  corrected source. All 29 focused Linux checks pass. Fresh-cache CUDA suite
+  observations produce 768 exact results across both strategies, with corrected
+  process-tree sampling, unchanged inputs, one resident dataset and clean cleanup.
+  Record resources in acceptance without attributing differences solely to the
+  sampler or claiming tuning convergence. Checked sources remain unchanged.
+
+
+### 2026-10-09 — Guard measurement validity and capacity transitions
+
+- Current-head review finds that missing procfs child-list support can silently
+  appear as parent-only RSS, and runtime verification can admit an unstamped or
+  stub extension. Report unsupported tree samples as unavailable and require a
+  real matching source stamp before preparing benchmark inputs. Regressions
+  reproduce preceding behavior and verify rejection without device preparation.
+- A successful replay may update its physical ceiling before completion is
+  observed. Invalidate that dataset's controller and retained demand immediately
+  in `constrain()`, so an obsolete window cannot supply growth decisions or
+  completed-window evidence. Preserve evidence when capacity is unchanged.
+- All 65 focused Linux/CUDA controls pass, including both strategies, actual
+  worker-child accounting and the lower/higher capacity ordering regressions.
+  Optimized-Python CUDA callers complete 72 exact results with unchanged source
+  arrays and clean service ownership/cleanup. Checked sources remain unchanged.
+  Rust and shaders are unchanged; independent new-head review and required CI
+  remain mandatory before the development-only merge.
+
+
+- A further review finding identifies executable discovery as insufficient proof
+  of device-sample availability. Derive both resource availability flags from
+  completed observations. Device availability requires a usable memory/utilization
+  sample; transient errors remain recorded. Timeout, nonzero exit, malformed,
+  unsupported and empty-device controls verify unavailable reporting.
+- Final reporting validation passes all 71 focused Linux/CUDA controls and both
+  optimized-Python callers with 72 exact results and clean resources. Checked
+  production/tests remain unchanged; current-head review and CI still gate merge.
+
+- Honor unavailable child lists in the actual Linux worker regression as well:
+  probe the worker task file, exit cooperatively through child cleanup, and skip
+  unsupported kernels/mounts. The actual Linux positive control and unsupported
+  skip control pass; production code is unchanged by this test correction.
