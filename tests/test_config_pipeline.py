@@ -337,7 +337,7 @@ def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
     assert migrated["backtest"]["candle_interval_minutes"] == 1
     assert migrated["bot"]["long"]["risk"]["n_positions"] == 7
     assert migrated["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(0.0)
-    assert migrated["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "bounded"
+    assert "we_excess_allowance_mode" not in migrated["bot"]["long"]["risk"]
     assert migrated["bot"]["long"]["forager"]["volatility_ema_span_1m"] == 120
     assert migrated["bot"]["long"]["forager"]["volume_ema_span_1m"] == 760
     assert migrated["optimize"]["bounds"]["long"]["entry_cooldown"]["base_duration_minutes"] == [
@@ -380,10 +380,10 @@ def test_migrate_v7_trailing_grid_warns_when_v7_raw_excess_would_be_clamped():
 
     migrated, report = migrate_v7_trailing_grid_config(source)
 
-    assert migrated["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "bounded"
+    assert "we_excess_allowance_mode" not in migrated["bot"]["long"]["risk"]
     assert any(
         "bot.long.risk.we_excess_allowance_pct=0.1" in item
-        and "legacy_raw" in item
+        and "Raw/unclamped exposure is no longer supported" in item
         and "above side TWEL" in item
         for item in report["warnings"]
     )
@@ -409,7 +409,7 @@ def test_migrate_v7_trailing_grid_warns_for_coin_override_raw_excess_clamp():
     ] == pytest.approx(0.1)
     assert any(
         "coin_overrides.BTC.bot.long.risk.we_excess_allowance_pct=0.1" in item
-        and "legacy_raw" in item
+        and "Raw/unclamped exposure is no longer supported" in item
         for item in report["warnings"]
     )
 
@@ -637,7 +637,7 @@ def test_migrate_config_v7_cli_prints_migration_warnings(tmp_path, capsys):
 
     assert rc == 0
     assert "behavior warning: bot.long.risk.we_excess_allowance_pct=0.1" in captured.err
-    assert "legacy_raw" in captured.err
+    assert "Raw/unclamped exposure is no longer supported" in captured.err
     assert "Migration status: ok" in captured.out
     assert not captured.out.lstrip().startswith("{")
 
@@ -766,42 +766,12 @@ def test_migrated_v7_trailing_grid_config_prepares_and_validates():
     }
 
 
-def test_migrate_v7_coin_override_preserves_supported_fields_and_reports_removed_mode():
+def test_migrate_v7_rejects_explicit_raw_coin_override():
     source = _minimal_v7_trailing_grid_config()
-    source["coin_overrides"]["BTC"] = {
-        "bot": {
-            "long": {
-                "ema_span_0": 3.0,
-                "wallet_exposure_limit": 0.25,
-                "risk_we_excess_allowance_pct": 0.2,
-                "risk_we_excess_allowance_mode": "LEGACY_RAW",
-            }
-        }
-    }
+    source["coin_overrides"]["BTC"] = {"bot": {"long": {"risk_we_excess_allowance_mode": "LEGACY_RAW"}}}
+    with pytest.raises(ValueError, match="coin_overrides.BTC.*re-backtest"):
+        migrate_v7_trailing_grid_config(source)
 
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
-    assert long_override["wallet_exposure_limit"] == pytest.approx(0.25)
-    assert long_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
-    assert "we_excess_allowance_mode" not in long_override["risk"]
-    assert long_override["strategy"]["trailing_grid_v7"]["ema_span_0"] == pytest.approx(
-        3.0
-    )
-    assert (
-        "coin_overrides.BTC.bot.long.wallet_exposure_limit -> "
-        "coin_overrides.BTC.bot.long.wallet_exposure_limit"
-    ) in report["moved_fields"]
-    assert (
-        "coin_overrides.BTC.bot.long.risk_we_excess_allowance_mode"
-        in report["manual_review_fields"]
-    )
-    prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-    parsed = parse_overrides(prepared, verbose=False)
-    parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
-    assert parsed_override["wallet_exposure_limit"] == pytest.approx(0.25)
-    assert parsed_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
-    assert "we_excess_allowance_mode" not in parsed_override["risk"]
 
 
 def test_migrate_v7_trailing_grid_coin_override_reports_runtime_unsupported_risk_fields():
@@ -1818,68 +1788,31 @@ def test_prepare_config_rejects_negative_positions_even_when_side_disabled(n_pos
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_normalizes_we_excess_allowance_mode_and_runtime_flattening():
+def test_prepare_config_removes_bounded_selector_and_runtime_flattening():
     source = get_template_config()
-    source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "LEGACY_RAW"
-
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "BOUNDED"
+    prepared = prepare_config(source, verbose=False)
     compiled = compile_runtime_config(prepared, runtime="backtest")
+    assert "we_excess_allowance_mode" not in prepared["bot"]["long"]["risk"]
+    assert "risk_we_excess_allowance_mode" not in compiled["bot"]["long"]
+    assert source["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "BOUNDED"
 
-    assert prepared["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "legacy_raw"
-    assert compiled["bot"]["long"]["risk_we_excess_allowance_mode"] == "legacy_raw"
 
 
-def test_prepare_config_normalizes_coin_override_we_excess_allowance_mode():
+def test_prepare_config_rejects_retired_raw_coin_override():
     source = get_template_config()
-    source["coin_overrides"] = {
-        "BTC": {
-            "bot": {
-                "long": {
-                    "risk": {"we_excess_allowance_mode": "LEGACY_RAW"},
-                },
-                "short": {
-                    "risk_we_excess_allowance_mode": "LEGACY_RAW",
-                },
-            }
-        }
-    }
-
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert (
-        prepared["coin_overrides"]["BTC"]["bot"]["long"]["risk"][
-            "we_excess_allowance_mode"
-        ]
-        == "legacy_raw"
-    )
-    assert (
-        prepared["coin_overrides"]["BTC"]["bot"]["short"]["risk"][
-            "we_excess_allowance_mode"
-        ]
-        == "legacy_raw"
-    )
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"we_excess_allowance_mode": "LEGACY_RAW"}}}}}
+    with pytest.raises(ValueError, match="coin_overrides.BTC.*Legacy raw sizing cannot be preserved automatically"):
+        prepare_config(source, verbose=False)
 
 
-def test_parse_overrides_rejects_coin_override_we_excess_allowance_mode():
+
+def test_parse_overrides_rejects_retired_raw_coin_override():
     source = get_template_config()
-    source["coin_overrides"] = {
-        "BTC": {
-            "bot": {
-                "long": {
-                    "risk": {
-                        "we_excess_allowance_mode": "LEGACY_RAW",
-                    }
-                }
-            }
-        }
-    }
-
-    with pytest.raises(
-        ValueError,
-        match=r"coin_overrides\.BTC\.bot\.long\.risk\.we_excess_allowance_mode "
-        r"is no longer overridable.*configure bot\.long\.risk\.we_excess_allowance_mode globally",
-    ):
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"we_excess_allowance_mode": "LEGACY_RAW"}}}}}
+    with pytest.raises(ValueError, match="coin_overrides.BTC.*no longer supported"):
         parse_overrides(source, verbose=False)
+
 
 
 def test_prepare_config_rejects_invalid_we_excess_allowance_mode():

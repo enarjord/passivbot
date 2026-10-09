@@ -117,6 +117,7 @@
                 "unilateralness_ema_span_1m": 60.0
             },
             "hsl": {
+                "scale_budget_with_excess_allowance": false,
                 "cooldown_minutes_after_red": 0,
                 "ema_span_minutes": 60,
                 "enabled": false,
@@ -197,6 +198,7 @@
                 "unilateralness_ema_span_1m": 60.0
             },
             "hsl": {
+                "scale_budget_with_excess_allowance": false,
                 "cooldown_minutes_after_red": 0,
                 "ema_span_minutes": 60,
                 "enabled": false,
@@ -264,6 +266,7 @@
             }
         },
         "hsl": {
+            "scale_budget_with_excess_allowance": false,
             "cooldown_minutes_after_red": 0,
             "ema_span_minutes": 60,
             "enabled": false,

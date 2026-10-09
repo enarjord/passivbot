@@ -42,7 +42,16 @@ preserve an otherwise unreconstructible trading decision after restart.
 
 Enabled HSL requires explicit supported restart policy and 1–90 days of lookback.
 Coin budgets divide current raw balance by applicable configured slots; inactive zero-slot
-sides do not invent a divisor. Aggregate budgets use raw balance. TWEL does not scale HSL.
+sides do not invent a divisor. Aggregate budgets use raw balance. TWEL does not directly
+scale HSL. `bot.<side>.hsl.scale_budget_with_excess_allowance` defaults to false and
+is global per side. In coin mode only, true multiplies the slot budget by
+`1 + effective_we_excess_allowance_pct`, using each coin's authored WEL and excess
+percentage, or TWEL / applicable slots for automatic WEL. Use the same bounded
+allowance as Rust entry sizing; actual exposure does not determine this multiplier.
+Both current and terminal replay use the current budget. Changed balance, slots or
+headroom invalidates cached signals and can reclassify terminal cooldown without
+renewing the original flatten timestamp. Reject true for aggregate modes and reject
+coin overrides of this switch.
 
 Use minute closes in live and backtest reconstruction. Historical coarser candles use the
 shared deterministic OHLC expansion; remaining gaps forward-fill then backfill a missing

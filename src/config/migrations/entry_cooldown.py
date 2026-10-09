@@ -54,14 +54,14 @@ def migrate_entry_cooldown_tree(document, *, path="config", tracker=None):
 
 def migrate_entry_cooldown(config, *, tracker=None):
     from ..param_paths import resolve_dotted_config_path
-    from suite_runner import _normalize_scenario_overrides
+    from ..scenario_overrides import normalize_scenario_overrides
 
     for scenario in config.get("backtest", {}).get("scenarios", []):
         if not isinstance(scenario, dict) or not isinstance(
             scenario.get("overrides"), dict
         ):
             continue
-        overrides = _normalize_scenario_overrides(scenario["overrides"])
+        overrides = normalize_scenario_overrides(scenario["overrides"])
         expanded = {}
         for key, value in overrides.items():
             # Dotted group replacements are atomic in the suite runner. Extract

@@ -7534,7 +7534,6 @@ def test_monitor_trailing_section_includes_trailing_grid_v7_diagnostics():
                 "n_positions": 1,
                 "wallet_exposure_limit": 0.2,
                 "risk_we_excess_allowance_pct": 0.0,
-                "risk_we_excess_allowance_mode": "bounded",
                 "risk_wel_enforcer_threshold": 0.0,
             }
             return values[key]
@@ -7637,7 +7636,6 @@ def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
                 "total_wallet_exposure_limit": 1.5,
                 "n_positions": 3,
                 "risk_we_excess_allowance_pct": 0.66,
-                "risk_we_excess_allowance_mode": "bounded",
                 "risk_wel_enforcer_enabled": False,
                 "risk_wel_enforcer_threshold": 1.0,
             }

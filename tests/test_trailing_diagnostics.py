@@ -203,7 +203,6 @@ def _hype_trailing_martingale_close_inputs():
             "total_wallet_exposure_limit": 1.5,
             "n_positions": 3,
             "risk_we_excess_allowance_pct": 0.66,
-            "risk_we_excess_allowance_mode": "bounded",
             "risk_wel_enforcer_enabled": False,
             "risk_wel_enforcer_threshold": 1.0,
         },
@@ -337,7 +336,7 @@ def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit
     assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.2)
 
 
-def test_snapshot_trailing_diagnostic_legacy_raw_excess_mode_is_unbounded():
+def test_snapshot_trailing_diagnostic_excess_is_always_bounded():
     config = _sample_config()
     side_cfg = config["bot"]["long"]
     side_cfg.pop("total_wallet_exposure_limit")
@@ -347,7 +346,6 @@ def test_snapshot_trailing_diagnostic_legacy_raw_excess_mode_is_unbounded():
         "total_wallet_exposure_limit": 0.2,
         "n_positions": 1,
         "we_excess_allowance_pct": 0.5,
-        "we_excess_allowance_mode": "legacy_raw",
     }
     inputs = build_trailing_inputs_from_snapshot(
         config,
@@ -358,9 +356,9 @@ def test_snapshot_trailing_diagnostic_legacy_raw_excess_mode_is_unbounded():
 
     diagnostic = build_trailing_diagnostic(inputs)
 
-    assert inputs["risk_we_excess_allowance_mode"] == "legacy_raw"
-    assert diagnostic["allowed_wallet_exposure_limit"] == pytest.approx(0.3)
-    assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.3)
+    assert "risk_we_excess_allowance_mode" not in inputs
+    assert diagnostic["allowed_wallet_exposure_limit"] == pytest.approx(0.2)
+    assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.2)
 
 
 def test_build_trailing_diagnostic_matches_monitor_slice():

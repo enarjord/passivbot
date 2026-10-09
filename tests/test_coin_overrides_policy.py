@@ -62,37 +62,24 @@ def test_removed_allowance_mode_has_actionable_inline_error(pside, spelling):
         if spelling == "grouped"
         else {"risk_we_excess_allowance_mode": "legacy_raw"}
     )
-
     with pytest.raises(
         ValueError,
-        match=(
-            rf"coin_overrides\.BTC\.bot\.{pside}\.risk\.we_excess_allowance_mode "
-            rf"is no longer overridable.*configure bot\.{pside}\.risk\."
-            r"we_excess_allowance_mode globally"
-        ),
+        match=rf"coin_overrides.BTC.bot.{pside}.*no longer supported.*re-backtest",
     ):
         _parse({"BTC": {"bot": {pside: side}}})
 
 
-def test_removed_allowance_mode_in_full_file_is_warned_and_ignored(caplog):
-    parsed = _parse(
-        {"BTC": {"override_config_path": "unused-by-test.json"}},
-        loaded={
-            "bot": {
-                "long": {
-                    "risk": {
-                        "entry_cooldown_minutes": 1.5,
-                        "we_excess_allowance_mode": "legacy_raw",
-                    }
-                }
-            }
-        },
-    )
 
-    cooldown = parsed["coin_overrides"]["BTC"]["bot"]["long"]["entry_cooldown"]
-    assert cooldown == {"base_duration_minutes": 1.5}
-    assert "is no longer overridable" in caplog.text
-    assert "the file value is ignored" in caplog.text
+def test_removed_raw_allowance_in_full_file_is_not_silently_ignored(caplog):
+    with pytest.raises(ValueError, match="legacy_raw.*no longer supported"):
+        _parse(
+            {"BTC": {"override_config_path": "unused-by-test.json"}},
+            loaded={
+                "bot": {"long": {"risk": {"we_excess_allowance_mode": "legacy_raw"}}}
+            },
+        )
+    assert "re-backtest" in caplog.text
+
 
 
 def test_file_then_inline_precedence_and_long_short_independence():

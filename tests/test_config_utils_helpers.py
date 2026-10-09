@@ -1939,7 +1939,7 @@ def test_backtest_help_all_describes_high_value_overrides():
     assert "--bot.long.hsl.orange_tier_mode" not in help_text
     assert "Allowed values: limit or market" in help_text
     assert "Allowed values: reduce_overweight or reduce_portfolio" in help_text
-    assert "Allowed values: bounded or legacy_raw" in help_text
+    assert "Scale coin HSL balance budget" in help_text
     assert "Override bot.long.hsl.orange_tier_mode." not in help_text
     assert "Override bot.short.risk.we_excess_allowance_mode." not in help_text
     assert "Override backtest.dynamic_wel_by_tradability." not in help_text
@@ -2352,3 +2352,72 @@ def test_retired_hsl_recovery_controls_are_not_runtime_inputs(key, value):
     config["live"][key] = value
     normalized = prepare_config(config, verbose=False, target="canonical", runtime=None)
     assert key not in normalized["live"]
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("short_value", ["2", "2,2", "1,2,0.25"])
+def test_optimizer_twel_aliases_override_bounds_without_changing_bot(wrapped, short_value):
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 2.5
+    source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    original_bot = deepcopy(source["bot"])
+    if wrapped:
+        source = {"config": source}
+    parser = argparse.ArgumentParser()
+    template = project_template_config_for_cli(get_template_config(), "optimize")
+    allowed = add_config_arguments(parser, template, command="optimize")
+    short_args = parser.parse_args(["-ltwel", "0", "-stwel", short_value, "-s", "BTC"])
+    long_args = parser.parse_args([
+        "--optimize.bounds.long.risk.total_wallet_exposure_limit", "0",
+        "--optimize.bounds.short.risk.total_wallet_exposure_limit", short_value,
+        "-s", "BTC",
+    ])
+    assert vars(short_args) == vars(long_args)
+    update_config_with_args(source, short_args, allowed_keys=allowed)
+    prepared = prepare_config(source, target="optimize", verbose=False)
+    assert (source.get("config", source))["bot"] == original_bot
+    assert prepared["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.5
+    assert prepared["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert prepared["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [0.0, 0.0]
+    expected = [float(value) for value in short_value.split(",")]
+    if len(expected) == 1:
+        expected *= 2
+    assert prepared["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] == expected
+
+
+@pytest.mark.parametrize("alias_last", [False, True])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_optimizer_twel_aliases_last_value_wins(side, alias_last):
+    parser = argparse.ArgumentParser()
+    template = project_template_config_for_cli(get_template_config(), "optimize")
+    add_config_arguments(parser, template, command="optimize")
+    key = f"optimize.bounds.{side}.risk.total_wallet_exposure_limit"
+    argv = [f"-{side[0]}twel", "0", f"--{key}", "1,2"]
+    if alias_last:
+        argv = argv[2:] + argv[:2]
+    assert getattr(parser.parse_args(argv), key) == ([0.0] if alias_last else [1.0, 2.0])
+
+
+def test_optimizer_twel_aliases_visible_in_default_help():
+    config = project_template_config_for_cli(get_template_config(), "optimize")
+    text = _format_parser_help_with_config("optimize", config, help_all=False)
+    for side in ("long", "short"):
+        _assert_help_option_aliases(text, f"--optimize.bounds.{side}.risk.total_wallet_exposure_limit", f"-{side[0]}twel", "VALUE_OR_RANGE")
+
+
+def test_unscoped_config_parser_preserves_bot_twel_aliases():
+    parser = argparse.ArgumentParser()
+    add_config_arguments(parser, get_template_config())
+    args = parser.parse_args(["-ltwel", "1.5", "-stwel", "2.0"])
+    assert getattr(args, "bot.long.risk.total_wallet_exposure_limit") == 1.5
+    assert getattr(args, "bot.short.risk.total_wallet_exposure_limit") == 2.0
+    assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit") is None
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_optimizer_generated_twel_alias_remains_supported(side):
+    parser = argparse.ArgumentParser()
+    template = project_template_config_for_cli(get_template_config(), "optimize")
+    add_config_arguments(parser, template, command="optimize")
+    args = parser.parse_args([f"-{side[0]}rtwel", "1,2"])
+    assert getattr(args, f"optimize.bounds.{side}.risk.total_wallet_exposure_limit") == [1.0, 2.0]

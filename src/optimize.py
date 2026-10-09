@@ -136,7 +136,14 @@ from copy import deepcopy
 from dataclasses import replace
 import gc
 import numpy as np
-from uuid import uuid4
+from session_artifacts import (
+    create_session_dir,
+    date_span,
+    effective_setup_config,
+    snapshot_starting_configs,
+    iter_starting_snapshot,
+    resolve_optimizer_seed,
+)
 import logging
 import traceback
 import json
@@ -3849,18 +3856,24 @@ async def main():
         scenario_labels=active_suite_scenario_labels,
     )
 
+    # Record the actual seed before hashing a new search. Legacy resumes retain
+    # their original seed policy; new sessions restore the seed from metadata.
     resume_results_dir = None
     resume_checkpoint_path = None
     restored_resume_anchor_plan = False
     if args.resume:
         resume_results_dir = _resolve_resume_results_dir(args.resume)
         resume_checkpoint_path = _require_resume_checkpoint(resume_results_dir)
+        resolve_optimizer_seed(config["optimize"], resume_results_dir)
         if get_anchor_plan(config) is None:
             restored_resume_anchor_plan = _restore_gpu_resume_anchor_plan(
                 config, resume_checkpoint_path
             )
         else:
             restored_resume_anchor_plan = True
+
+    if not args.resume:
+        resolve_optimizer_seed(config["optimize"])
 
     preselected_starting_configs = None
     if args.filter_starting_configs or args.starting_configs_max is not None:
@@ -3910,6 +3923,7 @@ async def main():
     )
     interrupted = False
     failed = False
+    starting_snapshot = None
     pool = None
     manager = None
     pool_terminated = False
@@ -4063,29 +4077,33 @@ async def main():
             timestamps=timestamps_dict,
             scenario_contexts=scenario_contexts,
         )
-        exchanges = backtest_exchanges
-        exchanges_fname = (
-            "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)
-        )
-        date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
-        coins = sorted(
-            set([x for y in config["backtest"]["coins"].values() for x in y])
-        )
-        suite_flag = suite_enabled or bool(args.suite)
-        if suite_flag:
-            coins_fname = f"suite_{len(coins)}_coins"
-        else:
-            coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
-        hash_snippet = uuid4().hex[:8]
-        n_days = int(
-            round(
-                (
-                    date_to_ts(require_config_value(config, "backtest.end_date"))
-                    - date_to_ts(require_config_value(config, "backtest.start_date"))
-                )
-                / (1000 * 60 * 60 * 24)
+        config[CONTRACT_CACHE_KEY] = build_evaluation_contract(config)
+        starting_config_iter = iter_starting_configs
+        if preselected_starting_configs is not None:
+            starting_config_iter = lambda _path: iter(preselected_starting_configs)
+        if get_anchor_plan(config) is not None:
+            starting_config_iter = lambda _path: iter_anchored_fine_tune_seed_configs(
+                config
             )
+        seed_identity = None
+        if not args.resume:
+            starting_snapshot, seed_identity = snapshot_starting_configs(
+                starting_config_iter(args.starting_configs)
+            )
+            starting_config_iter = lambda _path: iter_starting_snapshot(
+                starting_snapshot
+            )
+        run_configs = [ctx.config for ctx in scenario_contexts] or [config]
+        coins = sorted(
+            {
+                coin
+                for cfg in run_configs
+                for values in cfg["backtest"]["coins"].values()
+                for coin in values
+            }
         )
+        source = "combined" if len(backtest_exchanges) > 1 else backtest_exchanges[0]
+        span, span_metadata = date_span(run_configs)
         previous_evals = 0
         resume_recorder_state = {}
         checkpoint_path = None
@@ -4101,10 +4119,28 @@ async def main():
                 resume_state=resume_recorder_state,
             )
         else:
-            results_dir = make_get_filepath(
-                f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
+            directory, session_metadata = create_session_dir(
+                "optimize_results",
+                coins=coins,
+                source=source,
+                span=span,
+                scenarios=len(scenario_contexts),
+                setup={
+                    "version": 1,
+                    "config": effective_setup_config(config, optimize=True),
+                    "evaluation_contract": config[CONTRACT_CACHE_KEY],
+                    "starting_configs": seed_identity,
+                },
+                metadata={
+                    "kind": "optimize",
+                    "seed": config["optimize"]["seed"],
+                    "coins": coins,
+                    "data_source": source,
+                    **span_metadata,
+                    "starting_configs": seed_identity,
+                },
             )
-            os.makedirs(results_dir, exist_ok=True)
+            results_dir = str(directory)
 
         config["results_dir"] = results_dir
         results_filename = os.path.join(results_dir, "all_results.bin")
@@ -4121,8 +4157,6 @@ async def main():
         duplicate_counter["total"] = 0
         duplicate_counter["resolved"] = 0
         duplicate_counter["reused"] = 0
-
-        config[CONTRACT_CACHE_KEY] = build_evaluation_contract(config)
 
         # Initialize evaluator with shared memory references
         evaluator = Evaluator(
@@ -4162,13 +4196,6 @@ async def main():
         backend_name = config["optimize"]["backend"]
         logging.info("Selected optimizer backend: %s", backend_name)
         backend_runner = get_backend_runner(backend_name)
-        starting_config_iter = iter_starting_configs
-        if preselected_starting_configs is not None:
-            starting_config_iter = lambda _path: iter(preselected_starting_configs)
-        if get_anchor_plan(config) is not None:
-            starting_config_iter = lambda _path: iter_anchored_fine_tune_seed_configs(
-                config
-            )
         backend_kwargs = dict(
             config=config,
             evaluator=evaluator,
@@ -4212,6 +4239,8 @@ async def main():
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()
     finally:
+        if starting_snapshot is not None:
+            starting_snapshot.close()
         if "recorder" in locals():
             logging.info("Flushing Pareto/results recorder...")
             try:

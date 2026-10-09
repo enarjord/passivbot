@@ -182,7 +182,7 @@ struct EmaMulticoinSideConfig {
     float w_volatility;
     int n_positions;
     float allowance_pct;
-    bool legacy_raw_allowance;
+    bool scale_hsl_budget;
     bool twel_entry_gate_enabled;
     float twel_threshold;
     bool twel_enforcer_enabled;
@@ -403,7 +403,7 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     }
     config.n_positions = max(1, int(rint(params[po + 18])));
     config.allowance_pct = params[po + 19];
-    config.legacy_raw_allowance = params[po + 20] > 0.5f;
+    config.scale_hsl_budget = params[po + 20] > 0.5f;
     config.twel_entry_gate_enabled = params[po + 21] > 0.5f;
     config.twel_threshold = params[po + 22];
     config.twel_enforcer_enabled = params[po + 23] > 0.5f;
@@ -749,6 +749,8 @@ inline bool update_ema_multicoin_dual_side_hsl(
     thread const JointPortfolioAccount& account,
     constant float* bars,
     constant float* coin_settings,
+    constant float* long_coin_overrides,
+    constant float* short_coin_overrides,
     int k,
     int day_index,
     int coin_count,
@@ -838,6 +840,11 @@ inline bool update_ema_multicoin_dual_side_hsl(
                 long_side.coin_hsl[c].slot_count = float(
                     long_effective_n_positions
                 );
+                long_side.coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
+                    long_config.scale_hsl_budget, long_config.twel,
+                    long_effective_n_positions, long_coin_overrides, c,
+                    11, 12, long_config.allowance_pct
+                );
                 update_hsl(
                     long_side.coin_hsl[c], account.balance, starting_balance,
                     long_side.coin_realized_pnl[c], long_coin_unrealized,
@@ -863,6 +870,11 @@ inline bool update_ema_multicoin_dual_side_hsl(
             if (short_active) {
                 short_side.coin_hsl[c].slot_count = float(
                     short_effective_n_positions
+                );
+                short_side.coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
+                    short_config.scale_hsl_budget, short_config.twel,
+                    short_effective_n_positions, short_coin_overrides, c,
+                    11, 12, short_config.allowance_pct
                 );
                 update_hsl(
                     short_side.coin_hsl[c], account.balance, starting_balance,
@@ -1061,9 +1073,7 @@ inline void update_ema_multicoin_side_selection(
             coin_overrides, c, 12, config.allowance_pct
         );
         float allowed_wel = allowed_wallet_exposure_limit(
-            base_limit, config.twel, allowance_pct,
-            config.legacy_raw_allowance
-        );
+            base_limit, config.twel, allowance_pct);
         float initial_qty_pct = coin_override_or(
             coin_overrides, c, 0, config.base_qty_pct
         );
@@ -1333,9 +1343,7 @@ inline int select_ema_multicoin_unstuck_coin(
             coin_overrides, c, 12, config.allowance_pct
         );
         const float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, config.twel, coin_allowance_pct,
-            config.legacy_raw_allowance
-        );
+            coin_wel, config.twel, coin_allowance_pct);
         if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
             && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
             && side.psize[c] > 0.0f && side.pprice[c] > 0.0f
@@ -1414,7 +1422,6 @@ inline void generate_ema_multicoin_side_orders(
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_pct = config.allowance_pct;
-    const bool legacy_raw_allowance = config.legacy_raw_allowance;
     const bool twel_entry_gate_enabled = config.twel_entry_gate_enabled;
     const float twel_threshold = config.twel_threshold;
     const bool twel_enforcer_enabled = config.twel_enforcer_enabled;
@@ -1649,8 +1656,7 @@ inline void generate_ema_multicoin_side_orders(
             coin_overrides, c, 12, allowance_pct
         );
         float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
-        );
+            coin_wel, twel, coin_allowance_pct);
         if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
             && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
             && balance > 0.0f && balance_peak > 0.0f
@@ -1756,8 +1762,7 @@ inline void generate_ema_multicoin_side_orders(
             coin_overrides, c, 12, allowance_pct
         );
         float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
-        );
+            coin_wel, twel, coin_allowance_pct);
         bool tradable = k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(price_now) && allowed_coin_wel > 0.0f;
@@ -3036,7 +3041,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_pct = config.allowance_pct;
-    const bool legacy_raw_allowance = config.legacy_raw_allowance;
     EmaMulticoinSideState side;
     init_ema_multicoin_side_state(
         side, config, coin_settings, coin_overrides, C
@@ -3188,6 +3192,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 side, bars, coin_settings, k, C, short_side, balance
             );
 #endif
+        prepare_coin_hsl_budgets(
+            side.coin_hsl, config.coin_hsl_mode, config.scale_hsl_budget,
+            config.twel, wallet_exposure_denominator_n_positions(
+                config.n_positions, side.max_tradable_seen),
+            coin_overrides, C, 11, 12, config.allowance_pct
+        );
         bool any_fill = process_ema_multicoin_side_fills(
             side, account, fills,
             bars, fill_ticks, coin_settings, coin_overrides,
@@ -3236,8 +3246,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             && !min_cost_exact_open_uncertain
             && multicoin_min_cost_rejection_possible(
                 side.psize, side.coin_hsl, config.coin_hsl_mode,
-                current_hsl_mode, config.twel, config.allowance_pct,
-                config.legacy_raw_allowance, config.base_qty_pct,
+                current_hsl_mode, config.twel, config.allowance_pct, config.base_qty_pct,
                 bars, coin_settings, coin_overrides, 11, 12, 0,
                 k, C, effective_n_positions,
                 min_cost_balance_lower
@@ -3375,6 +3384,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
                             || secondary_close_qty[c] > 0.0f
                     );
                     coin_hsl[c].slot_count = float(effective_n_positions);
+                    coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
+                        config.scale_hsl_budget, config.twel, effective_n_positions,
+                        coin_overrides, c, 11, 12, config.allowance_pct
+                    );
                     update_hsl(
                         coin_hsl[c], balance, starting_balance,
                         coin_realized_pnl[c], coin_unrealized,
@@ -3613,8 +3626,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         coin_overrides, 0, 12, allowance_pct
     );
     scalars[scalar_offset + 21] = allowed_wallet_exposure_limit(
-        entry_base_limit, twel, entry_allowance_pct, legacy_raw_allowance
-    ) * entry_initial_qty_pct;
+        entry_base_limit, twel, entry_allowance_pct) * entry_initial_qty_pct;
     scalars[scalar_offset + 22] = total_wallet_exposure_max;
     scalars[scalar_offset + 23] = total_wallet_exposure_mean;
     scalars[scalar_offset + 24] = fill_count;
@@ -3705,8 +3717,7 @@ inline float ema_multicoin_entry_initial_balance_pct(
         coin_overrides, 0, 12, config.allowance_pct
     );
     return allowed_wallet_exposure_limit(
-        base_limit, config.twel, allowance_pct, config.legacy_raw_allowance
-    ) * initial_qty_pct;
+        base_limit, config.twel, allowance_pct) * initial_qty_pct;
 }
 
 // Match exact Rust's per-symbol one-way eligibility before Forager selection
@@ -3781,16 +3792,12 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
             long_base_limit, long_config.twel,
             coin_override_or(
                 long_coin_overrides, c, 12, long_config.allowance_pct
-            ),
-            long_config.legacy_raw_allowance
-        );
+            ));
         const float short_allowed_wel = allowed_wallet_exposure_limit(
             short_base_limit, short_config.twel,
             coin_override_or(
                 short_coin_overrides, c, 12, short_config.allowance_pct
-            ),
-            short_config.legacy_raw_allowance
-        );
+            ));
         const bool long_min_cost_eligible =
             passes_multicoin_min_effective_cost(
                 filter_by_min_effective_cost, guaranteed_balance_lower,
@@ -4076,6 +4083,20 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #endif
         }
 
+        prepare_coin_hsl_budgets(
+            long_side.coin_hsl, long_config.coin_hsl_mode,
+            long_config.scale_hsl_budget, long_config.twel,
+            wallet_exposure_denominator_n_positions(
+                long_config.n_positions, long_side.max_tradable_seen),
+            long_coin_overrides, C, 11, 12, long_config.allowance_pct
+        );
+        prepare_coin_hsl_budgets(
+            short_side.coin_hsl, short_config.coin_hsl_mode,
+            short_config.scale_hsl_budget, short_config.twel,
+            wallet_exposure_denominator_n_positions(
+                short_config.n_positions, short_side.max_tradable_seen),
+            short_coin_overrides, C, 11, 12, short_config.allowance_pct
+        );
         float long_hsl_equity_before_fills = account.balance;
         long_hsl_equity_before_fills =
             accumulate_ema_multicoin_side_unrealized_pnl(
@@ -4187,7 +4208,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                         long_side.psize, long_side.coin_hsl,
                         long_config.coin_hsl_mode, long_hsl_mode,
                         long_config.twel, long_config.allowance_pct,
-                        long_config.legacy_raw_allowance,
                         long_config.base_qty_pct,
                         bars, coin_settings, long_coin_overrides, 11, 12, 0,
                         k, C, long_effective_n_positions,
@@ -4198,7 +4218,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                         short_side.psize, short_side.coin_hsl,
                         short_config.coin_hsl_mode, short_hsl_mode,
                         short_config.twel, short_config.allowance_pct,
-                        short_config.legacy_raw_allowance,
                         short_config.base_qty_pct,
                         bars, coin_settings, short_coin_overrides, 11, 12, 0,
                         k, C, short_effective_n_positions,
@@ -4395,7 +4414,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             bool hsl_valid = update_ema_multicoin_dual_side_hsl(
                 long_side, long_config, long_effective_n_positions,
                 short_side, short_config, short_effective_n_positions,
-                account, bars, coin_settings, k, day_index, C,
+                account, bars, coin_settings,
+                long_coin_overrides, short_coin_overrides, k, day_index, C,
                 starting_balance, interval_ms,
                 sample_enabled, sampled_tier
             );

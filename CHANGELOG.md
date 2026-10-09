@@ -8,6 +8,40 @@ since the latest release tag; these features may already be available when insta
 
 - Reject individual GPU suite candidates with invalid aggregated metrics, matching the CPU optimizer, instead of terminating the entire optimization batch.
 
+- Fix live-only editable installs failing during config loading: cooldown and EMA
+  migrations no longer import backtest/optimizer runtimes. Declare the optimizer
+  fingerprinting dependency in full installs.
+
+- Name optimizer, backtest, suite and iterative sessions with UTC dates, readable coin
+  labels, deterministic setup fingerprints and unique run IDs. Record generated optimizer
+  seeds for comparison and resume, and freeze selected starting configs before execution.
+  Suite scenarios now write artifacts directly under their scenario directory, keeping
+  exchange subdirectories only for multiple results. Suite summaries expose layout version,
+  relative artifact paths and actual scenario timing. This changes generated output paths;
+  existing results are preserved and optimizer resume retains its original directory.
+
+- Add `passivbot tool clean-config` for full canonical cleanup, lean live/backtest/optimizer
+  exports and formatting-only JSON. Support explicit source/destination paths, opt-in atomic
+  in-place replacement, bounded directory scans, dry-run/check modes and overwrite protection.
+
+- Make excess allowance always bounded by side TWEL, removing its policy selector.
+  Older explicit bounded selectors are removed with a warning; explicit raw policies
+  stop configuration loading with a field path and revalidation instructions, including
+  overrides and scenarios. Add global per-side `hsl.scale_budget_with_excess_allowance`
+  (default `false`) for coin HSL: optionally scale current and terminal balance budgets
+  by each coin's bounded headroom across live, CPU backtests and GPU optimization.
+
+- Add optimizer `-ltwel` and `-stwel` aliases for wallet exposure bounds, accepting fixed
+  values or ranges. GPU setup now uses the bounds-clamped seed, allowing bounds to enable
+  or disable a side relative to the input config while keeping side topology fixed throughout
+  the search.
+
+- Expose HSL candle-source failure types and fetch/cache stages in bounded status diagnostics,
+  with a compact console cause and transitions when failures change or recover.
+
+- Resume incomplete native candle history from missing spans with a small overlap, so bounded
+  reads retain progress across deadlines and restarts instead of repeating a cached prefix.
+
 - Avoid repeated unrelated execution-history scans when reconstructing backtest HSL scopes.
 - Apply GPU exact worker auto-tuning during seed validation, draining admitted work before pool changes and accounting for observed private worker memory.
 

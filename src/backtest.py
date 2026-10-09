@@ -2904,6 +2904,56 @@ def run_backtest(
     return fills, equities_array, analysis
 
 
+def _create_backtest_output(
+    config, exchange, hlcvs, btc, timestamps, mss, results_path
+):
+    from optimization.evaluation_implementation import (
+        evaluation_implementation_identity,
+    )
+    from optimization.prepared_dataset_identity import materialized_dataset_identity
+    from session_artifacts import create_session_dir, date_span, effective_setup_config
+
+    effective = deepcopy(config)
+    meta = mss.get("__meta__", {})
+    for key in ("start_date", "end_date"):
+        if meta.get(f"requested_{key}") is not None:
+            effective["backtest"][key] = meta[f"requested_{key}"]
+    span, span_metadata = date_span([effective])
+    coins = config["backtest"]["coins"][exchange]
+    directory, metadata = create_session_dir(
+        results_path,
+        coins=coins,
+        source=exchange,
+        span=span,
+        setup={
+            "version": 1,
+            "config": effective_setup_config(effective),
+            "data": materialized_dataset_identity(coins, hlcvs, btc, timestamps, mss),
+            "implementation": evaluation_implementation_identity(),
+        },
+        metadata={
+            "kind": "backtest",
+            "coins": coins,
+            "data_source": exchange,
+            **span_metadata,
+        },
+    )
+    return directory, metadata
+
+
+def _finish_backtest_output(directory, metadata):
+    from session_artifacts import (
+        SESSION_MANIFEST,
+        artifact_paths,
+        utc_datetime,
+        write_json,
+    )
+
+    metadata["completed_at"] = utc_datetime()
+    metadata["artifacts"] = artifact_paths(directory, directory)
+    write_json(directory / SESSION_MANIFEST, metadata)
+
+
 def post_process(
     config,
     hlcvs,
@@ -2915,6 +2965,8 @@ def post_process(
     exchange,
     label=None,
     plot_context: BacktestPlotContext | None = None,
+    *,
+    output_directory: Path | None = None,
 ):
     from config.hsl import engine
 
@@ -2957,7 +3009,9 @@ def post_process(
         )
     logging.info("%s%s", label_prefix, pprint.pformat(visible_analysis.analysis))
     results_path = make_get_filepath(
-        oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
+        str(output_directory) + "/"
+        if output_directory is not None
+        else oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
     json.dump(
         analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True
@@ -3321,6 +3375,15 @@ async def main():
             config["backtest"]["cache_dir"][exchange] = str(cache_dir)
             raise_if_backtest_cancel_requested("backtest execution")
 
+            output_directory, output_metadata = _create_backtest_output(
+                config,
+                exchange,
+                hlcvs,
+                btc_usd_prices,
+                timestamps,
+                mss,
+                results_path,
+            )
             fills, equities_array, analysis, payload = run_backtest(
                 hlcvs,
                 mss,
@@ -3340,7 +3403,9 @@ async def main():
                 results_path,
                 exchange,
                 plot_context=BacktestPlotContext.from_payload(payload),
+                output_directory=output_directory,
             )
+            _finish_backtest_output(output_directory, output_metadata)
         finally:
             release_materialized_payload(hlcvs)
     else:
@@ -3361,6 +3426,15 @@ async def main():
                 configs[exchange]["backtest"]["coins"][exchange] = coins
                 configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
                 raise_if_backtest_cancel_requested("backtest execution")
+                output_directory, output_metadata = _create_backtest_output(
+                    configs[exchange],
+                    exchange,
+                    hlcvs,
+                    btc_usd_prices,
+                    timestamps,
+                    mss,
+                    results_path,
+                )
                 fills, equities_array, analysis, payload = run_backtest(
                     hlcvs,
                     mss,
@@ -3380,7 +3454,9 @@ async def main():
                     results_path,
                     exchange,
                     plot_context=BacktestPlotContext.from_payload(payload),
+                    output_directory=output_directory,
                 )
+                _finish_backtest_output(output_directory, output_metadata)
             finally:
                 release_materialized_payload(hlcvs)
 

@@ -7,6 +7,15 @@ from types import SimpleNamespace
 
 import pytest
 
+
+@pytest.fixture(scope="module")
+def require_real_passivbot_rust_module():
+    import passivbot_rust as pbr
+
+    assert not getattr(pbr, "__is_stub__", False)
+    assert hasattr(pbr, "hsl_evaluate"), "rebuild the source-matched Rust extension"
+    return pbr
+
 from config import prepare_config
 from config.hsl import generated_template
 from config.schema import get_template_config
@@ -1487,3 +1496,26 @@ def test_flat_order_only_pair_without_quote_cannot_block_current_protection(mode
         assert [(d.scope.symbol, d.action) for d in decisions] == [(flat, "normal")]
     else:
         assert decisions[0].action == "panic"
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_live_scales_slot_budget_from_coin_override_allowance(
+    side, require_real_passivbot_rust_module
+):
+    value = bot(side=side)
+    risk = value.config["bot"][side]["risk"]
+    risk.update(
+        n_positions=10, total_wallet_exposure_limit=2.5, we_excess_allowance_pct=0.0
+    )
+    value.positions[SYMBOL][side]["size"] = 1 if side == "long" else -1
+    value.config["bot"][side]["hsl"]["red_threshold"] = 0.2
+    mark = 78.0 if side == "long" else 122.0
+    marks = {SYMBOL: MarketSnapshot(SYMBOL, mark, mark, mark, NOW - 100, "fake")}
+    ordinary, unavailable = run(value, marks=marks)
+    assert not unavailable and ordinary[0].action == "panic"
+    value.config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = True
+    value.coin_overrides[SYMBOL] = {
+        "bot": {side: {"risk": {"we_excess_allowance_pct": 0.44}}}
+    }
+    scaled, unavailable = run(value, marks=marks)
+    assert not unavailable and scaled[0].action == "normal"
+    assert run(value, marks=marks)[0] == scaled

@@ -39,6 +39,13 @@
 
 ## Non-Obvious Details
 
+Ordinary native higher-timeframe reads reuse verified persisted rows and fetch only missing spans,
+with one source bucket of overlap on each side. Overlapping requests are coalesced; the overlap
+retains within-response evidence for KuCoin's no-tick gaps. Pages persisted before a deadline or
+cancellation remain useful to the next acquisition, including after manager restart. Forced
+`max_age_ms=0` reads still refetch the full requested range. Missing buckets remain unavailable;
+this acquisition optimization does not relax full-coverage EMA readiness or fabricate candles.
+
 1. Runtime synthetic candles are not always persisted to disk shards.
 2. Real candles replacing synthetic candles must trigger EMA cache invalidation.
 3. Gap semantics differ within-page vs between-page boundaries.

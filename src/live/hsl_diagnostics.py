@@ -7,11 +7,44 @@ import json
 import logging
 
 from live.diagnostic_safety import bounded_exception_type
-from live.event_bus import EventTags, EventTypes
+from live.event_bus import EventTags, EventTypes, _hsl_input_console
 from live.event_emitters import _safe_emit, _console_sink_error_count
 
 SCOPE_LIMIT = 128
 SAMPLE_LIMIT = 3
+SOURCE_FAILURE_LIMIT = 16
+
+
+def _source_failures(bot):
+    """Describe the latest source acquisitions, independently of decision freshness."""
+    owner = getattr(bot, "_hsl_live", None)
+    rows = [
+        dict(
+            symbol=symbol,
+            timeframe=failure.timeframe,
+            stage=failure.stage,
+            error_type=failure.error_type,
+        )
+        for symbol, source in sorted(getattr(owner, "sources", {}).items())
+        for failure in source.failures
+    ]
+    rows.sort(
+        key=lambda row: (
+            row["stage"] != "cache",
+            row["symbol"],
+            row["timeframe"],
+            row["error_type"],
+        )
+    )
+    signature = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+    return (
+        dict(
+            failure_count=len(rows),
+            failures=rows[:SOURCE_FAILURE_LIMIT],
+            omitted_failures=max(0, len(rows) - SOURCE_FAILURE_LIMIT),
+        ),
+        signature,
+    )
 
 
 def _account_unavailable(bot, now):
@@ -92,6 +125,7 @@ def record(bot, wave):
         rows = [_row(d.scope, action=d.action, decision=d) for d in wave.decisions]
         rows += [_row(item.scope, reason=item.reason) for item in wave.unavailable]
         rows.sort(key=_priority)
+        candle_sources, source_signature = _source_failures(bot)
         counts = Counter(row["tier"] or "unavailable" for row in rows)
         counts["estimated"] = sum(row["estimated"] for row in rows)
         counts = {
@@ -132,44 +166,67 @@ def record(bot, wave):
             ),
             scopes=rows[:SCOPE_LIMIT],
             omitted_scopes=max(0, len(rows) - SCOPE_LIMIT),
+            candle_sources=candle_sources,
+            unavailable_scope=next(
+                (
+                    {
+                        key: row[key]
+                        for key in (
+                            "signal_mode",
+                            "symbol",
+                            "pside",
+                            "unavailable_reason",
+                        )
+                    }
+                    for row in rows
+                    if row["unavailable_reason"]
+                ),
+                None,
+            ),
         )
         # Human materiality ignores estimator-reason churn, numeric movement and
         # cycle timestamps. Include every scope before either payload sample cap:
         # equal aggregate counts must not hide a different affected position.
         observation["console_state"] = hashlib.sha256(
             json.dumps(
-                sorted(
-                    [
-                        (
-                            r["signal_mode"],
-                            r["symbol"] or "",
-                            r["pside"] or "",
-                            r["action"] or "",
-                            r["tier"] or "",
-                            r["availability"],
-                            r["unavailable_reason"] or "",
-                            r["estimated"],
-                        )
-                        for r in rows
-                    ]
-                ),
+                [
+                    source_signature,
+                    sorted(
+                        [
+                            (
+                                r["signal_mode"],
+                                r["symbol"] or "",
+                                r["pside"] or "",
+                                r["action"] or "",
+                                r["tier"] or "",
+                                r["availability"],
+                                r["unavailable_reason"] or "",
+                                r["estimated"],
+                            )
+                            for r in rows
+                        ]
+                    ),
+                ],
                 sort_keys=True,
             ).encode()
         ).hexdigest()
         scope_signature = hashlib.sha256(
             json.dumps(
                 [
-                    (
-                        r["signal_mode"],
-                        r["symbol"],
-                        r["pside"],
-                        r["action"],
-                        r["availability"],
-                        r["unavailable_reason"],
-                        r["estimates"],
-                        _raw_pending(r),
-                    )
-                    for r in rows
+                    source_signature,
+                    [
+                        (
+                            r["signal_mode"],
+                            r["symbol"],
+                            r["pside"],
+                            r["action"],
+                            r["availability"],
+                            r["unavailable_reason"],
+                            r["estimates"],
+                            _raw_pending(r),
+                        )
+                        for r in rows
+                    ],
                 ],
                 sort_keys=True,
             ).encode()
@@ -227,7 +284,11 @@ def _emit_status(bot, data, scope_signature):
         component="risk.hsl",
         tags=(EventTags.RISK, EventTags.SUMMARY),
         level="warning" if unavailable else "info",
-        status="degraded" if unavailable or counts["estimated"] else "succeeded",
+        status=(
+            "degraded"
+            if unavailable or counts["estimated"] or data["candle_sources"]["failure_count"]
+            else "succeeded"
+        ),
         cycle_id=getattr(bot, "_live_event_current_cycle_id", None),
         data=data,
     )
@@ -238,13 +299,14 @@ def _emit_status(bot, data, scope_signature):
         and console_errors_after > console_errors_before
     )
     if emitted is None or console_failed:
+        _, input_cause = _hsl_input_console(data)
         logging.log(
             (
                 logging.DEBUG
                 if data.get("console_replaced_observation")
                 else logging.WARNING if unavailable else logging.INFO
             ),
-            "[risk] HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d",
+            "[risk] HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d%s",
             data["signal_mode"],
             data["observation_status"],
             counts["green"],
@@ -252,6 +314,7 @@ def _emit_status(bot, data, scope_signature):
             counts["inactive"],
             counts["unavailable"],
             counts["estimated"],
+            " " + input_cause if input_cause else "",
         )
 
 
