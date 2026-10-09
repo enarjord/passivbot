@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix live-only editable installs failing during config loading: cooldown and EMA
+  migrations no longer import backtest/optimizer runtimes. Declare the optimizer
+  fingerprinting dependency in full installs.
+
 - Name optimizer, backtest, suite and iterative sessions with UTC dates, readable coin
   labels, deterministic setup fingerprints and unique run IDs. Record generated optimizer
   seeds for comparison and resume, and freeze selected starting configs before execution.
