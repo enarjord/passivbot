@@ -22,6 +22,11 @@ class ExecutionBatchTuner:
 
     def constrain(self, dataset_id, ceiling):
         """Apply the prepared replay's dispatch bound on its owning worker."""
+        if self._ceilings.get(dataset_id) != ceiling:
+            # Preparation/retry may change capacity before this replay's
+            # completion is observed. Its old allocation-shape evidence expires.
+            self.controllers.pop(dataset_id, None)
+            self._demand.pop(dataset_id, None)
         self._ceilings[dataset_id] = ceiling
 
     def width(self, dataset_id, ceiling):
@@ -50,7 +55,9 @@ class ExecutionBatchTuner:
     def observe(self, dataset_id, count, seconds, *, backlog, closing):
         if not self.enabled:
             return
-        controller = self.controllers[dataset_id]
+        controller = self.controllers.get(dataset_id)
+        if controller is None:
+            return  # Capacity changed during replay; next claim creates fresh evidence.
         # A finite cohort's final replay may have no remaining backlog even
         # when this window repeatedly had enough compatible work for growth.
         if 1 <= count <= controller.width and math.isfinite(seconds) and seconds > 0:

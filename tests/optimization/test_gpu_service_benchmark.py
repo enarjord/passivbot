@@ -188,3 +188,30 @@ finally:
     completed = subprocess.run([sys.executable, '-c', script, str(Path(benchmark.__file__).parents[1])],
                                capture_output=True, text=True, timeout=45)
     assert completed.returncode == 0, completed.stderr
+
+
+def test_missing_proc_child_lists_do_not_report_root_only_rss(tmp_path, monkeypatch):
+    root = tmp_path / '10'
+    root.mkdir()
+    (root / 'status').write_text('VmRSS:\t100 kB\n')
+    (root / 'task' / '10').mkdir(parents=True)
+    monkeypatch.setattr(benchmark, 'Path', lambda value: tmp_path / str(value).removeprefix('/proc/'))
+    assert benchmark.rss_tree(10) is None
+
+
+@pytest.mark.parametrize('metadata', [
+    {'skipped': 'stub_module', 'runtime_compiled_source_stamp': None, 'expected_source_fingerprint': 'current'},
+    {'runtime_compiled_source_stamp': None, 'expected_source_fingerprint': 'current'},
+    {'runtime_compiled_source_stamp': 'old', 'expected_source_fingerprint': 'current'},
+    {'runtime_compiled_source_stamp': None, 'expected_source_fingerprint': None},
+])
+def test_unverified_runtime_fails_before_fixture_or_device_preparation(monkeypatch, metadata):
+    import rust_utils
+    from tools import gpu_parity
+    metadata = dict(runtime_compiled_sha256='binary', **metadata)
+    def forbidden(*args):
+        pytest.fail('unverified runtime reached fixture preparation')
+    monkeypatch.setattr(gpu_parity, 'fixture_inputs', forbidden)
+    monkeypatch.setattr(rust_utils, 'verify_loaded_runtime_extension', lambda: metadata)
+    with pytest.raises(RuntimeError, match='source-fingerprint-verified'):
+        benchmark.main(['--strategy', 'ema_anchor', '--report', 'unused.json'])

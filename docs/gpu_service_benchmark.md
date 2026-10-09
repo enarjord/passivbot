@@ -14,7 +14,8 @@ passivbot tool gpu-service-benchmark --strategy trailing_martingale --candidates
 
 The preparation-only mode creates requests without importing Torch, CuPy or the
 replay kernel. Execution requires a full CUDA installation and a source-verified
-Rust extension. All data and candidate configurations come from the public
+Rust extension. Skipped verification, absent stamps and mismatched source
+fingerprints are rejected before fixture or device preparation. All data and candidate configurations come from the public
 seed-seven parity fixture. Both sides run; `--hsl unified` enables factual HSL
 with a 0.99 threshold and one-day lookback. This tool does not claim every risk
 transition occurs in that fixture.
@@ -61,6 +62,9 @@ display and unrelated processes; it is not exclusive service VRAM. Sampling may
 miss short peaks. Linux RSS traverses children created by every process thread,
 including service-worker compiler children; whole-process CPU time
 includes its workers, preparation, in-process compilation and monitoring; it
-excludes compiler-child CPU time and is not isolated orchestrator cost. Unsupported or failed resource observations are explicit, and sampler
+excludes compiler-child CPU time and is not isolated orchestrator cost. Linux procfs must expose child lists for each sampled process; unavailable
+child lists produce a null RSS observation and disable process-tree availability
+in that phase rather than reporting parent-only memory. Unsupported or failed
+resource observations are explicit, and sampler
 errors are retained. The tool measures service execution only: it does not
 establish Pareto quality, CPU optimizer throughput or whole-search speedup.

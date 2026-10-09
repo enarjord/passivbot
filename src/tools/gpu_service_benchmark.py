@@ -37,7 +37,10 @@ def rss_tree(pid):
                     total += int(line.split()[1]) * 1024
         except (FileNotFoundError, ProcessLookupError):
             continue  # A sampled process can exit before its status is read.
-        for children in Path(f"/proc/{current}/task").glob("*/children"):
+        child_lists = list(Path(f"/proc/{current}/task").glob("*/children"))
+        if not child_lists and Path(f"/proc/{current}/status").exists():
+            return None  # This procfs cannot expose a complete process tree.
+        for children in child_lists:
             try:
                 pending.extend(map(int, children.read_text().split()))
             except (FileNotFoundError, ProcessLookupError):
@@ -189,6 +192,9 @@ def main(argv=None):
     import passivbot_rust
     from rust_utils import verify_loaded_runtime_extension
     verified = verify_loaded_runtime_extension()
+    if (verified.get("skipped") or not verified.get("runtime_compiled_source_stamp")
+            or verified["runtime_compiled_source_stamp"] != verified.get("expected_source_fingerprint")):
+        raise RuntimeError("GPU service benchmark requires a real source-fingerprint-verified Rust extension")
     runtime = {name: verified[name] for name in
                ("runtime_compiled_sha256", "runtime_compiled_source_stamp", "expected_source_fingerprint")}
     from tools.gpu_parity import build_parser as parity_parser, fixture_inputs, _native_dataset
@@ -353,6 +359,8 @@ def main(argv=None):
                 raise RuntimeError("Shared source arrays changed during execution")
             phase["owner_snapshots"] = owner_rows
             phase["resource_samples"] = sampler.rows
+            phase["sampling_availability"]["process_tree_rss"] = bool(sampler.rows) and all(
+                row["process_tree_rss_bytes"] is not None for row in sampler.rows)
             phase["sampling_errors"] = sampler.errors
             phase["warm_median_seconds"] = statistics.median(row["seconds"] for row in phase["rounds"][1:])
             phase["warm_requests_per_second"] = 3 * args.candidates / phase["warm_median_seconds"]

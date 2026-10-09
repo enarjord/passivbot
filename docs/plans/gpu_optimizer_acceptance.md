@@ -1705,3 +1705,14 @@ state. The underfilled cohorts complete no tuning windows, and their observation
 do not replace the larger scenario-decision evidence or broader acceptance. One-second
 sampling can miss short peaks; global device memory includes unrelated allocations.
 Both preceding and corrected checked sources remain unchanged after validation.
+
+
+The subsequent review tightens unsupported-procfs reporting and extension identity:
+missing child lists yield null RSS instead of a parent-only baseline, and skipped,
+unstamped or mismatched runtime verification fails before fixture preparation.
+A changed replay ceiling invalidates its old tuning window before observation,
+including the completion that discovered the change; an unchanged ceiling preserves
+evidence. All 65 focused Linux/CUDA controls pass. Optimized-Python EMA/TM CLI
+refreshes complete 72 exact results with unchanged arrays and clean ownership/cleanup.
+Checked sources remain unchanged. These small callers establish the corrected
+validation path; earlier moderate resource observations retain their stated scope.

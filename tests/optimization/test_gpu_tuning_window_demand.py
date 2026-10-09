@@ -1,5 +1,7 @@
 """Window-level queued demand must survive finite cohort boundaries."""
 
+import pytest
+
 from optimization.gpu.autotune import WINDOW
 from optimization.gpu.execution_tuning import ExecutionBatchTuner
 
@@ -64,3 +66,33 @@ def test_new_prepared_ceiling_discards_previous_window_demand():
     assert result.width('a', 16) == 4
     window(result, backlog=0)
     assert result.width('a', 16) == 2
+
+
+@pytest.mark.parametrize('ceiling', [2, 32])
+def test_ceiling_change_before_observation_discards_obsolete_window(ceiling):
+    from tools.gpu_cohort_benchmark import _observe_batches
+    result = policy()
+    evidence = _observe_batches(result, [])
+    result.observe('a', 4, 2, backlog=100, closing=False)
+    for _ in range(WINDOW - 1):
+        result.observe('a', 4, 2, backlog=100, closing=False)
+    obsolete = result.controllers['a']
+    result.constrain('a', ceiling)  # Production applies this inside successful replay.
+    result.observe('a', 4, 2, backlog=0, closing=False)
+    assert not evidence['completed_windows']
+    assert obsolete.width == 4 and obsolete.baseline is None
+    assert 'a' not in result.controllers and 'a' not in result._demand
+    assert result.width('a', 16) == min(4, ceiling)
+    assert not result.controllers['a'].samples
+    assert not result.controllers['a'].seen
+    assert result.controllers['b'].width == 4
+
+
+def test_unchanged_ceiling_preserves_current_window_and_demand():
+    result = policy()
+    result.observe('a', 4, 2, backlog=100, closing=False)
+    owner = result.controllers['a']
+    result.constrain('a', 16)
+    for _ in range(WINDOW):
+        result.observe('a', 4, 2, backlog=0, closing=False)
+    assert result.controllers['a'] is owner and owner.width == 8

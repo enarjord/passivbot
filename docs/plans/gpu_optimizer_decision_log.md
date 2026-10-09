@@ -3226,3 +3226,22 @@ Historical observations do not supersede those requirements or prove current acc
   process-tree sampling, unchanged inputs, one resident dataset and clean cleanup.
   Record resources in acceptance without attributing differences solely to the
   sampler or claiming tuning convergence. Checked sources remain unchanged.
+
+
+### 2026-10-09 — Guard measurement validity and capacity transitions
+
+- Current-head review finds that missing procfs child-list support can silently
+  appear as parent-only RSS, and runtime verification can admit an unstamped or
+  stub extension. Report unsupported tree samples as unavailable and require a
+  real matching source stamp before preparing benchmark inputs. Regressions
+  reproduce preceding behavior and verify rejection without device preparation.
+- A successful replay may update its physical ceiling before completion is
+  observed. Invalidate that dataset's controller and retained demand immediately
+  in `constrain()`, so an obsolete window cannot supply growth decisions or
+  completed-window evidence. Preserve evidence when capacity is unchanged.
+- All 65 focused Linux/CUDA controls pass, including both strategies, actual
+  worker-child accounting and the lower/higher capacity ordering regressions.
+  Optimized-Python CUDA callers complete 72 exact results with unchanged source
+  arrays and clean service ownership/cleanup. Checked sources remain unchanged.
+  Rust and shaders are unchanged; independent new-head review and required CI
+  remain mandatory before the development-only merge.
