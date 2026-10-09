@@ -788,8 +788,10 @@ def _mps_multicoin_dispatch_plan(
     n_sides: int,
     max_candidate_bars: int,
     device: str = "mps",
+    factual_hsl: bool = False,
 ) -> tuple[bool, int, int]:
-    temporal_chunking = (
+    native_ema = factual_hsl and device == "cuda" and strategy_kind == "ema_anchor"
+    temporal_chunking = native_ema or (
         strategy_kind == "trailing_martingale"
         and n_bars > MPS_TM_MULTICOIN_CHUNK_BARS
         and (device == "cuda" or (
@@ -814,7 +816,7 @@ def _mps_multicoin_dispatch_plan(
     dispatch_history = (
         min(
             n_bars,
-            MPS_TM_MULTICOIN_CHUNK_BARS,
+            128 if native_ema else MPS_TM_MULTICOIN_CHUNK_BARS,
             MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // dispatch_candidates,
             max(1, max_candidate_bars // (n_coins * n_sides)),
         )
@@ -2627,6 +2629,7 @@ class MpsMulticoinProxy:
                 n_sides=len(enabled_sides),
                 max_candidate_bars=self.max_dispatch_candidate_bars,
                 device=gpu_device(torch),
+                factual_hsl=factual_hsl,
             )
         )
         if self.temporal_chunking:

@@ -3314,3 +3314,50 @@ Historical observations do not supersede those requirements or prove current acc
   exposes the limit of cancelling queued work while joining an active kernel.
   Record that unfinished evidence explicitly. Profile individual replay attempts,
   capacity retries and launch geometry before another all-width comparison.
+
+- PR #1952 clears independent review at head `fc73c4e446` with no findings and
+  all required Rust/Python CI. Merge `f406de00fa` integrates the compiler slice
+  into development.
+
+### 2026-10-09 — Separate larger HSL duration and numerical gaps
+
+- Profile individual public 25-coin EMA requests rather than another opaque
+  all-width suite phase. Two/four/eight-day kernels take approximately 34/99/229
+  seconds, all at factual capacity 256 without retries. The two-day single-candidate
+  group-one/default-group controls return identical results with similar duration.
+  This does not assess wider-cohort geometry or search throughput.
+- Record a concrete active-kernel interruption limitation and keep the larger
+  suite gate open. Reusing TM's bounded temporal replay pattern for EMA is a
+  candidate next step; avoid broad scheduling changes before establishing it.
+- Separate CPU references expose recovery-duration and fill differences beyond
+  the small ADG/drawdown absolute errors. The four-day recovery p95 differs by
+  approximately four hours on a nearly flat strategy curve. Tolerances remain
+  unassessed; evaluate path/metric sensitivity rather than asserting decimal noise.
+- A completed independent HSL-off native control disables the explicit portfolio
+  policy as well as both side policies. All ten GPU metrics and CPU/GPU errors
+  remain equal to the HSL-on case. The gap persists without HSL protection;
+  keep numerical diagnosis and reconstruction duration separate. The CPU reference
+  takes 0.161 seconds; cold GPU request time is not warm kernel evidence.
+
+### 2026-10-09 — Bound native EMA replay without a second dispatcher
+
+- Extend the existing temporal replay protocol to native CUDA EMA, preserving
+  per-candidate state and actual finalization endpoints. Move dispatch ownership
+  into the shared multicoin owner; adapters name their kernel and state-size query.
+  Legacy EMA/Metal continue to use the whole-replay ABI.
+- Query the compiled state size before physical admission and include it with
+  factual, unstuck and metric histories. Release obsolete state allocations before
+  admitting a changed layout or allocating another physical batch. Keep this
+  memory policy independent of evolution and request payloads.
+- Use an initial 128-bar ceiling for active factual HSL in EMA; retain the existing
+  work envelope and larger HSL-off ceiling. This is a bounded starting policy,
+  not measured optimality or a guarantee of short wall-clock dispatches. CUDA
+  continuity, interruption, overflow/retry and duration checks pass in the scoped
+  development evidence: 31 actual CUDA controls and eleven mocked policy checks.
+  The 25-coin two-day comparison preserves all ten metrics, takes about 33–34
+  seconds in either replay mode and reduces the largest observed command from
+  34.249 to 2.845 seconds. Eight native EMA CLI/resume checks also pass without
+  CPU backtests. Independent review and CI remain integration gates.
+- Input-f32 CPU controls preserve the four-day fill rate and recovery distribution.
+  Simple input rounding does not explain the previously measured discrepancy;
+  retain the open numerical gate and investigate the trading path.

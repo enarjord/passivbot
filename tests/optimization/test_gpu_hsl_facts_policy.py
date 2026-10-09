@@ -9,6 +9,9 @@ from optimization.gpu.mps_kernel import HslFactHistoryOverflow, MpsEmaAnchorMult
 
 def _runner(capacity=1):
     runner = object.__new__(MpsEmaAnchorMulticoinRunner)
+    runner.max_dispatch_candidate_bars = None
+    runner._replay_state_bytes = None
+    runner.native_factual_hsl = False
     runner.hsl_fact_capacity = capacity
     runner.hsl_capacity = 64
     runner.hsl_scopes = 2

@@ -1150,6 +1150,7 @@ def _ema_anchor_multicoin_shader_library(
     hsl_factual_only: bool = False,
     unstuck_enabled: bool = True,
     side: str | None = None,
+    temporal_chunking: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1165,6 +1166,10 @@ def _ema_anchor_multicoin_shader_library(
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
     source = _with_unstuck(source, unstuck_enabled)
     source = _with_multicoin_side(source, side)
+    if temporal_chunking:
+        if "#if PASSIVBOT_EMA_MULTICOIN_CHUNKED" not in source:
+            raise RuntimeError("GPU source is missing the EMA replay-state contract")
+        source = "#define PASSIVBOT_EMA_MULTICOIN_CHUNKED 1\n" + source
     # Keep diagnostics for forced delist panic-loss parity even when the HSL
     # controllers and their per-candle scans are compiled away.
     source = _with_hsl_disabled(source, hsl_disabled)
@@ -2314,6 +2319,8 @@ class _MulticoinReplayRunner:
     scalar_cols = MPS_MULTICOIN_SCALAR_COLS
     replay_sides = 1
     side_specialization = True
+    cuda_whole_group_size = None
+    temporal_chunk_bar_limit = MPS_TM_MULTICOIN_CHUNK_BARS
     supports_entry_interval = False
     specialize_metal_coin_capacity = False
     _validate_hsl_params = _validate_hsl_params
@@ -2358,9 +2365,17 @@ class _MulticoinReplayRunner:
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
         unstuck_pnl_lookback_bars: int = 0,
+        max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
         interrupt_check=None,
     ):
+        if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
+            raise ValueError("max_dispatch_candidate_bars must be positive")
+        self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
+        self._replay_state_bytes = None
+        self._replay_state_sizes = {}
+        self._replay_states = {}
+        self._last_temporal_dispatch = None
         if side not in {"long", "short"}:
             raise ValueError(
                 f"MPS multicoin runner side must be long or short, got {side!r}"
@@ -2702,6 +2717,7 @@ class _MulticoinReplayRunner:
     def _history_bytes_per_candidate(self):
         return (
             self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
+            + (int(self._replay_state_bytes or 0) if self._temporal_replay_enabled() else 0)
             + (4 * self.n_days if self.raw_strategy_risk_enabled else 0)
             + (8 * self.n_days if self.raw_strategy_growth_enabled else 0)
             + weighted_equity_history_bytes(
@@ -2960,8 +2976,110 @@ class _MulticoinReplayRunner:
         self.hsl_fact_capacity = capacity
         self.hsl_factual_replay = active
 
+    def _prepare_replay_state_layout(self, library, library_args):
+        if not self._temporal_replay_enabled():
+            self._replay_state_bytes = None
+            self._replay_states.clear()
+            return
+        if library_args not in self._replay_state_sizes:
+            size = torch.empty(1, dtype=torch.int32, device=gpu_device())
+            getattr(library, self.replay_state_size_kernel_name)(size, threads=1)
+            self._replay_state_sizes[library_args] = int(size.item())
+        state_bytes = self._replay_state_sizes[library_args]
+        if self._replay_state_bytes != state_bytes:
+            self._replay_states.clear()
+        self._replay_state_bytes = state_bytes
+        if self._replay_state_bytes < 1:
+            raise RuntimeError("GPU replay state has an invalid compiled size")
+
+    def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size):
+        kernel = getattr(library, self.replay_kernel_name)
+        if not self._temporal_replay_enabled():
+            dispatch_options = {"threads": (batch_size, 1, 1)}
+            if gpu_device(torch) == "cuda" and self.replay_sides == 1 and self.cuda_whole_group_size is not None:
+                # Spread independent, state-heavy candidates across more SMs.
+                dispatch_options["group_size"] = self.cuda_whole_group_size
+            kernel(
+                *kernel_args, **dispatch_options
+            )
+            return
+        chunk_bars = min(
+            self.temporal_chunk_bar_limit if getattr(self, "hsl_fact_capacity", 0) else MPS_TM_MULTICOIN_CHUNK_BARS,
+            MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // batch_size,
+            self.max_dispatch_candidate_bars // (batch_size * self.n_coins * self.replay_sides),
+        )
+        if chunk_bars < 1:
+            raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
+        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+            raise ValueError("GPU replay state batch exceeds its scratch budget")
+        state_key = (batch_size, self._replay_state_bytes)
+        if state_key not in self._replay_states:
+            self._replay_states.clear()
+            self._replay_states = {
+                state_key: torch.empty(
+                    (batch_size, self._replay_state_bytes),
+                    dtype=torch.uint8,
+                    device=gpu_device(),
+                )
+            }
+        replay_states = self._replay_states[state_key]
+        stop_k = int(end_steps.max().item())
+        dispatch_count = 0
+        max_dispatch_seconds = 0.0
+        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=chunk_bars)
+        replay_started = time.perf_counter()
+        next_progress = replay_started + 30.0
+        # One SIMD-width group distributes independent, state-heavy replays
+        # across GPU cores instead of packing the batch into a large group.
+        threads_per_threadgroup = min(batch_size, 32)
+        for begin_k in range(1, max(2, stop_k), chunk_bars):
+            self.interrupt_check()
+            replay_range = torch.tensor(
+                [begin_k, min(begin_k + chunk_bars, stop_k)],
+                dtype=torch.int32,
+                device=gpu_device(),
+            )
+            started = time.perf_counter()
+            kernel(
+                *kernel_args,
+                replay_states,
+                replay_range,
+                threads=(batch_size, 1, 1),
+                group_size=(threads_per_threadgroup, 1, 1),
+            )
+            # Bound queued work as well as each command, and make Ctrl+C visible
+            # between temporal chunks even when profiling is disabled.
+            synchronize()
+            dispatch_count += 1
+            dispatch_seconds = time.perf_counter() - started
+            max_dispatch_seconds = max(max_dispatch_seconds, dispatch_seconds)
+            processed_bars = min(begin_k + chunk_bars, stop_k) - begin_k
+            record_replay_chunk(
+                batch_size, processed_bars, stop_k - 1, dispatch_seconds,
+                eligible=begin_k > 1 and processed_bars == chunk_bars,
+            )
+            now = time.perf_counter()
+            completed_k = min(begin_k + chunk_bars, stop_k)
+            if now >= next_progress and completed_k < stop_k:
+                replay_progress.log("progress", completed_k - 1, now - replay_started, kernel_dispatches=dispatch_count)
+                next_progress = now + 30.0
+        self.interrupt_check()
+        replay_progress.log("complete", stop_k - 1, time.perf_counter() - replay_started, kernel_dispatches=dispatch_count)
+        self._last_temporal_dispatch = {
+            "dispatch_count": dispatch_count,
+            "temporal_chunk_bars": chunk_bars,
+            "threads_per_threadgroup": threads_per_threadgroup,
+            "max_dispatch_seconds": max_dispatch_seconds,
+            "kernel_candidate_steps": int((end_steps - 1).clamp(min=0).sum().item()),
+            "replay_state_bytes_per_candidate": self._replay_state_bytes,
+        }
+
+    def _temporal_replay_enabled(self):
+        return self.max_dispatch_candidate_bars is not None
+
     def run(self, params, *, profile=False, end_steps=None):
         """Grow bounded factual storage from rejected GPU work, without publishing it."""
+        self._last_temporal_dispatch = None
         self._prepare_native_factual_hsl(params)
         count_before = getattr(self, "hsl_fact_retry_count_total", 0)
         seconds_before = getattr(self, "hsl_fact_retry_seconds_total", 0.0)
@@ -2994,6 +3112,9 @@ class _MulticoinReplayRunner:
                 self.last_profile["hsl_fact_retry_count"] = self.last_hsl_fact_retries
                 self.last_profile["hsl_fact_retry_seconds"] = (self.hsl_fact_retry_seconds_total
                                                                 - seconds_before)
+            if (profile and self._last_temporal_dispatch is not None
+                    and "candidate_batch_count" not in self.last_profile):
+                self.last_profile.update(self._last_temporal_dispatch)
             return output
 
     def _run_factual_attempt(
@@ -3003,11 +3124,28 @@ class _MulticoinReplayRunner:
         profile: bool = False,
         end_steps: np.ndarray | None = None,
     ) -> dict:
+        started = time.perf_counter() if profile else 0.0
+        matrix = self._pack_params(params)
+        self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(matrix)
+        self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(matrix)
+        self.dispatch_unstuck_enabled = self._unstuck_required(matrix)
+        packed = time.perf_counter() if profile else 0.0
+        loader, library_args = self._library_cache_call()
+        library, cold = _cached_library_with_miss(loader, *library_args)
+        # The compiled ABI owns the state size. Include it in admission before
+        # any candidate histories or persistent state buffers are allocated.
+        self._prepare_replay_state_layout(library, library_args)
+        compiled = time.perf_counter() if profile else 0.0
         if self._history_bytes_per_candidate():
             split = self._run_history_batches(
                 params, profile=profile, end_steps=end_steps
             )
             if split is not None:
+                if profile:
+                    self.last_profile["cpu_pack_seconds"] += packed - started
+                    self.last_profile["compile_seconds"] += compiled - packed
+                    self.last_profile["cold"] |= cold
+                    self.last_profile["cold_dispatch_count"] += int(cold)
                 return split
         if self.hsl_capacity:
             keys = self.parameter_keys
@@ -3020,17 +3158,11 @@ class _MulticoinReplayRunner:
                     effective = np.repeat(effective, 2, axis=1)
             self._validate_hsl_params(
                 policy_matrix, keys, effective_enabled=effective)
-        started = time.perf_counter() if profile else 0.0
         self.settings[-2] = getattr(self, "hsl_fact_capacity", 0)
         factual_replay = bool(getattr(self, "hsl_factual_replay", False))
         if factual_replay and not getattr(self, "hsl_fact_capacity", 0):
             raise ValueError("GPU factual HSL evaluation requires retained fill capacity")
         self.settings[-1] = float(factual_replay)
-        matrix = self._pack_params(params)
-        self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(matrix)
-        self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(matrix)
-        self.dispatch_unstuck_enabled = self._unstuck_required(matrix)
-        packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
         end_steps_mps = self._end_steps(end_steps, batch_size)
@@ -3066,14 +3198,11 @@ class _MulticoinReplayRunner:
                 device=gpu_device(),
             )
         prepared = time.perf_counter() if profile else 0.0
-        loader, library_args = self._library_cache_call()
-        library, cold = _cached_library_with_miss(loader, *library_args)
-        compiled = time.perf_counter() if profile else 0.0
         if profile:
             synchronize()
             dispatched = time.perf_counter()
         else:
-            dispatched = compiled
+            dispatched = prepared
         self._dispatch(
             library,
             params_mps,
@@ -3096,9 +3225,9 @@ class _MulticoinReplayRunner:
             finished = time.perf_counter()
             self.last_profile = {
                 "cpu_pack_seconds": packed - started,
-                "upload_and_zero_seconds": prepared - packed,
-                "compile_seconds": compiled - prepared,
-                "pre_dispatch_sync_seconds": dispatched - compiled,
+                "upload_and_zero_seconds": prepared - compiled,
+                "compile_seconds": compiled - packed,
+                "pre_dispatch_sync_seconds": dispatched - prepared,
                 "kernel_seconds": finished - dispatched,
                 "batch_size": batch_size,
                 "dispatch_count": 1,
@@ -3184,6 +3313,14 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             dtype=np.float32,
         )
 
+    replay_kernel_name = "passivbot_ema_anchor_multicoin"
+    replay_state_size_kernel_name = "passivbot_ema_multicoin_replay_state_bytes"
+    temporal_chunk_bar_limit = 128
+
+    def _temporal_replay_enabled(self):
+        return (self.max_dispatch_candidate_bars is not None
+                and self.native_factual_hsl and self.bars.device.type == "cuda")
+
     def _dispatch(
         self,
         library,
@@ -3237,10 +3374,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        library.passivbot_ema_anchor_multicoin(
-            *kernel_args,
-            threads=(batch_size, 1, 1),
-        )
+        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
 
     def _use_disabled_hsl_specialization(self, matrix):
         if getattr(self, "hsl_fact_capacity", 0):
@@ -3283,6 +3417,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "native_factual_hsl", False),
             getattr(self, "dispatch_unstuck_enabled", True),
             self._compiled_side(),
+            self._temporal_replay_enabled(),
         )
 
 
@@ -3291,6 +3426,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
 
     scalar_cols = MPS_MULTICOIN_FUSED_SCALAR_COLS
     replay_sides = 2
+    replay_kernel_name = "passivbot_ema_anchor_multicoin_fused"
+    replay_state_size_kernel_name = "passivbot_ema_multicoin_fused_replay_state_bytes"
     # The compact disabled-HSL layout specializes the one-side kernel. Keep
     # the fused dual-side kernel on its full state layout until every fused
     # HSL access has its own compile-time specialization.
@@ -3329,6 +3466,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
         unstuck_pnl_lookback_bars: int = 0,
+        max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
         interrupt_check=None,
     ):
@@ -3361,6 +3499,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
             unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
+            max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
             interrupt_check=interrupt_check,
         )
@@ -3503,10 +3642,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        library.passivbot_ema_anchor_multicoin_fused(
-            *kernel_args,
-            threads=(batch_size, 1, 1),
-        )
+        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
@@ -3566,6 +3702,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     replay_kernel_name = "passivbot_trailing_martingale_multicoin"
     replay_state_size_kernel_name = "passivbot_tm_multicoin_replay_state_bytes"
     replay_sides = 1
+    cuda_whole_group_size = (32, 1, 1)
 
     parameter_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
@@ -3615,13 +3752,6 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         factual_hsl: bool = False,
         interrupt_check=None,
     ):
-        if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
-            raise ValueError("max_dispatch_candidate_bars must be positive")
-        self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
-        self._replay_state_bytes = None
-        self._replay_state_sizes = {}
-        self._replay_states = {}
-        self._last_temporal_dispatch = None
         self.loss_gate_enabled = _encode_max_realized_loss_pct(max_realized_loss_pct) < 1.0
         self.loss_gate_specialization = True
         super().__init__(
@@ -3653,6 +3783,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
             unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
+            max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
             interrupt_check=interrupt_check,
         )
@@ -3768,101 +3899,6 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             kernel_args += self._unstuck_history_buffers(batch_size)
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
 
-    def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size):
-        kernel = getattr(library, self.replay_kernel_name)
-        if self.max_dispatch_candidate_bars is None:
-            dispatch_options = {"threads": (batch_size, 1, 1)}
-            if gpu_device(torch) == "cuda" and self.replay_sides == 1:
-                # Spread independent, state-heavy candidates across more SMs.
-                dispatch_options["group_size"] = (32, 1, 1)
-            kernel(
-                *kernel_args, **dispatch_options
-            )
-            return
-        chunk_bars = min(
-            MPS_TM_MULTICOIN_CHUNK_BARS,
-            MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // batch_size,
-            self.max_dispatch_candidate_bars // (batch_size * self.n_coins * self.replay_sides),
-        )
-        if chunk_bars < 1:
-            raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
-        _, library_args = self._library_cache_call()
-        if library_args not in self._replay_state_sizes:
-            size = torch.empty(1, dtype=torch.int32, device=gpu_device())
-            getattr(library, self.replay_state_size_kernel_name)(size, threads=1)
-            self._replay_state_sizes[library_args] = int(size.item())
-        self._replay_state_bytes = self._replay_state_sizes[library_args]
-        state_key = (batch_size, self._replay_state_bytes)
-        if state_key not in self._replay_states:
-            self._replay_states = {
-                state_key: torch.empty(
-                    (batch_size, self._replay_state_bytes),
-                    dtype=torch.uint8,
-                    device=gpu_device(),
-                )
-            }
-        replay_states = self._replay_states[state_key]
-        stop_k = int(end_steps.max().item())
-        dispatch_count = 0
-        max_dispatch_seconds = 0.0
-        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=chunk_bars)
-        replay_started = time.perf_counter()
-        next_progress = replay_started + 30.0
-        # One SIMD-width group distributes independent, state-heavy replays
-        # across GPU cores instead of packing the batch into a large group.
-        threads_per_threadgroup = min(batch_size, 32)
-        for begin_k in range(1, max(2, stop_k), chunk_bars):
-            self.interrupt_check()
-            replay_range = torch.tensor(
-                [begin_k, min(begin_k + chunk_bars, stop_k)],
-                dtype=torch.int32,
-                device=gpu_device(),
-            )
-            started = time.perf_counter()
-            kernel(
-                *kernel_args,
-                replay_states,
-                replay_range,
-                threads=(batch_size, 1, 1),
-                group_size=(threads_per_threadgroup, 1, 1),
-            )
-            # Bound queued work as well as each command, and make Ctrl+C visible
-            # between temporal chunks even when profiling is disabled.
-            synchronize()
-            dispatch_count += 1
-            dispatch_seconds = time.perf_counter() - started
-            max_dispatch_seconds = max(max_dispatch_seconds, dispatch_seconds)
-            processed_bars = min(begin_k + chunk_bars, stop_k) - begin_k
-            record_replay_chunk(
-                batch_size, processed_bars, stop_k - 1, dispatch_seconds,
-                eligible=begin_k > 1 and processed_bars == chunk_bars,
-            )
-            now = time.perf_counter()
-            completed_k = min(begin_k + chunk_bars, stop_k)
-            if now >= next_progress and completed_k < stop_k:
-                replay_progress.log("progress", completed_k - 1, now - replay_started, kernel_dispatches=dispatch_count)
-                next_progress = now + 30.0
-        self.interrupt_check()
-        replay_progress.log("complete", stop_k - 1, time.perf_counter() - replay_started, kernel_dispatches=dispatch_count)
-        self._last_temporal_dispatch = {
-            "dispatch_count": dispatch_count,
-            "temporal_chunk_bars": chunk_bars,
-            "threads_per_threadgroup": threads_per_threadgroup,
-            "max_dispatch_seconds": max_dispatch_seconds,
-            "kernel_candidate_steps": int((end_steps - 1).clamp(min=0).sum().item()),
-            "replay_state_bytes_per_candidate": self._replay_state_bytes,
-        }
-
-    def run(self, params, *, profile=False, end_steps=None):
-        self._last_temporal_dispatch = None
-        output = super().run(params, profile=profile, end_steps=end_steps)
-        if (
-            profile
-            and self._last_temporal_dispatch is not None
-            and "candidate_batch_count" not in self.last_profile
-        ):
-            self.last_profile.update(self._last_temporal_dispatch)
-        return output
 
 
 class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRunner):
