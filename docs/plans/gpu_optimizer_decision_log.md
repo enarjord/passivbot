@@ -3497,3 +3497,10 @@ Historical observations do not supersede those requirements or prove current acc
 - Keep retirement unpublished until representative factual resource/numerical
   comparisons, current CUDA callers and cutover CLI controls pass, then obtain
   independent current-head review and all required CI on development.
+
+- The parity command and programmatic comparator now default to the actual native
+  CUDA service; earlier directional/observer replay remains an explicit diagnostic
+  option. Defaults must test the delivered optimizer rather than a superseded
+  simulation policy. CLI regressions cover default/native/legacy selection; real
+  service comparisons and CLI cases now exercise omitted-engine defaults. Host
+  comparator/cleanup/report controls pass; device verification remains pending.

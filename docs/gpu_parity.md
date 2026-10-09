@@ -57,14 +57,14 @@ passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 2 --bars 300
   hard_stop_duration_minutes_max --report expiry.json
 ```
 
-This is an adversarial diagnostic with known reconstruction differences, not a
-passing release fixture. Missing policies remain unassessed; do not infer acceptance
-from the execution completing.
+This is an adversarial diagnostic, not a blanket release gate. Missing policies remain
+unassessed; evaluate current reconstruction and numerical differences case by case,
+without inferring acceptance from execution completing.
 
-`--gpu-engine native` uses the actual `CudaBacktestService` selected by native GPU
-optimization, including its shared-account replay for a single coin. It requires NVIDIA
-CUDA and never falls back to the legacy path. The default `legacy` retains the existing
-single-coin/multicoin replay selection, including supported Apple Metal installations.
+The default `--gpu-engine native` uses the actual `CudaBacktestService` selected by GPU
+optimization, including factual HSL and shared-account replay for a single coin. It requires
+NVIDIA CUDA and never falls back to the legacy path. Explicit `--gpu-engine legacy` retains
+the earlier single-coin/multicoin diagnostic selection, including Apple Metal installations.
 Reports label both the chosen engine and replay family; a one-coin legacy comparison does
 not establish parity of the native shared-account implementation. Neither mode changes
 metric tolerances or calls this comparator during optimization.

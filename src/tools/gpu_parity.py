@@ -63,8 +63,8 @@ def build_parser():
     parser.add_argument("--report", help="Save a standard-JSON report here")
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--diagnostics", action="store_true", help="Include bounded fill/state summaries")
-    parser.add_argument("--gpu-engine", choices=("legacy", "native"), default="legacy",
-                        help="GPU replay path: legacy selection or the native CUDA optimizer service")
+    parser.add_argument("--gpu-engine", choices=("legacy", "native"), default="native",
+                        help="GPU replay path: native CUDA optimizer service (default) or legacy diagnostic selection")
     return parser
 
 
@@ -372,7 +372,7 @@ def _native_dataset(inputs, exchange, metrics):
         resources.close()
 
 
-def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostics=False, gpu_engine="legacy"):
+def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostics=False, gpu_engine="native"):
     if gpu_engine not in {"legacy", "native"}:
         raise ValueError("GPU parity engine must be legacy or native")
     from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension

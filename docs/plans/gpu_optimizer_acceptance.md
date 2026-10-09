@@ -2132,7 +2132,8 @@ The CUDA ask/tell implementation now occupies the existing `gpu` backend path in
 local cutover prototype. Remove the intermediate backend, CPU validation pools/queues,
 drift probes, screened-seed policy, exact-worker tuner and obsolete replay calibration
 cache. Preserve service-owned completed-work width/delay tuning, physical history limits
-and adaptive temporal commands. Preserve independent direct-replay and CPU parity tools.
+and adaptive temporal commands. Preserve independent direct-replay and CPU parity tools. The parity command defaults
+to the delivered native CUDA service; legacy replay requires an explicit diagnostic flag.
 
 The canonical GPU config has five settings: batch width, dispatch work ceiling, tuning
 mode, checkpoint interval and scenario screening. Population/search settings remain

@@ -12,8 +12,8 @@ def fixture(*options):
     ]))
 
 
-@pytest.mark.parametrize("engine", ["legacy", "native"])
-def test_cli_passes_explicit_engine_to_comparison(monkeypatch, capsys, engine):
+@pytest.mark.parametrize("selected,engine", [(None, "native"), ("legacy", "legacy"), ("native", "native")])
+def test_cli_selects_the_native_optimizer_service_by_default(monkeypatch, capsys, selected, engine):
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
         validate_gpu_metric_names=lambda names: names,
     ))
@@ -21,8 +21,8 @@ def test_cli_passes_explicit_engine_to_comparison(monkeypatch, capsys, engine):
         assert kwargs["gpu_engine"] == engine
         return {"passed": True, "gpu_engine": engine}
     monkeypatch.setattr(gpu_parity, "run_comparison", compared)
-    assert gpu_parity.main(["--fixture", "trailing_martingale", "--bars", "128",
-                            "--gpu-engine", engine]) == 0
+    flags = ["--gpu-engine", selected] if selected is not None else []
+    assert gpu_parity.main(["--fixture", "trailing_martingale", "--bars", "128", *flags]) == 0
     assert json.loads(capsys.readouterr().out)["gpu_engine"] == engine
 
 
@@ -114,7 +114,7 @@ def test_native_parity_uses_actual_service_shared_replay_and_one_cpu_simulation(
     monkeypatch.setattr(replays, "MpsSingleCoinProxy", wrong_engine)
     report = gpu_parity.run_comparison(
         inputs, "binance", gpu_parity.DEFAULT_METRICS, gpu_parity.DEFAULT_TOLERANCES,
-        gpu_engine="native", diagnostics=True,
+        diagnostics=True,
     )
     assert len(cpu_rows) == len(registered) == 1
     assert len(registered[0].coin_indices) == coins
@@ -125,7 +125,8 @@ def test_native_parity_uses_actual_service_shared_replay_and_one_cpu_simulation(
     config, candles, markets, btc, timestamps = inputs
     expected = MpsMulticoinProxy(config=config, hlcvs=candles, mss=markets, btc=btc,
                                 timestamps=timestamps, exchange="binance", batch_size=1,
-                                needed_metrics=gpu_parity.DEFAULT_METRICS).evaluate_results([{}])[0]
+                                needed_metrics=gpu_parity.DEFAULT_METRICS,
+                                factual_hsl=True).evaluate_results([{}])[0]
     assert report["diagnostics"]["gpu"]["native_result"]["liquidated"] == expected.liquidated
     for name in gpu_parity.DEFAULT_METRICS:
         assert report["metrics"][name]["cpu"] == resolve_metric_value(cpu_rows[0], name)
@@ -139,7 +140,7 @@ def test_real_native_parity_cli_returns_comparison_and_engine_identity(capsys, c
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
     code = gpu_parity.main(["--fixture", "trailing_martingale", "--coins", str(coins),
-                            "--gpu-engine", "native", "--diagnostics", "--compact"])
+                            "--diagnostics", "--compact"])
     report = json.loads(capsys.readouterr().out)
     assert code in (0, 1), report
     assert report["gpu_engine"] == "native" and report["gpu_replay"] == "shared_account"
