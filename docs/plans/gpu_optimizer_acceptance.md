@@ -1570,3 +1570,154 @@ Constant marks produce zero risk metrics here, so these cases establish boundary
 and performance behavior, not additional nonzero HSL-risk coverage. Component,
 mixed-candidate and lifecycle cases supply that separate evidence. Do not relax
 endpoint guards merely to obtain a larger speedup.
+
+
+## Native service suite resource baseline
+
+The [service benchmark](../gpu_service_benchmark.md) adds three-scenario observations
+without CPU simulations. This baseline uses the preceding completed-work demand
+policy; the window-demand correction and broader acceptance remain separate.
+
+```bash
+passivbot tool gpu-service-benchmark --strategy ema_anchor --coins 12 --bars 5760 \
+  --candidates 128 --rounds 3 --tuning-windows 2 --max-rounds 128 \
+  --accumulation-delay 0 --report suite.json
+```
+
+Use both sides and the public seed-seven fixture. The full scenario has twelve coins
+and 5,760 minute bars; early/late scenarios each select four coins and 2,880 bars
+from shared arrays, with aligned dates and validity metadata. Ten requested metrics
+include recovery distributions and weighted equity/volume. Compilation/cache state
+is retained between phases; these are first-use and warm observations, not fresh
+cold-cache comparisons. Accumulation is fixed at zero to isolate width decisions.
+
+On an RTX 3070 Ti Laptop GPU, all 33,408 results match the width-one references
+exactly, with no reduction rounding differences. The automatic phase completes
+82 rounds and at least two unchanged 24-sample/30-second evidence windows per
+scenario. First-use timings, completion tails, per-window decisions and actual
+batch counts remain in the report; small batches alone do not prove optimal tuning.
+
+| Execution width | Warm requests/s | Peak Torch allocated bytes | Earlier sampled RSS bytes | Sampled global device bytes | Peak sampled packing bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1.901 | 3,417,600 | 1,298,616,320 | 1,490,026,496 | 4,888,848 |
+| 8 | 13.380 | 5,090,304 | 1,302,138,880 | 1,490,026,496 | 4,888,848 |
+| Automatic | 68.268 | 28,797,440 | 1,304,625,152 | 1,513,095,168 | 4,888,848 |
+
+Every owner snapshot has one resident dataset; packing reaches three reusable
+entries. Shared source arrays remain unchanged, all spill files are removed on
+close, and resource sampling reports no errors. One-second samples can miss short
+peaks. These historical RSS observations use a leader-only child walker and may
+omit worker-spawned children; they do not certify whole-process-tree memory.
+Global device memory includes
+driver/display/other-process allocations, while Torch peaks cover its allocator
+only. CPU time covers the benchmark process and its threads, excluding compiler
+children; it is not isolated orchestrator cost.
+
+This establishes a moderate synthetic suite resource observation and useful
+grouped execution. It does not establish large/long HSL resources, exclusively
+owned device memory, evolutionary search quality, CPU optimizer throughput or a
+globally optimal width. Those remain project acceptance work.
+
+
+The current service caller also exercises TM with production adaptive accumulation:
+
+```bash
+passivbot tool gpu-service-benchmark --strategy trailing_martingale --coins 12 \
+  --bars 5760 --candidates 16 --rounds 3 --report tm-suite.json
+```
+
+All 384 results match the isolated references exactly for the ten requested
+metrics. Width-one, width-eight and automatic warm rates are 0.433, 3.231 and
+5.991 requests/s respectively. Every owner snapshot retains one device dataset,
+packing reaches three entries, arrays remain unchanged and spill cleanup succeeds
+without sampling errors. Automatic Torch allocation peaks at 7,006,720 bytes. The earlier RSS sampler
+has the leader-only traversal limitation described above.
+This underfilled cohort checks the adaptive-accumulation caller and resources;
+it completes no production tuning windows and establishes no tuning optimum.
+
+A separate three-coin, 2,880-bar, two-candidate/two-round EMA run requests one
+window per scenario but bounds execution at two rounds. All 36 results agree
+exactly and cleanup succeeds. The report retains the measurements, marks automatic
+evidence insufficient and exits with status two as specified. This exercises the
+failure-to-meet-evidence path without treating valid simulations as failed.
+
+The larger current-demand comparison similarly reaches its initial 128-round
+bound with 51,072 exact results and clean resources, but only one completed
+window each for early/late scenarios. Their width-128 trials accumulate about
+22 seconds toward the unchanged 30-second threshold. A larger bounded run is
+required before reporting completed trial decisions; do not shorten the evidence
+threshold or present the partial run as proof of convergence.
+
+
+The extended current-demand comparison uses the same EMA recipe with
+`--max-rounds 256`. It finishes successfully after 151 automatic rounds, with
+59,904 results matching isolated GPU references exactly and no reduction-rounding
+differences. The base scenario consumes fourteen windows and retains width 64
+after rejecting width-128 and width-32 trials. Early and late each complete two
+windows and accept width 128: measured per-window rates increase from
+207.546 to 412.129 and from 213.831 to 421.634 candidates/s respectively.
+These are scenario-specific measured decisions, not a globally optimal policy.
+
+Warm cohort rates for widths one, eight and automatic execution are 1.645, 12.131
+and 71.781 requests/s. First reference rounds take 230.213 and 233.413 seconds,
+slower than the earlier baseline. Different durations, dispatch shapes and
+operating conditions prevent a causal whole-search speedup claim.
+Automatic Torch allocation/reservation peaks are 26,851,328/50,331,648 bytes;
+earlier sampled RSS/global device peaks are 1,304,571,904/1,513,095,168 bytes.
+This RSS observation has the same leader-only traversal limitation.
+Packing peaks at 4,888,848 bytes, with three cached entries and one resident
+dataset in every owner snapshot. Arrays remain unchanged, spill files are removed
+and sampling reports no errors. The checked source remains unchanged through
+completion. The broader resource, HSL, parity and search-quality gates remain open.
+
+
+Final explicit-failure tool checks use optimized Python for both strategy CLIs:
+three coins, 2,880 bars, two candidates and two rounds, producing 72 exact results
+across widths one/eight/automatic. Residency, unchanged inputs and spill cleanup
+pass without sampling errors. An injected comparator rejection propagates on the
+actual optimized CUDA path; replay instrumentation and CPU guards are restored
+and the worker closes. All 27 focused tool/window controls pass with the verified
+extension, and the final checked source remains unchanged. This strengthens
+failure detection without changing simulation or comparison tolerances.
+
+
+## Corrected Linux process-tree resource sampling
+
+PR #1950 review identifies that Linux child lists belong to individual threads.
+The corrected sampler traverses every task's child list and deduplicates processes.
+The real worker-spawned-child regression fails preceding code and passes the fix;
+all 29 focused tool/window checks pass on Linux. Earlier RSS observations above
+are qualified because their leader-only traversal may omit worker children.
+
+Refresh both strategy recipes with twelve coins, 5,760 bars, sixteen candidates
+and three rounds, using production adaptive accumulation. Start with fresh CUDA
+driver/CuPy compiler-cache directories, retaining state between execution phases.
+All 768 results match isolated GPU references exactly, with unchanged arrays, one
+resident dataset, three packing entries, clean spill removal and no sampling errors.
+
+| Strategy | Width-one / width-eight / automatic warm requests/s | Maximum sampled process-tree RSS bytes | Automatic Torch allocated / reserved bytes | Sampled global device peak bytes | Peak packing bytes |
+| --- | --- | ---: | --- | ---: | ---: |
+| EMA Anchor | 1.996 / 15.308 / 29.559 | 1,629,196,288 | 7,002,624 / 29,360,128 | 1,490,026,496 | 4,888,848 |
+| Trailing Martingale | 0.512 / 3.615 / 6.633 | 1,838,252,032 | 7,006,720 / 29,360,128 | 1,680,867,328 | 4,888,848 |
+
+RSS maxima include first-use compilation; later phase warm medians retain compiler
+state. The underfilled cohorts complete no tuning windows, and their observations
+do not replace the larger scenario-decision evidence or broader acceptance. One-second
+sampling can miss short peaks; global device memory includes unrelated allocations.
+Both preceding and corrected checked sources remain unchanged after validation.
+
+
+The subsequent review tightens unsupported-procfs reporting and extension identity:
+missing child lists yield null RSS instead of a parent-only baseline, and skipped,
+unstamped or mismatched runtime verification fails before fixture preparation.
+A changed replay ceiling invalidates its old tuning window before observation,
+including the completion that discovered the change; an unchanged ceiling preserves
+evidence. All 65 focused Linux/CUDA controls pass. Optimized-Python EMA/TM CLI
+refreshes complete 72 exact results with unchanged arrays and clean ownership/cleanup.
+Checked sources remain unchanged. These small callers establish the corrected
+validation path; earlier moderate resource observations retain their stated scope.
+
+Global-device availability now likewise derives from actual usable memory/utilization
+observations. Failed, empty or unsupported command output cannot advertise sampling
+as available. All 71 focused Linux/CUDA controls and 72 optimized-Python caller
+results pass on the final reporting correction; numerical comparison policy is unchanged.
