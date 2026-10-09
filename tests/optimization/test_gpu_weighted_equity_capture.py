@@ -256,7 +256,7 @@ def test_native_weighted_service_adapts_admission_without_cpu(monkeypatch, strat
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
-    base = mps_kernel.MpsEmaAnchorMulticoinRunner
+    base = mps_kernel._MulticoinReplayRunner
     init, run = base.__init__, base.run
     flags, dispatches = [], []
     def prepare(self, *args, **kwargs):
@@ -271,6 +271,7 @@ def test_native_weighted_service_adapts_admission_without_cpu(monkeypatch, strat
             assert len(self._weighted_equity_buffers) == 1
             assert all(output[name].shape == (len(parameters),)
                        and output[name].device.type == "cuda" for name in self.weighted_equity_metrics)
+            assert len(parameters) * self._history_bytes_per_candidate() <= self.hsl_scratch_budget_bytes
         else:
             assert self._weighted_equity_buffers == {}
             assert not set(output) & WEIGHTED_EQUITY_METRICS
@@ -287,7 +288,9 @@ def test_native_weighted_service_adapts_admission_without_cpu(monkeypatch, strat
         assert all(set(completion.metrics) == requested for completion in completions)
         assert all(completion.metrics == completions[0].metrics for completion in completions)
     assert flags == [WEIGHTED_EQUITY_METRICS, frozenset()]
-    assert sum(dispatches) == 8 and max(dispatches) == 2
+    assert sum(dispatches) == 8
+    # Effective HSL-off policies release factual scratch after the first replay.
+    assert min(dispatches) >= 1
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

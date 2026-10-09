@@ -12,7 +12,8 @@ since the latest release tag; these features may already be available when insta
   HSL scratch, without the legacy observation tree/window. Stable exposed episodes
   reuse a guarded scalar continuation; changed or uncertain facts reconstruct fresh.
   Learned factual capacity survives scenario residency switches without retaining
-  device buffers. Earlier native fitness checkpoints
+  device buffers. Native recovery histories reduce to compact metrics before
+  sub-batch results are combined. Earlier native fitness checkpoints
   require a fresh run; saved configurations remain usable as seeds.
 
 - Trailing-martingale partial initial entries preserve aligned quantity differences instead of losing one step to floating-point subtraction; genuine fractional differences still round down.

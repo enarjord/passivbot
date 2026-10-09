@@ -1668,6 +1668,71 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
     return output
 
 
+def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
+    width = len(keys)
+    for side, active in enumerate((runner.long_enabled, runner.short_enabled)):
+        if not active:
+            continue
+        cols = {
+            key: params[:, side * width + keys.index(key)]
+            for key in (
+                "hsl_enabled",
+                "hsl_red_threshold",
+                "hsl_ema_span_minutes",
+                "hsl_cooldown_minutes_after_red",
+                "hsl_restart_policy",
+                "hsl_signal_mode",
+                "hsl_slot_count",
+            )
+        }
+        enabled = cols["hsl_enabled"] > 0.5
+        if not np.isfinite(cols["hsl_enabled"]).all():
+            raise ValueError("GPU HSL enablement must be finite")
+        if not np.any(enabled):
+            continue
+        needs_history = (enabled if effective_enabled is None
+                         else enabled & effective_enabled[:, side])
+        if np.any(needs_history) and (
+            runner.interval_minutes != 1
+            or not 1440 <= runner.pnl_lookback_bars <= 90 * 1440
+        ):
+            raise ValueError(
+                "Enabled GPU HSL requires 1m candles and 1..90d lookback"
+            )
+        if any(not np.isfinite(v[enabled]).all() for v in cols.values()):
+            raise ValueError("GPU HSL parameters must be finite")
+
+        def selected(key):
+            return cols[key][enabled]
+
+        if (
+            np.any(selected("hsl_red_threshold") <= 0)
+            or np.any(selected("hsl_red_threshold") > 1)
+            or np.any(selected("hsl_ema_span_minutes") < 1)
+            or np.any(selected("hsl_cooldown_minutes_after_red") < 0)
+            or not np.isin(selected("hsl_restart_policy"), [0, 2]).all()
+            or not np.isin(selected("hsl_signal_mode"), [0, 1, 2]).all()
+            or np.any(selected("hsl_slot_count") < 1)
+        ):
+            raise ValueError("Invalid GPU HSL policy")
+    # Both directional views must identify the same topology. Unified has
+    # one explicitly packed policy; never choose between conflicting views.
+    mode = keys.index("hsl_signal_mode")
+    if np.any(params[:, mode] != params[:, width + mode]):
+        raise ValueError("GPU HSL views disagree on signal mode")
+    unified = params[:, mode] == 0
+    for key in (
+        "hsl_enabled",
+        "hsl_red_threshold",
+        "hsl_ema_span_minutes",
+        "hsl_cooldown_minutes_after_red",
+        "hsl_restart_policy",
+    ):
+        i = keys.index(key)
+        if np.any(params[unified, i] != params[unified, width + i]):
+            raise ValueError("Unified GPU HSL requires one shared policy")
+
+
 class MpsEmaAnchorRunner:
     hsl_scratch_budget_bytes = 512 * 1024 * 1024
 
@@ -1960,69 +2025,7 @@ class MpsEmaAnchorRunner:
         self._buffers[batch_size][0][:, :, 1].fill_(float("inf"))
         return self._buffers[batch_size]
 
-    def _validate_hsl_params(self, params, keys, *, effective_enabled=None):
-        width = len(keys)
-        for side, active in enumerate((self.long_enabled, self.short_enabled)):
-            if not active:
-                continue
-            cols = {
-                key: params[:, side * width + keys.index(key)]
-                for key in (
-                    "hsl_enabled",
-                    "hsl_red_threshold",
-                    "hsl_ema_span_minutes",
-                    "hsl_cooldown_minutes_after_red",
-                    "hsl_restart_policy",
-                    "hsl_signal_mode",
-                    "hsl_slot_count",
-                )
-            }
-            enabled = cols["hsl_enabled"] > 0.5
-            if not np.isfinite(cols["hsl_enabled"]).all():
-                raise ValueError("GPU HSL enablement must be finite")
-            if not np.any(enabled):
-                continue
-            needs_history = (enabled if effective_enabled is None
-                             else enabled & effective_enabled[:, side])
-            if np.any(needs_history) and (
-                self.interval_minutes != 1
-                or not 1440 <= self.pnl_lookback_bars <= 90 * 1440
-            ):
-                raise ValueError(
-                    "Enabled GPU HSL requires 1m candles and 1..90d lookback"
-                )
-            if any(not np.isfinite(v[enabled]).all() for v in cols.values()):
-                raise ValueError("GPU HSL parameters must be finite")
-
-            def selected(key):
-                return cols[key][enabled]
-
-            if (
-                np.any(selected("hsl_red_threshold") <= 0)
-                or np.any(selected("hsl_red_threshold") > 1)
-                or np.any(selected("hsl_ema_span_minutes") < 1)
-                or np.any(selected("hsl_cooldown_minutes_after_red") < 0)
-                or not np.isin(selected("hsl_restart_policy"), [0, 2]).all()
-                or not np.isin(selected("hsl_signal_mode"), [0, 1, 2]).all()
-                or np.any(selected("hsl_slot_count") < 1)
-            ):
-                raise ValueError("Invalid GPU HSL policy")
-        # Both directional views must identify the same topology. Unified has
-        # one explicitly packed policy; never choose between conflicting views.
-        mode = keys.index("hsl_signal_mode")
-        if np.any(params[:, mode] != params[:, width + mode]):
-            raise ValueError("GPU HSL views disagree on signal mode")
-        unified = params[:, mode] == 0
-        for key in (
-            "hsl_enabled",
-            "hsl_red_threshold",
-            "hsl_ema_span_minutes",
-            "hsl_cooldown_minutes_after_red",
-            "hsl_restart_policy",
-        ):
-            i = keys.index(key)
-            if np.any(params[unified, i] != params[unified, width + i]):
-                raise ValueError("Unified GPU HSL requires one shared policy")
+    _validate_hsl_params = _validate_hsl_params
 
     def release_replay_scratch(self):
         """Release completed replay buffers, retaining invariant market tensors."""
@@ -2279,12 +2282,17 @@ class MpsEmaAnchorRunner:
         return output
 
 
-class MpsEmaAnchorMulticoinRunner:
-    """Persistent single-side multi-coin EMA Anchor screening runner on MPS."""
+class _MulticoinReplayRunner:
+    """Worker-owned multicoin allocation, retry and dispatch lifecycle."""
 
-    coin_override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
-    coin_override_label = "EMA"
     scalar_cols = MPS_MULTICOIN_SCALAR_COLS
+    replay_sides = 1
+    supports_entry_interval = False
+    specialize_metal_coin_capacity = False
+    _validate_hsl_params = _validate_hsl_params
+
+    def _use_disabled_hsl_specialization(self, matrix):
+        return False
 
     def __init__(
         self,
@@ -2305,6 +2313,7 @@ class MpsEmaAnchorMulticoinRunner:
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        compact_recovery_output: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
         raw_strategy_growth_enabled: bool = False,
@@ -2331,6 +2340,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
         self.hsl_raw_tail_enabled = bool(hsl_raw_tail_enabled)
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
+        self.compact_recovery_output = bool(compact_recovery_output)
         self.weighted_volume_enabled = bool(weighted_volume_enabled)
         self.raw_strategy_risk_enabled = bool(raw_strategy_risk_enabled)
         self.raw_strategy_growth_enabled = bool(raw_strategy_growth_enabled)
@@ -2349,7 +2359,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.weighted_account_equity_enabled
         )
         self.dynamic_wel_by_tradability = bool(dynamic_wel_by_tradability)
-        fused = self.scalar_cols == MPS_MULTICOIN_FUSED_SCALAR_COLS
+        fused = self.replay_sides == 2
         self.long_enabled = fused or side == "long"
         self.short_enabled = fused or side == "short"
         if self.hsl_raw_tail_enabled:
@@ -2407,7 +2417,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.hsl_capacity = 0
         self._hsl_scratch_buffers = {}
         self.hsl_scratch_budget_bytes = 512 * 1024 * 1024
-        self.hsl_replay_sides = 2 if fused else 1
+        self.hsl_replay_sides = self.replay_sides
         self.hsl_scopes = self.hsl_replay_sides * (self.n_coins + 1)
         # Conservative resident seed; completed overflow learns upward. Keep
         # that estimate across dispatches where the effective HSL policy is off.
@@ -2425,7 +2435,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.entry_interval_enabled = bool(entry_interval_enabled)
         if (
             self.entry_interval_enabled
-            and self.coin_override_label != "Trailing Martingale"
+            and not self.supports_entry_interval
         ):
             raise ValueError(
                 "MPS entry-interval output is only defined for Trailing Martingale"
@@ -2462,7 +2472,7 @@ class MpsEmaAnchorMulticoinRunner:
         if (
             self.hsl_capacity
             and self.bars.device.type == "mps"
-            and self.coin_override_label == "Trailing Martingale"
+            and self.specialize_metal_coin_capacity
         ):
             if not 1 <= self.n_coins <= MPS_MULTICOIN_MAX_COINS:
                 raise ValueError("Metal coin count exceeds the multicoin shader limit")
@@ -2490,28 +2500,20 @@ class MpsEmaAnchorMulticoinRunner:
                 f"({self.n_coins}, {self.coin_override_cols}), "
                 f"got {coin_overrides.shape}"
             )
-        wel_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
-                      if self.coin_override_label == "Trailing Martingale"
-                      else EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN)
+        wel_column = self.coin_override_wel_column
         self.rms_ranking_coin_counts = (int(np.count_nonzero(coin_overrides[:, wel_column] != 0.0)),)
-        cooldown_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
-                           if self.coin_override_label == "Trailing Martingale"
-                           else EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN)
+        cooldown_column = self.coin_override_cooldown_column
         self.rms_cooldown_coin_overrides = (coin_overrides[:, [
             cooldown_column, self.coin_override_cols - 4, self.coin_override_cols - 3,
             self.coin_override_cols - 1, wel_column,
         ]].copy(),)
-        hsl_start = (TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
-                     if self.coin_override_label == "Trailing Martingale"
-                     else EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN)
+        hsl_start = self.coin_override_hsl_start
         hsl_overrides = coin_overrides[:, hsl_start]
         self._coin_hsl_enabled_overrides = (hsl_overrides.copy(),)
         self.coin_hsl_may_enable = bool(
             np.any(np.isfinite(hsl_overrides) & (hsl_overrides > 0.5))
         )
-        unstuck_start = (TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
-                         if self.coin_override_label == "Trailing Martingale"
-                         else EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN)
+        unstuck_start = self.coin_override_unstuck_start
         self._unstuck_ema_overrides = (coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
         self.coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(coin_overrides), device=gpu_device()
@@ -2586,31 +2588,6 @@ class MpsEmaAnchorMulticoinRunner:
             ),
         )
 
-    def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
-        return _scale_ema_multicoin_coin_overrides(
-            coin_overrides, self.interval_minutes
-        )
-
-    def _pack_params(self, params: np.ndarray) -> np.ndarray:
-        expected = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
-        if params.ndim != 2 or params.shape[1] != expected:
-            got = params.shape[1] if params.ndim == 2 else params.shape
-            raise ValueError(
-                f"expected multicoin EMA parameter matrix with {expected} columns, got {got}"
-            )
-        return np.ascontiguousarray(
-            _scale_directional_minute_parameters(
-                params,
-                EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
-                sides=1,
-                interval_minutes=self.interval_minutes,
-                ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
-                cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
-                dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
-            ),
-            dtype=np.float32,
-        )
-
     def _output_buffers(self, batch_size: int):
         if batch_size not in self._buffers:
             self._buffers = {
@@ -2666,117 +2643,15 @@ class MpsEmaAnchorMulticoinRunner:
             np.ascontiguousarray(values), dtype=torch.int32, device=gpu_device()
         )
 
-    def _dispatch(
-        self,
-        library,
-        params_mps,
-        sizes,
-        end_steps,
-        daily,
-        scalars,
-        gaps,
-        coin_fill_counts,
-        equity_balance_diff,
-        entry_interval_stats,
-        entry_interval_counts,
-        recovery_samples,
-        volume_samples,
-        weighted_equity_samples,
-        *,
-        batch_size: int,
-    ) -> None:
-        kernel_args = (
-            self.bars,
-            self.fill_ticks,
-            self.touch_ticks,
-            self.hour_log_ranges,
-            self.coin_settings,
-            self.coin_overrides,
-            params_mps,
-            self.settings,
-            sizes,
-            end_steps,
-        )
-        if self.btc_prices_enabled:
-            kernel_args += (self.btc_prices,)
-        if self.equity_balance_diff_enabled:
-            kernel_args += (equity_balance_diff,)
-        if self.entry_interval_enabled:
-            kernel_args += (entry_interval_stats, entry_interval_counts)
-        kernel_args += (
-            daily,
-            scalars,
-            gaps,
-            coin_fill_counts,
-        )
-        if self.recovery_distribution_enabled:
-            kernel_args += (recovery_samples,)
-        if self.weighted_volume_enabled:
-            kernel_args += (volume_samples,)
-        if self.weighted_equity_cols:
-            kernel_args += (weighted_equity_samples,)
-        if self.hsl_capacity:
-            kernel_args += self._hsl_buffers(batch_size)
-        if self.unstuck_pnl_capacity:
-            kernel_args += self._unstuck_history_buffers(batch_size)
-        library.passivbot_ema_anchor_multicoin(
-            *kernel_args,
-            threads=(batch_size, 1, 1),
-        )
-
     def _library(self):
         loader, args = self._library_cache_call()
         return loader(*args)
 
-    def _use_disabled_hsl_specialization(self, matrix):
-        if getattr(self, "hsl_fact_capacity", 0):
-            return False
-        # Coin-mode forced delists still report per-coin panic segments when
-        # HSL is disabled. The compact layout preserves only aggregate state.
-        # Fused and TM kernels do not implement this one-side EMA layout.
-        keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
-        return bool(
-            self.coin_override_label == "EMA"
-            and getattr(self, "hsl_disabled_specialization", True)
-            and not self.coin_hsl_may_enable
-            and np.all(matrix[:, keys.index("hsl_enabled")] <= 0.5)
-            and np.isin(matrix[:, keys.index("hsl_signal_mode")], [0, 1]).all()
-        )
-
     def _unstuck_ema_required(self, matrix):
         if not getattr(self, "unstuck_ema_specialization", True):
             return True
-        keys = (TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-                if self.coin_override_label == "Trailing Martingale"
-                else EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+        keys = self.parameter_keys
         return unstuck_ema_required(matrix, keys, self._unstuck_ema_overrides)
-
-    def _library_cache_call(self):
-        return _ema_anchor_multicoin_shader_library, (
-            self.hsl_ema_tail_enabled,
-            self.hsl_raw_drawdown_enabled,
-            self.hsl_raw_tail_enabled,
-            self.recovery_distribution_enabled,
-            self.dynamic_wel_by_tradability,
-            self.btc_risk_enabled,
-            self.equity_balance_diff_enabled,
-            getattr(self, "dispatch_hsl_disabled", False),
-            self.cuda_coin_capacity,
-            self.hsl_capacity,
-            self.pnl_lookback_bars,
-            self.mps_coin_capacity,
-            self.unstuck_pnl_lookback_bars,
-            self.unstuck_pnl_capacity,
-            self.weighted_volume_enabled,
-            self.raw_strategy_risk_enabled,
-            self.raw_strategy_growth_enabled,
-            self.weighted_raw_equity_enabled,
-            self.weighted_account_equity_enabled,
-            self.hsl_raw_tail_capacity,
-            getattr(self, "dispatch_unstuck_ema_enabled", True),
-            int(bool(getattr(self, "hsl_fact_capacity", 0))),
-            getattr(self, "native_factual_hsl", False),
-        )
 
     def _hsl_history_bytes_per_candidate(self):
         if not self.hsl_capacity:
@@ -3036,9 +2911,7 @@ class MpsEmaAnchorMulticoinRunner:
     def _prepare_native_factual_hsl(self, params):
         if not getattr(self, "native_factual_hsl", False):
             return
-        keys = (TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-                if self.coin_override_label == "Trailing Martingale"
-                else EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+        keys = self.parameter_keys
         matrix = np.asarray(params, dtype=np.float32)
         if matrix.ndim != 2 or matrix.shape[1] != len(keys) * self.hsl_replay_sides:
             raise ValueError("invalid native GPU candidate parameter shape")
@@ -3099,11 +2972,7 @@ class MpsEmaAnchorMulticoinRunner:
             if split is not None:
                 return split
         if self.hsl_capacity:
-            keys = (
-                TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-                if self.coin_override_label == "Trailing Martingale"
-                else EMA_ANCHOR_MULTICOIN_PARAM_KEYS
-            )
+            keys = self.parameter_keys
             policy_matrix = np.asarray(params, dtype=np.float32)
             effective = (self._native_hsl_effective_enablement(policy_matrix, keys)
                          if getattr(self, "native_factual_hsl", False) else None)
@@ -3111,8 +2980,8 @@ class MpsEmaAnchorMulticoinRunner:
                 policy_matrix = np.concatenate((policy_matrix, policy_matrix), axis=1)
                 if effective is not None:
                     effective = np.repeat(effective, 2, axis=1)
-            MpsEmaAnchorRunner._validate_hsl_params(
-                self, policy_matrix, keys, effective_enabled=effective)
+            self._validate_hsl_params(
+                policy_matrix, keys, effective_enabled=effective)
         started = time.perf_counter() if profile else 0.0
         self.settings[-2] = getattr(self, "hsl_fact_capacity", 0)
         factual_replay = bool(getattr(self, "hsl_factual_replay", False))
@@ -3215,10 +3084,17 @@ class MpsEmaAnchorMulticoinRunner:
             _decode_entry_interval_outputs(entry_interval_stats, entry_interval_counts)
         )
         if self.recovery_distribution_enabled:
-            output["strategy_eq_recovery_samples"] = recovery_samples
-            output["strategy_eq_recovery_sample_interval_days"] = (
-                self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
-            )
+            sample_interval_days = self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
+            if self.compact_recovery_output:
+                # Reduce accepted physical replays before logical sub-batches
+                # clone/join outputs. Raw histories remain available to direct
+                # diagnostic callers through the default output mode.
+                output["strategy_eq_recovery_distribution"] = strategy_eq_recovery_distribution_from_samples(
+                    recovery_samples, sample_interval_days=sample_interval_days,
+                )
+            else:
+                output["strategy_eq_recovery_samples"] = recovery_samples
+                output["strategy_eq_recovery_sample_interval_days"] = sample_interval_days
         if self.weighted_volume_enabled:
             output["volume_pct_per_day_avg_w"] = weighted_volume_from_samples(
                 volume_samples, output["first_eq_ts"], output["last_eq_ts"],
@@ -3233,10 +3109,147 @@ class MpsEmaAnchorMulticoinRunner:
         return output
 
 
+class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
+    """EMA Anchor parameter layout, packing and kernel dispatch."""
+
+    parameter_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    coin_override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
+    coin_override_label = "EMA"
+    coin_override_wel_column = EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+    coin_override_cooldown_column = EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN
+    coin_override_hsl_start = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
+    coin_override_unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
+
+    def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
+        return _scale_ema_multicoin_coin_overrides(
+            coin_overrides, self.interval_minutes
+        )
+
+    def _pack_params(self, params: np.ndarray) -> np.ndarray:
+        expected = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+        if params.ndim != 2 or params.shape[1] != expected:
+            got = params.shape[1] if params.ndim == 2 else params.shape
+            raise ValueError(
+                f"expected multicoin EMA parameter matrix with {expected} columns, got {got}"
+            )
+        return np.ascontiguousarray(
+            _scale_directional_minute_parameters(
+                params,
+                EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
+                sides=1,
+                interval_minutes=self.interval_minutes,
+                ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
+                cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
+                dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
+            ),
+            dtype=np.float32,
+        )
+
+    def _dispatch(
+        self,
+        library,
+        params_mps,
+        sizes,
+        end_steps,
+        daily,
+        scalars,
+        gaps,
+        coin_fill_counts,
+        equity_balance_diff,
+        entry_interval_stats,
+        entry_interval_counts,
+        recovery_samples,
+        volume_samples,
+        weighted_equity_samples,
+        *,
+        batch_size: int,
+    ) -> None:
+        kernel_args = (
+            self.bars,
+            self.fill_ticks,
+            self.touch_ticks,
+            self.hour_log_ranges,
+            self.coin_settings,
+            self.coin_overrides,
+            params_mps,
+            self.settings,
+            sizes,
+            end_steps,
+        )
+        if self.btc_prices_enabled:
+            kernel_args += (self.btc_prices,)
+        if self.equity_balance_diff_enabled:
+            kernel_args += (equity_balance_diff,)
+        if self.entry_interval_enabled:
+            kernel_args += (entry_interval_stats, entry_interval_counts)
+        kernel_args += (
+            daily,
+            scalars,
+            gaps,
+            coin_fill_counts,
+        )
+        if self.recovery_distribution_enabled:
+            kernel_args += (recovery_samples,)
+        if self.weighted_volume_enabled:
+            kernel_args += (volume_samples,)
+        if self.weighted_equity_cols:
+            kernel_args += (weighted_equity_samples,)
+        if self.hsl_capacity:
+            kernel_args += self._hsl_buffers(batch_size)
+        if self.unstuck_pnl_capacity:
+            kernel_args += self._unstuck_history_buffers(batch_size)
+        library.passivbot_ema_anchor_multicoin(
+            *kernel_args,
+            threads=(batch_size, 1, 1),
+        )
+
+    def _use_disabled_hsl_specialization(self, matrix):
+        if getattr(self, "hsl_fact_capacity", 0):
+            return False
+        # Coin-mode forced delists still report per-coin panic segments when
+        # HSL is disabled. The compact layout preserves only aggregate state.
+        # Fused and TM kernels do not implement this one-side EMA layout.
+        keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        return bool(
+            getattr(self, "hsl_disabled_specialization", True)
+            and not self.coin_hsl_may_enable
+            and np.all(matrix[:, keys.index("hsl_enabled")] <= 0.5)
+            and np.isin(matrix[:, keys.index("hsl_signal_mode")], [0, 1]).all()
+        )
+
+    def _library_cache_call(self):
+        return _ema_anchor_multicoin_shader_library, (
+            self.hsl_ema_tail_enabled,
+            self.hsl_raw_drawdown_enabled,
+            self.hsl_raw_tail_enabled,
+            self.recovery_distribution_enabled,
+            self.dynamic_wel_by_tradability,
+            self.btc_risk_enabled,
+            self.equity_balance_diff_enabled,
+            getattr(self, "dispatch_hsl_disabled", False),
+            self.cuda_coin_capacity,
+            self.hsl_capacity,
+            self.pnl_lookback_bars,
+            self.mps_coin_capacity,
+            self.unstuck_pnl_lookback_bars,
+            self.unstuck_pnl_capacity,
+            self.weighted_volume_enabled,
+            self.raw_strategy_risk_enabled,
+            self.raw_strategy_growth_enabled,
+            self.weighted_raw_equity_enabled,
+            self.weighted_account_equity_enabled,
+            self.hsl_raw_tail_capacity,
+            getattr(self, "dispatch_unstuck_ema_enabled", True),
+            int(bool(getattr(self, "hsl_fact_capacity", 0))),
+            getattr(self, "native_factual_hsl", False),
+        )
+
+
 class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
     """Persistent dual-side shared-account EMA Anchor runner on Apple MPS."""
 
     scalar_cols = MPS_MULTICOIN_FUSED_SCALAR_COLS
+    replay_sides = 2
     # The compact disabled-HSL layout specializes the one-side kernel. Keep
     # the fused dual-side kernel on its full state layout until every fused
     # HSL access has its own compile-time specialization.
@@ -3262,6 +3275,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        compact_recovery_output: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
         raw_strategy_growth_enabled: bool = False,
@@ -3294,6 +3308,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            compact_recovery_output=compact_recovery_output,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             raw_strategy_growth_enabled=raw_strategy_growth_enabled,
@@ -3504,15 +3519,22 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
         )
 
 
-class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
+class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
 
     replay_kernel_name = "passivbot_trailing_martingale_multicoin"
     replay_state_size_kernel_name = "passivbot_tm_multicoin_replay_state_bytes"
     replay_sides = 1
 
+    parameter_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
+    coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+    coin_override_cooldown_column = TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
+    coin_override_hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
+    coin_override_unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
+    supports_entry_interval = True
+    specialize_metal_coin_capacity = True
 
     def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
         return _scale_tm_multicoin_coin_overrides(coin_overrides, self.interval_minutes)
@@ -3536,6 +3558,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        compact_recovery_output: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
         raw_strategy_growth_enabled: bool = False,
@@ -3577,6 +3600,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            compact_recovery_output=compact_recovery_output,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             raw_strategy_growth_enabled=raw_strategy_growth_enabled,
@@ -3612,10 +3636,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         return _pack_tm_parameter_matrix(
             scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=1
         )
-
-    def _library(self):
-        loader, args = self._library_cache_call()
-        return loader(*args)
 
     def _library_cache_call(self):
         args = (
@@ -3801,9 +3821,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.last_profile.update(self._last_temporal_dispatch)
         return output
 
-    def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
-
 
 class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRunner):
     """Persistent dual-side shared-account Trailing Martingale runner on MPS."""
@@ -3834,6 +3851,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        compact_recovery_output: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
         raw_strategy_growth_enabled: bool = False,
@@ -3867,6 +3885,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            compact_recovery_output=compact_recovery_output,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             raw_strategy_growth_enabled=raw_strategy_growth_enabled,

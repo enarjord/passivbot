@@ -3021,3 +3021,84 @@ Historical observations do not supersede those requirements or prove current acc
 - The bounded continuation slice is ready for independent review and CI. Broader
   numerical, total-resource and whole-optimizer gates remain open; do not present
   this slice as completion of the optimizer redesign.
+
+
+### 2026-10-08 — Give multicoin replay a strategy-neutral owner
+
+- Extract the existing multicoin allocation, history, retry and result-decoding
+  lifecycle into a private replay base. EMA Anchor and Trailing Martingale are
+  sibling adapters; each owns its parameter layout, override columns, packing,
+  library identity and kernel dispatch. Diagnostic names no longer select binary
+  layouts or capabilities. Preserve existing public runner names and the separate
+  directional single-coin family; introduce no general backend framework.
+- Preserve fused strategy dispatch methods and shared numerical behavior. Host
+  controls change diagnostic labels while checking actual layout selection, native
+  HSL enablement/learned capacity and unstuck specialization. All four regressions
+  fail the preceding implementation and pass the extracted owner. These are
+  source-only checks, not GPU simulations.
+- Require actual CUDA replay, temporal/retry, residency and real native optimizer
+  callers with a verified extension, plus independent current-head review and CI,
+  before integration. Keep this ownership cleanup separate from guarded HSL
+  continuation and its numerical/performance acceptance.
+
+
+### 2026-10-08 — Compact recovery output within shared replay ownership
+
+- A native policy-switch control with two coins/both sides and 512 minute bars
+  shows raw recovery histories escaping physical replay admission. Set a 200,000-byte
+  scratch budget and retain a legal 512-record factual estimate after HSL-off work;
+  a 24-request HSL-on cohort splits into one-candidate replays. Factual scratch,
+  the recovery owner, cloned histories and their joined allocation coexist at
+  248,388 bytes, before subsequent reduction scratch. This is a bounded history
+  observation, not total device accounting or a capacity-learning reproduction.
+- Let native metric-service runners reduce each accepted physical recovery history
+  before sub-batch cloning/joining. Preserve raw output as the direct runner default
+  for diagnostics and legacy consumers. Keep the existing GPU recurrence/reducer
+  and metric semantics; do not reduce rejected factual attempts into fitness.
+- Extend the focused shared-owner extraction to own this compact result transport.
+  Reject malformed or ambiguous pre-reduced results; preserve the original opt-in
+  raw postprocessor. Nine host transport checks pass. Updated liquidation controls
+  observe reducer inputs, preserving raw-trajectory evidence without relying on
+  raw histories being returned from the metric service. Actual CUDA regression,
+  broader callers, independent review and CI remain required before integration.
+
+
+### 2026-10-09 — Complete shared-owner and compact-result validation
+
+- Affected validation passes 706 host/source/device checks: 154 execution/data/
+  residency/tuning, 301 service, fifteen layout controls, 35 recovery, 116 factual
+  replay, 53 device/transport, four optional-history, sixteen expired-history and
+  twelve real CLI/data/service cases. The latter retain CPU-forbidden optimizer
+  bootstrap/resume coverage. All checked sources remain unchanged after each run;
+  the final derivative changes only two budget tests and the acceptance record.
+- Both strategy regressions fail the preceding raw recovery transport at the
+  specific 248,388-byte allocation overlap. Corrected compact transport combines
+  672 bytes of recovery summaries for 24 requests and preserves results against
+  raw GPU diagnostic controls. No comparison tolerance or numerical recurrence
+  changes. Rust and shaders are unchanged in this slice.
+- Earlier fixed-width volume/equity controls also fail preceding code: HSL-off
+  releases its initial factual allowance, permitting widths six/five. Correct
+  tests to assert the effective physical history envelope; do not constrain
+  production scheduling merely to preserve an outdated width expectation.
+- Keep guarded continuation as a separate reviewed slice. Integrate the actual
+  development head, validate affected combined callers and obtain independent
+  current-head review plus required CI before merging the shared-owner slice.
+  Representative resources, numerical materiality and replacement retirement
+  remain whole-project gates.
+
+
+### 2026-10-09 — Validate cleanup against the continuation development merge
+
+- Guarded HSL continuation is integrated on development through
+  [PR #1947](https://github.com/enarjord/passivbot/pull/1947), after clean independent
+  current-head review and Rust/Python 3.12/Python 3.14 CI. Master is unchanged.
+  Reconcile the checklist and supersede the resolved benchmark HSL-gap wording
+  while preserving the measured residuals and broader acceptance limits.
+- The shared-owner/compact-result branch includes that actual development merge.
+  Resolving only changelog and decision-log conflicts preserves both implementations;
+  reconciliation with the subsequent development merge changes ancestry only.
+- Combined source-verified validation passes 216 affected checks: fifteen layout,
+  35 recovery, 134 factual replay, four optional-history, sixteen expired-history and
+  twelve real CLI/data/service cases. Rust/shaders match the reviewed continuation
+  runtime exactly. All 952 checked sources remain unchanged. Current-head
+  independent review and CI are still required for cleanup integration.

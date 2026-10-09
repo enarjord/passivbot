@@ -182,7 +182,7 @@ def test_native_volume_capture_is_optional_bounded_and_cpu_simulation_free(
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
-    base = mps_kernel.MpsEmaAnchorMulticoinRunner
+    base = mps_kernel._MulticoinReplayRunner
     init, run = base.__init__, base.run
     dispatches, flags = [], []
     def prepare(self, *args, **kwargs):
@@ -202,6 +202,7 @@ def test_native_volume_capture_is_optional_bounded_and_cpu_simulation_free(
             assert len(self._volume_buffers) == 1
             assert result["volume_pct_per_day_avg_w"].shape == (len(parameters),)
             assert result["volume_pct_per_day_avg_w"].device.type == "cuda"
+            assert len(parameters) * self._history_bytes_per_candidate() <= self.hsl_scratch_budget_bytes
         else:
             assert self._volume_buffers == {}
             assert "volume_pct_per_day_avg_w" not in result
@@ -219,4 +220,6 @@ def test_native_volume_capture_is_optional_bounded_and_cpu_simulation_free(
         assert all(result.metrics == results[0].metrics for result in results)
     assert flags == [True, False]
     assert sum(dispatches) == 8
-    assert max(dispatches) == 2
+    # HSL-off work releases its initial factual allowance; widths may grow
+    # while every physical replay remains inside the effective history envelope.
+    assert min(dispatches) >= 1

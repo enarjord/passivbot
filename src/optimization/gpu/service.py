@@ -994,6 +994,20 @@ def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
 
     if not set(needed_metrics) & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS:
         return None
+    if "strategy_eq_recovery_distribution" in output:
+        from optimization.gpu.mps_kernel import MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS, torch
+
+        if {"strategy_eq_recovery_samples", "strategy_eq_recovery_sample_interval_days"} & output.keys():
+            raise RuntimeError("Ambiguous GPU recovery output")
+        stats = output["strategy_eq_recovery_distribution"]
+        bounds = output.get("last_eq_ts")
+        if (not isinstance(stats, torch.Tensor) or not isinstance(bounds, torch.Tensor)
+            or stats.device.type not in {"cuda", "mps"} or stats.device != bounds.device
+            or stats.dtype != torch.float32 or stats.ndim != 2
+            or bounds.shape != (stats.shape[0],)
+            or stats.shape[1] != MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS):
+            raise RuntimeError("Invalid compact GPU recovery output")
+        return stats
     required = {
         "strategy_eq_recovery_samples",
         "strategy_eq_recovery_sample_interval_days",
@@ -2979,6 +2993,9 @@ class MpsMulticoinProxy:
         )
         common_runner_kwargs["interrupt_check"] = self.interrupt_check
         common_runner_kwargs["factual_hsl"] = factual_hsl
+        common_runner_kwargs["compact_recovery_output"] = bool(
+            factual_hsl and common_runner_kwargs["recovery_distribution_enabled"]
+        )
         loss_gate_enabled = common_runner_kwargs["max_realized_loss_pct"] < 1.0
         common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
             _fill_pnl_lookback_bars(backtest_params)

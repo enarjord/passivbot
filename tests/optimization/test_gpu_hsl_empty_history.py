@@ -240,10 +240,10 @@ def test_native_callers_use_their_own_factual_fill_history(
     from tools.gpu_parity import run_comparison
 
     active = ("long", "short") if sides == "both" else (sides,)
-    from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinRunner
+    from optimization.gpu.mps_kernel import _MulticoinReplayRunner
 
     observed = []
-    original_run = MpsEmaAnchorMulticoinRunner.run
+    original_run = _MulticoinReplayRunner.run
 
     def capture(self, *args, **kwargs):
         output = original_run(self, *args, **kwargs)
@@ -255,7 +255,7 @@ def test_native_callers_use_their_own_factual_fill_history(
         ))
         return output
 
-    monkeypatch.setattr(MpsEmaAnchorMulticoinRunner, "run", capture)
+    monkeypatch.setattr(_MulticoinReplayRunner, "run", capture)
     metrics = ("hard_stop_triggers_per_year",)
     report = run_comparison(
         _integrated_inputs(strategy, sides, expired_sides), "binance", metrics,
