@@ -58,7 +58,8 @@ Resource observations include Torch allocator peaks, owner snapshots and
 one-second samples of Linux process-tree RSS, global device memory/utilization
 and packing disk bytes. Global device memory sums all GPUs, including driver,
 display and unrelated processes; it is not exclusive service VRAM. Sampling may
-miss short peaks. Linux RSS includes compiler children; whole-process CPU time
+miss short peaks. Linux RSS traverses children created by every process thread,
+including service-worker compiler children; whole-process CPU time
 includes its workers, preparation, in-process compilation and monitoring; it
 excludes compiler-child CPU time and is not isolated orchestrator cost. Unsupported or failed resource observations are explicit, and sampler
 errors are retained. The tool measures service execution only: it does not

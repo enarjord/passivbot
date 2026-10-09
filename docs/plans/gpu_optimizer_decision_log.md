@@ -3205,3 +3205,24 @@ Historical observations do not supersede those requirements or prove current acc
   tool/window controls pass; checked source remains unchanged. Documentation
   checks pass with only the existing size warnings. The slice is ready for
   current-head independent review and required CI on development.
+
+
+### 2026-10-09 — Correct worker-child RSS traversal after review
+
+- Independent review of PR #1950 identifies a valid Linux sampling gap: the
+  thread-specific child list of the process leader omits worker-spawned children.
+  Enumerate every task's child list, deduplicate processes and scope disappearing
+  thread races to the affected file. The offline regression fails preceding code
+  at 700 instead of 1,000 KiB and passes the correction.
+- Qualify the earlier historical RSS observations rather than presenting them as
+  complete process-tree accounting. Metric, device allocator and tuning evidence
+  remains valid. Validate actual Linux worker-child traversal and refresh CUDA
+  resource observations before requesting new-head review; no merge on old review.
+
+
+- The actual Linux worker-child regression also fails preceding source and passes
+  corrected source. All 29 focused Linux checks pass. Fresh-cache CUDA suite
+  observations produce 768 exact results across both strategies, with corrected
+  process-tree sampling, unchanged inputs, one resident dataset and clean cleanup.
+  Record resources in acceptance without attributing differences solely to the
+  sampler or claiming tuning convergence. Checked sources remain unchanged.

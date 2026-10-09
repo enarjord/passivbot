@@ -1597,7 +1597,7 @@ exactly, with no reduction rounding differences. The automatic phase completes
 scenario. First-use timings, completion tails, per-window decisions and actual
 batch counts remain in the report; small batches alone do not prove optimal tuning.
 
-| Execution width | Warm requests/s | Peak Torch allocated bytes | Sampled process-tree RSS bytes | Sampled global device bytes | Peak sampled packing bytes |
+| Execution width | Warm requests/s | Peak Torch allocated bytes | Earlier sampled RSS bytes | Sampled global device bytes | Peak sampled packing bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 1 | 1.901 | 3,417,600 | 1,298,616,320 | 1,490,026,496 | 4,888,848 |
 | 8 | 13.380 | 5,090,304 | 1,302,138,880 | 1,490,026,496 | 4,888,848 |
@@ -1606,7 +1606,9 @@ batch counts remain in the report; small batches alone do not prove optimal tuni
 Every owner snapshot has one resident dataset; packing reaches three reusable
 entries. Shared source arrays remain unchanged, all spill files are removed on
 close, and resource sampling reports no errors. One-second samples can miss short
-peaks. Process-tree RSS includes compiler children; global device memory includes
+peaks. These historical RSS observations use a leader-only child walker and may
+omit worker-spawned children; they do not certify whole-process-tree memory.
+Global device memory includes
 driver/display/other-process allocations, while Torch peaks cover its allocator
 only. CPU time covers the benchmark process and its threads, excluding compiler
 children; it is not isolated orchestrator cost.
@@ -1628,7 +1630,8 @@ All 384 results match the isolated references exactly for the ten requested
 metrics. Width-one, width-eight and automatic warm rates are 0.433, 3.231 and
 5.991 requests/s respectively. Every owner snapshot retains one device dataset,
 packing reaches three entries, arrays remain unchanged and spill cleanup succeeds
-without sampling errors. Automatic Torch allocation peaks at 7,006,720 bytes.
+without sampling errors. Automatic Torch allocation peaks at 7,006,720 bytes. The earlier RSS sampler
+has the leader-only traversal limitation described above.
 This underfilled cohort checks the adaptive-accumulation caller and resources;
 it completes no production tuning windows and establishes no tuning optimum.
 
@@ -1660,7 +1663,8 @@ and 71.781 requests/s. First reference rounds take 230.213 and 233.413 seconds,
 slower than the earlier baseline. Different durations, dispatch shapes and
 operating conditions prevent a causal whole-search speedup claim.
 Automatic Torch allocation/reservation peaks are 26,851,328/50,331,648 bytes;
-sampled process-tree RSS/global device peaks are 1,304,571,904/1,513,095,168 bytes.
+earlier sampled RSS/global device peaks are 1,304,571,904/1,513,095,168 bytes.
+This RSS observation has the same leader-only traversal limitation.
 Packing peaks at 4,888,848 bytes, with three cached entries and one resident
 dataset in every owner snapshot. Arrays remain unchanged, spill files are removed
 and sampling reports no errors. The checked source remains unchanged through
@@ -1675,3 +1679,29 @@ actual optimized CUDA path; replay instrumentation and CPU guards are restored
 and the worker closes. All 27 focused tool/window controls pass with the verified
 extension, and the final checked source remains unchanged. This strengthens
 failure detection without changing simulation or comparison tolerances.
+
+
+## Corrected Linux process-tree resource sampling
+
+PR #1950 review identifies that Linux child lists belong to individual threads.
+The corrected sampler traverses every task's child list and deduplicates processes.
+The real worker-spawned-child regression fails preceding code and passes the fix;
+all 29 focused tool/window checks pass on Linux. Earlier RSS observations above
+are qualified because their leader-only traversal may omit worker children.
+
+Refresh both strategy recipes with twelve coins, 5,760 bars, sixteen candidates
+and three rounds, using production adaptive accumulation. Start with fresh CUDA
+driver/CuPy compiler-cache directories, retaining state between execution phases.
+All 768 results match isolated GPU references exactly, with unchanged arrays, one
+resident dataset, three packing entries, clean spill removal and no sampling errors.
+
+| Strategy | Width-one / width-eight / automatic warm requests/s | Maximum sampled process-tree RSS bytes | Automatic Torch allocated / reserved bytes | Sampled global device peak bytes | Peak packing bytes |
+| --- | --- | ---: | --- | ---: | ---: |
+| EMA Anchor | 1.996 / 15.308 / 29.559 | 1,629,196,288 | 7,002,624 / 29,360,128 | 1,490,026,496 | 4,888,848 |
+| Trailing Martingale | 0.512 / 3.615 / 6.633 | 1,838,252,032 | 7,006,720 / 29,360,128 | 1,680,867,328 | 4,888,848 |
+
+RSS maxima include first-use compilation; later phase warm medians retain compiler
+state. The underfilled cohorts complete no tuning windows, and their observations
+do not replace the larger scenario-decision evidence or broader acceptance. One-second
+sampling can miss short peaks; global device memory includes unrelated allocations.
+Both preceding and corrected checked sources remain unchanged after validation.

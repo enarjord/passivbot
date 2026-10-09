@@ -116,3 +116,75 @@ else:
     raise SystemExit('Optimized Python skipped result validation')
 '''], capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
+
+
+def test_rss_tree_includes_children_of_every_thread_without_double_counting(tmp_path, monkeypatch):
+    for pid, kib, threads in [(10, 100, {10: '20', 11: '30 20'}),
+                              (20, 200, {20: '40'}), (30, 300, {30: ''}), (40, 400, {40: ''})]:
+        root = tmp_path / str(pid)
+        root.mkdir()
+        (root / 'status').write_text(f'VmRSS:\t{kib} kB\n')
+        for tid, children in threads.items():
+            task = root / 'task' / str(tid)
+            task.mkdir(parents=True)
+            (task / 'children').write_text(children)
+    def proc_path(value):
+        return tmp_path / str(value).removeprefix('/proc/')
+    monkeypatch.setattr(benchmark, 'Path', proc_path)
+    assert benchmark.rss_tree(10) == 1000 * 1024
+
+
+def test_rss_tree_counts_a_real_linux_worker_spawned_child():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if sys.platform != 'linux' or not Path('/proc/self/task').is_dir():
+        pytest.skip('Linux proc thread children are required')
+    script = '''
+import os, subprocess, sys
+from pathlib import Path
+from queue import Queue
+from threading import Event, Thread, get_native_id
+sys.path.insert(0, sys.argv[1])
+from tools.gpu_service_benchmark import rss_tree
+ready, done = Queue(), Event()
+def worker():
+    child = subprocess.Popen([sys.executable, '-c',
+        "import sys; data=bytearray(64*1024**2); data[::4096]=b'x'*(len(data)//4096); print('ready',flush=True); sys.stdin.read(1)"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        ready.put((child, get_native_id()))
+        done.wait(20)
+        child.communicate('x', timeout=10)
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=10)
+thread = Thread(target=worker)
+thread.start()
+try:
+    child, tid = ready.get(timeout=15)
+    if child.stdout.readline().strip() != 'ready':
+        raise RuntimeError('Child did not initialize its resident allocation')
+    root = Path(f'/proc/{os.getpid()}')
+    if str(child.pid) not in (root/'task'/str(tid)/'children').read_text().split():
+        raise RuntimeError('Child is not owned by the worker thread')
+    if str(child.pid) in (root/'task'/str(os.getpid())/'children').read_text().split():
+        raise RuntimeError('Fixture child unexpectedly belongs to the leader')
+    def resident(pid):
+        line = next(line for line in Path(f'/proc/{pid}/status').read_text().splitlines() if line.startswith('VmRSS:'))
+        return int(line.split()[1]) * 1024
+    child_rss, parent_rss = resident(child.pid), resident(os.getpid())
+    measured = rss_tree(os.getpid())
+    if child_rss < 32*1024**2 or measured < child_rss + parent_rss - 1024**2:
+        raise RuntimeError(f'Worker child omitted: measured={measured}, parent={parent_rss}, child={child_rss}')
+finally:
+    done.set()
+    thread.join(timeout=20)
+    if thread.is_alive():
+        raise RuntimeError('Worker child cleanup did not complete')
+'''
+    completed = subprocess.run([sys.executable, '-c', script, str(Path(benchmark.__file__).parents[1])],
+                               capture_output=True, text=True, timeout=45)
+    assert completed.returncode == 0, completed.stderr

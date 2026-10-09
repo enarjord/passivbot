@@ -35,9 +35,13 @@ def rss_tree(pid):
             for line in Path(f"/proc/{current}/status").read_text().splitlines():
                 if line.startswith("VmRSS:"):
                     total += int(line.split()[1]) * 1024
-            pending.extend(map(int, Path(f"/proc/{current}/task/{current}/children").read_text().split()))
         except (FileNotFoundError, ProcessLookupError):
-            pass  # A sampled compiler child can exit between the two reads.
+            continue  # A sampled process can exit before its status is read.
+        for children in Path(f"/proc/{current}/task").glob("*/children"):
+            try:
+                pending.extend(map(int, children.read_text().split()))
+            except (FileNotFoundError, ProcessLookupError):
+                pass  # One thread can exit while other threads remain readable.
     return total
 
 
