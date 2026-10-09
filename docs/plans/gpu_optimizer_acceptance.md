@@ -1983,9 +1983,10 @@ with the actual native request/future service through the public parity tool.
 The source-level Rust test proves why an 18-step position must retain a
 nine-step remainder after a nine-step clip. A second regression covers `1e-8`
 minimum remainders after clips of 1, 10 and 1,000, accounting for cancellation
-error at the operand scale. The allowance is capped at one quarter of a quantity
-step; an extreme-ratio regression preserves a valid two-step minimum remainder
-and consumes a genuinely one-step remainder after a 13,000,000-unit clip.
+error at the operand scale. The allowance is capped at half a quantity step;
+extreme-ratio regressions preserve valid minimum remainders and consume genuine
+one-step deficits after 13,000,000- and 40,000,000-unit clips. The latter reproduces
+the cancellation crossover missed by the preceding quarter-step ceiling.
 Genuinely undersized remainders
 still trigger full closes; GPU strategy arithmetic remains unchanged.
 
@@ -2002,10 +2003,9 @@ match exactly. No global tolerance or matching-nonfinite policy changes. This
 is a regression acceptance case, not certification of every recovery curve,
 limit threshold or strategy combination.
 
-All 337 Rust tests pass, with one existing ignored test, and default-feature
-test compilation plus rebuilt extension source verification pass. The step-capped
-revision passes 181 CPU backtest/plot, optimizer-isolation, analysis and Rust API
-caller checks without skips. The preceding operand-scaled revision passed 186
-parity, Rust-backed caller and native EMA CLI lifecycle checks. Current step-capped
-CUDA parity/native CLI verification, independent current-head review and CI remain
-integration gates; the earlier device results do not satisfy the current-build gate.
+The half-step revision passes 338 Rust tests, with one existing ignored test,
+default-feature compilation, rebuilt source verification, 181 CPU caller checks
+without skips and five documentation checks. The earlier operand-scaled revision
+passed 186 parity, Rust-backed caller and native EMA CLI lifecycle checks. Current
+half-step CUDA parity/native CLI verification, independent current-head review and
+CI remain integration gates. Earlier device results do not satisfy this gate.

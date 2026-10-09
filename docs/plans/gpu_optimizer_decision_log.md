@@ -3393,11 +3393,11 @@ Historical observations do not supersede those requirements or prove current acc
   compares the nine-step remainder below its minimum by binary representation
   noise. Preserve the valid clip when that difference lies within four f64
   epsilon-scaled units at the position/clip/minimum operand scale, capped at one
-  quarter of a quantity step. Keep genuinely
+  half a quantity step. Keep genuinely
   subminimum remainders, including small nonzero deficits, on the full-close path.
 - Fix the shared Rust strategy producer rather than reproducing its rounding
   artifact in GPU arithmetic or adding Python trading policy. The regression
-  fails the old producer; all 337 Rust tests pass after the correction, with
+  fails the old producer; the preceding quarter-step revision passes 337 Rust tests, with
   one existing ignored test. Default-feature test compilation passes. Rebuilt
   extension source verification passes. The preceding operand-scaled revision
   passed the public native-service parity regression and 185 affected
@@ -3425,3 +3425,13 @@ Historical observations do not supersede those requirements or prove current acc
   clip, `1e-8` step and two-step minimum; valid minimum remainders remain clips,
   while a one-step deficit still closes fully. Rebuild/caller verification and
   new exact-head review/CI are required before integration.
+
+- A further exact-head review reproduces the quarter-step crossover: a
+  40,000,000-unit clip plus one `1e-8` step leaves a representable remainder
+  whose subtraction deficit exceeds the quarter-step allowance. Raise the
+  ceiling to half a step, retaining the operand-scaled noise bound. Add the
+  reproducing regression and preserve full closes for a real one-step deficit
+  at the same operand scale. All 338 Rust tests pass, with one existing ignore;
+  default-feature compilation, rebuilt source verification, 181 CPU caller
+  checks and five documentation checks pass. Current-build CUDA verification,
+  independent review and required CI remain integration gates.

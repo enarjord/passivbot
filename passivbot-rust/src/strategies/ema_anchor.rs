@@ -210,11 +210,11 @@ fn calc_close_qty(
         return 0.0;
     }
     let remainder = position_size_abs - clip_qty;
-    // Subtraction noise scales to the operands, but must never absorb an
-    // actual quantity-step deficit at extreme position/step ratios.
+    // Subtraction noise scales to the operands. A half-step ceiling preserves
+    // representable minimum remainders without absorbing a full-step deficit.
     let representation_tolerance =
         (f64::EPSILON * position_size_abs.abs().max(clip_qty.abs()).max(min_qty.abs()) * 4.0)
-            .min(exchange.qty_step.abs() * 0.25);
+            .min(exchange.qty_step.abs() * 0.5);
     if remainder < min_qty && min_qty - remainder > representation_tolerance {
         position_size_abs
     } else {
@@ -530,6 +530,69 @@ mod tests {
                 balance,
                 1.0,
                 clip + minimum,
+                1.0,
+            ),
+            clip
+        );
+    }
+
+    #[test]
+    fn close_clip_retains_minimum_at_large_operand_crossover() {
+        let mut exchange = ExchangeParams {
+            qty_step: 1e-8,
+            min_qty: 1e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let balance = 4_000_000_000.0;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        assert_eq!(clip, 40_000_000.0);
+        let position = clip + exchange.qty_step;
+        assert!(position > clip);
+        assert!(exchange.min_qty - (position - clip) > exchange.qty_step * 0.25);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            clip
+        );
+        // A full step below a two-step minimum is still undersized at the
+        // same operand scale; accepting subtraction noise must not hide it.
+        exchange.min_qty = 2e-8;
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            position
+        );
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                clip + exchange.min_qty,
                 1.0,
             ),
             clip
