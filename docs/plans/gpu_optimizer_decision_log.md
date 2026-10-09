@@ -3085,3 +3085,20 @@ Historical observations do not supersede those requirements or prove current acc
   current-head review plus required CI before merging the shared-owner slice.
   Representative resources, numerical materiality and replacement retirement
   remain whole-project gates.
+
+
+### 2026-10-09 — Validate cleanup against the continuation development merge
+
+- Guarded HSL continuation is integrated on development through
+  [PR #1947](https://github.com/enarjord/passivbot/pull/1947), after clean independent
+  current-head review and Rust/Python 3.12/Python 3.14 CI. Master is unchanged.
+  Reconcile the checklist and supersede the resolved benchmark HSL-gap wording
+  while preserving the measured residuals and broader acceptance limits.
+- The shared-owner/compact-result branch includes that actual development merge.
+  Resolving only changelog and decision-log conflicts preserves both implementations;
+  reconciliation with the subsequent development merge changes ancestry only.
+- Combined source-verified validation passes 216 affected checks: fifteen layout,
+  35 recovery, 134 factual replay, four optional-history, sixteen expired-history and
+  twelve real CLI/data/service cases. Rust/shaders match the reviewed continuation
+  runtime exactly. All 952 checked sources remain unchanged. Current-head
+  independent review and CI are still required for cleanup integration.

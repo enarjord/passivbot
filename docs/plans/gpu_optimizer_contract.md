@@ -295,8 +295,13 @@ Completion requires:
   - [x] Measure held, many-coin HSL reconstruction scaling before further launch
     tuning. Matched 2/25-coin, 512/1024/2048-bar cases show roughly quadratic
     warm replay cost with HSL enabled; wider acceptance remains separate.
-  - [ ] Evaluate guarded incremental reconstruction against fresh factual replay,
-    including cache loss, fills, budgets, clipping, numerical conditions and CPU parity.
+  - [x] Evaluate and integrate guarded incremental reconstruction against fresh factual
+    replay, including cache loss, fills, budgets, clipping, numerical conditions and
+    CPU parity. Independent review and CI pass on development; broader resources
+    and whole-optimizer performance remain separate gates.
+  - [ ] Integrate a focused strategy-neutral multicoin replay owner and compact
+    physical recovery results. Affected host/CUDA/CLI and combined continuation
+    validation pass; current-head independent review/CI remain required.
   - [x] Interleave bounded CPU preparation and result servicing, adapt completion grouping
     from CPU cost, and keep suite notification fan-in independent of persistence batches.
   - [x] Let execution tuning learn actual warm partial dispatches and explore smaller

@@ -46,8 +46,11 @@ passivbot tool gpu-cohort-benchmark --seeds 7 43 --coins 2 --bars 3000 \
   --limit backtest_completion_ratio less_than 0.99 --report hsl-cohort.json
 ```
 
-This stress measurement exposes a known acceptance gap: agreement at the chosen
-limits does not establish agreement of HSL objectives or tighter constraints.
+Earlier replay exposed a material HSL discrepancy in this measurement. Factual
+native replay now passes the matched cohort HSL checks recorded in the
+[acceptance map](plans/gpu_optimizer_acceptance.md#unified-hsl-cohort-materiality).
+Inspect the current report for its actual numerical, ranking and feasibility outcomes;
+those bounded checks do not establish every trajectory or tighter constraint.
 
 The JSON report includes fixture/candidate and implementation fingerprints,
 per-candidate strict CPU/GPU metric comparisons, Pareto membership for the requested

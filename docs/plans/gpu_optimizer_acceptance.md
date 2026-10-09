@@ -1363,7 +1363,9 @@ fourteen host), twelve actual CUDA CLI/data/service controls, two allocation
 controls and 42 native lifecycle/loss controls. The partition controls compare all
 returned raw metrics with factual replay using the retained layout. Lifecycle/loss
 checks include CPU references outside optimization. Checked sources remain unchanged.
-Current-head review, CI and development integration remain required.
+Independent review and required CI pass; compact storage is integrated on
+development through [PR #1945](https://github.com/enarjord/passivbot/pull/1945).
+Representative total-resource acceptance remains open.
 
 Runner-local learned capacity previously disappeared when residency cleared the
 runners. The service now retains only integer capacity estimates per dataset and
@@ -1381,8 +1383,9 @@ and compatible-data owner switches. Initial GPU replay grows beyond its 256-reco
 seed; returning to the first scenario uses the same learned capacity with identical
 metrics and zero overflow retries. Weak references prove that estimate retention
 does not pin the evicted runner. CPU backtests are forbidden in those service checks.
-Checked source files remain unchanged. Development integration, independent
-current-head review and CI remain required.
+Checked source files remain unchanged. Independent review and required CI pass;
+capacity retention is integrated on development through
+[PR #1946](https://github.com/enarjord/passivbot/pull/1946).
 
 The compact-storage development merge is integrated without changing the checked
 capacity implementation or host regressions. The combined source passes all 154
@@ -1392,19 +1395,25 @@ checked files remain unchanged after validation. Rust/shader sources and the
 verified extension are the reviewed compact-storage build; this slice changes
 only Python execution ownership and its regressions.
 
-Fresh scope composition can repeatedly traverse historical minutes for long exposed
-episodes. This is a scaling risk, not an established performance regression. Measure
-long-held, many-coin workloads, useful throughput and total host/device/disk resources
-before further launch tuning. If reconstruction dominates, evaluate guarded incremental
-advancement against fresh reconstruction and CPU references. Keep factual fallback
-and invalidation explicit; do not infer parity from matching allocation sizes.
+Matched held-position measurements below establish roughly quadratic fresh
+composition cost. Guarded scalar continuation preserves the measured factual/CPU
+outputs and improves stable held cases, with unchanged busy multi-entry performance.
+It is integrated on development through
+[PR #1947](https://github.com/enarjord/passivbot/pull/1947) after clean independent
+review and required CI. Fresh reconstruction remains the explicit fallback;
+matching allocation sizes alone never establishes parity. Representative useful
+throughput and total host/device/disk resources remain open before further tuning.
 
-Shared allocation/retry/dispatch responsibilities still sit in EMA-named base classes
-inherited by TM, with strategy-specific parameter switches and fused overrides.
-A focused strategy-neutral extraction is a follow-up simplification candidate. It
-must preserve the existing service boundary and avoid introducing a general backend
-framework. These resource and scaling gates take priority over additional small-fixture
-test counts or marginal launch gains.
+Multicoin allocation/retry/dispatch now has a private strategy-neutral owner, with
+EMA/TM as sibling adapters and explicit parameter/override layouts. Native recovery
+histories reduce before logical result assembly; the bounded evidence is recorded
+above. Public runner names and the separate legacy directional family remain.
+This focused extraction preserves the service boundary and adds no general backend
+framework. Combined validation also passes 216 affected controls: fifteen layout, 35 recovery,
+134 factual replay, four optional-history, sixteen expired-history and twelve actual
+CLI/data/service checks. Rust/shaders match the reviewed continuation runtime;
+all 952 checked sources remain unchanged. Independent review and CI gate its
+integration; these gates take priority over marginal launch gains.
 
 ### Held-position reconstruction scaling
 
