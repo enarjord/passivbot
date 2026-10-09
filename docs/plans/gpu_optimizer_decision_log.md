@@ -3525,3 +3525,13 @@ Historical observations do not supersede those requirements or prove current acc
   and run-local tuning/capacity metadata. Preserve independent diagnostic parity.
 - This is source-backed maintenance evidence. Larger TM resources, current CUDA
   verification, numerical materiality and final cutover review/CI remain open.
+
+### 2026-10-09 — Clarify independent execution controls
+
+- Document that `tuning_mode: "off"` fixes batch-width/request-accumulation policies;
+  native CUDA history-chunk duration and CPU result-consumption cadence remain adaptive.
+  Existing candle/work/history ceilings still apply, without a preemption guarantee.
+- Remove stale wording that lists dispatch-duration/delay control entirely as future
+  work. Describe the implemented completed-command controller separately from width
+  tuning. This is documentation alignment; execution, numerical policy and search
+  behavior are unchanged.

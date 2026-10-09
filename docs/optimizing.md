@@ -199,12 +199,13 @@ runtime overrides use canonical CPU preparation; fixed policies remove ineffecti
 ```
 
 An omitted, null or `"auto"` batch width lets the service tune from completed production
-work. A positive explicit width fixes its ceiling. `tuning_mode: "off"` disables service
-tuning and uses width 64 if none is supplied. `"refresh"` currently starts fresh like
-`"auto"`; advisory measurements are run-local. Prepared work/history budgets can reduce
-physical widths further. Adaptive history chunks target bounded command durations,
-without a preemption guarantee. Width, accumulation and CPU consumption cadence change
-execution only; they never tune simulation precision or search policy.
+work. A positive explicit width fixes its ceiling. `tuning_mode: "off"` disables batch-width
+and request-accumulation tuning and uses width 64 if none is supplied. `"refresh"` currently
+starts fresh like `"auto"`; advisory measurements are run-local. Prepared work/history
+budgets can reduce physical widths further. Native CUDA history chunks still adapt in
+`"off"` mode, targeting bounded command durations without a preemption guarantee.
+CPU consumption cadence also adapts independently. These controls change execution only;
+they never tune simulation precision or search policy.
 
 Legacy CPU exact-worker, validation-count, drift-probe and screened-seed controls have
 been removed. Population size belongs to `optimize.population_size`. Old screening/

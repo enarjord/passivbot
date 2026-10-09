@@ -259,9 +259,19 @@ using subsequent submitted work; a slower trial rolls back. This prevents dedupl
 screening or a bounded producer from indefinitely starving the tuner of evidence or
 smaller-width experiments. Tuning submits no extra simulations and never changes precision
 or search policy. Measurements are run-local; `auto` and `refresh` currently both start
-fresh. Persistent advisory calibration, richer workload classes, dispatch duration/delay,
-residency budgets and further CPU/evolution cadence experiments remain development work. This policy
-does not claim a globally optimal width or a representative optimizer speedup.
+fresh. Persistent advisory calibration, richer workload classes, residency budgets and
+further CPU/evolution cadence experiments remain development work. This policy does not
+claim a globally optimal width or a representative optimizer speedup.
+
+Native CUDA temporal replay separately adapts history-chunk length from completed command
+durations, targeting one second within existing candle/work/history ceilings. It shrinks
+slow chunks and grows only after repeated fast full chunks; partial tails do not train it.
+The controller resets for each physical replay and submits no extra simulations. Replay
+state survives each boundary, and only complete accepted simulations produce results.
+This internal duration control remains active with `tuning_mode: "off"`; that setting fixes
+batch-width and accumulation policies. CPU result-consumption cadence is also independent.
+One candle or a first command can exceed the duration target, so it is not a preemption or
+worst-case cancellation guarantee.
 
 Native checkpoints contain CPU search state and a partially evaluated cohort, without
 service/device handles or shared-memory names. SIGINT stops admission, drains completed
