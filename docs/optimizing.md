@@ -721,6 +721,8 @@ records positive inter-candle gaps
 in a 128-bin logarithmic histogram; the proxy decodes each occupied bin with a float32-safe upper
 edge and adds the exact leading and trailing gaps. This deliberately overestimates the minimizing
 fill-gap summaries when exact Rust has same-candle zero gaps or a value inside a histogram bin.
+P95 is retained as an inactivity-tail signal; the excluded mean, median, and P99 fill-gap summaries
+share this histogram approximation. P95 eligibility does not imply greater numerical accuracy.
 Trailing Martingale also supports `entry_interval_hours_{mean,median,p95,p99,max}` for single-coin
 and multi-coin, long-only, short-only, and fused long+short runs. Metal records gaps between
 normal initial entries independently for each coin and position side. The proxy mean and maximum
@@ -731,13 +733,27 @@ so these metrics retain exact Rust's canonical zero values without allocating th
 surface. Runs that do not request an entry-interval metric keep their existing kernel ABI and
 dispatch cost.
 
-Exact Rust metrics remain authoritative. Metrics intentionally kept for exact analysis rather than
-proxy optimization include raw gain, realized-PnL growth/risk, positive equity-balance divergence,
+Exact Rust metrics remain authoritative. `GPU_EXACT_ONLY_METRICS` is an eligibility policy, not a
+list of known calculation defects. Some exclusions reflect approximation or cost concerns; others
+favor a smaller set of normalized growth, activity, and downside-risk signals:
+
+- Gain shares ADG's smoothed endpoint; ADG is preferred for daily normalization.
+- Positive equity-balance divergence has no universally desirable optimization direction. Negative
+  divergence measures unrealized downside and supplies the retained paper-loss denominators.
+- Raw fill/HSL counts and absolute panic losses are reserved in favor of rates and loss percentages.
+  Realized-PnL-only growth/risk can reward leaving losing positions unrealized.
+
+Exact-only metrics include raw gain, realized-PnL growth/risk, positive equity-balance divergence,
 completed-only account-equity recovery, raw or split fill counts/rates, raw HSL event counts and
 absolute loss totals, the self-relative high-exposure duration family, and the legacy global
-recovery/profit aliases. Requests for these metrics as GPU objectives or proxy-side limits fail
+recovery aliases. Requests for these metrics as GPU objectives or proxy-side limits fail
 before MPS setup. They remain
 available in normal Rust backtests, exact optimizer validation output, and CPU optimization.
+
+Proposals to enable a metric should cover Rust semantics, GPU-versus-Rust parity on supported
+strategies/topologies, aliases, scoring and limits, and explicit numerical tolerances. Include
+ranking and constraint agreement evidence; identify which backends were tested. A useful constraint
+need not be a recommended standalone objective, but current exclusions apply to both.
 
 The backend is hybrid rather than a replacement backtester:
 
@@ -1167,6 +1183,9 @@ and `min_survivors` if desired, and remove the old block. Remove the block and l
 checkpoints from enabled successive halving are incompatible with scenario screening.
 
 #### Profiling Apple MPS optimization
+
+Metric eligibility changes alone do not demonstrate a speedup. Profile optional output collection,
+host reductions, and dispatches; reuse existing intermediates when adding a metric.
 
 For long multi-coin Trailing Martingale datasets with one active side, MPS can retain each
 candidate's replay state between history chunks. This activates automatically when the full-history
@@ -1954,11 +1973,11 @@ over all exchanges before scoring.
 |--------|-------------|
 | `adg`, `adg_w` | Average Daily Gain (smoothed geometric) and its recency-biased counterpart |
 | `mdg`, `mdg_w` | Median Daily Gain and its recency-biased counterpart |
-| `gain` | Final balance gain (end/start ratio) |
+| `gain` | Smoothed terminal equity / starting equity; terminal equity averages the last up to three daily values |
 | `adg_strategy_eq`, `adg_strategy_eq_w` | Collateral-agnostic geometric growth on the synthetic strategy-equity curve |
 | `adg_rolling_hmean_strategy_eq` | Harmonic mean of automatic rolling 30/90/180-day-equivalent strategy-equity growth windows, dailyized and combined in log space. Higher values reward growth that survives many start/end windows; retain terminal ADG alongside it. |
 | `adg_time_integrated_strategy_eq` | Dailyized area under log strategy equity. Higher values reward earlier sustained growth; retain terminal ADG alongside it. |
-| `positive_gain_participation_strategy_eq` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a gain objective. |
+| `positive_gain_participation_strategy_eq` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a growth objective such as `adg_strategy_eq`. |
 | `mdg_strategy_eq`, `mdg_strategy_eq_w` | Median-day version of the same strategy-equity growth family |
 | `*_per_exposure_{long,short}` | Above metrics divided by the configured exposure limit per side |
 
