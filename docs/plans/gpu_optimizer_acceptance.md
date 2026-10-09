@@ -78,6 +78,19 @@ waits for its evaluated offspring, while service completions, replenishment and 
 proceed within the cohort. Steady-state evolution is a future experiment, not an initial
 acceptance requirement.
 
+Compared with the development prerequisite at `a29d571fa8`, the final consolidation
+changes 17 Python production files under `src`: 391 lines added and 8,208 removed
+(net 7,817 removed). This measures the cutover slice only; preceding service and
+kernel work is already in that prerequisite. Tests, documentation and example configs
+are excluded. Rust/GPU kernel sources are unchanged in this consolidation. Line
+counts support the maintenance comparison; they do not establish simulator acceptance.
+
+The remaining checkpoint contains CPU algorithm/cohort state, complete fitness, separate
+partial scenario-selection evidence, evaluation identity and resume configuration.
+Device handles, residency buffers, capacity hints and execution-tuner state stay outside
+it. Direct diagnostic replay and independent CPU/GPU comparison tooling remain available;
+they do not supply optimizer fitness or recreate its removed validation queue.
+
 One active dataset is an intentional simple residency policy. Retaining more scenarios,
 overlapping transfers or routing several GPUs can be implemented behind the service
 later; they must preserve request identity, bounded admission and per-candidate behavior.

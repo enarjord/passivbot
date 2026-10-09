@@ -3512,3 +3512,16 @@ Historical observations do not supersede those requirements or prove current acc
 - Report process-tree RSS, global device use, Torch allocation and packing separately. Global device use reaches about 4.72 GiB; its driver/display/other-process scope does not imply exclusive service ownership or a complete scratch guarantee.
 - The automatic phase completes zero production evidence windows. One warm sample per scenario cannot establish an optimal width. The moving HSL lookback and changed facts/budgets remain explicit fresh-reconstruction cases; do not extrapolate held-position continuation speedup to all traffic.
 - Keep the larger TM measurement, current metric-surface comparison and final cutover acceptance open. No new launch tuning or simulation tolerance follows from this measurement.
+
+### 2026-10-09 — Quantify the final consolidation boundary
+
+- Compare the final cutover with development prerequisite `a29d571fa8`: 17 Python
+  production files under `src`, 391 added lines and 8,208 removed (net 7,817).
+  This excludes tests/docs/examples and does not count preceding service/kernel work
+  as a cutover reduction. Rust/GPU kernel sources are unchanged in this slice.
+- Relate the reduction to removed CPU validation queues/workers, drift/bootstrap
+  responsibilities, interim optimizer duplication and exact-worker calibration.
+  Keep CPU search/cohort checkpoints separate from service-owned device resources
+  and run-local tuning/capacity metadata. Preserve independent diagnostic parity.
+- This is source-backed maintenance evidence. Larger TM resources, current CUDA
+  verification, numerical materiality and final cutover review/CI remain open.
