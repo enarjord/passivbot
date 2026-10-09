@@ -6,6 +6,10 @@
 #define PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED 1
 #endif
 
+#ifndef PASSIVBOT_HSL_INCREMENTAL_ENABLED
+#define PASSIVBOT_HSL_INCREMENTAL_ENABLED PASSIVBOT_HSL_FACTUAL_ONLY
+#endif
+
 #ifndef PASSIVBOT_HSL_EMA_TAIL_ENABLED
 #define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0
 #endif
@@ -44,6 +48,9 @@ struct HslState {
     HslPairRing facts;
 #if PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
     HslScopeCutoffCache cutoff_cache;
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED
+    HslScopeCursor scope_cursor;
+#endif
 #endif
     device HslPairEvent* fact_events;
     thread HslReplayContext* replay;
@@ -184,6 +191,9 @@ inline bool replay_factual_hsl(
     }
     HslScopeResult result;
     if (count == 0) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+        h.scope_cursor.valid = false;
+#endif
         h.hsl.raw = h.hsl.ema = 0.0f; h.hsl.action = 0; h.hsl.flat_minute = -1;
         return !exposed;
     }
@@ -197,15 +207,46 @@ inline bool replay_factual_hsl(
         cursors, prior_sizes, cutoff)) return false;
 #endif
     if (cutoff.found) first = max(first, cutoff.minute);
-    for (int p = 0; p < count; ++p) {
-        pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
-        if (!hsl_reconstruct_pair(pairs[p].facts, pairs[p].current_size,
-            pairs[p].current_basis, pairs[p].short_side, quantity_steps[p],
-            pairs[p].events, pairs[p].history)) return false;
+    const float span = 2.0f / h.alpha - 1.0f;
+    bool advanced = false;
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    if (reused_cutoff && exposed && !terminal) {
+        HslPairSum upnl;
+        hsl_pair_sum_reset(upnl, 0.0f);
+        bool valid_marks = true;
+        for (int p = 0; p < count; ++p) {
+            thread const HslScopePair& pair = pairs[p];
+            valid_marks = valid_marks && isfinite(pair.current_mark) && pair.current_mark > 0.0f
+                && isfinite(pair.multiplier) && pair.multiplier > 0.0f;
+            float direction = pair.short_side ? -1.0f : 1.0f;
+            float value = pair.current_size == 0.0f ? 0.0f
+                : direction * fabs(pair.current_size) * pair.multiplier
+                    * (pair.current_mark - pair.current_basis);
+            valid_marks = valid_marks && isfinite(value);
+            hsl_pair_sum_add(upnl, value);
+        }
+        advanced = valid_marks && hsl_advance_scope(h.scope_cursor, first, minute,
+            hsl_pair_sum_value(upnl), budget, 2.0f / (span + 1.0f), h.red_threshold,
+            h.cooldown_minutes, h.restart_policy == 2, result);
     }
-    if (!hsl_compose_scope(pairs, count, first, minute, false, budget,
-        2.0f / h.alpha - 1.0f, h.red_threshold, h.cooldown_minutes,
-        h.restart_policy == 2, result)) return false;
+#endif
+    if (!advanced) {
+        for (int p = 0; p < count; ++p) {
+            pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
+            if (!hsl_reconstruct_pair(pairs[p].facts, pairs[p].current_size,
+                pairs[p].current_basis, pairs[p].short_side, quantity_steps[p],
+                pairs[p].events, pairs[p].history)) return false;
+        }
+        if (!hsl_compose_scope(pairs, count, first, minute, false, budget,
+            span, h.red_threshold, h.cooldown_minutes, h.restart_policy == 2, result
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+            , nullptr, 0, &h.scope_cursor
+#endif
+        )) return false;
+    }
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    if (terminal) h.scope_cursor.valid = false;
+#endif
     h.hsl.raw = terminal && result.latest_flat_minute == minute
         ? result.latest_flat_raw : result.raw;
     h.hsl.ema = terminal && result.latest_flat_minute == minute
@@ -738,6 +779,9 @@ inline HslState load_hsl(
     h.replay = nullptr; h.replay_side = 0; h.replay_coin = -1;
 #if PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
     hsl_scope_cutoff_cache_reset(h.cutoff_cache);
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED
+    h.scope_cursor.valid = false;
+#endif
 #endif
 #endif
     int ho = po + hsl_param_offset;
