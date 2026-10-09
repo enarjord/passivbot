@@ -5,6 +5,8 @@ cooldowns and rollback. Dataset classes do not share timing evidence; no search
 policy, simulations, device imports or checkpoint state live here.
 """
 
+import math
+
 from optimization.gpu.autotune import BatchController
 
 
@@ -15,7 +17,7 @@ class ExecutionBatchTuner:
         self.enabled = enabled
         self.controllers = {}
         self._ceilings = {}
-        self._demand = 0
+        self._demand = {}
         self._allow_trial = False
 
     def constrain(self, dataset_id, ceiling):
@@ -32,11 +34,12 @@ class ExecutionBatchTuner:
             return min(self.initial, limit)
         controller = self.controllers.get(dataset_id)
         if controller is None or controller.ceiling != limit:
+            self._demand[dataset_id] = 0
             controller = BatchController(
                 limit, min(self.initial, limit),
                 allow_partial_batches=True,
                 can_grow=lambda: (
-                    self._demand >= min(controller.ceiling, controller.width * 2)
+                    self._demand[dataset_id] >= min(controller.ceiling, controller.width * 2)
                     and self.headroom()
                 ),
                 can_trial=lambda: self._allow_trial,
@@ -48,6 +51,10 @@ class ExecutionBatchTuner:
         if not self.enabled:
             return
         controller = self.controllers[dataset_id]
-        self._demand = count + backlog
+        # A finite cohort's final replay may have no remaining backlog even
+        # when this window repeatedly had enough compatible work for growth.
+        if 1 <= count <= controller.width and math.isfinite(seconds) and seconds > 0:
+            self._demand[dataset_id] = max(self._demand[dataset_id], count + backlog)
         self._allow_trial = not closing
-        controller.observe(count, seconds)
+        if controller.observe(count, seconds):
+            self._demand[dataset_id] = 0
