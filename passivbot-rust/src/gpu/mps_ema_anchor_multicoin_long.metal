@@ -4953,7 +4953,11 @@ kernel void passivbot_ema_anchor_multicoin(
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#ifdef PASSIVBOT_MULTICOIN_SHORT_SIDE
+    const bool short_side = PASSIVBOT_MULTICOIN_SHORT_SIDE != 0;
+#else
     const bool short_side = run_settings[3] > 0.5f;
+#endif
     passivbot_ema_anchor_multicoin_impl(
         bars, fill_ticks, touch_ticks, hour_log_ranges,
         coin_settings, coin_overrides, params, run_settings,

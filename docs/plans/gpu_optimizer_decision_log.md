@@ -3288,3 +3288,29 @@ Historical observations do not supersede those requirements or prove current acc
 - Twelve existing native bootstrap/resume CLI controls also pass after
   development integration, with checked sources unchanged. The compiler slice
   is ready for author review, publication to development, independent review and CI.
+
+- PR #1951 passes independent review at head `69f2383562`, with no findings,
+  and all required Rust/Python CI. Merge `eb8ef06dd0` integrates it into
+  development; broader acceptance and inactive-side compiler work remain open.
+
+### 2026-10-09 — Compile the fixed direction of one-side CUDA replay
+
+- Use the runner's prepared direction as compiler identity for one-side CUDA
+  replay. Keep fused and Metal entries general; preserve an internal general
+  control. Candidate and numerical policy remain unchanged. Native single-coin
+  replay already compiles with capacity one, so reuse the multicoin owner rather
+  than introducing another kernel implementation.
+- All 24 raw/general controls and eight native standalone/suite lifecycle cases
+  pass, including active factual HSL, TM temporal state and cache restoration.
+  Suite fixtures initially violate symmetric eligibility; correct the fixtures
+  while preserving zero exposure on the inactive side and the suite contract.
+  Existing unstuck/CPU isolation controls also pass: 80 distinct checks overall.
+  Rust/default-feature compilation and rebuilt source verification pass.
+- All 3,584 paired candidate metric/status results agree exactly. Warm medians
+  improve modestly in the measured fixtures, while local bytes stay unchanged and
+  register counts are not universally lower. Record the full scope in acceptance;
+  current-head independent review and CI remain integration gates.
+- The larger 25-coin HSL suite pilot does not complete its reference phase and
+  exposes the limit of cancelling queued work while joining an active kernel.
+  Record that unfinished evidence explicitly. Profile individual replay attempts,
+  capacity retries and launch geometry before another all-width comparison.

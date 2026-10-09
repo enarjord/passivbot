@@ -1113,6 +1113,16 @@ def _with_unstuck_pnl_window(source, lookback_bars, capacity):
     return source
 
 
+def _with_multicoin_side(source, side):
+    if side is None:
+        return source
+    if side not in {"long", "short"}:
+        raise ValueError("multicoin compile side must be long, short or None")
+    if "#ifdef PASSIVBOT_MULTICOIN_SHORT_SIDE" not in source:
+        raise RuntimeError("GPU source is missing the multicoin side contract")
+    return f"#define PASSIVBOT_MULTICOIN_SHORT_SIDE {int(side == 'short')}\n" + source
+
+
 @lru_cache(maxsize=32)
 def _ema_anchor_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
@@ -1139,6 +1149,7 @@ def _ema_anchor_multicoin_shader_library(
     hsl_fact_capacity: int = 0,
     hsl_factual_only: bool = False,
     unstuck_enabled: bool = True,
+    side: str | None = None,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1153,6 +1164,7 @@ def _ema_anchor_multicoin_shader_library(
     source = f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
     source = _with_unstuck(source, unstuck_enabled)
+    source = _with_multicoin_side(source, side)
     # Keep diagnostics for forced delist panic-loss parity even when the HSL
     # controllers and their per-candle scans are compiled away.
     source = _with_hsl_disabled(source, hsl_disabled)
@@ -1212,6 +1224,7 @@ def _trailing_martingale_multicoin_shader_library(
     hsl_fact_capacity: int = 0,
     hsl_factual_only: bool = False,
     unstuck_enabled: bool = True,
+    side: str | None = None,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1235,6 +1248,7 @@ def _trailing_martingale_multicoin_shader_library(
     source = f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
     source = _with_unstuck(source, unstuck_enabled)
+    source = _with_multicoin_side(source, side)
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     if weighted_raw_equity_enabled:
         source = "#define PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED 1\n" + source
@@ -2299,12 +2313,19 @@ class _MulticoinReplayRunner:
 
     scalar_cols = MPS_MULTICOIN_SCALAR_COLS
     replay_sides = 1
+    side_specialization = True
     supports_entry_interval = False
     specialize_metal_coin_capacity = False
     _validate_hsl_params = _validate_hsl_params
 
     def _use_disabled_hsl_specialization(self, matrix):
         return False
+
+    def _compiled_side(self):
+        # Preserve the existing Metal path until its runtime is validated.
+        if self.replay_sides == 1 and self.side_specialization and self.bars.device.type == "cuda":
+            return self.side
+        return None
 
     def __init__(
         self,
@@ -3261,6 +3282,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             int(bool(getattr(self, "hsl_fact_capacity", 0))),
             getattr(self, "native_factual_hsl", False),
             getattr(self, "dispatch_unstuck_enabled", True),
+            self._compiled_side(),
         )
 
 
@@ -3684,6 +3706,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             int(bool(getattr(self, "hsl_fact_capacity", 0))),
             getattr(self, "native_factual_hsl", False),
             getattr(self, "dispatch_unstuck_enabled", True),
+            self._compiled_side(),
         )
         return _trailing_martingale_multicoin_shader_library, args
 

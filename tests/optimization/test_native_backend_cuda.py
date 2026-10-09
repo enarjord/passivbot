@@ -14,7 +14,7 @@ import pytest
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
                                                                     screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
-                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False):
+                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False, sides="both"):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -26,9 +26,13 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     from tools.gpu_parity import build_parser, fixture_inputs
 
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
-        "--fixture", strategy_kind, "--sides", "both", "--coins", "3", "--bars",
+        "--fixture", strategy_kind, "--sides", sides, "--coins", "3", "--bars",
         "3000" if weighted_equity or raw_equity else "512",
     ]))
+    if suite and sides != "both":
+        # Suites share eligibility across sides; zero exposure disables trading.
+        coins = list(config["backtest"]["coins"]["binance"])
+        config["live"]["approved_coins"] = {side: list(coins) for side in ("long", "short")}
     config["optimize"].update(backend="gpu_native", population_size=4, iters=8, seed=12)
     if generated_seed:
         import session_artifacts
@@ -102,12 +106,13 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     config_path.write_text(json.dumps(config))
     seeds_path = tmp_path / "seeds"
     seeds_path.mkdir()
+    seed_side = "short" if sides == "short" else "long"
     for index, value in enumerate((0.012, 0.03)):
         seed_config = deepcopy(config)
         if strategy_kind == "ema_anchor":
-            seed_config["bot"]["long"]["strategy"]["ema_anchor"]["base_qty_pct"] = value
+            seed_config["bot"][seed_side]["strategy"]["ema_anchor"]["base_qty_pct"] = value
         else:
-            seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = value
+            seed_config["bot"][seed_side]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = value
         if anchors:
             seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if index == 0 else 1
         if coupled:

@@ -266,11 +266,17 @@ Completion requires:
 - [x] Restore safe disabled-HSL single-side EMA ablation and verify all returned outputs.
 - [x] Prove effective candidate/coin-side unstuck EMA consumers independently of scheduling;
   specialize multicoin EMA/TM layouts and verify general/specialized outputs.
-- [ ] Integrate full multicoin unstuck ablation after current-head review/CI.
+- [x] Integrate full multicoin unstuck ablation after current-head review/CI.
   Effective-consumer proofs, raw/general/temporal/cache controls, shared loss/HSL
   consumers, longer HSL panics and disabled native CLI interrupt/resume controls
   pass on CUDA; paired public-fixture measurements are recorded in acceptance.
-  Inactive-side and single-coin compiler work remain separate gates.
+  Independent current-head review and required CI pass; development integration
+  is complete.
+- [ ] Integrate prepared one-side CUDA compiler specialization after review/CI.
+  General/specialized raw outputs, temporal/cache transitions and native single/suite
+  lifecycle controls pass. Paired compiler observations are recorded in acceptance.
+  Native single-coin multicoin replay already compiles with capacity one; retain
+  that shared implementation rather than adding a separate kernel without evidence.
 
 ### Optimizer cutover
 
