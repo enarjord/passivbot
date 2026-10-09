@@ -3392,8 +3392,8 @@ Historical observations do not supersede those requirements or prove current acc
   steps with a nine-step minimum/clip can close fully because raw subtraction
   compares the nine-step remainder below its minimum by binary representation
   noise. Preserve the valid clip when that difference lies within four f64
-  epsilon-scaled units at the position/clip/minimum operand scale, capped at one
-  half a quantity step. Keep genuinely
+  epsilon-scaled units at the position/clip/minimum operand scale and aligned
+  quantity-step counts establish a valid minimum remainder. Keep genuinely
   subminimum remainders, including small nonzero deficits, on the full-close path.
 - Fix the shared Rust strategy producer rather than reproducing its rounding
   artifact in GPU arithmetic or adding Python trading policy. The regression
@@ -3435,3 +3435,14 @@ Historical observations do not supersede those requirements or prove current acc
   default-feature compilation, rebuilt source verification, 181 CPU caller
   checks and five documentation checks pass. Current-build CUDA verification,
   independent review and required CI remain integration gates.
+
+- Further exact-head review reproduces a real three-step remainder below a
+  four-step minimum that subtraction rounds close enough for the half-step
+  allowance. Replace fractional-step caps with aligned cardinality checks inside
+  the existing operand-noise boundary. Quantities must have finite, exactly
+  countable f64 step cardinalities before repairing an undersized subtraction;
+  otherwise retain the ordinary full-close decision. The new regression fails
+  the half-step revision. All 339 Rust tests pass, with one existing ignore;
+  default-feature compilation, source-verified rebuild, 181 CPU caller checks and
+  five documentation checks pass. Current CUDA, independent review and CI gates
+  remain.

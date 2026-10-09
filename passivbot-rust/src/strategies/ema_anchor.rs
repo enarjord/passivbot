@@ -210,16 +210,33 @@ fn calc_close_qty(
         return 0.0;
     }
     let remainder = position_size_abs - clip_qty;
-    // Subtraction noise scales to the operands. A half-step ceiling preserves
-    // representable minimum remainders without absorbing a full-step deficit.
-    let representation_tolerance =
-        (f64::EPSILON * position_size_abs.abs().max(clip_qty.abs()).max(min_qty.abs()) * 4.0)
-            .min(exchange.qty_step.abs() * 0.5);
-    if remainder < min_qty && min_qty - remainder > representation_tolerance {
-        position_size_abs
-    } else {
-        clip_qty
+    if remainder < min_qty {
+        // Only repair subtraction noise, not genuinely undersized remainders.
+        let representation_tolerance = f64::EPSILON
+            * position_size_abs
+                .abs()
+                .max(clip_qty.abs())
+                .max(min_qty.abs())
+            * 4.0;
+        if min_qty - remainder > representation_tolerance {
+            return position_size_abs;
+        }
+        // Compare aligned cardinalities before accepting a near-minimum
+        // remainder. A fractional-step allowance can hide a real grid deficit
+        // at large operand ratios. Beyond exactly countable f64 integers, keep
+        // the ordinary full-close decision instead of guessing a valid clip.
+        let step = exchange.qty_step.abs();
+        let steps = [position_size_abs, clip_qty, min_qty].map(|qty| (qty / step).round());
+        const MAX_EXACT_STEPS: f64 = 9_007_199_254_740_992.0;
+        if !steps
+            .iter()
+            .all(|value| value.is_finite() && value.abs() <= MAX_EXACT_STEPS)
+            || steps[0] - steps[1] < steps[2]
+        {
+            return position_size_abs;
+        }
     }
+    clip_qty
 }
 
 fn typed_params<'a>(request: &'a StrategyRequest<'a>) -> &'a EmaAnchorParams {
@@ -596,6 +613,44 @@ mod tests {
                 1.0,
             ),
             clip
+        );
+    }
+
+    #[test]
+    fn close_clip_rejects_a_countable_step_deficit_after_cancellation() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-12,
+            min_qty: 4e-12,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let balance = 572237.8299375748;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        let clip_steps = (clip / exchange.qty_step).round();
+        assert_eq!(clip_steps, 5_722_378_299_375_748.0);
+        let position = (clip_steps + 3.0) * exchange.qty_step;
+        let remainder = position - clip;
+        assert!(remainder < exchange.min_qty);
+        assert!(exchange.min_qty - remainder < exchange.qty_step * 0.5);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            position
         );
     }
 
