@@ -3504,3 +3504,11 @@ Historical observations do not supersede those requirements or prove current acc
   simulation policy. CLI regressions cover default/native/legacy selection; real
   service comparisons and CLI cases now exercise omitted-engine defaults. Host
   comparator/cleanup/report controls pass; device verification remains pending.
+
+### 2026-10-09 — Larger factual-HSL EMA resource observation
+
+- Complete the public 25-coin, 5,760-bar, four-candidate, three-scenario service recipe with unified HSL, one-day lookback and threshold 0.99. All 72 width-one/eight/automatic results agree exactly; one device dataset is resident, packed inputs are reused, source arrays stay unchanged and spill cleanup succeeds.
+- Wider execution improves warm elapsed time by approximately 18%, but increases first-result latency approximately fivefold. Keep this microbatch tradeoff visible rather than interpreting throughput as optimal responsiveness.
+- Report process-tree RSS, global device use, Torch allocation and packing separately. Global device use reaches about 4.72 GiB; its driver/display/other-process scope does not imply exclusive service ownership or a complete scratch guarantee.
+- The automatic phase completes zero production evidence windows. One warm sample per scenario cannot establish an optimal width. The moving HSL lookback and changed facts/budgets remain explicit fresh-reconstruction cases; do not extrapolate held-position continuation speedup to all traffic.
+- Keep the larger TM measurement, current metric-surface comparison and final cutover acceptance open. No new launch tuning or simulation tolerance follows from this measurement.

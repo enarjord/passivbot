@@ -2145,3 +2145,25 @@ Local checks and documentation preparation are underway. This section is not a c
 retirement gate: current verified CUDA caller checks, representative HSL resources,
 refreshed factual cohort comparisons, final cutover CLI/CPU isolation, independent review
 and all required CI remain prerequisites.
+
+## Larger factual-HSL service resources — EMA measurement
+
+Use `gpu-service-benchmark --strategy ema_anchor --coins 25 --bars 5760 --candidates 4 --rounds 2 --hsl unified`, seed seven, both sides, one-day lookback and threshold 0.99. Three shared-data scenarios contain 25/full and two 8/half views. First-use and warm execution share the existing compiler caches. This is a synthetic service observation, not CPU throughput, a full optimization run or fresh cold-cache timing.
+
+All 72 request results and statuses match the isolated width-one references exactly, with zero reduction-rounding cases. Every owner snapshot has one resident dataset; packing reaches three entries. Source arrays remain unchanged, spill files are removed after shutdown and resource sampling reports no errors.
+
+| Width | Warm round seconds | Warm requests/s | First warm result seconds | Sampled process-tree RSS peak bytes | Sampled global device peak bytes | Torch allocated peak bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 684.437 | 0.017533 | 113.672 | 2,217,734,144 | 5,069,864,960 | 7,469,568 |
+| 8 | 559.797 | 0.021436 | 515.282 | 1,534,681,088 | 5,069,864,960 | 10,215,936 |
+| auto | 554.502 | 0.021641 | 509.100 | 1,543,335,936 | 5,069,864,960 | 10,215,936 |
+
+Wider execution reduces warm elapsed time by approximately 18%, while delaying the first result from 114 to 509–515 seconds. Completions remain bounded by a physical microbatch. Busy many-coin HSL remains expensive; this result establishes a measurable throughput/latency tradeoff, not a promise of speedup over CPU or optimal scheduling.
+
+The automatic phase collects one warm sample per scenario and completes zero unchanged production tuning windows. It executes actual cohorts of four under a width-64 proposal; the evidence does not establish an optimal width. Earlier sustained HSL-off measurements separately exercise completed windows.
+
+Torch reserved peak is 25,165,824 bytes and packing peak is 10,033,620 bytes. Process-tree RSS includes compiler children; global device use includes driver/display/other processes and is not exclusive service allocation. One-second samples may miss short peaks. Whole-process CPU time includes replay/preparation/driver activity and does not isolate orchestration. History/scratch admission is not a complete VRAM guarantee. These facts preserve wider and future device-resource limitations explicitly.
+
+The source-backed continuation limitation is precise: `replay_factual_hsl` begins at `max(minute - lookback, 0)` before applying the factual cutoff, and `hsl_advance_scope` requires the same effective start, budget and factual identity. A sliding lookback, changed fills/budget, expired history or numerical guard therefore reconstructs fresh. A held-position continuation speedup cannot be extrapolated to this workload. These observations identify possible costs; this benchmark does not isolate the fraction attributable to each condition.
+
+The corresponding larger Trailing Martingale measurement remains open. These observations do not close numerical, final cutover or general resource acceptance by themselves.
