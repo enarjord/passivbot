@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native CUDA EMA Anchor backtests retain complete replay state across temporal
+  dispatches, allowing interruption between history chunks. Shared EMA/TM admission
+  includes the compiled state size alongside replay histories.
+
 - One-side CUDA multicoin backtests compile their prepared long or short direction
   into the kernel, allowing the compiler to omit the unused directional path.
 

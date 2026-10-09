@@ -3542,3 +3542,15 @@ def test_fill_pnl_lookback_matches_rust_bar_contract(days, interval, expected):
         )
         == expected
     )
+
+
+@pytest.mark.parametrize("device,factual,expected", [
+    ("cuda", True, (True, 64, 128)),
+    ("cuda", False, (False, 64, 11520)),
+    ("mps", True, (False, 64, 11520)),
+])
+def test_native_ema_plan_has_cuda_interrupt_boundaries(device, factual, expected):
+    assert _mps_multicoin_dispatch_plan(
+        "ema_anchor", 64, n_bars=11520, n_coins=25, n_sides=2,
+        max_candidate_bars=1_000_000_000, device=device, factual_hsl=factual,
+    ) == expected

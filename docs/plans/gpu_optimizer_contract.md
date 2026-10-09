@@ -272,11 +272,13 @@ Completion requires:
   pass on CUDA; paired public-fixture measurements are recorded in acceptance.
   Independent current-head review and required CI pass; development integration
   is complete.
-- [ ] Integrate prepared one-side CUDA compiler specialization after review/CI.
+- [x] Integrate prepared one-side CUDA compiler specialization after review/CI.
   General/specialized raw outputs, temporal/cache transitions and native single/suite
   lifecycle controls pass. Paired compiler observations are recorded in acceptance.
   Native single-coin multicoin replay already compiles with capacity one; retain
   that shared implementation rather than adding a separate kernel without evidence.
+  PR #1952 passes independent current-head review and all required CI and is
+  integrated into development.
 
 ### Optimizer cutover
 

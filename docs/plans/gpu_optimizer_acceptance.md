@@ -1825,5 +1825,106 @@ Warm median decreases range from approximately 2.4% to 16.4% in these fixtures;
 the shortest observations include substantial orchestration/reduction overhead.
 Compiler local storage is unchanged and registers are not universally lower.
 These are proxy/kernel observations, not whole-search throughput, total VRAM,
-paired cold-cache evidence or wider simulator acceptance. Review and CI still
-gate development integration.
+paired cold-cache evidence or wider simulator acceptance. PR #1952 passes
+independent current-head review and required CI and is integrated into development.
+
+## Granular larger HSL diagnostics
+
+Isolate the base scenario's first public seed-seven EMA candidate from the larger
+service recipe: 25 coins, both sides, quantity `0.01`, EMA span zero `5.0`, unified
+HSL threshold `0.99`, one-day lookback and the ten service-benchmark metrics.
+Use factual replay at width one, profile individual accepted attempts and retain
+the same source-verified simulator. This is neither a completed suite measurement
+nor population/search throughput evidence.
+
+| Minute bars | Kernel seconds | Fills | Factual capacity | Reported replay history bytes per candidate |
+| ---: | ---: | ---: | ---: | ---: |
+| 2,880 | 34.115 | 495 | 256 | 977,028 |
+| 5,760 | 99.473 | 1,020 | 256 | 1,311,644 |
+| 11,520 | 228.941 | 1,925 | 256 | 1,980,876 |
+
+All three complete one accepted attempt without a capacity retry. First-use
+compilation is measured separately: 45.023 seconds for the initial two-day control,
+then approximately 0.085 seconds for subsequent cached loads. Launch groups one
+and 64 return exactly equal two-day metrics/status and take 34.319/34.115 seconds
+in the kernel. That single-candidate comparison does not assess wider-cohort
+geometry. History bytes are the runner's admission estimate, not total VRAM.
+The large active EMA dispatch is a concrete interruption-latency limitation;
+pending-future cancellation cannot shorten it. Keep long-suite and interruption
+acceptance open.
+
+Separate CPU backtests of the same public recipes take 6.219, 19.228 and 43.617
+seconds. These single-candidate observations do not measure CPU/GPU population
+throughput. Per-metric comparisons remain explicitly unassessed until discrepancy
+materiality is evaluated; no blanket tolerance is inferred from these samples.
+ADG absolute errors range from approximately `6.7e-7` to `4.3e-6`, and worst
+strategy-equity drawdown errors from `9.0e-6` to `3.1e-5`. Fill rates differ too.
+For four days, recovery p95 is 0.688993 days on CPU and 0.523715 on GPU, a difference
+of 0.165278 days. The underlying drawdowns are small (approximately 0.000434 and
+0.000403); that context does not automatically excuse an objective/limit difference.
+Investigate trading-path and recovery sensitivity before accepting this case.
+
+An independent native-service HSL-off control disables the explicit `bot.hsl`
+portfolio policy and both side policies. It returns exactly the same ten GPU
+metrics and CPU/GPU errors for the four-day recipe. The discrepancy therefore
+persists without HSL protection. The CPU reference takes 0.161 seconds; the
+15.282-second cold GPU request combines compilation/preparation/replay and does
+not establish warm kernel cost. Side-policy disablement alone cannot supply this
+control in unified mode. Keep numerical diagnosis separate from duration evidence
+and do not reinterpret missing tolerance policy as a parity pass. All completed
+checked sources remain unchanged.
+
+A CPU-only precision-sensitivity control of the same four-day HSL-off recipe
+rounds candles/BTC, market settings and floating config values to f32 separately
+and together before the ordinary f64 CPU simulation. All five controls retain
+the same CPU fill rate and all three recovery-duration metrics; the p95 gap stays
+0.165278 days against the previously measured GPU result. This rules out those
+input-rounding changes alone as an explanation. It does not test f32 arithmetic
+inside the CPU simulator, identify the first divergent GPU fill, or accept the
+discrepancy. Further diagnosis needs trading-path evidence rather than a blanket
+precision explanation.
+
+## Native EMA temporal replay — development evidence
+
+Native CUDA EMA now uses the shared multicoin temporal dispatcher. Optional
+state/range arguments preserve side, account, fills, day and metric state;
+finalization occurs only at each candidate's actual end. Legacy EMA/Metal keep
+their whole-replay entry contract. The compiled state-size query runs before
+physical admission, alongside factual, unstuck and metric histories. Obsolete
+state allocations are released before layout or physical-batch replacement.
+
+Twenty EMA and eleven affected TM controls pass on actual CUDA. These cover
+one-side/fused replay, disabled/coin/unified HSL, hedge/one-way selection, unequal
+ends, whole/temporal cache changes, day boundaries, raw/weighted/BTC/recovery
+outputs, fatal markers, discarded partial state, actual native-service futures,
+factual overflow retries and compiled-size scratch admission. Eleven identified
+mocked factual-policy controls pass separately. CPU simulations are forbidden
+in the GPU controls. An initial service fixture had an undefined side selector
+and failed before service construction; the corrected fixture passes. Rust tests
+(333 passing, one existing ignored), default-feature compilation and rebuilt
+source-stamp verification pass. Eight additional native EMA optimizer CLI checks
+pass for standalone/suite, one-side/shared-account, interruption and resume,
+with CPU simulations forbidden. Current-head independent review/CI remain gates.
+
+Repeat the documented 25-coin two-day seed-seven recipe at width one, with the
+same ten metrics and factual capacity 256. Whole and both temporal runs return
+exactly equal metrics and liquidation status.
+
+| Replay | Runner kernel-phase seconds | Dispatches | Largest observed dispatch seconds | Compiled state bytes per candidate | Reported history/state admission bytes per candidate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Whole control | 34.249 | 1 | 34.249 | 0 | 977,028 |
+| Temporal first use | 33.776 | 23 | 2.841 | 34,408 | 1,011,436 |
+| Temporal warm | 33.375 | 23 | 2.845 | 34,408 | 1,011,436 |
+
+First-use preparation/compilation is separate: 45.411/47.676 seconds for
+whole/temporal variants; the warm lookup is approximately 0.000018 seconds.
+An interrupt after the first completed 128-bar chunk propagates in 0.046 seconds
+(the observed chunk takes 0.044 seconds), returning no partial metrics. This
+first-chunk check is not worst-case interruption latency. The maximum completed
+chunk above is the stronger duration evidence for this case.
+
+The initial 128-bar active-factual-HSL ceiling improves observable boundaries
+without an evident total-runtime penalty in this small timing set. It is not an
+optimal launch policy, a general wall-clock guarantee, a completed large-suite
+measurement, or CPU/GPU numerical acceptance. Keep wider cohorts, longer suites,
+adaptive duration policy and the recovery/trading-path discrepancy open.
