@@ -1721,3 +1721,50 @@ Global-device availability now likewise derives from actual usable memory/utiliz
 observations. Failed, empty or unsupported command output cannot advertise sampling
 as available. All 71 focused Linux/CUDA controls and 72 optimized-Python caller
 results pass on the final reporting correction; numerical comparison policy is unchanged.
+
+
+## Full unstuck compiler specialization
+
+The multicoin EMA Anchor and Trailing Martingale runners prove full unstuck
+inactivity over packed float32 candidate flags and immutable coin overrides on
+every active side. Any effective consumer or unknown consumed flag retains the
+general implementation. Compiler identity includes the decision, including TM
+temporal state layouts. Selection/generation and exclusive close quantity/tick
+arrays are omitted when the proof succeeds; shared loss-budget and HSL consumers
+remain independent. This does not specialize inactive sides or single-coin kernels.
+
+The first source-verified CUDA matrix passes 24 specialized/general raw-output
+controls across strategies, sides, coin pins, mixed candidates, temporal replay
+and cache transitions, plus seven host proof controls. All returned values and
+NaN masks agree exactly. Existing EMA specialization, effective history consumers,
+shared realized-loss gates and disabled factual-HSL controls pass 110 additional
+checks, including Rust loss-expiry comparisons. Rust tests pass 333 checks with
+one existing ignored test; default-feature test compilation passes.
+
+A paired observation uses public seed-seven parity fixtures with twelve coins,
+2,880 bars, both sides, disabled HSL/unstuck and 32 candidates. Vary the long
+quantity gene as `0.005 + index * 0.0001` (EMA `long_base_qty_pct`, TM
+`long_entry_initial_qty_pct`), request ADG, worst strategy-equity drawdown and
+fills/day, and use the fused factual proxy at fixed width 32. Compare the internal
+forced-general control (`unstuck_specialization=False`) with automatic proof.
+Warm both variants once, then alternate their order over six paired rounds.
+CPU simulation is forbidden throughout; all 896 returned candidate metric/status
+results agree exactly with the general reference. Checked sources remain unchanged.
+
+| Strategy | General / specialized median seconds | General / specialized compiler local bytes | General / specialized registers |
+| --- | --- | --- | --- |
+| EMA Anchor | 0.55775 / 0.52281 | 13,952 / 13,696 | 235 / 227 |
+| Trailing Martingale | 2.42668 / 2.38320 | 16,640 / 16,336 | 255 / 255 |
+
+Observed median time decreases are approximately 6.3% and 1.8%. Compiler local
+bytes/registers are reported per kernel thread, not total allocator/VRAM usage.
+First-use calls take 12.87/11.71 seconds for EMA and 22.90/21.94 for TM, including
+compilation/setup; their order and retained caches do not establish a paired cold
+benchmark. The measured path is the proxy/kernel, not full service or search
+throughput. Six additional 3,000-bar controls force active factual unified-HSL panics with
+unstuck disabled and preserve all raw outputs against the general implementation.
+Four disabled-unstuck native CLI controls cover both strategies, suites/screening,
+interruption and resumption: they observe the disabled dispatch and forbid CPU
+simulations while checking prompt persistence. Twelve existing native bootstrap/
+resume CLI controls also pass after development integration. Current-head review/CI remains
+required before this slice is integrated.

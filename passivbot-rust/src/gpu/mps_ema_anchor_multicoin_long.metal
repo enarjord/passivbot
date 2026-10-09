@@ -125,7 +125,9 @@ struct EmaMulticoinSideState {
     float close_qty[MAX_COINS];
     float secondary_close_qty[MAX_COINS];
     float twel_close_qty[MAX_COINS];
+#if PASSIVBOT_UNSTUCK_ENABLED
     float unstuck_close_qty[MAX_COINS];
+#endif
     float position_open_k[MAX_COINS];
     float position_last_fill_k[MAX_COINS];
     float score[MAX_COINS];
@@ -135,7 +137,9 @@ struct EmaMulticoinSideState {
     int close_tick[MAX_COINS];
     int secondary_close_tick[MAX_COINS];
     int twel_close_tick[MAX_COINS];
+#if PASSIVBOT_UNSTUCK_ENABLED
     int unstuck_close_tick[MAX_COINS];
+#endif
     bool entry_market[MAX_COINS];
     bool close_market[MAX_COINS];
     bool secondary_close_market[MAX_COINS];
@@ -522,7 +526,9 @@ inline void init_ema_multicoin_side_state(
         side.close_qty[c] = 0.0f;
         side.secondary_close_qty[c] = 0.0f;
         side.twel_close_qty[c] = 0.0f;
+#if PASSIVBOT_UNSTUCK_ENABLED
         side.unstuck_close_qty[c] = 0.0f;
+#endif
         side.position_open_k[c] = -1.0f;
         side.position_last_fill_k[c] = -1.0f;
         side.score[c] = -INFINITY;
@@ -532,7 +538,9 @@ inline void init_ema_multicoin_side_state(
         side.close_tick[c] = 0;
         side.secondary_close_tick[c] = 0;
         side.twel_close_tick[c] = 0;
+#if PASSIVBOT_UNSTUCK_ENABLED
         side.unstuck_close_tick[c] = 0;
+#endif
         side.entry_market[c] = false;
         side.close_market[c] = false;
         side.secondary_close_market[c] = false;
@@ -1203,6 +1211,7 @@ inline int select_ema_multicoin_unstuck_coin(
     thread float& selected_diff
 ) {
     selected_diff = INFINITY;
+#if PASSIVBOT_UNSTUCK_ENABLED
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
         / fmax(float(effective_n_positions), 1.0f);
@@ -1300,6 +1309,9 @@ inline int select_ema_multicoin_unstuck_coin(
         }
     }
     return selected_coin;
+#else
+    return -1;
+#endif
 }
 
 inline void generate_ema_multicoin_side_orders(
@@ -1359,14 +1371,18 @@ inline void generate_ema_multicoin_side_orders(
     thread float* close_qty = side.close_qty;
     thread float* secondary_close_qty = side.secondary_close_qty;
     thread float* twel_close_qty = side.twel_close_qty;
+#if PASSIVBOT_UNSTUCK_ENABLED
     thread float* unstuck_close_qty = side.unstuck_close_qty;
+#endif
     thread float* contribution = side.contribution;
     thread float* minimum_entry = side.minimum_entry;
     thread int* entry_tick = side.entry_tick;
     thread int* close_tick = side.close_tick;
     thread int* secondary_close_tick = side.secondary_close_tick;
     thread int* twel_close_tick = side.twel_close_tick;
+#if PASSIVBOT_UNSTUCK_ENABLED
     thread int* unstuck_close_tick = side.unstuck_close_tick;
+#endif
     thread bool* entry_market = side.entry_market;
     thread bool* close_market = side.close_market;
     thread bool* secondary_close_market = side.secondary_close_market;
@@ -1506,11 +1522,16 @@ inline void generate_ema_multicoin_side_orders(
     // positions. A directional multicoin thread owns that complete
     // one-side portfolio, so it can apply the same least-stuck rank.
     for (int c = 0; c < C; ++c) {
+#if PASSIVBOT_UNSTUCK_ENABLED
         unstuck_close_qty[c] = 0.0f;
+#endif
+#if PASSIVBOT_UNSTUCK_ENABLED
         unstuck_close_tick[c] = 0;
+#endif
         side.close_is_protective_reducer[c] = false;
         close_is_unstuck_reducer[c] = false;
     }
+#if PASSIVBOT_UNSTUCK_ENABLED
     float balance_peak = balance + effective_realized_pnl_drawdown(account);
     int unstuck_coin = -1;
     float best_unstuck_diff = INFINITY;
@@ -1647,6 +1668,7 @@ inline void generate_ema_multicoin_side_orders(
         unstuck_close_qty[unstuck_coin] = selected_unstuck_qty;
         unstuck_close_tick[unstuck_coin] = selected_unstuck_tick;
     }
+#endif
     for (int c = 0; c < C; ++c) {
         entry_qty[c] = 0.0f;
         close_qty[c] = 0.0f;
@@ -2029,6 +2051,7 @@ inline void prepare_ema_multicoin_reducer_candidates(
                 qty_step, price_step, min_qty, min_cost, c_mult,
                 market_orders_allowed, market_order_near_touch_threshold
             );
+#if PASSIVBOT_UNSTUCK_ENABLED
         EmaMulticoinReducerCandidate unstuck =
             make_ema_multicoin_reducer_candidate(
                 side.psize[c], side.close_qty[c], side.close_tick[c],
@@ -2037,6 +2060,10 @@ inline void prepare_ema_multicoin_reducer_candidates(
                 qty_step, price_step, min_qty, min_cost, c_mult,
                 market_orders_allowed, market_order_near_touch_threshold
             );
+#else
+        EmaMulticoinReducerCandidate unstuck =
+            empty_ema_multicoin_reducer_candidate();
+#endif
         if (ema_multicoin_reducer_candidate_preferred(
                 unstuck, twel, short_side)) {
             preferred[c] = unstuck;
@@ -2719,12 +2746,16 @@ inline void clear_ema_multicoin_coin_orders(
     side.close_qty[coin] = 0.0f;
     side.secondary_close_qty[coin] = 0.0f;
     side.twel_close_qty[coin] = 0.0f;
+#if PASSIVBOT_UNSTUCK_ENABLED
     side.unstuck_close_qty[coin] = 0.0f;
+#endif
     side.entry_tick[coin] = 0;
     side.close_tick[coin] = 0;
     side.secondary_close_tick[coin] = 0;
     side.twel_close_tick[coin] = 0;
+#if PASSIVBOT_UNSTUCK_ENABLED
     side.unstuck_close_tick[coin] = 0;
+#endif
     side.entry_market[coin] = false;
     side.close_market[coin] = false;
     side.secondary_close_market[coin] = false;
