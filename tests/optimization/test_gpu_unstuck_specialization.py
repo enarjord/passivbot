@@ -135,3 +135,61 @@ def test_full_unstuck_ablation_preserves_raw_outputs_and_cache_transitions(
         _, disabled_again = raw(proxy, [{}, {}])
         assert not runner.dispatch_unstuck_enabled
         equal(expected, disabled_again)
+
+
+@pytest.mark.parametrize('strategy', ['ema_anchor', 'trailing_martingale'])
+@pytest.mark.parametrize('sides', [('long',), ('short',), ('long', 'short')])
+def test_disabled_unstuck_preserves_active_factual_hsl_panics(
+    require_real_passivbot_rust_module, strategy, sides,
+):
+    import torch
+    from test_gpu_hsl_multicoin import make_proxy, raw
+
+    proxy = make_proxy('unified', strategy, sides, minutes=3000, factual_hsl=True)
+    candidate = {f'{side}_unstuck_enabled': 0.0 for side in sides}
+    candidate['hsl_red_threshold'] = 1e-6
+    runner, specialized = raw(proxy, [candidate])
+    assert not runner.dispatch_unstuck_enabled
+    assert not runner.dispatch_hsl_disabled
+    assert (specialized['hsl_triggers_long'] + specialized['hsl_triggers_short']).item() > 0
+    runner.unstuck_specialization = False
+    _, general = raw(proxy, [candidate])
+    assert runner.dispatch_unstuck_enabled
+    assert specialized.keys() == general.keys()
+    for key, value in specialized.items():
+        if isinstance(value, torch.Tensor):
+            torch.testing.assert_close(value, general[key], rtol=0, atol=0, equal_nan=True, msg=key)
+        else:
+            assert value == general[key]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('strategy', ['ema_anchor', 'trailing_martingale'])
+@pytest.mark.parametrize('suite', [False, True])
+async def test_disabled_unstuck_native_cli_persists_and_resumes_without_cpu(
+    require_real_passivbot_rust_module, monkeypatch, tmp_path, strategy, suite,
+):
+    from tools import gpu_parity
+    from optimization.gpu.service import MpsMulticoinProxy
+    from test_native_backend_cuda import test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu
+
+    fixture_inputs = gpu_parity.fixture_inputs
+    def disabled_inputs(*args, **kwargs):
+        inputs = fixture_inputs(*args, **kwargs)
+        for side in ('long', 'short'):
+            inputs[0]['bot'][side]['unstuck']['enabled'] = False
+        return inputs
+    monkeypatch.setattr(gpu_parity, 'fixture_inputs', disabled_inputs)
+    evaluate = MpsMulticoinProxy.evaluate_results
+    observations = []
+    def observed(proxy, candidates):
+        results = evaluate(proxy, candidates)
+        runners = [proxy.fused_runner] if proxy.fused_runner else [proxy.runners[s] for s in proxy.sides]
+        assert all(not runner.dispatch_unstuck_enabled for runner in runners)
+        observations.append(len(results))
+        return results
+    monkeypatch.setattr(MpsMulticoinProxy, 'evaluate_results', observed)
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, True, True, screening=suite, strategy_kind=strategy,
+    )
+    assert observations and sum(observations) > 0

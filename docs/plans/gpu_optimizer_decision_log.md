@@ -3260,3 +3260,31 @@ Historical observations do not supersede those requirements or prove current acc
   probe the worker task file, exit cooperatively through child cleanup, and skip
   unsupported kernels/mounts. The actual Linux positive control and unsupported
   skip control pass; production code is unchanged by this test correction.
+
+
+### 2026-10-09 — Specialize fully inactive unstuck consumers
+
+- Extend the existing packed-flag/coin-override proof to full unstuck enablement.
+  Keep a dispatch general if any effective candidate/coin/active side consumes it;
+  retain unknown consumed inputs for producer validation. Include the feature in
+  library and temporal-state identity, with an internal general control.
+- Omit the exclusive selector/generator and private close arrays while preserving
+  ordinary/risk close construction and shared realized-loss/HSL work. Preserve the
+  existing independent EMA proof; do not use a broad reducer-disable shortcut.
+- Source-verified CUDA controls pass 24 raw-output cases, seven host proofs and
+  110 existing shared-consumer checks, including Rust loss-budget expiry. Rust
+  tests and extension verification pass. Public-fixture paired observations retain
+  exact metrics/status and reduce compiler local storage for both strategies; EMA
+  also reduces registers. Record modest warm timing differences without claiming
+  whole-search speedup or total resource acceptance.
+- Integrate reviewed resource-tool development changes without changing Rust
+  fingerprint or the compiler implementation. Validate longer active-HSL panics
+  and native optimizer callers before current-head review/CI.
+
+- All six longer active factual-HSL panic controls and four disabled-unstuck native
+  CLI interrupt/resume controls pass on the reviewed-resource development base.
+  Shared sources remain unchanged. The CLI observes actual disabled dispatches
+  and forbids CPU simulation while checking prompt result/Pareto persistence.
+- Twelve existing native bootstrap/resume CLI controls also pass after
+  development integration, with checked sources unchanged. The compiler slice
+  is ready for author review, publication to development, independent review and CI.

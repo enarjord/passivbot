@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Multicoin GPU backtests compile away unstuck selection and exclusive close state
+  when every effective candidate, coin override and active side disables it;
+  shared realized-loss and HSL consumers remain independently enabled.
+
 - Native GPU batch tuning retains compatible queued demand through each scenario
   evidence window, so a cohort tail does not hide opportunities to test a larger width.
 
