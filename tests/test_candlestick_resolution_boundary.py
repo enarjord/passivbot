@@ -295,3 +295,49 @@ async def test_boundary_does_not_hide_nonfinite_coarse_values(field):
     coarse[field] = np.nan
     with pytest.raises(ValueError, match="finite"):
         await read_boundary(exact, coarse, "5m", 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeframe,minutes", [("5m", 5), ("15m", 15), ("1h", 60)])
+@pytest.mark.parametrize(
+    "opening,high,low,expected_open",
+    [(100.0, 50.0, 200.0, 100.0),
+     (300.0, 200.0, 50.0, 200.0),
+     (25.0, 200.0, 50.0, 50.0),
+     (300.0, 50.0, 200.0, 200.0)],
+)
+async def test_boundary_normalizes_coarse_ohlc_like_full_bucket(
+    timeframe, minutes, opening, high, low, expected_open
+):
+    exact = priced_candles(range(1, minutes + 5))
+    raw = priced_candles([0], opening=opening, high=high, low=low)
+    canonical = raw.copy()
+    canonical["o"] = expected_open
+    canonical["h"] = 200.0
+    canonical["l"] = 50.0
+
+    result = await read_boundary(exact, raw, timeframe, minutes)
+    reference = await read_boundary(exact, canonical, timeframe, minutes)
+    assert np.array_equal(result.candles, reference.candles)
+    assert np.array_equal(result.candles[1:], exact)
+    assert float(result.candles[0]["o"]) == expected_open
+    assert float(result.candles["h"].max()) == 200.0
+    assert float(result.candles["l"].min()) == 50.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeframe,minutes", [("5m", 5), ("15m", 15), ("1h", 60)])
+@pytest.mark.parametrize("exact_open,expected_close", [(300.0, 200.0), (25.0, 50.0)])
+async def test_boundary_clamps_synthetic_endpoint_to_normalized_coarse_range(
+    timeframe, minutes, exact_open, expected_close
+):
+    exact = priced_candles(
+        range(1, minutes + 5), opening=exact_open, high=exact_open,
+        low=exact_open, close=exact_open,
+    )
+    coarse = priced_candles([0], high=200.0, low=50.0)
+    result = await read_boundary(exact, coarse, timeframe, minutes)
+    assert float(result.candles[0]["c"]) == expected_close
+    assert float(result.candles[0]["h"]) <= 200.0
+    assert float(result.candles[0]["l"]) >= 50.0
+    assert np.array_equal(result.candles[1:], exact)

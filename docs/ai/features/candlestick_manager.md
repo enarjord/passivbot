@@ -233,7 +233,9 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
     ending at or before the first available 1m candle are eligible. One coarse bucket may straddle
     that boundary when every overlapping exact 1m minute is already present; only synthetic rows
     before the precision boundary are eligible, while exact 1m rows retain precedence. The missing
-    prefix is expanded separately, ending at the first exact candle's open. Coarse extrema outside
+    prefix is expanded separately, ending at the first exact candle's open clamped to the normalized
+    coarse range. Full-bucket and boundary expansion share finite-value checks, reversed-extrema
+    normalization and endpoint clamping. Coarse extrema outside
     the complete overlap and already-selected finer rows' ranges must belong to the missing prefix
     and are preserved in its remaining synthetic rows. Extrema already present in finer rows are
     not moved backward; whether they also occurred in the missing prefix is unknown. Coarse volume

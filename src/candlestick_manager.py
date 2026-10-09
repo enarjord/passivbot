@@ -359,12 +359,8 @@ def _linear_interpolate(value0: float, value1: float, ratio: float) -> float:
     return float(value0 + (value1 - value0) * ratio)
 
 
-def ohlcv_xm_to_1m(candle: np.void, minutes: int) -> np.ndarray:
-    """Expand one higher-timeframe OHLCV candle into deterministic synthetic 1m candles."""
-    if minutes <= 0:
-        raise ValueError(f"minutes must be > 0, got {minutes}")
-
-    ts = int(candle["ts"])
+def _normalized_coarse_ohlcv(candle: np.void) -> tuple[float, float, float, float, float]:
+    """Use the same finite-value, range and endpoint policy for every expansion."""
     o = float(candle["o"])
     h = float(candle["h"])
     l = float(candle["l"])
@@ -377,6 +373,16 @@ def ohlcv_xm_to_1m(candle: np.void, minutes: int) -> np.ndarray:
         h, l = l, h
     o = min(max(o, l), h)
     c = min(max(c, l), h)
+    return o, h, l, c, bv
+
+
+def ohlcv_xm_to_1m(candle: np.void, minutes: int) -> np.ndarray:
+    """Expand one higher-timeframe OHLCV candle into deterministic synthetic 1m candles."""
+    if minutes <= 0:
+        raise ValueError(f"minutes must be > 0, got {minutes}")
+
+    ts = int(candle["ts"])
+    o, h, l, c, bv = _normalized_coarse_ohlcv(candle)
 
     out = np.zeros(minutes, dtype=CANDLE_DTYPE)
     out["ts"] = np.arange(ts, ts + minutes * ONE_MIN_MS, ONE_MIN_MS, dtype=np.int64)
@@ -466,22 +472,22 @@ def _synthesize_boundary_prefix(
     Extrema already observed in finer rows have unknown prefix membership and
     are not moved backward. Their ordering within the prefix remains approximate.
     """
-    if not all(math.isfinite(float(candle[key])) for key in ("o", "h", "l", "c", "bv")):
-        raise ValueError("all OHLCV values must be finite")
+    o, h, l, _, bv = _normalized_coarse_ohlcv(candle)
     known_rows = np.concatenate([known_prefix, exact_overlap])
     prefix_minutes = (int(exact_overlap[0]["ts"]) - int(candle["ts"])) // ONE_MIN_MS
     prefix = candle.copy()
-    prefix["c"] = exact_overlap[0]["o"]
+    prefix["o"] = o
+    prefix["c"] = min(max(float(exact_overlap[0]["o"]), l), h)
     prefix["h"] = max(float(prefix["o"]), float(prefix["c"]))
     prefix["l"] = min(float(prefix["o"]), float(prefix["c"]))
-    missing_high = float(candle["h"]) > float(np.max(known_rows["h"]))
-    missing_low = float(candle["l"]) < float(np.min(known_rows["l"]))
+    missing_high = h > float(np.max(known_rows["h"]))
+    missing_low = l < float(np.min(known_rows["l"]))
     if missing_high:
-        prefix["h"] = max(float(prefix["h"]), float(candle["h"]))
+        prefix["h"] = max(float(prefix["h"]), h)
     if missing_low:
-        prefix["l"] = min(float(prefix["l"]), float(candle["l"]))
+        prefix["l"] = min(float(prefix["l"]), l)
     # Keep the existing proportional volume approximation for coarse history.
-    prefix["bv"] = float(candle["bv"]) * prefix_minutes / tf_minutes
+    prefix["bv"] = bv * prefix_minutes / tf_minutes
     expanded = ohlcv_xm_to_1m(prefix, prefix_minutes)
     expanded = expanded[~np.isin(expanded["ts"], known_prefix["ts"])]
     # Finer rows keep precedence, but must not displace an extreme they lack.
