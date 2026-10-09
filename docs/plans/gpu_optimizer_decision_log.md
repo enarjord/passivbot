@@ -3392,11 +3392,11 @@ Historical observations do not supersede those requirements or prove current acc
   steps with a nine-step minimum/clip can close fully because raw subtraction
   compares the nine-step remainder below its minimum by binary representation
   noise. Preserve the valid clip when that difference lies within four f64
-  epsilon-scaled units at the remainder/minimum scale. Keep genuinely
+  epsilon-scaled units at the position/clip/minimum operand scale. Keep genuinely
   subminimum remainders, including small nonzero deficits, on the full-close path.
 - Fix the shared Rust strategy producer rather than reproducing its rounding
   artifact in GPU arithmetic or adding Python trading policy. The regression
-  fails the old producer; all 335 Rust tests pass after the correction, with
+  fails the old producer; all 336 Rust tests pass after the correction, with
   one existing ignored test. Default-feature test compilation passes. Rebuilt
   extension source verification passes. The public native-service parity
   regression and 185 affected caller/CPU-entrypoint/CLI controls pass without
@@ -3408,3 +3408,9 @@ Historical observations do not supersede those requirements or prove current acc
 - PR #1954's public-data-boundary review finding is addressed before merge.
   Updated head `8b6e99b0a5` clears independent review and all required CI;
   merge `46218c2f28` integrates adaptive dispatch into development.
+
+- PR #1955 review identifies cancellation when the position/clip is much larger
+  than the remaining minimum. Scale subtraction tolerance to its operands.
+  A regression with `1e-8` steps and clips of 1, 10 and 1,000 fails the preceding
+  remainder-scaled code; include real half-minimum deficits at those magnitudes.
+  Updated-head validation, independent review and CI remain merge gates.

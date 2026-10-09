@@ -212,7 +212,8 @@ fn calc_close_qty(
     let remainder = position_size_abs - clip_qty;
     // A valid minimum-size remainder must survive subtraction noise. Keep
     // genuinely undersized remainders on the existing full-close path.
-    let representation_tolerance = f64::EPSILON * remainder.abs().max(min_qty.abs()) * 4.0;
+    let representation_tolerance =
+        f64::EPSILON * position_size_abs.abs().max(clip_qty.abs()).max(min_qty.abs()) * 4.0;
     if remainder < min_qty && min_qty - remainder > representation_tolerance {
         position_size_abs
     } else {
@@ -440,6 +441,49 @@ mod tests {
         );
         assert_eq!(close, minimum);
         assert_eq!(round_(close, exchange.qty_step), 0.009);
+    }
+
+    #[test]
+    fn close_clip_preserves_tiny_minimum_remainders_after_large_subtraction() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-8,
+            min_qty: 1e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let minimum = calc_min_entry_qty(1.0, &exchange);
+        assert!((1.0 + minimum) - 1.0 < minimum);
+        for clip in [1.0, 10.0, 1000.0] {
+            let position = clip + minimum;
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &base_params(),
+                    clip * 100.0,
+                    1.0,
+                    position,
+                    1.0,
+                ),
+                clip
+            );
+            // A real deficit much larger than subtraction noise still consumes
+            // the remainder, even at the same position/clip magnitudes.
+            let undersized = clip + minimum * 0.5;
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &base_params(),
+                    clip * 100.0,
+                    1.0,
+                    undersized,
+                    1.0,
+                ),
+                undersized
+            );
+        }
     }
 
     #[test]
