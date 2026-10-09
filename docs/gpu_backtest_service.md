@@ -11,6 +11,9 @@ The [development evidence map](plans/gpu_optimizer_acceptance.md) records the ow
 incremental-admission and optimizer persistence cases separately from outstanding parity
 and cutover requirements.
 
+The offline [service suite benchmark](gpu_service_benchmark.md) measures latency,
+resource use and completed default tuning windows independently of optimization.
+
 ## Input ownership
 
 Prepare effective config, market settings and immutable candle/BTC/timestamp arrays on

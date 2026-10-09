@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add an offline native CUDA service benchmark for shared-data scenarios, result latency, resource use and completed default tuning windows.
+
 - Native CUDA optimization reconstructs HSL scopes from retained simulation fill
   facts. Worker-owned factual storage grows within its scratch budget and is
   omitted when effective HSL policies are off. Native replay reserves only factual
