@@ -223,10 +223,30 @@ fn calc_close_qty(
         }
         // Compare aligned cardinalities before accepting a near-minimum
         // remainder. A fractional-step allowance can hide a real grid deficit
-        // at large operand ratios. Beyond exactly countable f64 integers, keep
-        // the ordinary full-close decision instead of guessing a valid clip.
+        // at large operand ratios. Each quantity must resolve adjacent steps;
+        // otherwise keep the ordinary full-close decision.
         let step = exchange.qty_step.abs();
-        let steps = [position_size_abs, clip_qty, min_qty].map(|qty| (qty / step).round());
+        let quantities = [position_size_abs, clip_qty, min_qty];
+        if !quantities
+            .iter()
+            .all(|qty| qty.is_finite() && f64::from_bits(qty.to_bits() + 1) - qty < step)
+        {
+            return position_size_abs;
+        }
+        let steps = quantities.map(|qty| {
+            let nearest = (qty / step).round();
+            // Division can round before integer rounding at large counts.
+            // A fused residual corrects that double rounding without losing
+            // the low bits again in nearest * step.
+            let residual = (-nearest).mul_add(step, qty);
+            if residual >= step * 0.5 {
+                nearest + 1.0
+            } else if residual < -step * 0.5 {
+                nearest - 1.0
+            } else {
+                nearest
+            }
+        });
         const MAX_EXACT_STEPS: f64 = 9_007_199_254_740_992.0;
         if !steps
             .iter()
@@ -640,6 +660,83 @@ mod tests {
         let remainder = position - clip;
         assert!(remainder < exchange.min_qty);
         assert!(exchange.min_qty - remainder < exchange.qty_step * 0.5);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            position
+        );
+    }
+
+    #[test]
+    fn close_clip_does_not_infer_steps_below_quantity_resolution() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-12,
+            min_qty: 2e-12,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let balance = 864102.4116158515;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        assert_eq!(clip, 8641.024116158515);
+        let position = 8641.024116158516;
+        assert!(position > clip);
+        assert!(position - clip < exchange.min_qty);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            position
+        );
+    }
+
+    #[test]
+    fn close_clip_corrects_division_rounding_when_steps_are_resolvable() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-8,
+            min_qty: 2e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let clip_steps = 4_000_000_000_000_006.0;
+        let balance = clip_steps * exchange.qty_step * 100.0;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        assert_eq!(clip, clip_steps * exchange.qty_step);
+        let position = (clip_steps + 1.0) * exchange.qty_step;
+        assert!(f64::from_bits(position.to_bits() + 1) - position < exchange.qty_step);
+        assert_eq!(
+            (position / exchange.qty_step).round() - (clip / exchange.qty_step).round(),
+            2.0
+        );
+        assert!(position - clip < exchange.min_qty);
         assert_eq!(
             calc_close_qty(
                 &exchange,

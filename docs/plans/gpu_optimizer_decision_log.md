@@ -3446,3 +3446,14 @@ Historical observations do not supersede those requirements or prove current acc
   default-feature compilation, source-verified rebuild, 181 CPU caller checks and
   five documentation checks pass. Current CUDA, independent review and CI gates
   remain.
+
+- Further review demonstrates that exactly countable integer values alone do
+  not make float division recover the original cardinality. Reproduce the
+  one-step/two-step minimum case where quantity spacing exceeds the step.
+  Require distinguishable adjacent quantity steps before near-minimum repair;
+  otherwise retain the ordinary full-close decision. Correct quotient double
+  rounding with a fused residual in the supported domain, with a separate
+  producer regression. All 341 Rust tests pass, with one existing ignore;
+  default-feature compilation, touched-file formatting, rebuilt source verification,
+  181 CPU caller checks and five documentation checks pass. Current CUDA,
+  independent review and CI gates remain.

@@ -1988,8 +1988,11 @@ when aligned quantity-step counts confirm a valid remainder. This replaces
 fractional-step caps, which can reject valid remainders or absorb genuine deficits
 at extreme ratios. Regressions cover 13,000,000- and 40,000,000-unit clips and a
 three-step remainder below a four-step minimum at a countable quadrillion-step
-ratio. Above exactly countable f64 cardinalities, retain the ordinary full-close
-decision when subtraction reports an undersized remainder.
+ratio. Recovery also requires adjacent quantity steps to remain distinguishable
+at each operand's floating-point spacing. A fused residual corrects division
+rounding before comparing cardinalities. Above those quantity-resolution or
+countability bounds, retain the ordinary full-close decision when subtraction
+reports an undersized remainder.
 Genuinely undersized remainders
 still trigger full closes; GPU strategy arithmetic remains unchanged.
 
@@ -2006,9 +2009,9 @@ match exactly. No global tolerance or matching-nonfinite policy changes. This
 is a regression acceptance case, not certification of every recovery curve,
 limit threshold or strategy combination.
 
-The cardinality revision passes 339 Rust tests, with one existing ignored test,
-default-feature compilation, rebuilt source verification, 181 CPU caller checks
-without skips and five documentation checks. The earlier operand-scaled revision
+The resolution revision passes 341 Rust tests, with one existing ignored test,
+default-feature compilation, touched-file formatting, rebuilt source verification,
+181 CPU caller checks without skips and five documentation checks. The earlier operand-scaled revision
 passed 186 parity, Rust-backed caller and native EMA CLI lifecycle checks. Current
-cardinality CUDA parity/native CLI verification, independent current-head review and
+resolution CUDA parity/native CLI verification, independent current-head review and
 CI remain integration gates. Earlier device results do not satisfy this gate.
