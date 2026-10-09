@@ -5,6 +5,12 @@ cohorts through serial CPU backtests, direct shared-account GPU replay and the
 native CUDA service. It never downloads data, reads accounts or runs optimization.
 It requires a full backtest installation, NVIDIA CUDA and a source-verified Rust
 extension. CPU backtests belong to this explicit development measurement only.
+Direct GPU replay uses the same factual simulation policy as the native worker;
+`measurement_scope.gpu_replay` records `native_factual`. This isolates transport,
+packing and scheduling comparisons from differences between simulation policies.
+The historical measurements below predate factual-worker adoption unless explicitly
+identified otherwise; refresh a report before applying their numerical conclusions
+to the current native optimizer.
 
 ```sh
 passivbot tool gpu-cohort-benchmark --seeds 7 43 --report cohort.json
