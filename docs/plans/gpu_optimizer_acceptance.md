@@ -2003,7 +2003,9 @@ is a regression acceptance case, not certification of every recovery curve,
 limit threshold or strategy combination.
 
 All 337 Rust tests pass, with one existing ignored test, and default-feature
-test compilation plus rebuilt extension source verification pass. A further
-186 parity, Rust-backed caller, CPU backtest/plot/optimizer-isolation and native
-EMA CLI lifecycle checks pass without skips. Independent current-head review
-and CI remain integration gates.
+test compilation plus rebuilt extension source verification pass. The step-capped
+revision passes 181 CPU backtest/plot, optimizer-isolation, analysis and Rust API
+caller checks without skips. The preceding operand-scaled revision passed 186
+parity, Rust-backed caller and native EMA CLI lifecycle checks. Current step-capped
+CUDA parity/native CLI verification, independent current-head review and CI remain
+integration gates; the earlier device results do not satisfy the current-build gate.

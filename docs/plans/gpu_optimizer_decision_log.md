@@ -3399,9 +3399,12 @@ Historical observations do not supersede those requirements or prove current acc
   artifact in GPU arithmetic or adding Python trading policy. The regression
   fails the old producer; all 337 Rust tests pass after the correction, with
   one existing ignored test. Default-feature test compilation passes. Rebuilt
-  extension source verification passes. The public native-service parity
-  regression and 185 affected caller/CPU-entrypoint/CLI controls pass without
-  skips. The documented four-day fixture now matches fill rate exactly and
+  extension source verification passes. The preceding operand-scaled revision
+  passed the public native-service parity regression and 185 affected
+  caller/CPU-entrypoint/CLI controls without skips. The step-capped revision
+  passes 181 rebuilt CPU caller checks; its current CUDA parity/native CLI
+  verification remains an integration gate. The documented four-day fixture
+  matches fill rate exactly and
   reduces recovery-p95 error to about three minutes; keep its five-minute
   recovery gate scoped to that nearly flat regression curve. Independent
   current-head review and CI remain integration gates.
