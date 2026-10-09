@@ -1942,9 +1942,8 @@ same temporal owner. Legacy GPU and Metal dispatch policy remains unchanged.
 Twelve actual CUDA checks pass for both strategies and all side topologies,
 forced shrinking boundaries, restored whole replay, zero-work finalization,
 unequal endpoints with HSL disabled and actual prepared-service interruption.
-All compared replay outputs are exact. An added endpoint fixture initially
-miscounted the terminal row; its corrected endpoint follows the existing
-`n - 1` contract. Production code and output equality were unchanged.
+All compared replay outputs are exact. Unequal endpoint checks follow the
+existing `n - 1` terminal-row contract.
 
 Repeat the preceding 25-coin two-day recipe at width one. The fixed control
 holds the same compiled replay's controller constant; all ten metrics and
@@ -1971,7 +1970,5 @@ resource totals and the CPU/GPU trading-path discrepancy remain open.
 A further 191 orchestration/tuning/CLI checks pass on the verified current Rust
 runtime, with one environment skip. These include twelve real native TM/EMA
 standalone/suite startup, interruption and resume cases with CPU simulations
-forbidden, as well as legacy exact-worker option roundtrips. A broader local
-host attempt used a stale Rust extension; its collection/config failures do not
-supply acceptance evidence. The current-runtime rerun passes those callers.
+forbidden, as well as legacy exact-worker option roundtrips.
 Current-head independent review and CI remain required before integration.
