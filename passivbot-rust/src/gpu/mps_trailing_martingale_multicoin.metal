@@ -7406,7 +7406,11 @@ kernel void passivbot_trailing_martingale_multicoin(
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#ifdef PASSIVBOT_MULTICOIN_SHORT_SIDE
+    const bool short_side = PASSIVBOT_MULTICOIN_SHORT_SIDE != 0;
+#else
     const bool short_side = run_settings[3] > 0.5f;
+#endif
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,

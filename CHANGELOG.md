@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- One-side CUDA multicoin backtests compile their prepared long or short direction
+  into the kernel, allowing the compiler to omit the unused directional path.
+
 - Multicoin GPU backtests compile away unstuck selection and exclusive close state
   when every effective candidate, coin override and active side disables it;
   shared realized-loss and HSL consumers remain independently enabled.

@@ -722,6 +722,19 @@ dispatch tuning and representative larger-suite resource acceptance remain open.
 
 ## Work still required before legacy retirement
 
+A larger native-suite pilot uses 25 coins, both sides, 11,520 minute bars,
+eight candidates and unified HSL (`gpu-service-benchmark`, seed seven, one-day
+lookback and threshold 0.99). Its isolated width-one reference phase does not
+complete a round after more than 35 minutes and is stopped. No completed-phase
+resource, throughput or parity acceptance follows. The active work also prevents
+shutdown completing within six minutes of an interrupt. The tool cancels queued
+requests but joins its running worker; it does not pass an interrupt callback.
+Production optimization supplies its own callback, while an active CUDA kernel
+still cannot observe that callback until it returns. Keep these caller and kernel
+limits distinct. Profile individual completions, reconstruction/retry costs and
+launch geometry before another long all-width comparison; larger busy-HSL and
+long-interruption acceptance remain open.
+
 1. Finish the code-backed approximation inventory for the actual native shared-account
    path. In particular assess requested histogram tails, recovery trajectories, partial-day
    weighting and HSL observation timing using meaningful samples and canonical limit
@@ -1766,5 +1779,51 @@ unstuck disabled and preserve all raw outputs against the general implementation
 Four disabled-unstuck native CLI controls cover both strategies, suites/screening,
 interruption and resumption: they observe the disabled dispatch and forbid CPU
 simulations while checking prompt persistence. Twelve existing native bootstrap/
-resume CLI controls also pass after development integration. Current-head review/CI remains
-required before this slice is integrated.
+resume CLI controls also pass after development integration. PR #1951 passes
+independent current-head review and required Rust/Python CI and is integrated into
+development. Wider simulator/resource acceptance remains open.
+
+## Prepared one-side CUDA compilation
+
+A one-side multicoin runner has a fixed prepared direction. Include that direction
+in compiler/cache identity and make it constant in the Rust-owned kernel entry.
+Fused two-side replay and Metal retain their general entries. The internal
+`side_specialization=False` control selects the general CUDA entry. This changes
+neither candidate parameters nor the numerical/checkpoint contract. Single-coin
+multicoin replay already compiles with capacity one; no separate kernel is added.
+
+Source-verified CUDA checks cover 24 raw/general cases across both strategies,
+long/short/fused topologies, one/three coins and enabled/disabled factual HSL.
+Every returned value and NaN mask agrees exactly, including TM temporal replay,
+cache transitions and restored specialization. Eight native one-side CLI cases
+cover both strategies, standalone/suite screening, prompt persistence, interruption
+and resume with CPU simulations forbidden. Suites use symmetric coin eligibility
+and zero exposure on the disabled side, preserving the existing suite contract.
+Together with existing unstuck and CPU-entrypoint controls, 80 distinct checks
+pass. Rust tests pass 333 checks with one existing ignored test; default-feature
+test compilation and rebuilt-extension source verification pass.
+
+Paired public seed-seven fixtures use one/eight coins, 2,880 bars, a single active
+side, disabled HSL/unstuck, width 32 and ADG, worst strategy-equity drawdown and
+fills/day. Vary the active quantity gene as `0.005 + index * 0.0001`. Warm general
+and specialized variants once, then alternate order over six paired rounds.
+All 3,584 candidate metric/status results agree exactly; CPU simulation is forbidden
+and checked sources remain unchanged.
+
+| Strategy / side / coins | General / specialized median seconds | General / specialized registers | Local bytes, both variants |
+| --- | --- | --- | ---: |
+| EMA / long / 1 | 0.04188 / 0.03779 | 162 / 160 | 576 |
+| EMA / long / 8 | 0.14739 / 0.14292 | 164 / 158 | 3,536 |
+| EMA / short / 1 | 0.04396 / 0.03675 | 162 / 156 | 576 |
+| EMA / short / 8 | 0.15180 / 0.14317 | 164 / 158 | 3,536 |
+| TM / long / 1 | 0.04922 / 0.04750 | 237 / 230 | 672 |
+| TM / long / 8 | 0.19002 / 0.18484 | 217 / 214 | 4,416 |
+| TM / short / 1 | 0.16350 / 0.15670 | 237 / 232 | 672 |
+| TM / short / 8 | 1.24604 / 1.21615 | 217 / 220 | 4,416 |
+
+Warm median decreases range from approximately 2.4% to 16.4% in these fixtures;
+the shortest observations include substantial orchestration/reduction overhead.
+Compiler local storage is unchanged and registers are not universally lower.
+These are proxy/kernel observations, not whole-search throughput, total VRAM,
+paired cold-cache evidence or wider simulator acceptance. Review and CI still
+gate development integration.
