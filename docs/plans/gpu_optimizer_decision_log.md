@@ -2914,3 +2914,110 @@ Historical observations do not supersede those requirements or prove current acc
   actual CUDA service controls, including all four eviction regressions. All checked
   sources remain unchanged; Rust/shaders use the reviewed compact extension.
   Require a fresh independent review and CI for this integrated head.
+
+
+### 2026-10-08 — Measure the held-history reconstruction bottleneck
+
+- Twelve source-verified native request cases cover EMA/TM, 2/25 long-side coins
+  and 512/1024/2048 minute histories. Isolated CPU references prove the intended
+  entry-at-64/no-close trajectory; dataset identities and five requested metrics
+  agree within the stated tolerance. GPU on/off/on-repeat results agree exactly;
+  all checked source files remain unchanged.
+- Both strategies show roughly fourfold warm HSL-enabled cost when history doubles.
+  At 25 coins and 2048 bars, warm requests take about 22.5 seconds with HSL enabled,
+  versus 0.34 seconds for EMA and 0.46 seconds for TM with HSL off. This is measured
+  single-candidate synthetic scaling, not universal optimizer throughput or a
+  90-day simulation result. Record the public recipe and bounded resource limitations
+  in acceptance; do not claim Torch counters measure all device allocations.
+- Prioritize a compact guarded active-episode recurrence over further launch tuning.
+  Retain fresh reconstruction as the reference/fallback for changed facts, budgets,
+  clipping, causal phase and numerical concerns. Require cache-loss/temporal controls,
+  paired factual and CPU parity, resource evidence and review before adoption.
+  The strategy-neutral shared-runner extraction remains a separate focused follow-up.
+
+
+### 2026-10-08 — Integrate resource fixes and tighten continuation guards
+
+- Compact native factual storage and dataset-owned capacity retention are integrated
+  on development through [PR #1945](https://github.com/enarjord/passivbot/pull/1945)
+  and [PR #1946](https://github.com/enarjord/passivbot/pull/1946), after clean independent
+  current-head review and all required CI. Master is unchanged. Reconcile the checklist
+  to distinguish completed integration from remaining representative acceptance.
+- The local active-episode continuation experiment passes its initial component
+  comparisons, but exact native comparisons expose approximately 5e-9 short-side EMA
+  diagnostic residuals. Do not count the interrupted validation as accepted parity.
+- A current endpoint becomes a historical sample on the next evaluation. Require no
+  same-end-minute fill and exact agreement of reconstructed final inventory/basis with
+  the actual endpoint before seeding continuation; otherwise reconstruct fresh.
+  Three new seed-denial regressions fail against the preceding draft without these
+  guards. Corrected component/native validation and paired performance/resource
+  evidence remain required before adoption.
+- Extend temporal controls to both retained factual and native factual layouts;
+  the earlier controls exercised only the retained factual layout. Keep the shared
+  runner extraction separate from this numerical/performance change.
+
+
+### 2026-10-08 — Verify stable continuation and paired held-request scaling
+
+- Corrected validation passes 82 actual CUDA components and eighteen native
+  policy/on-off-on/capacity comparisons with exact raw-output agreement. All
+  checked sources remain unchanged. Three stable-prefix and six scalar-guard
+  omission regressions fail as expected. Retain the strict comparisons; the
+  initial draft's residuals are not an accepted numerical exception.
+- Twelve paired native future cases preserve input identity, all five returned
+  GPU metrics exactly and independent CPU references within 1e-6 absolute/relative
+  tolerance. At 25 coins and 2048 bars, warm EMA/TM requests improve from
+  22.480/22.497 seconds to 0.561/0.649 seconds. The 25-coin history-doubling
+  shape becomes approximately linear; smaller cases have noisier timings.
+- Torch allocation peaks match across every measured variant/phase. This does
+  not measure compiler/private kernel, total driver, host or disk resources.
+  Exclude cold compilation from the warm ratios and keep whole optimizer/search
+  claims separate. Record the public recipe and full bounded table in acceptance.
+- Continue paired mixed-candidate, actual-native temporal, lifecycle/CLI and
+  multi-entry/clipping controls before publication. Keep fresh factual replay as
+  reference/fallback, with no action cached and no new optimizer tuning knob.
+
+
+### 2026-10-08 — Bound continuation claims with mixed candidate evidence
+
+- Four paired cohorts preserve all nine GPU metrics for 64 distinct candidates
+  exactly against preceding factual replay and between fresh/continued variants.
+  Refreshed CPU references preserve exact agreement on all five HSL lifecycle
+  metrics; existing trajectory differences and the TM seed-7 drawdown near-tie
+  are unchanged, with zero limit flips. No numerical policy is widened.
+- Busy-cohort warm medians remain essentially unchanged (EMA about 9.3/9.7
+  seconds; TM about 8.5/8.2). Keep the large held-episode improvement scoped to
+  stable exposed histories. Continuation adds 320/336 compiler-reported local
+  bytes for EMA/TM, with 255 registers unchanged. Torch peaks match; post-replay
+  whole-device free snapshots differ by about 22 MiB. These are not total peaks.
+- All checked sources remain unchanged after paired comparisons. Continue
+  actual-native temporal, lifecycle and real CLI tests, then representative
+  multiple-entry and lookback-boundary controls before integration/review.
+
+
+### 2026-10-08 — Complete continuation replay and optimizer caller checks
+
+- Corrected continuation passes 350 broader replay checks, including 36 exact
+  temporal controls across retained/native factual layouts, 42 native lifecycle/loss
+  checks and twelve real CLI/data/service checks. Eight CLI combinations cover
+  bootstrap/resume with CPU simulation forbidden. All checked sources remain
+  unchanged; preserve the existing strict raw-output comparisons.
+- Keep representative fill/clipping comparisons and total-resource evidence
+  separate from these completed caller gates. Independent review and CI remain
+  required for development integration.
+
+
+### 2026-10-08 — Bound continuation with additional entries and clipping
+
+- Four paired two-coin/2048-bar requests preserve every requested GPU metric
+  exactly, separate CPU references within 1e-6 absolute/relative tolerance and
+  matching Torch peaks. Additional-entry cases make four EMA/fourteen TM fills
+  at bars 64 and 128; one-day lookback cases exercise clipping. Sources remain
+  unchanged. Record the reproducible recipe and timing table in acceptance.
+- Multiple-entry warm cost remains about 2.5 seconds; clipping improves from
+  about 2.3 to 1.0 seconds. Retain conservative endpoint guards and the fresh
+  fallback. These constant-mark cases have zero risk metrics and do not replace
+  nonzero component, mixed-candidate or lifecycle evidence.
+- The bounded continuation slice is ready for independent review and CI. Broader
+  numerical, total-resource and whole-optimizer gates remain open; do not present
+  this slice as completion of the optimizer redesign.

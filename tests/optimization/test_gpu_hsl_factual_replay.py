@@ -62,12 +62,15 @@ def test_native_factual_replay_dispatch(reference, forbid_cpu, strategy, mode, s
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("coin_count", [1, 2])
-def test_factual_context_rebinds_after_every_temporal_chunk(reference, forbid_cpu, mode, sides, coin_count):
+@pytest.mark.parametrize("native", [False, True])
+def test_factual_context_rebinds_after_every_temporal_chunk(reference, forbid_cpu, mode, sides, coin_count, native):
     from test_gpu_hsl_multicoin import make_proxy, raw
 
-    proxy = make_proxy(mode, "trailing_martingale", sides, minutes=128, coin_count=coin_count)
+    proxy = make_proxy(mode, "trailing_martingale", sides, minutes=128,
+                       coin_count=coin_count, factual_hsl=native)
     _enable(proxy)
     runner, full = raw(proxy, [{}, {}])
+    assert runner.native_factual_hsl is native
     runner.max_dispatch_candidate_bars = 64
     _, chunked = raw(proxy, [{}, {}])
     assert runner._last_temporal_dispatch["dispatch_count"] > 1

@@ -1381,3 +1381,159 @@ A focused strategy-neutral extraction is a follow-up simplification candidate. I
 must preserve the existing service boundary and avoid introducing a general backend
 framework. These resource and scaling gates take priority over additional small-fixture
 test counts or marginal launch gains.
+
+### Held-position reconstruction scaling
+
+The compact native service is measured on twelve matched synthetic cases: EMA
+Anchor/TM, 2/25 long-side coins, and 512/1024/2048 minute bars. Start from the public
+parity fixture with seed 7, unified HSL threshold 0.99, span 2.5 and 90-day lookback.
+Replace high/low/close/volume with 100.1/99.9/100/100, except low 97 at bar 64.
+EMA uses spans 10/20, offset 0.02, base quantity 0.02, doubling factor 1 and zero
+inventory/volatility offset weights. TM entry uses spans 10/20, initial distance
+0.01, quantity 0.02, doubling factor 1, threshold 0.9 and zero threshold weights;
+close uses quantity 1, threshold 0.5 and zero threshold weights. Apply these strategy
+parameters to both sides, retaining the fixture's disabled short side. Other settings,
+BTC prices, markets and date alignment are unchanged. Request `adg_strategy_eq`,
+`drawdown_worst_strategy_eq`, `fills_per_day`, `position_held_hours_max` and
+`hard_stop_time_in_red_pct`.
+
+Source-verified CPU references prove every coin enters at bar 64 and makes no
+closes, with held durations 7.43, 15.97 and 33.03 hours. GPU requests use the native
+future API, batch width one and tuning off. Each HSL-on/off/on-repeat phase contains
+an initial request and two warm repeats; explicit factual-mode/capacity assertions
+verify the phase switch. CPU simulations are forbidden in GPU requests and run
+separately as references. Dataset identity and all five requested metrics agree
+within 1e-6 absolute/relative tolerance; GPU repeats and phases agree exactly.
+All 951 checked source files remain unchanged.
+
+| Strategy / coins | Warm HSL-on, 512 bars | 1024 bars | 2048 bars |
+|---|---:|---:|---:|
+| EMA / 2 | 0.148 s | 0.594 s | 2.447 s |
+| EMA / 25 | 1.388 s | 5.602 s | 22.450 s |
+| TM / 2 | 0.148 s | 0.607 s | 2.484 s |
+| TM / 25 | 1.321 s | 5.450 s | 22.500 s |
+
+On-repeat measurements reproduce this shape. For 25 coins, HSL-off warm medians
+are 0.098/0.172/0.341 s for EMA and 0.124/0.227/0.459 s for TM. Compilation is
+excluded from warm timings. These single-candidate synthetic requests demonstrate
+the repeated historical reconstruction bottleneck; they are not a whole-optimizer
+throughput comparison or a 90-day simulation benchmark. Torch allocation counters
+exclude driver/compiler allocations, and process peak RSS includes cold compilation;
+total host/device/disk acceptance remains open.
+
+Evaluate a compact, guarded active-episode cursor using the existing scope recurrence.
+Fresh reconstruction remains the reference and fallback when facts, budgets, clipping,
+causal phase or numerical conditions invalidate reuse. Require paired fresh/cached
+outputs, reset/temporal controls, CPU parity and measured resource/performance evidence
+before adoption. Do not add launch tuning or a general backend framework for this fix.
+
+
+### Guarded active-episode continuation — paired development evidence
+
+The same twelve held-position recipes above compare fresh reconstruction with
+native continuation in isolated processes. Prefix each compiled source with
+`PASSIVBOT_HSL_INCREMENTAL_ENABLED` set to zero or one; include TM replay-state
+sizing in the same process-wide variant. Keep the native future API, width one,
+tuning off and HSL-on/off/on-repeat requests unchanged. All five raw returned
+metrics agree exactly across variants and repeats; independently run CPU references
+agree within 1e-6 absolute/relative tolerance. Input identities agree, and all checked
+source files remain unchanged after the matrix.
+
+Each cell below is fresh / continued warm seconds, excluding first-use compilation.
+
+| Strategy / coins | 512 bars | 1024 bars | 2048 bars |
+|---|---:|---:|---:|
+| EMA / 2 | 0.148 / 0.042 | 0.594 / 0.087 | 2.453 / 0.070 |
+| EMA / 25 | 1.391 / 0.139 | 5.607 / 0.279 | 22.480 / 0.561 |
+| TM / 2 | 0.149 / 0.076 | 0.602 / 0.055 | 2.473 / 0.074 |
+| TM / 25 | 1.320 / 0.156 | 5.451 / 0.316 | 22.497 / 0.649 |
+
+The 25-coin cases improve from roughly fourfold to twofold growth as history
+doubles. On-repeat timings reproduce this shape. Small cases have noisier timings:
+for example TM/2/512 improves from 0.149 to 0.076 seconds initially, but its
+on-repeat continued median is 0.023 seconds. These are bounded synthetic service
+requests, not whole optimizer throughput or a 90-day simulation claim. Cold
+compilation remains substantial and is outside warm speedup ratios.
+
+All recorded Torch allocated/reserved peaks match between variants. At 25 coins
+and 2048 bars, requested allocator peaks are 2,646,016 bytes for EMA and 2,647,552
+bytes for TM, with 4,194,304 bytes reserved for each. Compiler/private kernel storage,
+driver allocations, process memory including compilation, and disk are separate
+resource surfaces. Unchanged Torch peaks do not close total-resource acceptance.
+
+Corrected source-verified validation passes 82 actual CUDA component cases, including
+20 continuation/seed-denial controls and 62 preceding fresh-composer references.
+Eighteen native policy/on-off-on/capacity comparisons preserve every raw output
+exactly, including fields that differed in the initial draft. Three seed-guard
+omission controls and six scalar-guard omission controls fail as expected without
+changing production source. Rust tests and default test compilation pass with a
+rebuilt, source-verified extension. No comparison tolerance was widened.
+
+Reuse stores only scalar peak/EMA/PnL and continuation identity. It requires a known
+active episode, unchanged selected factual histories, consecutive minutes, unchanged
+budget/smoothing and lookback start, stable endpoint inventory/basis and causal
+quotes. Missing/clipped history, same-minute fills, completed episodes, near-threshold
+numerical concerns and cache loss reconstruct fresh. It retains no action permission.
+The mixed candidate evidence below passes. Broader replay validation also passes
+350 cases, including 36 exact temporal controls covering both legacy and native
+factual layouts, one/two coins, long/short/both sides and coin/pside/unified HSL.
+All 42 native lifecycle/loss checks and twelve real CLI/data/service checks also
+pass. The latter include eight optimizer bootstrap/resume combinations with CPU
+simulation forbidden, lazy suite preparation and incremental resource admission.
+All 952 checked source files remain unchanged after the combined validation.
+Representative multi-entry/clipping pairs also pass as recorded below. Total-resource
+checks remain a project-wide gate; independent review and CI are required before
+integration.
+
+
+The paired continuation experiment also refreshes the four unified HSL cohorts
+above: sixteen distinct candidates per EMA/TM seed 7/43, two coins, both sides and
+3000 bars. CPU references run separately with the current verified extension.
+Both GPU variants forbid CPU simulation. Each comparison has an initial replay
+and two warm repeats; the same compiled variant is used for TM state sizing.
+
+All nine GPU metrics agree exactly with preceding factual reconstruction and
+across variants, as do measured limit/ranking outcomes. All five HSL lifecycle
+metrics equal the refreshed CPU references exactly. Existing ADG/fill trajectory
+residuals and the TM seed-7 drawdown near-tie remain visible: its CPU regret at
+the GPU drawdown winner is 2.196e-7, with no limit flips. This is unchanged
+fixture-specific evidence, not a new general tolerance approval.
+
+| Cohort | Fresh warm median | Continued warm median | Fresh / continued CUDA local bytes |
+|---|---:|---:|---:|
+| EMA / 7 | 9.347 s | 9.253 s | 5,776 / 6,096 |
+| EMA / 43 | 9.686 s | 9.572 s | 5,776 / 6,096 |
+| TM / 7 | 8.508 s | 8.489 s | 6,320 / 6,656 |
+| TM / 43 | 8.154 s | 8.154 s | 6,320 / 6,656 |
+
+Treat these busy-cohort timings as essentially unchanged; do not extrapolate
+the held-episode speedup to arbitrary search traffic. Registers remain 255.
+Torch allocated/reserved peaks match, but post-replay whole-device free-memory
+snapshots are about 22 MiB lower with continuation for each strategy. Those
+snapshots include driver/compiler effects and are not device peak measurements
+or exclusive ownership accounting. Record the extra private storage explicitly
+while keeping representative total-resource acceptance open.
+
+
+Four paired boundary requests use the same held-position recipe with two coins and
+2048 bars. The multiple-entry profile adds a low of 94 at bar 128; TM uses entry
+threshold 0.01, zero retracement and zero retracement weights to admit further
+entries. EMA/TM make four/fourteen fills at bars 64 and 128, with no closes. The
+clipped profile instead uses a one-day lookback, retaining the two entries at bar
+64. All five GPU metrics agree exactly between fresh/continued variants and
+repeats; separate CPU references agree within 1e-6 absolute/relative tolerance.
+Torch peaks match, and all checked sources remain unchanged.
+
+| Boundary / strategy | Fresh warm median | Continued warm median |
+|---|---:|---:|
+| Multiple entries / EMA | 2.494 s | 2.482 s |
+| Multiple entries / TM | 2.511 s | 2.496 s |
+| Clipped lookback / EMA | 2.276 s | 1.003 s |
+| Clipped lookback / TM | 2.296 s | 1.017 s |
+
+Repeated measurements reproduce these timings. Multiple-entry performance is
+essentially unchanged; clipping improves by about 2.25 times in this fixture.
+Constant marks produce zero risk metrics here, so these cases establish boundary
+and performance behavior, not additional nonzero HSL-risk coverage. Component,
+mixed-candidate and lifecycle cases supply that separate evidence. Do not relax
+endpoint guards merely to obtain a larger speedup.
