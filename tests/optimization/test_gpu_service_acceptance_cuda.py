@@ -3,6 +3,9 @@
 from copy import deepcopy
 import gc
 import json
+import signal
+import time
+from concurrent.futures import TimeoutError
 from threading import Event
 
 import numpy as np
@@ -157,3 +160,108 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
             np.testing.assert_array_equal(array, snapshot)
     finally:
         manager.cleanup()
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results(
+    cuda_runtime, monkeypatch, strategy,
+):
+    import backtest
+    from optimization.gpu import mps_kernel
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.residency import current_cuda_residency
+    from optimization.interrupts import OptimizerInterruptLatch
+    from tools.gpu_parity import build_parser, fixture_inputs, _native_dataset
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("large cancellation acceptance must not run CPU simulations")
+    for owner, name in ((backtest, "execute_backtest"), (backtest, "run_backtest"),
+                        (backtest.pbr, "run_backtest_bundle")):
+        monkeypatch.setattr(owner, name, forbidden)
+    inputs = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", "long", "--coins", "25",
+        "--bars", "11520", "--seed", "7", "--hsl", "unified",
+        "--hsl-red-threshold", ".99", "--hsl-ema-span-minutes", "2.5",
+        "--hsl-lookback-days", "1",
+    ]))
+    config, candles, _markets, _btc, _timestamps = inputs
+    candles[:] = [100.1, 99.9, 100., 100.]
+    candles[64, :, 1] = 97.
+    for side in ("long", "short"):
+        bot = config["bot"][side]["strategy"][strategy]
+        if strategy == "ema_anchor":
+            bot.update(ema_span_0=10., ema_span_1=20., offset=.02,
+                       offset_psize_weight=0., offset_volatility_1m_weight=0.,
+                       offset_volatility_1h_weight=0., base_qty_pct=.02,
+                       entry_double_down_factor=1.)
+        else:
+            bot["entry"].update(ema_span_0=10., ema_span_1=20., initial_ema_dist=.01,
+                                initial_qty_pct=.02, double_down_factor=1.,
+                                threshold_base_pct=.9, threshold_we_weight=0.,
+                                threshold_volatility_1m_weight=0.,
+                                threshold_volatility_1h_weight=0.)
+            bot["close"].update(qty_pct=1., threshold_base_pct=.5,
+                                threshold_we_weight=0., threshold_volatility_1m_weight=0.,
+                                threshold_volatility_1h_weight=0.)
+    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
+               "position_held_hours_max", "hard_stop_time_in_red_pct")
+    snapshots = [value.copy() for value in (candles, inputs[3], inputs[4])]
+    active = False
+    completed_bars = 0
+    signalled = Event()
+    spill_directory = None
+    original_observe = mps_kernel.record_replay_chunk
+
+    def observe(count, bars, total_bars, seconds, **kwargs):
+        nonlocal completed_bars, spill_directory
+        original_observe(count, bars, total_bars, seconds, **kwargs)
+        if active:
+            completed_bars += bars
+            # Observe completed production commands, then send a real SIGINT
+            # after the exposed episode's one-day boundary has started sliding.
+            if completed_bars >= 1664 and not signalled.is_set():
+                assert count == 1 and completed_bars < total_bars
+                directory = current_cuda_residency()._directory
+                spill_directory = directory.name if directory is not None else None
+                signalled.set()
+                signal.raise_signal(signal.SIGINT)
+    monkeypatch.setattr(mps_kernel, "record_replay_chunk", observe)
+
+    with _native_dataset(inputs, "binance", metrics) as dataset, OptimizerInterruptLatch() as latch:
+        service = CudaBacktestService(batch_size=1, tuning_mode="off", max_batch_delay=0,
+                                      interrupt_check=latch.raise_if_requested)
+        try:
+            service.register_dataset("held", dataset)
+            first = service.submit(BacktestRequest("completed", "held", {"long_hsl_enabled": 0.}))
+            retained = first.result(timeout=600)
+            saved_metrics = dict(retained.metrics)
+            assert retained.metrics["fills_per_day"] > 0
+            active = True
+            interrupted = service.submit(BacktestRequest("interrupted", "held", {}))
+            deadline = time.monotonic() + 600
+            with pytest.raises(KeyboardInterrupt):
+                while True:
+                    try:
+                        interrupted.result(timeout=.05)
+                    except TimeoutError:
+                        if time.monotonic() >= deadline:
+                            raise AssertionError("large GPU request did not reach its cancellation boundary")
+                        continue
+                    pytest.fail("interrupted replay supplied successful metrics")
+            assert signalled.is_set() and latch.requested
+            assert isinstance(interrupted.exception(), KeyboardInterrupt)
+            assert first.result() is retained and dict(retained.metrics) == saved_metrics
+        finally:
+            # Also stop active work if an earlier harness assertion failed.
+            if not latch.requested:
+                signal.raise_signal(signal.SIGINT)
+            service.close(cancel_pending=True)
+        assert not service._executor._thread.is_alive()
+        assert service._residency is None
+        if spill_directory is not None:
+            from pathlib import Path
+            assert not Path(spill_directory).exists()
+        with dataset.attach() as arrays:
+            for observed, snapshot in zip(arrays, snapshots, strict=True):
+                np.testing.assert_array_equal(observed, snapshot)
