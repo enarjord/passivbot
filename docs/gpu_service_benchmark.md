@@ -9,7 +9,7 @@ optimizer search. Use [GPU parity](gpu_parity.md) for CPU/GPU correctness and th
 passivbot tool gpu-service-benchmark --strategy ema_anchor --prepare-only --report prepared.json
 passivbot tool gpu-service-benchmark --strategy ema_anchor --report service.json
 passivbot tool gpu-service-benchmark --strategy trailing_martingale --candidates 128 \
-  --tuning-windows 1 --max-rounds 128 --report tuning.json
+  --tuning-windows 2 --max-rounds 256 --report tuning.json
 ```
 
 The preparation-only mode creates requests without importing Torch, CuPy or the
@@ -23,6 +23,9 @@ The base scenario uses all selected coins and rows. Early and late scenarios
 use disjoint halves of the same candle arrays and the first/last third of coins
 (at least two). Requests interleave these scenarios. Scenario preparation,
 packing, residency switches and async completion use the production service.
+Accumulation defaults to the production adaptive controller. Set
+`--accumulation-delay 0` to isolate width tuning, or supply a bounded fixed delay.
+The recipe records this choice; width evidence windows remain unchanged.
 One device dataset must remain resident, and shared source arrays must remain
 unchanged. Packed spill files must be removed after each service closes.
 
@@ -46,13 +49,15 @@ means the requested evidence was insufficient; the completed measurements are
 still saved. Enough windows prove that decisions were exercised, not that the
 chosen settings are globally optimal. Small candidate counts can underfill the
 nominal width or prevent growth; use a sufficient backlog to study larger widths.
+Fast scenarios can exhaust the round bound while still awaiting their 30 seconds
+of evidence; do not lower that threshold merely to make a benchmark finish.
 
 Resource observations include Torch allocator peaks, owner snapshots and
 one-second samples of Linux process-tree RSS, global device memory/utilization
 and packing disk bytes. Global device memory sums all GPUs, including driver,
 display and unrelated processes; it is not exclusive service VRAM. Sampling may
 miss short peaks. Linux RSS includes compiler children; whole-process CPU time
-includes preparation, compilation and monitoring, not isolated orchestrator
-cost. Unsupported or failed resource observations are explicit, and sampler
+includes its workers, preparation, in-process compilation and monitoring; it
+excludes compiler-child CPU time and is not isolated orchestrator cost. Unsupported or failed resource observations are explicit, and sampler
 errors are retained. The tool measures service execution only: it does not
 establish Pareto quality, CPU optimizer throughput or whole-search speedup.

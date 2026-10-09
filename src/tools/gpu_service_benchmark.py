@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import gc
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -95,6 +96,8 @@ def build_parser():
     parser.add_argument("--max-rounds", type=int, default=256,
                         help="Bound automatic extension for --tuning-windows")
     parser.add_argument("--hsl", choices=["disabled", "unified"], default="disabled")
+    parser.add_argument("--accumulation-delay", type=float, default=None,
+                        help="Fixed accumulation seconds; omitted uses production adaptive accumulation, zero isolates width")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--report", required=True)
     return parser
@@ -106,6 +109,9 @@ def validate_args(parser, args):
                                ("tuning_windows", 0, 8), ("max_rounds", 2, 256)):
         if not lower <= getattr(args, name) <= upper:
             parser.error(f"--{name.replace('_', '-')} must be between {lower} and {upper}")
+    if args.accumulation_delay is not None and (not math.isfinite(args.accumulation_delay)
+                                               or not 0 <= args.accumulation_delay <= 0.1):
+        parser.error("--accumulation-delay must be finite and between zero and 0.1 seconds")
     if args.max_rounds < args.rounds:
         parser.error("--max-rounds must be at least --rounds")
 
@@ -177,6 +183,7 @@ def main(argv=None):
     recipe = dict(strategy=args.strategy, coins=args.coins, bars=args.bars,
                   candidates=args.candidates, rounds=args.rounds, hsl=args.hsl,
                   tuning_windows=args.tuning_windows, max_rounds=args.max_rounds, reference_rounds=2,
+                  accumulation_delay="auto" if args.accumulation_delay is None else args.accumulation_delay,
                   metrics=metrics, seed=7, widths=[1, 8, "auto"],
                   scopes="native service request cohorts, not evolutionary search or CPU throughput")
     report = dict(recipe=recipe, runtime=runtime, phases=[], prepared=[])
@@ -245,14 +252,14 @@ def main(argv=None):
                                            for value in entry["data"].values()) for entry in residency._entries.values())))
                 assert owner_rows[-1]["resident_entries"] == 1
                 return result
-            MpsMulticoinProxy.evaluate_results = observed
             torch.cuda.reset_peak_memory_stats()
             phase = dict(width="auto" if width is None else width, rounds=[], batches=[],
                          sampling_availability=dict(process_tree_rss=sys.platform.startswith("linux"),
                                                     global_device=bool(sampler.smi)))
             sampler.thread.start()
             try:
-                with CudaBacktestService(batch_size=width, max_pending=max(128, 3 * args.candidates), max_batch_delay=0) as service:
+                MpsMulticoinProxy.evaluate_results = observed
+                with CudaBacktestService(batch_size=width, max_pending=max(128, 3 * args.candidates), max_batch_delay=args.accumulation_delay) as service:
                     for name, dataset in datasets.items():
                         service.register_dataset(name, dataset)
                     evidence = _observe_batches(service._batch_policy, phase["batches"])
@@ -281,6 +288,7 @@ def main(argv=None):
                             row = future.result(timeout=600)
                             now = time.perf_counter()
                             assert (row.dataset_id, row.request_id) == (name, request_id)
+                            assert set(row.metrics) == set(metrics), (request_id, sorted(row.metrics))
                             assert all(np.isfinite(value) for value in row.metrics.values())
                             key = name, index
                             if width != 1:

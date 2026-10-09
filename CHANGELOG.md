@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native GPU batch tuning retains compatible queued demand through each scenario
+  evidence window, so a cohort tail does not hide opportunities to test a larger width.
+
 - Add an offline native CUDA service benchmark for shared-data scenarios, result latency, resource use and completed default tuning windows.
 
 - Native CUDA optimization reconstructs HSL scopes from retained simulation fill

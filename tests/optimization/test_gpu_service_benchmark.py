@@ -11,6 +11,8 @@ from tools import gpu_service_benchmark as benchmark
     ('--coins', '2'), ('--bars', '2879'), ('--candidates', '129'),
     ('--rounds', '1'), ('--tuning-windows', '9'), ('--max-rounds', '257'),
     ('--rounds', '4', '--max-rounds', '3'),
+    ('--accumulation-delay', 'nan'), ('--accumulation-delay', '-1'),
+    ('--accumulation-delay', '.2'),
 ])
 def test_invalid_workload_fails_before_runtime_import(flags):
     with pytest.raises(SystemExit) as error:

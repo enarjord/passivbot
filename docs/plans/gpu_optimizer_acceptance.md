@@ -1570,3 +1570,77 @@ Constant marks produce zero risk metrics here, so these cases establish boundary
 and performance behavior, not additional nonzero HSL-risk coverage. Component,
 mixed-candidate and lifecycle cases supply that separate evidence. Do not relax
 endpoint guards merely to obtain a larger speedup.
+
+
+## Native service suite resource baseline
+
+The [service benchmark](../gpu_service_benchmark.md) adds three-scenario observations
+without CPU simulations. This baseline uses the preceding completed-work demand
+policy; the window-demand correction and broader acceptance remain separate.
+
+```bash
+passivbot tool gpu-service-benchmark --strategy ema_anchor --coins 12 --bars 5760 \
+  --candidates 128 --rounds 3 --tuning-windows 2 --max-rounds 128 \
+  --accumulation-delay 0 --report suite.json
+```
+
+Use both sides and the public seed-seven fixture. The full scenario has twelve coins
+and 5,760 minute bars; early/late scenarios each select four coins and 2,880 bars
+from shared arrays, with aligned dates and validity metadata. Ten requested metrics
+include recovery distributions and weighted equity/volume. Compilation/cache state
+is retained between phases; these are first-use and warm observations, not fresh
+cold-cache comparisons. Accumulation is fixed at zero to isolate width decisions.
+
+On an RTX 3070 Ti Laptop GPU, all 33,408 results match the width-one references
+exactly, with no reduction rounding differences. The automatic phase completes
+82 rounds and at least two unchanged 24-sample/30-second evidence windows per
+scenario. First-use timings, completion tails, per-window decisions and actual
+batch counts remain in the report; small batches alone do not prove optimal tuning.
+
+| Execution width | Warm requests/s | Peak Torch allocated bytes | Sampled process-tree RSS bytes | Sampled global device bytes | Peak sampled packing bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1.901 | 3,417,600 | 1,298,616,320 | 1,490,026,496 | 4,888,848 |
+| 8 | 13.380 | 5,090,304 | 1,302,138,880 | 1,490,026,496 | 4,888,848 |
+| Automatic | 68.268 | 28,797,440 | 1,304,625,152 | 1,513,095,168 | 4,888,848 |
+
+Every owner snapshot has one resident dataset; packing reaches three reusable
+entries. Shared source arrays remain unchanged, all spill files are removed on
+close, and resource sampling reports no errors. One-second samples can miss short
+peaks. Process-tree RSS includes compiler children; global device memory includes
+driver/display/other-process allocations, while Torch peaks cover its allocator
+only. CPU time covers the benchmark process and its threads, excluding compiler
+children; it is not isolated orchestrator cost.
+
+This establishes a moderate synthetic suite resource observation and useful
+grouped execution. It does not establish large/long HSL resources, exclusively
+owned device memory, evolutionary search quality, CPU optimizer throughput or a
+globally optimal width. Those remain project acceptance work.
+
+
+The current service caller also exercises TM with production adaptive accumulation:
+
+```bash
+passivbot tool gpu-service-benchmark --strategy trailing_martingale --coins 12 \
+  --bars 5760 --candidates 16 --rounds 3 --report tm-suite.json
+```
+
+All 384 results match the isolated references exactly for the ten requested
+metrics. Width-one, width-eight and automatic warm rates are 0.433, 3.231 and
+5.991 requests/s respectively. Every owner snapshot retains one device dataset,
+packing reaches three entries, arrays remain unchanged and spill cleanup succeeds
+without sampling errors. Automatic Torch allocation peaks at 7,006,720 bytes.
+This underfilled cohort checks the adaptive-accumulation caller and resources;
+it completes no production tuning windows and establishes no tuning optimum.
+
+A separate three-coin, 2,880-bar, two-candidate/two-round EMA run requests one
+window per scenario but bounds execution at two rounds. All 36 results agree
+exactly and cleanup succeeds. The report retains the measurements, marks automatic
+evidence insufficient and exits with status two as specified. This exercises the
+failure-to-meet-evidence path without treating valid simulations as failed.
+
+The larger current-demand comparison similarly reaches its initial 128-round
+bound with 51,072 exact results and clean resources, but only one completed
+window each for early/late scenarios. Their width-128 trials accumulate about
+22 seconds toward the unchanged 30-second threshold. A larger bounded run is
+required before reporting completed trial decisions; do not shorten the evidence
+threshold or present the partial run as proof of convergence.

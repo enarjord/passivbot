@@ -3102,3 +3102,74 @@ Historical observations do not supersede those requirements or prove current acc
   twelve real CLI/data/service cases. Rust/shaders match the reviewed continuation
   runtime exactly. All 952 checked sources remain unchanged. Current-head
   independent review and CI are still required for cleanup integration.
+
+
+### 2026-10-09 — Integrate shared replay ownership and measure service suites
+
+- [PR #1948](https://github.com/enarjord/passivbot/pull/1948) integrates the
+  strategy-neutral multicoin owner and compact physical recovery results on
+  development after clean independent current-head review and Rust/Python
+  3.12/Python 3.14 CI. The tested combined production tree is unchanged by the
+  development merge. Master remains unchanged.
+- Add a focused offline native service benchmark over three shared-data scenarios.
+  Keep CPU/GPU parity and evolutionary ranking in their existing tools. Measure
+  incremental completion, requested histories, residency, allocator/global device
+  resources, process-tree RSS and disk cleanup without CPU simulations.
+- Preserve default tuner evidence windows. Require completed windows per scenario
+  when requested, bound their automatic extension and report insufficient evidence
+  explicitly. A small underfilled cohort is insufficient evidence of tuning quality;
+  broader queue demand must exercise real width trials before drawing conclusions.
+
+
+### 2026-10-09 — Keep compatible demand through a tuning evidence window
+
+- A finite-cohort controller reproduction finishes a warm evidence window with
+  no backlog, although earlier work in that same window had enough compatible
+  requests for growth. The preceding policy probes width two instead of eight
+  from width four. Demand from the last completion alone loses this evidence.
+- Retain one compatible-demand maximum per scenario for the current window;
+  consume it when the window completes and reset it when the prepared ceiling
+  changes. Invalid observations and unrelated scenarios cannot supply demand.
+  Keep existing smoothing, cold-shape rejection, headroom, rollback and shutdown
+  policy. No new simulator, checkpoint or scheduling framework is introduced.
+- Five regression controls reproduce the tail failure before the change and pass
+  afterward, including dataset isolation, stale-window/ceiling reset and invalid
+  work. Actual CUDA/default-window resource and caller checks plus independent
+  current-head review and CI remain required before development integration.
+
+
+### 2026-10-09 — Validate current admission and native callers
+
+- The preceding development code reproduces two stale assertions in the CUDA
+  physical-bound control: post-replay ceiling checks produce repeated observations
+  of one runner, and HSL-off releases its initial factual allowance, allowing
+  seven requests to run as two then five instead of repeated width-two batches.
+  Correct tests to validate the current owner-owned ceiling, request identities,
+  equivalence and distinct-owner eviction/cleanup. No production change is needed
+  for these preceding-code test failures.
+- Four corrected actual CUDA bounds controls and twelve CPU-forbidden native
+  optimizer bootstrap/resume controls pass. Together with the completed current
+  tuning/host controls, 114 affected checks pass with one existing Metal-only skip.
+  Both fresh strategy preparation-only CLIs keep GPU imports absent. Rust and
+  shaders are unchanged. Complete the default-window resource comparisons before
+  publication and current-head independent review/CI.
+- Record the reproducible 33,408-result baseline separately in acceptance: all ten
+  metrics match isolated GPU references exactly, one dataset is resident, shared
+  arrays remain unchanged and spill cleanup/sampling succeed. This measures a
+  moderate synthetic suite, not long/busy HSL or evolutionary search quality.
+
+
+### 2026-10-09 — Keep bounded evidence failures explicit
+
+- A 128-round current-demand suite completes 51,072 requests with exact requested
+  metrics, unchanged arrays, clean spill removal and no sampling errors. Base
+  width-128 and width-32 trials reject insufficient gains; the faster early/late
+  width-128 trials still await the 30-second threshold. Extend the benchmark
+  within a larger bound instead of weakening production evidence requirements.
+- The final TM adaptive-accumulation caller completes 384 exact results and clean
+  resource cleanup. Its sixteen-candidate cohort does not complete tuning windows;
+  retain that limit rather than interpreting automatic execution as converged.
+- A deliberately short EMA run preserves all 36 valid results and exits two
+  for insufficient per-scenario evidence. Keep report completion separate from
+  tuner evidence sufficiency. Instrumentation is installed inside its cleanup
+  scope so early CUDA setup failures cannot leave the replay method replaced.
