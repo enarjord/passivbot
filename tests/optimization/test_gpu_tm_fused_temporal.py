@@ -187,4 +187,4 @@ def test_cuda_prepared_service_fused_long_history_interrupts_between_real_chunks
             with pytest.raises(KeyboardInterrupt, match="native fused interrupt"):
                 future.result(timeout=180)
     # The service preserves its existing exclusive final-bar replay endpoint.
-    assert completed_chunks == [(1, 8192, 8235)]
+    assert completed_chunks == [(1, 128, 8235)]

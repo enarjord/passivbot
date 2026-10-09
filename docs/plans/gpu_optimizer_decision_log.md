@@ -3361,3 +3361,26 @@ Historical observations do not supersede those requirements or prove current acc
 - Input-f32 CPU controls preserve the four-day fill rate and recovery distribution.
   Simple input rounding does not explain the previously measured discrepancy;
   retain the open numerical gate and investigate the trading path.
+
+
+### 2026-10-09 — Adapt history chunks inside the existing replay owner
+
+- PR #1953 clears exact-head independent review and all required CI at
+  `f908cd7cf8`; merge `4e987391a2` integrates it into development.
+- Extend native CUDA temporal dispatch to both strategies, including short TM
+  histories. Keep legacy and Metal dispatch policies unchanged. Use the same
+  active factual-HSL ceiling and work envelope; adapt smaller chunks from actual
+  completed durations toward an internal one-second target. Require sustained
+  fast work before growth, never exceed the original ceiling and never run extra
+  calibration backtests. Reset the small controller for each physical replay.
+- Duration is observational, not preemption: an expensive first chunk or single
+  bar can exceed the target. Keep cancellation at completed-command boundaries
+  and never return partial metrics. Finalize zero-work endpoint candidates once.
+- Host policy/service checks and twelve actual CUDA controls pass. Four paired
+  25-coin runs preserve all ten metrics/status with similar kernel time; after
+  shrink, expensive commands take about 0.89 seconds. The first expensive command
+  remains about 2.85 seconds. Document that limit instead of promising preemption.
+  Verified-runtime orchestration/tuning/CLI checks pass: 191 cases, one
+  environment skip, including twelve real native standalone/suite lifecycle
+  cases without CPU simulation. Current-head independent review and CI remain
+  integration gates.

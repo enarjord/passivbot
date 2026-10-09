@@ -60,6 +60,7 @@ from optimization.gpu.model import (
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATES,
     CUDA_TM_MULTICOIN_CHUNK_CANDIDATES,
+    CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
@@ -421,7 +422,13 @@ def _add_gpu_runner_profile(
                     "max_dispatch_seconds",
                     "replay_state_bytes_per_candidate",
                     "threads_per_threadgroup",
+                    "adaptive_temporal_chunks",
+                    "adaptive_chunk_adjustments",
+                    "dispatch_duration_target_seconds",
+                    "temporal_chunk_bars_min",
+                    "temporal_chunk_bars_max",
                 )
+                if key in runner_profile
             }
         )
     timings = profile["timings_seconds"]
@@ -790,8 +797,10 @@ def _mps_multicoin_dispatch_plan(
     device: str = "mps",
     factual_hsl: bool = False,
 ) -> tuple[bool, int, int]:
-    native_ema = factual_hsl and device == "cuda" and strategy_kind == "ema_anchor"
-    temporal_chunking = native_ema or (
+    native_replay = factual_hsl and device == "cuda" and strategy_kind in {
+        "ema_anchor", "trailing_martingale",
+    }
+    temporal_chunking = native_replay or (
         strategy_kind == "trailing_martingale"
         and n_bars > MPS_TM_MULTICOIN_CHUNK_BARS
         and (device == "cuda" or (
@@ -816,7 +825,7 @@ def _mps_multicoin_dispatch_plan(
     dispatch_history = (
         min(
             n_bars,
-            128 if native_ema else MPS_TM_MULTICOIN_CHUNK_BARS,
+            CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS if native_replay else MPS_TM_MULTICOIN_CHUNK_BARS,
             MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // dispatch_candidates,
             max(1, max_candidate_bars // (n_coins * n_sides)),
         )

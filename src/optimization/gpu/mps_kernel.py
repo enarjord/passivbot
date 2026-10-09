@@ -16,7 +16,7 @@ from optimization.gpu.weighted_equity import (
 
 from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
 from optimization.gpu.replay_progress import TemporalReplayProgress
-from optimization.gpu.autotune import record_replay_chunk
+from optimization.gpu.autotune import record_replay_chunk, ReplayDurationController
 from optimization.gpu.runtime import (
     gpu_device,
     compile_shader,
@@ -42,6 +42,7 @@ from optimization.gpu.model import (
     MPS_TM_MULTICOIN_CHUNK_BARS,
     MPS_TM_SINGLE_COIN_CHUNK_BARS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
+    CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
@@ -3003,8 +3004,14 @@ class _MulticoinReplayRunner:
                 *kernel_args, **dispatch_options
             )
             return
+        adaptive = self.native_factual_hsl and self.bars.device.type == "cuda"
+        history_limit = (
+            CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS
+            if adaptive and getattr(self, "hsl_fact_capacity", 0)
+            else self.temporal_chunk_bar_limit
+        )
         chunk_bars = min(
-            self.temporal_chunk_bar_limit if getattr(self, "hsl_fact_capacity", 0) else MPS_TM_MULTICOIN_CHUNK_BARS,
+            history_limit,
             MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // batch_size,
             self.max_dispatch_candidate_bars // (batch_size * self.n_coins * self.replay_sides),
         )
@@ -3026,16 +3033,21 @@ class _MulticoinReplayRunner:
         stop_k = int(end_steps.max().item())
         dispatch_count = 0
         max_dispatch_seconds = 0.0
+        controller = ReplayDurationController(chunk_bars) if adaptive else None
+        adaptive_adjustments = 0
+        min_processed_bars, max_processed_bars = chunk_bars, 0
         replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=chunk_bars)
         replay_started = time.perf_counter()
         next_progress = replay_started + 30.0
         # One SIMD-width group distributes independent, state-heavy replays
         # across GPU cores instead of packing the batch into a large group.
         threads_per_threadgroup = min(batch_size, 32)
-        for begin_k in range(1, max(2, stop_k), chunk_bars):
+        begin_k = 1
+        while True:
             self.interrupt_check()
+            dispatch_bars = controller.bars if controller is not None else chunk_bars
             replay_range = torch.tensor(
-                [begin_k, min(begin_k + chunk_bars, stop_k)],
+                [begin_k, min(begin_k + dispatch_bars, stop_k)],
                 dtype=torch.int32,
                 device=gpu_device(),
             )
@@ -3053,16 +3065,24 @@ class _MulticoinReplayRunner:
             dispatch_count += 1
             dispatch_seconds = time.perf_counter() - started
             max_dispatch_seconds = max(max_dispatch_seconds, dispatch_seconds)
-            processed_bars = min(begin_k + chunk_bars, stop_k) - begin_k
+            completed_k = min(begin_k + dispatch_bars, stop_k)
+            processed_bars = completed_k - begin_k
+            min_processed_bars = min(min_processed_bars, processed_bars)
+            max_processed_bars = max(max_processed_bars, processed_bars)
             record_replay_chunk(
                 batch_size, processed_bars, stop_k - 1, dispatch_seconds,
-                eligible=begin_k > 1 and processed_bars == chunk_bars,
+                eligible=begin_k > 1 and processed_bars == dispatch_bars,
             )
             now = time.perf_counter()
-            completed_k = min(begin_k + chunk_bars, stop_k)
             if now >= next_progress and completed_k < stop_k:
                 replay_progress.log("progress", completed_k - 1, now - replay_started, kernel_dispatches=dispatch_count)
                 next_progress = now + 30.0
+            if completed_k >= stop_k:
+                break
+            if controller is not None:
+                controller.observe(processed_bars, dispatch_seconds)
+                adaptive_adjustments += int(controller.bars != dispatch_bars)
+            begin_k = completed_k
         self.interrupt_check()
         replay_progress.log("complete", stop_k - 1, time.perf_counter() - replay_started, kernel_dispatches=dispatch_count)
         self._last_temporal_dispatch = {
@@ -3073,6 +3093,14 @@ class _MulticoinReplayRunner:
             "kernel_candidate_steps": int((end_steps - 1).clamp(min=0).sum().item()),
             "replay_state_bytes_per_candidate": self._replay_state_bytes,
         }
+        if adaptive:
+            self._last_temporal_dispatch.update(
+                adaptive_temporal_chunks=True,
+                adaptive_chunk_adjustments=adaptive_adjustments,
+                dispatch_duration_target_seconds=controller.target_seconds,
+                temporal_chunk_bars_min=min_processed_bars,
+                temporal_chunk_bars_max=max_processed_bars,
+            )
 
     def _temporal_replay_enabled(self):
         return self.max_dispatch_candidate_bars is not None
@@ -3315,7 +3343,6 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
 
     replay_kernel_name = "passivbot_ema_anchor_multicoin"
     replay_state_size_kernel_name = "passivbot_ema_multicoin_replay_state_bytes"
-    temporal_chunk_bar_limit = 128
 
     def _temporal_replay_enabled(self):
         return (self.max_dispatch_candidate_bars is not None

@@ -1928,3 +1928,47 @@ without an evident total-runtime penalty in this small timing set. It is not an
 optimal launch policy, a general wall-clock guarantee, a completed large-suite
 measurement, or CPU/GPU numerical acceptance. Keep wider cohorts, longer suites,
 adaptive duration policy and the recovery/trading-path discrepancy open.
+
+
+## Adaptive native dispatch duration — development evidence
+
+Native CUDA EMA/TM replay adjusts history chunks from synchronized, completed
+production commands. A small per-replay controller targets one second, shrinks
+slow work promptly and grows only after sustained fast commands. Its initial
+work/HSL ceiling remains an upper bound; it adds no calibration backtests,
+checkpoint state or public request fields. Native short TM replays now use the
+same temporal owner. Legacy GPU and Metal dispatch policy remains unchanged.
+
+Twelve actual CUDA checks pass for both strategies and all side topologies,
+forced shrinking boundaries, restored whole replay, zero-work finalization,
+unequal endpoints with HSL disabled and actual prepared-service interruption.
+All compared replay outputs are exact. Unequal endpoint checks follow the
+existing `n - 1` terminal-row contract.
+
+Repeat the preceding 25-coin two-day recipe at width one. The fixed control
+holds the same compiled replay's controller constant; all ten metrics and
+liquidation status agree exactly across four runs.
+
+| Replay policy | Kernel-phase seconds | Commands | Largest command seconds | Largest command after adaptive shrink seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Fixed first | 33.598 | 23 | 2.846 | — |
+| Adaptive first | 33.434 | 44 | 2.849 | 0.890 |
+| Fixed warm | 33.374 | 23 | 2.848 | — |
+| Adaptive warm | 33.478 | 44 | 2.853 | 0.892 |
+
+Adaptive chunks shrink from 128 to 40 bars when the workload becomes expensive.
+The first expensive command still exceeds the target. Neither this feedback
+policy nor one-bar replay guarantees preemption or a maximum wall-clock latency.
+Warm total runtime is similar in this bounded set; it does not demonstrate search
+speedup or optimal scheduling. Compiled replay state remains 34,408 bytes per
+candidate, with 1,011,436 reported history/state admission bytes. Compiler cache
+loads are measured separately from kernel time. Interruption after the first
+completed command propagates in 0.046 seconds and returns no partial metrics;
+this is not worst-case interruption evidence. Wider cohorts, longer suites,
+resource totals and the CPU/GPU trading-path discrepancy remain open.
+
+A further 191 orchestration/tuning/CLI checks pass on the verified current Rust
+runtime, with one environment skip. These include twelve real native TM/EMA
+standalone/suite startup, interruption and resume cases with CPU simulations
+forbidden, as well as legacy exact-worker option roundtrips.
+Current-head independent review and CI remain required before integration.
