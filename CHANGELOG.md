@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reject individual GPU suite candidates with invalid aggregated metrics, matching the CPU optimizer, instead of terminating the entire optimization batch.
+
 - Fix live-only editable installs failing during config loading: cooldown and EMA
   migrations no longer import backtest/optimizer runtimes. Declare the optimizer
   fingerprinting dependency in full installs.
