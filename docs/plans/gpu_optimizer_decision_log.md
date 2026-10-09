@@ -3384,3 +3384,27 @@ Historical observations do not supersede those requirements or prove current acc
   environment skip, including twelve real native standalone/suite lifecycle
   cases without CPU simulation. Current-head independent review and CI remain
   integration gates.
+
+
+### 2026-10-09 — Keep EMA minimum-remainder comparisons stable
+
+- A source-level close-sizing regression proves that a position of 18 quantity
+  steps with a nine-step minimum/clip can close fully because raw subtraction
+  compares the nine-step remainder below its minimum by binary representation
+  noise. Preserve the valid clip when that difference lies within four f64
+  epsilon-scaled units at the remainder/minimum scale. Keep genuinely
+  subminimum remainders, including small nonzero deficits, on the full-close path.
+- Fix the shared Rust strategy producer rather than reproducing its rounding
+  artifact in GPU arithmetic or adding Python trading policy. The regression
+  fails the old producer; all 335 Rust tests pass after the correction, with
+  one existing ignored test. Default-feature test compilation passes. Rebuilt
+  extension source verification passes. The public native-service parity
+  regression and 185 affected caller/CPU-entrypoint/CLI controls pass without
+  skips. The documented four-day fixture now matches fill rate exactly and
+  reduces recovery-p95 error to about three minutes; keep its five-minute
+  recovery gate scoped to that nearly flat regression curve. Independent
+  current-head review and CI remain integration gates.
+
+- PR #1954's public-data-boundary review finding is addressed before merge.
+  Updated head `8b6e99b0a5` clears independent review and all required CI;
+  merge `46218c2f28` integrates adaptive dispatch into development.

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- EMA Anchor partial closes preserve valid minimum-size remainders when floating
+  subtraction differs only by representation noise; genuinely undersized
+  remainders still use full-position closes.
+
 - Native CUDA EMA Anchor backtests retain complete replay state across temporal
   dispatches, allowing interruption between history chunks. Native CUDA EMA/TM
   adjust chunk lengths from completed dispatch durations within their work ceilings.

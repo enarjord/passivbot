@@ -1972,3 +1972,33 @@ runtime, with one environment skip. These include twelve real native TM/EMA
 standalone/suite startup, interruption and resume cases with CPU simulations
 forbidden, as well as legacy exact-worker option roundtrips.
 Current-head independent review and CI remain required before integration.
+
+
+## EMA close minimum-remainder regression
+
+`test_gpu_ema_close_remainder_cuda.py` uses the public seed-seven EMA fixture,
+25 coins, both sides and 5,760 minute bars, with HSL disabled, base quantity
+`0.01` and EMA span zero `5.0`. It compares the corrected shared Rust producer
+with the actual native request/future service through the public parity tool.
+The source-level Rust test proves why an 18-step position must retain a
+nine-step remainder after a nine-step clip. Genuinely undersized remainders
+still trigger full closes; GPU strategy arithmetic remains unchanged.
+
+The corrected reference produces 1,020 fills and exactly matches GPU fill rate,
+completion ratio and HSL time-in-red. ADG absolute error is approximately
+`2.32e-8`, worst-drawdown error `1.01e-7`, and recovery p95 error `0.0020833`
+days (about three minutes). The previous four-hour p95 discrepancy therefore
+does not justify copying the old CPU close artifact into GPU arithmetic.
+
+This fixture uses a scoped five-minute absolute measurement gate for its three
+strict recovery-duration distributions on a nearly flat curve. Return,
+drawdown and volume gates remain much smaller; required structural metrics
+match exactly. No global tolerance or matching-nonfinite policy changes. This
+is a regression acceptance case, not certification of every recovery curve,
+limit threshold or strategy combination.
+
+All 335 Rust tests pass, with one existing ignored test, and default-feature
+test compilation plus rebuilt extension source verification pass. A further
+186 parity, Rust-backed caller, CPU backtest/plot/optimizer-isolation and native
+EMA CLI lifecycle checks pass without skips. Independent current-head review
+and CI remain integration gates.

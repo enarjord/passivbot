@@ -209,7 +209,11 @@ fn calc_close_qty(
     if clip_qty <= 0.0 {
         return 0.0;
     }
-    if position_size_abs - clip_qty < min_qty {
+    let remainder = position_size_abs - clip_qty;
+    // A valid minimum-size remainder must survive subtraction noise. Keep
+    // genuinely undersized remainders on the existing full-close path.
+    let representation_tolerance = f64::EPSILON * remainder.abs().max(min_qty.abs()) * 4.0;
+    if remainder < min_qty && min_qty - remainder > representation_tolerance {
         position_size_abs
     } else {
         clip_qty
@@ -404,6 +408,56 @@ mod tests {
             offset: 0.01,
             offset_psize_weight: 0.1,
             ..Default::default()
+        }
+    }
+
+    fn close_minimum_exchange() -> ExchangeParams {
+        ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.001,
+            min_cost: 1.0,
+            c_mult: 1.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn close_clip_preserves_minimum_remainder_despite_binary_noise() {
+        let exchange = close_minimum_exchange();
+        let minimum = calc_min_entry_qty(114.63, &exchange);
+        // Clip and remainder are both nine valid steps. Binary noise must
+        // not turn this partial close into a full-position close.
+        assert!(0.018 - minimum < minimum);
+        let close = calc_close_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            1000.0,
+            114.63,
+            0.018,
+            0.04,
+        );
+        assert_eq!(close, minimum);
+        assert_eq!(round_(close, exchange.qty_step), 0.009);
+    }
+
+    #[test]
+    fn close_clip_still_consumes_genuinely_subminimum_remainders() {
+        let exchange = close_minimum_exchange();
+        for position in [0.004, 0.009, 0.017, 0.018 - 1e-12] {
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &base_params(),
+                    1000.0,
+                    114.63,
+                    position,
+                    0.04,
+                ),
+                position
+            );
         }
     }
 
