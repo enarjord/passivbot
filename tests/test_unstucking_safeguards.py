@@ -456,7 +456,6 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "entry_trailing_threshold_pct": 0.0,
                 "wallet_exposure_limit": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
-                "risk_we_excess_allowance_mode": "bounded",
                 "close_grid_qty_pct": 0.0,
                 "close_trailing_qty_pct": 0.0,
                 "close_trailing_retracement_pct": 0.0,

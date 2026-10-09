@@ -20,7 +20,6 @@ from config.shared_bot import (
     get_grouped_bot_value,
 )
 from config.strategy_spec import get_strategy_param_keys
-from risk_limits import WE_EXCESS_ALLOWANCE_MODE_BOUNDED
 from json_utils import json_dumps_streamlined
 
 TRAILING_GRID_V7_KIND = "trailing_grid_v7"
@@ -110,7 +109,6 @@ COIN_OVERRIDE_SIDE_PASSTHROUGH_KEYS = {
 }
 V7_ABSENT_RISK_DEFAULTS = {
     "risk_entry_cooldown_minutes": 0.0,
-    "risk_we_excess_allowance_mode": WE_EXCESS_ALLOWANCE_MODE_BOUNDED,
 }
 V7_INSERTED_DEFAULT_TOP_LEVEL_PATHS = (
     ("backtest", "candle_interval_minutes"),
@@ -133,7 +131,6 @@ V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
     "risk_twel_enforcer_threshold",
     "risk_wel_enforcer_enabled",
     "risk_wel_enforcer_threshold",
-    "risk_we_excess_allowance_mode",
     "forager_score_weights",
     "forager_volatility_ema_span_1m",
     "forager_volume_drop_pct",
@@ -144,6 +141,7 @@ V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
     "hsl_panic_close_order_type",
     "hsl_red_threshold",
     "hsl_restart_after_red_policy",
+    "hsl_scale_budget_with_excess_allowance",
     "unstuck_close_pct",
     "unstuck_ema_dist",
     "unstuck_enabled",
@@ -797,10 +795,8 @@ def _warn_if_risk_excess_would_be_clamped(
         f"{path}.we_excess_allowance_pct={excess:g} would give v7 raw per-position "
         f"WEL {raw_allowed_wel:g}, above side TWEL {twel:g} "
         f"(base WEL = {base_wel:g}). The migrated v8 config keeps "
-        f"{path}.we_excess_allowance_mode='bounded', so the effective excess allowance is "
-        f"capped at {bounded_excess:g}. To intentionally use v7 raw/unclamped behavior, set "
-        f"{path}.we_excess_allowance_mode='legacy_raw' after migration and review the added "
-        f"risk explicitly.",
+        "bounded excess allowance, so the effective allowance is "
+        f"capped at {bounded_excess:g}. Raw/unclamped exposure is no longer supported; review this change and re-backtest before trading.",
         behavior_change=True,
     )
 
@@ -1350,6 +1346,10 @@ def migrate_v7_trailing_grid_config(
     if not isinstance(source, dict):
         raise TypeError(f"source config must be a dict; got {type(source).__name__}")
 
+    source = deepcopy(source)
+    from .excess_allowance import retire_excess_allowance_mode
+
+    retire_excess_allowance_mode(source, path=source_path or "input")
     target = get_template_config()
     target["config_version"] = CONFIG_SCHEMA_VERSION
     target.setdefault("live", {})["strategy_kind"] = TRAILING_GRID_V7_KIND

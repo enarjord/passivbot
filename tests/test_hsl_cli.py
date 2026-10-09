@@ -129,3 +129,27 @@ def test_cli_hsl_enablement_overrides_legacy_flat_alias(enable):
             prepare_config(config, verbose=False)
     else:
         assert prepare_config(config, verbose=False)["bot"]["long"]["hsl"]["enabled"] is False
+
+
+@pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
+def test_cli_supports_global_excess_budget_scaling_and_removes_allowance_selector(
+    command,
+):
+    from config_utils import update_config_with_args
+
+    config = get_template_config()
+    parser = argparse.ArgumentParser()
+    keys = add_config_arguments(
+        parser, project_template_config_for_cli(config, command), command=command
+    )
+    args = parser.parse_args(
+        ["--bot.long.hsl.scale_budget_with_excess_allowance", "true"]
+    )
+    update_config_with_args(config, args, allowed_keys=keys)
+    assert (
+        prepare_config(config, verbose=False)["bot"]["long"]["hsl"][
+            "scale_budget_with_excess_allowance"
+        ]
+        is True
+    )
+    assert "we_excess_allowance_mode" not in parser.format_help()

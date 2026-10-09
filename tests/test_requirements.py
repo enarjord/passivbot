@@ -73,3 +73,14 @@ def test_project_pins_satisfy_ccxt_runtime_dependencies():
             dependency.specifier.contains(project_version, prereleases=True)
             for project_version in exact_project_versions
         )
+
+
+def test_full_requirements_declare_packaging_for_evaluator_identity():
+    requirements = [
+        Requirement(row)
+        for row in _requirements("requirements-full.txt")
+        if not row.startswith("-")
+    ]
+    assert any(
+        requirement.name.casefold() == "packaging" for requirement in requirements
+    )

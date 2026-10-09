@@ -153,7 +153,6 @@ from config.overrides import parse_overrides
 from config.runtime_compile import compile_runtime_config
 from risk_limits import (
     effective_we_excess_allowance_pct,
-    normalize_we_excess_allowance_mode,
 )
 from logging_setup import (
     configure_logging,
@@ -10364,15 +10363,11 @@ class Passivbot:
             return True
         base_limit = self.get_wallet_exposure_limit(pside, symbol)
         allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-        allowance_mode = normalize_we_excess_allowance_mode(
-            self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
-        )
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
         effective_allowance_pct = effective_we_excess_allowance_pct(
             wallet_exposure_limit=base_limit,
             risk_we_excess_allowance_pct=allowance_pct,
             total_wallet_exposure_limit=twel,
-            risk_we_excess_allowance_mode=allowance_mode,
         )
         allowance_multiplier = 1.0 + effective_allowance_pct
         effective_limit = base_limit * allowance_multiplier
@@ -13921,12 +13916,16 @@ class Passivbot:
         table.padding_width = 0
 
         changed_symbols = list(dict.fromkeys(symbol for symbol, _pside in changed))
-        last_prices = await self._get_live_last_prices(
+        from live.diagnostic_valuation import DIAGNOSTIC_MAX_AGE_MS, remember_position_quotes
+
+        snapshots = await self._get_live_market_snapshots(
             changed_symbols,
-            max_age_ms=60_000,
+            max_age_ms=DIAGNOSTIC_MAX_AGE_MS,
             context="position_change_log",
             allow_completed_candle_fallback=True,
         )
+        remember_position_quotes(self, snapshots, positions_new, now_ms=utc_ms())
+        last_prices = {symbol: quote.last for symbol, quote in snapshots.items()}
 
         for symbol, pside in changed:
             old = psold[(symbol, pside)]
@@ -13955,15 +13954,11 @@ class Passivbot:
             allowance_pct = float(
                 self.bp(pside, "risk_we_excess_allowance_pct", symbol)
             )
-            allowance_mode = normalize_we_excess_allowance_mode(
-                self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
-            )
             twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
             effective_allowance_pct = effective_we_excess_allowance_pct(
                 wallet_exposure_limit=wel,
                 risk_we_excess_allowance_pct=allowance_pct,
                 total_wallet_exposure_limit=twel,
-                risk_we_excess_allowance_mode=allowance_mode,
             )
             effective_wel = wel * (1.0 + effective_allowance_pct)
             # WEL% = ratio against base WEL, WELe% = ratio against effective WEL (with excess allowance)
@@ -14841,7 +14836,6 @@ class Passivbot:
         }
         string_keys = {
             "risk_twel_enforcer_policy",
-            "risk_we_excess_allowance_mode",
         }
         strategy_keys = {
             "close_grid_qty_pct",
@@ -14904,7 +14898,6 @@ class Passivbot:
             "risk_twel_entry_gate_enabled",
             "risk_twel_enforcer_threshold",
             "risk_we_excess_allowance_pct",
-            "risk_we_excess_allowance_mode",
             "unstuck_enabled",
             "unstuck_close_pct",
             "unstuck_ema_gating_enabled",
@@ -14970,11 +14963,6 @@ class Passivbot:
                     out[out_key] = normalize_twel_enforcer_policy(
                         val,
                         path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
-                    )
-                else:
-                    out[out_key] = normalize_we_excess_allowance_mode(
-                        val,
-                        path=f"bot.{pside}.risk.we_excess_allowance_mode",
                     )
             else:
                 out[out_key] = float(val or 0.0)

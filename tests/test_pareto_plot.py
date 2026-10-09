@@ -149,7 +149,7 @@ def test_browser_open_is_opt_in(front, tmp_path, monkeypatch):
     assert pareto_plot.main(args) == 0
     assert not calls
     assert pareto_plot.main(args + ["--force", "--open"]) == 0
-    assert calls == [(tmp_path / "pareto-plot-2d.html").as_uri()]
+    assert calls == [(tmp_path / "pareto_plots" / "run.html").as_uri()]
 
 
 def read_payload(page):
@@ -267,3 +267,91 @@ def test_conflicting_aliases_without_canonical_value_fail():
     with pytest.raises(ValueError, match="Conflicting aliases"):
         pareto_plot._canonical_values({"adg": 0.1, "usd_adg": 0.2})
     assert pareto_plot._canonical_values({"adg": 0.1, "usd_adg": 0.1}) == {"adg_usd": 0.1}
+
+
+@pytest.mark.parametrize("input_kind", ["run", "pareto", "custom", "file"])
+def test_default_output_uses_input_name(front, tmp_path, monkeypatch, input_kind):
+    monkeypatch.chdir(tmp_path)
+    source = {"run": front.parent, "pareto": front, "file": front / "a.json"}.get(input_kind)
+    if input_kind == "custom":
+        source = tmp_path / "custom_front"
+        front.rename(source)
+    name = {"run": "run", "pareto": "run", "custom": "custom_front", "file": "a"}[input_kind]
+    assert cli_main(["tool", "pareto-plot", str(source)]) == 0
+    output = tmp_path / "pareto_plots" / f"{name}.html"
+    assert read_payload(output.read_text())["names"] == (["a.json"] if input_kind == "file" else ["a.json", "b.json", "c.json"])
+    assert not (tmp_path / "pareto-plot-2d.html").exists()
+
+
+def test_omitted_path_discovers_latest_populated_run(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    for run in ["2026-01-01_old", "2026-02-01_latest", "2026-03-01_empty", "2026-04-01_sidecar"]:
+        front = tmp_path / "optimize_results" / run / "pareto"
+        front.mkdir(parents=True)
+        if run.endswith("sidecar"):
+            (front / "selection.json").write_text('{"selected": []}')
+        elif not run.endswith("empty"):
+            write_candidate(front / f"{run}.json")
+    assert cli_main(["tool", "pareto-plot"]) == 0
+    output = tmp_path / "pareto_plots" / "2026-02-01_latest.html"
+    assert read_payload(output.read_text())["names"] == ["2026-02-01_latest.json"]
+    assert "2026-02-01_latest" in capsys.readouterr().out
+    # Auto-discovery retains the explicit overwrite guard.
+    with pytest.raises(SystemExit):
+        pareto_plot.main([])
+    assert pareto_plot.main(["--force"]) == 0
+
+
+def test_omitted_path_list_metrics_and_custom_output(front, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    results = tmp_path / "optimize_results"
+    results.mkdir()
+    front.parent.rename(results / "selected_run")
+    assert pareto_plot.main(["--list-metrics"]) == 0
+    assert not (tmp_path / "pareto_plots").exists()
+    output = tmp_path / "custom" / "chosen.html"
+    assert pareto_plot.main(["--output", str(output)]) == 0
+    assert output.is_file()
+    assert not (tmp_path / "pareto_plots").exists()
+
+
+@pytest.mark.parametrize("empty_root", [False, True])
+def test_omitted_path_without_candidates_fails_clearly(tmp_path, monkeypatch, capsys, empty_root):
+    monkeypatch.chdir(tmp_path)
+    if empty_root:
+        (tmp_path / "optimize_results" / "empty" / "pareto").mkdir(parents=True)
+    with pytest.raises(SystemExit) as exc:
+        pareto_plot.main([])
+    assert exc.value.code == 2
+    assert "No Pareto path provided" in capsys.readouterr().err
+    assert not (tmp_path / "pareto_plots").exists()
+
+
+@pytest.mark.parametrize("bad", ["{", "{}", None])
+def test_latest_malformed_candidate_is_not_hidden_by_fallback(tmp_path, monkeypatch, bad):
+    monkeypatch.chdir(tmp_path)
+    for name in ("2026-01-01_older", "2026-02-01_latest"):
+        front = tmp_path / "optimize_results" / name / "pareto"
+        front.mkdir(parents=True)
+        write_candidate(front / "candidate.json")
+    newest = front / "candidate.json"
+    if bad is None:
+        write_candidate(newest, (None, 0.1, 2.0))
+    elif bad == "{":
+        newest.write_text(bad)
+    else:
+        data = json.loads(newest.read_text())
+        data["optimize"]["scoring"] = ["unsupported_metric"]
+        newest.write_text(json.dumps(data))
+    with pytest.raises(SystemExit):
+        pareto_plot.main([])
+    assert not (tmp_path / "pareto_plots").exists()
+
+
+def test_plot_directory_is_ignored_from_repository_subdirectories():
+    import subprocess
+    result = subprocess.run(
+        ["git", "check-ignore", "--no-index", "pareto_plots/front.html", "src/pareto_plots/front.html"],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.splitlines() == ["pareto_plots/front.html", "src/pareto_plots/front.html"]

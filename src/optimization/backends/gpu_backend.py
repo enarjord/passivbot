@@ -20,7 +20,13 @@ from typing import Any
 import numpy as np
 import psutil
 
-from config.gpu import GPU_SCREENING_DEFAULTS, resolve_gpu_screening
+from config.gpu import (
+    GPU_SCREENING_DEFAULTS,
+    gpu_hsl_policy as _gpu_hsl_policy,
+    gpu_hsl_side_enabled as _gpu_hsl_side_enabled,
+    resolve_gpu_screening,
+    validate_hsl_gpu_inputs as _validate_hsl_gpu_inputs,
+)
 from config.metrics import resolve_metric_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.validate import validate_limit_order_fill_buffer_pct
@@ -610,22 +616,6 @@ def _validate_gpu_suite_override_paths(
             )
 
 
-def _validate_hsl_gpu_inputs(config: dict) -> None:
-
-    interval = float(config.get("backtest", {}).get("candle_interval_minutes", 1))
-    if interval != 1 and any(
-        _gpu_hsl_side_enabled(config, side) for side in ("long", "short")
-    ):
-        raise ValueError("GPU HSL requires 1m candles")
-
-
-def _gpu_hsl_policy(config: dict, side: str) -> dict:
-
-    if config["live"]["hsl_signal_mode"] == "unified":
-        return config["bot"]["hsl"]
-    return config.get("bot", {}).get(side, {}).get("hsl", {})
-
-
 def _gpu_hsl_bound_map(config: dict, bound_map: dict) -> dict:
 
     result = dict(bound_map)
@@ -735,18 +725,28 @@ def _materialize_gpu_override_template(
     config: dict,
     overrides_list,
     *,
-    finalize_fn=None,
+    vector=None,
+    key_paths=None,
 ) -> dict:
-    """Apply exact runtime-finalization overrides to the proxy base config."""
+    """Apply exact candidate values and runtime overrides to the proxy base config."""
 
-    if not callable(finalize_fn):
-        from optimization.warmup import _finalize_optimizer_vector_config
-
-        finalize_fn = _finalize_optimizer_vector_config
-    proxy_config = finalize_fn(
-        deepcopy(config),
-        overrides_list=overrides_list,
+    from optimization.warmup import (
+        _finalize_optimizer_vector_config,
+        build_optimizer_vector_config,
     )
+
+    if vector is None:
+        proxy_config = _finalize_optimizer_vector_config(
+            deepcopy(config),
+            overrides_list=overrides_list,
+        )
+    else:
+        proxy_config = build_optimizer_vector_config(
+            vector,
+            config,
+            key_paths=key_paths,
+            overrides_list=overrides_list,
+        )
     source_strategy_kind = (
         str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
     )
@@ -763,11 +763,18 @@ def _materialize_gpu_override_template(
 
 
 def materialize_gpu_preparation_config(config: dict) -> dict:
-    """Finalize the immutable GPU template while preserving its strategy-shape guard."""
+    """Use the bounds-clamped seed for GPU capability and side-topology checks."""
 
+    from optimize import config_to_individual
+    from optimization.shape import build_optimization_shape
+
+    shape = build_optimization_shape(config)
+    vector = config_to_individual(config, shape.bounds, optimization_shape=shape)
     return _materialize_gpu_override_template(
         config,
         config.get("optimize", {}).get("enable_overrides", []),
+        vector=vector,
+        key_paths=shape.key_paths,
     )
 
 
@@ -1116,7 +1123,7 @@ def _evaluate_gpu_suite_proxies(
 ) -> list[dict]:
     """Screen one candidate batch across suite scenarios with canonical reducers."""
 
-    from metrics_schema import build_scenario_metrics
+    from metrics_schema import MetricAggregationError, build_scenario_metrics
     from suite_runner import ScenarioResult, SuiteScenario
 
     if screening_scenarios:
@@ -1193,25 +1200,48 @@ def _evaluate_gpu_suite_proxies(
             offset += len(task_candidates)
     results = []
     for index in range(len(candidates)):
-        scenario_results = []
-        for ctx, exchange_rows in scenario_rows:
-            per_exchange = {exchange: rows[index] for exchange, rows in exchange_rows}
-            scenario_results.append(
-                ScenarioResult(
-                    scenario=SuiteScenario(
-                        label=ctx.label,
-                        start_date=None,
-                        end_date=None,
-                        coins=None,
-                        ignored_coins=None,
-                    ),
-                    per_exchange=per_exchange,
-                    metrics=build_scenario_metrics(per_exchange),
-                    elapsed_seconds=0.0,
-                    output_path=None,
+        try:
+            scenario_results = []
+            for ctx, exchange_rows in scenario_rows:
+                per_exchange = {exchange: rows[index] for exchange, rows in exchange_rows}
+                scenario_results.append(
+                    ScenarioResult(
+                        scenario=SuiteScenario(
+                            label=ctx.label,
+                            start_date=None,
+                            end_date=None,
+                            coins=None,
+                            ignored_coins=None,
+                        ),
+                        per_exchange=per_exchange,
+                        metrics=build_scenario_metrics(per_exchange),
+                        elapsed_seconds=0.0,
+                        output_path=None,
+                    )
                 )
+            scored = suite_evaluator.score_scenario_results(scenario_results)
+        except MetricAggregationError as exc:
+            # Match the CPU suite policy: reject this candidate, not the batch.
+            from optimize import _build_invalid_candidate_metrics
+
+            error = f"{exc.__class__.__name__}: {exc}"
+            logging.debug(
+                "GPU suite candidate invalid due to metric aggregation failure | index=%s | error=%s",
+                index,
+                error,
             )
-        scored = suite_evaluator.score_scenario_results(scenario_results)
+            objectives, violation, payload = _build_invalid_candidate_metrics(
+                suite_evaluator.base.config["optimize"]["scoring"],
+                error,
+                include_stats=False,
+                include_suite_metrics=True,
+            )
+            scored = {
+                "objectives": objectives,
+                "unpenalized_objectives": payload["unpenalized_objectives"],
+                "constraint_violation": violation,
+                "suite_metrics": payload["suite_metrics"],
+            }
         results.append(
             {
                 _GPU_SUITE_OBJECTIVES_KEY: tuple(scored["objectives"]),
@@ -3581,23 +3611,6 @@ def _gpu_pinned_hsl_bound_contract(bound_by_key) -> dict[str, float]:
     }
 
 
-def _gpu_hsl_side_enabled(config: dict, side: str, markets_by_exchange=None) -> bool:
-    from config.hsl import _side_has_enabled_policy
-
-    if config["live"]["hsl_signal_mode"] == "coin":
-        return _side_has_enabled_policy(config, side, markets_by_exchange)
-    globally_enabled = bool(_gpu_hsl_policy(config, side).get("enabled", False))
-    if globally_enabled:
-        return True
-    for patch in (config.get("coin_overrides") or {}).values():
-        if not isinstance(patch, dict):
-            continue
-        hsl_patch = patch.get("bot", {}).get(side, {}).get("hsl", {}) or {}
-        if isinstance(hsl_patch, dict) and bool(hsl_patch.get("enabled", False)):
-            return True
-    return False
-
-
 def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
     float32_below_one = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
 
@@ -3760,7 +3773,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 7,  # Adaptive timing/RMS parameter layout and four-weight ranking.
+        "version": 8,  # Always-bounded allowance and opt-in coin HSL budget scaling.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {
@@ -4221,18 +4234,6 @@ def _validate_directional_search_space(
             )
 
 
-def _validate_seed_side_match(config_enabled_sides, seed_enabled_sides) -> None:
-    config_enabled_sides = set(config_enabled_sides)
-    seed_enabled_sides = set(seed_enabled_sides)
-    if config_enabled_sides != seed_enabled_sides:
-        raise ValueError(
-            "GPU foundation does not allow optimizer bounds to activate or disable "
-            "a side relative to the input config; "
-            f"config={sorted(config_enabled_sides)}, "
-            f"bounds_clamped_seed={sorted(seed_enabled_sides)}"
-        )
-
-
 def _constraint_classification_mismatch(
     proxy_violation: float, exact_payload: dict
 ) -> bool:
@@ -4573,10 +4574,7 @@ def run_backend(
         MpsSingleCoinProxy,
         mps_requested_metric_features,
     )
-    from optimization.warmup import (
-        _finalize_optimizer_vector_config,
-        validate_optimizer_effective_configs,
-    )
+    from optimization.warmup import validate_optimizer_effective_configs
 
     interrupt_check = interrupt_check or no_interrupt_requested
     interrupt_check()
@@ -4626,7 +4624,8 @@ def run_backend(
     proxy_config = _materialize_gpu_override_template(
         config,
         overrides_list,
-        finalize_fn=_finalize_optimizer_vector_config,
+        vector=base_vector,
+        key_paths=key_paths,
     )
     suite_enabled = _gpu_suite_enabled(config, evaluator, evaluator_for_pool)
     suite_inputs = (
@@ -4791,9 +4790,7 @@ def run_backend(
         enabled_sides = {
             side for side in ("long", "short") if vector_side_enabled(side)
         }
-        if suite_multicoin_sides is None:
-            _validate_seed_side_match(config_enabled_sides, enabled_sides)
-        else:
+        if suite_multicoin_sides is not None:
             # CPU suite setup requires symmetric approved coin lists. Effective
             # scenario overrides establish the common side topology and
             # are validated below after shadowing candidate bounds.
@@ -5667,6 +5664,7 @@ def run_backend(
         if queue_controller is not None:
             queue_controller.record(*timing, epoch=queue_epoch, admission_stall=stall)
         if worker_controller is not None:
+            worker_controller.observe_worker_memory(pool_workers)
             worker_controller.record(
                 *timing,
                 epoch=worker_epoch,
@@ -5676,7 +5674,12 @@ def run_backend(
 
     def apply_worker_target():
         nonlocal pool, pool_workers, workers, max_pending, queue_controller
-        if worker_controller is None or worker_controller.target == workers:
+        if worker_controller is None:
+            return
+        # Late jobs may raise the private-memory estimate while draining, and
+        # other processes may consume headroom after a growth proposal.
+        worker_controller.recheck_pending_growth()
+        if worker_controller.target == workers:
             return
         # The caller has drained every admitted result in durable submission
         # order. Never cancel/replay a validation to change execution capacity.
@@ -5975,7 +5978,14 @@ def run_backend(
         try:
             while cursor < len(selected) or pending_seed:
                 interrupt_check()
-                while cursor < len(selected) and len(pending_seed) < max_pending:
+                if worker_controller is not None:
+                    worker_controller.update()
+                    if worker_controller.target != workers and not pending_seed:
+                        apply_worker_target()
+                        if queue_controller is not None:
+                            queue_controller.finish_seed_screen(generation)
+                draining = worker_controller is not None and worker_controller.target != workers
+                while cursor < len(selected) and len(pending_seed) < max_pending and not draining:
                     item = selected[cursor]
                     result = _submit_gpu_exact_validation(
                         pool,
@@ -6103,6 +6113,10 @@ def run_backend(
                     # checkpoint.  Honor the configured checkpoint interval
                     # instead of rewriting the complete seed plan per seed.
                     maybe_save_checkpoint()
+                # Consume completed worker evidence before a queue trial can
+                # change its admission epoch, as in the evolution loop.
+                if worker_controller is not None:
+                    worker_controller.update()
                 if queue_controller is not None:
                     queue_controller.update(generation)
                     max_pending = queue_controller.limit

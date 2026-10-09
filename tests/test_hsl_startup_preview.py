@@ -219,6 +219,7 @@ def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
     assert report["config"]["hsl"]["sides"]["long"] == {
         "present": True,
         "enabled": True,
+        "scale_budget_with_excess_allowance": None,
         "red_threshold": 0.10,
         "cooldown_minutes_after_red": 45,
         "ema_span_minutes": 120,

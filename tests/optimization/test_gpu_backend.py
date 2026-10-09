@@ -92,7 +92,7 @@ from optimization.backends.gpu_backend import (
     _validate_pinned_scope_bounds,
     _validate_resume_evidence_budget,
     _validate_seed_bootstrap_plan,
-    _validate_seed_side_match,
+    materialize_gpu_preparation_config,
     _validate_scope,
     _validate_tm_market_mode_bounds,
     _validate_tm_market_template_bounds,
@@ -3269,9 +3269,9 @@ def test_gpu_tm_realized_loss_gate_accepts_multicoin():
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("entry_gate", [False, True])
-@pytest.mark.parametrize("allowance_mode", ["bounded", "legacy_raw"])
+@pytest.mark.parametrize("scale_budget", [False, True])
 def test_gpu_foundation_accepts_single_coin_exposure_headroom_policy(
-    strategy_kind, side, entry_gate, allowance_mode
+    strategy_kind, side, entry_gate, scale_budget
 ):
     builder = (
         _directional_tm_config
@@ -3281,7 +3281,7 @@ def test_gpu_foundation_accepts_single_coin_exposure_headroom_policy(
     config = builder(long_enabled=side == "long", short_enabled=side == "short")
     risk = config["bot"][side]["risk"]
     risk["we_excess_allowance_pct"] = 0.25
-    risk["we_excess_allowance_mode"] = allowance_mode
+    config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = scale_budget
     risk["total_exposure_entry_gate_enabled"] = entry_gate
     risk["total_exposure_enforcer_threshold"] = 0.8
 
@@ -3461,9 +3461,9 @@ def test_gpu_dual_multicoin_accepts_ema_total_exposure_repair():
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("entry_gate", [False, True])
-@pytest.mark.parametrize("allowance_mode", ["bounded", "legacy_raw"])
+@pytest.mark.parametrize("scale_budget", [False, True])
 def test_gpu_multicoin_accepts_exposure_headroom_policy(
-    strategy_kind, side, entry_gate, allowance_mode
+    strategy_kind, side, entry_gate, scale_budget
 ):
     builder = (
         _directional_tm_config
@@ -3475,7 +3475,7 @@ def test_gpu_multicoin_accepts_exposure_headroom_policy(
     risk = config["bot"][side]["risk"]
     risk["n_positions"] = 2
     risk["we_excess_allowance_pct"] = 0.25
-    risk["we_excess_allowance_mode"] = allowance_mode
+    config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = scale_budget
     risk["total_exposure_entry_gate_enabled"] = entry_gate
     risk["total_exposure_enforcer_threshold"] = 0.8
     config["backtest"]["dynamic_wel_by_tradability"] = True
@@ -6620,6 +6620,7 @@ def test_gpu_checkpoint_signature_tracks_single_coin_hsl_contract():
         ("backtest", "dynamic_wel_by_tradability", False),
         ("bot.long.risk", "n_positions", 2),
         ("bot.long.hsl", "enabled", False),
+        ("bot.long.hsl", "scale_budget_with_excess_allowance", True),
         ("bot.long.hsl", "restart_after_red_policy", "never"),
         ("bot.long.hsl", "panic_close_order_type", "market"),
     )
@@ -7241,16 +7242,6 @@ def test_gpu_directional_search_space_rejects_disabled_approved_side_activation(
             {"long": ["BTC"], "short": ["BTC"]},
             {"long"},
         )
-
-
-def test_gpu_rejects_optimizer_bounds_that_change_config_side_enablement():
-    _validate_seed_side_match({"long"}, {"long"})
-
-    with pytest.raises(ValueError, match="activate or disable"):
-        _validate_seed_side_match({"long"}, {"long", "short"})
-
-    with pytest.raises(ValueError, match="activate or disable"):
-        _validate_seed_side_match({"long", "short"}, {"long"})
 
 
 def test_constraint_classification_drift_detects_feasibility_disagreement():
@@ -8201,3 +8192,50 @@ def test_gpu_anchor_optional_adaptive_defaults_preserve_explicit_anchor_values()
     assert all(set(fixed) <= a.keys() for a in anchors)
     assert all(a["long_entry_cooldown_max_duration_minutes"] == -1.0 for a in anchors)
     assert ranges["long_entry_cooldown_weights_minutes_exposure_ratio"] == Bound(4.0, 8.0)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("enabled", [{"long"}, {"short"}, {"long", "short"}])
+@pytest.mark.parametrize("coin_count", [1, 3])
+def test_gpu_setup_uses_bounds_clamped_side_topology(strategy, enabled, coin_count):
+    from optimize import config_to_individual
+    from optimization.shape import build_optimization_shape
+    from optimization.gpu.model import gpu_side_enabled
+
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["live"]["strategy_kind"] = strategy
+    config["live"]["approved_coins"] = {side: ["BTC", "ETH", "SOL"][:coin_count] for side in ("long", "short")}
+    # Deliberately stale flat aliases must not override clamped canonical leaves.
+    config["bot"]["long"]["total_wallet_exposure_limit"] = 2.5
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 2.5
+    config["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    for side in ("long", "short"):
+        risk = config["optimize"]["bounds"][side]["risk"]
+        risk["total_wallet_exposure_limit"] = [2.0, 2.0] if side in enabled else [0.0, 0.0]
+        risk["n_positions"] = [1, coin_count]
+    original = copy.deepcopy(config)
+    shape = build_optimization_shape(config)
+    vector = config_to_individual(config, shape.bounds, optimization_shape=shape)
+    runtime = _materialize_gpu_override_template(config, [], vector=vector, key_paths=shape.key_paths)
+    preparation = materialize_gpu_preparation_config(config)
+    assert runtime == preparation
+    assert config == original
+    assert {side for side in ("long", "short") if gpu_side_enabled(runtime, side)} == enabled
+    assert _gpu_candidate_search_sides(runtime, []) == enabled
+    bounds = {key: bound for (key, _), bound in zip(shape.key_paths, shape.bounds)}
+    base = {key: value for (key, _), value in zip(shape.key_paths, vector)}
+    _validate_directional_search_space(bounds, base, runtime["live"]["approved_coins"], enabled, coin_count=coin_count)
+
+
+def test_gpu_clamped_template_preserves_fixed_runtime_and_mirror_precedence():
+    from config.shared_bot import flatten_shared_bot_side
+
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+    for side in ("long", "short"):
+        config["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit"] = [0, 0]
+    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.total_wallet_exposure_limit": 1.5}
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    effective = materialize_gpu_preparation_config(config)
+    for side in ("long", "short"):
+        assert effective["bot"][side]["risk"]["total_wallet_exposure_limit"] == 1.5
+        assert flatten_shared_bot_side(effective["bot"][side])["total_wallet_exposure_limit"] == 1.5

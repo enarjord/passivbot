@@ -722,6 +722,10 @@ def _extract_objectives(entry: Mapping[str, Any]) -> Dict[str, float]:
     return objectives
 
 
+class NoParetoCandidatesError(ValueError):
+    """A front has no candidate entries; invalid candidate data raises separately."""
+
+
 def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCandidate], List[ObjectiveSpec]]:
     raw_path = Path(path).expanduser()
     if raw_path.is_file():
@@ -731,7 +735,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
         pareto_dir = resolve_pareto_directory(raw_path)
         json_paths = sorted(pareto_dir.glob("*.json"))
     if not json_paths:
-        raise ValueError(f"No Pareto JSON files found in {pareto_dir}")
+        raise NoParetoCandidatesError(f"No Pareto JSON files found in {pareto_dir}")
 
     candidates: List[ParetoCandidate] = []
     baseline_specs: Optional[List[ObjectiveSpec]] = None
@@ -781,7 +785,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
         )
 
     if baseline_specs is None:
-        raise ValueError(
+        raise NoParetoCandidatesError(
             f"No Pareto candidate JSON files found in {pareto_dir}; "
             "JSON artifacts without optimize.scoring were ignored."
         )

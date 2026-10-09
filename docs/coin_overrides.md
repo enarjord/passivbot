@@ -23,10 +23,10 @@ ordinary non-override config fields; those fields are validated as part of that 
 filtered out. Flat v7-style strategy keys such as `entry_grid_spacing_pct` are rejected; use the
 nested v8 strategy path instead.
 
-`bot.<side>.risk.we_excess_allowance_mode` is global policy, not a per-coin knob. Inline coin
-patches that contain it fail with a migration message. A complete file used through
-`override_config_path` may contain the global field, but it is warned about and ignored for the
-coin patch; set the value in the main config instead.
+`bot.<side>.risk.we_excess_allowance_pct` can vary per coin. Excess allowance is
+always bounded by side TWEL. `bot.<side>.hsl.scale_budget_with_excess_allowance`
+is a global per-side policy and cannot be overridden per coin; it uses each coin's
+effective allowance when enabled in coin HSL mode.
 
 The complete cooldown override group is:
 

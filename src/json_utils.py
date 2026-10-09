@@ -4,6 +4,49 @@ import json
 from typing import Any, Callable
 
 
+class _ObjectPairs(list):
+    """Keep object members distinct even when encoded keys collide."""
+
+
+class _NumberToken(str):
+    """A validated JSON number whose original spelling must survive formatting."""
+
+
+def reformat_json_text(
+    text: str,
+    *,
+    indent: int = 4,
+    max_inline: int = 72,
+    sort_keys: bool = False,
+) -> str:
+    """Format strict JSON without rounding numbers or discarding duplicate members."""
+
+    def reject_constant(value):
+        raise ValueError(f"{value} is not a valid JSON number")
+
+    data = json.loads(
+        text,
+        object_pairs_hook=_ObjectPairs,
+        parse_int=_NumberToken,
+        parse_float=_NumberToken,
+        parse_constant=reject_constant,
+    )
+    if sort_keys:
+
+        def sort(node):
+            if isinstance(node, _ObjectPairs):
+                return _ObjectPairs(
+                    (key, sort(value))
+                    for key, value in sorted(node, key=lambda pair: pair[0])
+                )
+            if isinstance(node, list):
+                return [sort(value) for value in node]
+            return node
+
+        data = sort(data)
+    return _render_streamlined(data, indent=indent, max_inline=max_inline)
+
+
 def dump_json_streamlined(
     data: Any,
     fp,
@@ -61,13 +104,24 @@ def json_dumps_streamlined(
 
     # Normalize once through the standard encoder: custom values, tuple values,
     # dictionary keys and validation must behave the same for every block size.
-    class ObjectPairs(list):
-        """Keep object members distinct even when encoded keys collide."""
+    normalized = json.loads(serialized, object_pairs_hook=_ObjectPairs)
+    return _render_streamlined(
+        normalized,
+        indent=indent,
+        max_inline=max_inline,
+        separators=separators,
+        ensure_ascii=ensure_ascii,
+    )
 
-    normalized = json.loads(serialized, object_pairs_hook=ObjectPairs)
+
+def _render_streamlined(
+    normalized, *, indent, max_inline, separators=(", ", ": "), ensure_ascii=True
+):
 
     def compact(value: Any) -> str:
-        if isinstance(value, ObjectPairs):
+        if isinstance(value, _NumberToken):
+            return str(value)
+        if isinstance(value, _ObjectPairs):
             entries = [
                 f"{json.dumps(key, ensure_ascii=ensure_ascii)}{separators[1]}{compact(val)}"
                 for key, val in value
@@ -84,7 +138,7 @@ def json_dumps_streamlined(
 
         indent_str = " " * (indent * level)
         child_indent = " " * (indent * (level + 1))
-        if isinstance(value, ObjectPairs):
+        if isinstance(value, _ObjectPairs):
             opening, closing = "{", "}"
             entries = [
                 f"{json.dumps(key, ensure_ascii=ensure_ascii)}{separators[1]}{render(val, level + 1)}"
@@ -95,8 +149,13 @@ def json_dumps_streamlined(
             entries = [render(item, level + 1) for item in value]
         separator = separators[0].rstrip() + "\n" + child_indent
         return (
-            opening + "\n" + child_indent + separator.join(entries)
-            + "\n" + indent_str + closing
+            opening
+            + "\n"
+            + child_indent
+            + separator.join(entries)
+            + "\n"
+            + indent_str
+            + closing
         )
 
     return render(normalized, 0)

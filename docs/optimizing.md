@@ -43,6 +43,25 @@ Optimization requires the full install profile:
 pip install -e ".[full]"
 ```
 
+## Session identity and output names
+
+Optimizer sessions use the [shared session naming format](backtesting.md#backtest-results)
+under `optimize_results/`. Small suites include their actual coin names and the number of
+prepared scenarios. The deterministic setup fingerprint includes effective settings after CLI
+overrides, fixed evaluation policy, optimizer bounds/objectives/backend settings, resolved dates,
+actual prepared data and evaluator implementation, and selected starting-config contents in
+consumption order. Starting configs are frozen in a bounded-memory disk snapshot before hashing
+and execution; filenames, old metrics and output paths are not seed identity.
+
+An unspecified `optimize.seed` is resolved to a concrete random seed before a fresh search.
+It is recorded in `session.json` and saved candidates. New sessions with different actual seeds
+have different setup fingerprints. An explicit seed can be used to compare otherwise equivalent
+setups. `--resume` retains the original output directory and restores its recorded seed when the
+input seed is unspecified; existing checkpoint/evaluation compatibility checks still apply.
+Legacy sessions without `session.json` keep their original seed policy. Fresh runs always get a
+new random run ID, even when their setup fingerprints match. Full SHA-256 setup fingerprints,
+run IDs and canonical setup inputs are available in `session.json`.
+
 ## Running Optimization
 
 ```bash
@@ -61,6 +80,11 @@ Example:
 ```bash
 passivbot optimize configs/examples/default_trailing_martingale_long.json --start configs/starting_pool/
 ```
+
+Wallet exposure shortcuts `-ltwel` and `-stwel` set
+`optimize.bounds.long.risk.total_wallet_exposure_limit` and the short equivalent.
+Use a single value to fix exposure (for example `-ltwel 0`), or `LOW,HIGH[,STEP]`
+to set its search range. In live and backtest commands these shortcuts still set bot values.
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
 
@@ -217,7 +241,7 @@ The supported slice is intentionally narrow:
   per-coin
   `risk.position_exposure_enforcer_enabled` and
   `risk.position_exposure_enforcer_threshold`; per-coin
-  `risk.we_excess_allowance_mode`, modeled leaves for disabled sides, and other override leaves
+  `hsl.scale_budget_with_excess_allowance`, modeled leaves for disabled sides, and other override leaves
   fail closed. Non-`normal` forced modes remain accepted for either side because they are
   backtest-inert. Trailing
   Martingale also resolves all four `entry.ema_gate_mode` values per coin and side. In one-sided
@@ -585,6 +609,11 @@ stored in the run contract and checkpoint identity, with dynamic scenario dates 
 prepared concrete dates. The checkpoint signature also records each scenario's ordered effective
 coins, side topology, and prepared candle window, so resume fails closed if preparation changes.
 
+GPU setup clamps the input bot values to optimizer bounds before determining enabled sides.
+For example, `-ltwel 0 -stwel 2,2` can switch a long-only input to short-only optimization
+when short positions and approved coins permit it. Each enabled GPU side must remain enabled
+across the entire search range; bounds that vary between disabled and enabled remain unsupported.
+
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the
 discrete anchor id alongside the selected tunable bounds. Anchor-fixed values are supplied to the
@@ -692,6 +721,8 @@ records positive inter-candle gaps
 in a 128-bin logarithmic histogram; the proxy decodes each occupied bin with a float32-safe upper
 edge and adds the exact leading and trailing gaps. This deliberately overestimates the minimizing
 fill-gap summaries when exact Rust has same-candle zero gaps or a value inside a histogram bin.
+P95 is retained as an inactivity-tail signal; the excluded mean, median, and P99 fill-gap summaries
+share this histogram approximation. P95 eligibility does not imply greater numerical accuracy.
 Trailing Martingale also supports `entry_interval_hours_{mean,median,p95,p99,max}` for single-coin
 and multi-coin, long-only, short-only, and fused long+short runs. Metal records gaps between
 normal initial entries independently for each coin and position side. The proxy mean and maximum
@@ -702,13 +733,27 @@ so these metrics retain exact Rust's canonical zero values without allocating th
 surface. Runs that do not request an entry-interval metric keep their existing kernel ABI and
 dispatch cost.
 
-Exact Rust metrics remain authoritative. Metrics intentionally kept for exact analysis rather than
-proxy optimization include raw gain, realized-PnL growth/risk, positive equity-balance divergence,
+Exact Rust metrics remain authoritative. `GPU_EXACT_ONLY_METRICS` is an eligibility policy, not a
+list of known calculation defects. Some exclusions reflect approximation or cost concerns; others
+favor a smaller set of normalized growth, activity, and downside-risk signals:
+
+- Gain shares ADG's smoothed endpoint; ADG is preferred for daily normalization.
+- Positive equity-balance divergence has no universally desirable optimization direction. Negative
+  divergence measures unrealized downside and supplies the retained paper-loss denominators.
+- Raw fill/HSL counts and absolute panic losses are reserved in favor of rates and loss percentages.
+  Realized-PnL-only growth/risk can reward leaving losing positions unrealized.
+
+Exact-only metrics include raw gain, realized-PnL growth/risk, positive equity-balance divergence,
 completed-only account-equity recovery, raw or split fill counts/rates, raw HSL event counts and
 absolute loss totals, the self-relative high-exposure duration family, and the legacy global
-recovery/profit aliases. Requests for these metrics as GPU objectives or proxy-side limits fail
+recovery aliases. Requests for these metrics as GPU objectives or proxy-side limits fail
 before MPS setup. They remain
 available in normal Rust backtests, exact optimizer validation output, and CPU optimization.
+
+Proposals to enable a metric should cover Rust semantics, GPU-versus-Rust parity on supported
+strategies/topologies, aliases, scoring and limits, and explicit numerical tolerances. Include
+ranking and constraint agreement evidence; identify which backends were tested. A useful constraint
+need not be a recommended standalone objective, but current exclusions apply to both.
 
 The backend is hybrid rather than a replacement backtester:
 
@@ -991,7 +1036,7 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   on either or both enabled sides, without extra calibration candidates. Fixed batch sizes
   and `tuning_mode=off` retain their configured execution policy.
 - `exact_workers` defaults to `null`; omitted, `null`, and `"auto"` values select initial
-  hardware/RAM-aware sizing. It counts physical cores within CPU affinity (including SMT siblings),
+  hardware/RAM-aware sizing. It counts distinct physical cores within CPU affinity, grouping SMT siblings,
   and uses cgroup-v2 CPU/memory limits
   when available, reserves one core for GPU orchestration, and budgets 60% of available RAM using
   a conservative worker estimate from process RSS before GPU proxy allocation plus twice the
@@ -1006,7 +1051,11 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   measured throughput; unrelated GPU-only pauses do not create evidence.
   The first window for a replacement pool is cold. Larger pools need a 5% gain;
   smaller pools can retain throughput within 2%. Growth also requires current RAM
-  headroom. Admitted results are drained and durably collected in order before replacing
+  headroom. After completed jobs, private worker memory refines the startup estimate:
+  twice the largest observed private footprint plus 256 MiB, with a 512 MiB floor.
+  Shared candle mappings are not charged again for each worker. If private memory accounting
+  is unavailable, the startup estimate remains in use. Worker trials run during exact seed
+  validation as well as evolution. Admitted results are drained and durably collected in order before replacing
   the pool; no validation is cancelled or repeated to resize it. Changing worker count
   invalidates GPU/queue evidence and admission epochs. Compatible local measurements
   are advisory starting points. Worker-cache memory estimates use 128 MiB classes to tolerate
@@ -1134,6 +1183,9 @@ and `min_survivors` if desired, and remove the old block. Remove the block and l
 checkpoints from enabled successive halving are incompatible with scenario screening.
 
 #### Profiling Apple MPS optimization
+
+Metric eligibility changes alone do not demonstrate a speedup. Profile optional output collection,
+host reductions, and dispatches; reuse existing intermediates when adding a metric.
 
 For long multi-coin Trailing Martingale datasets with one active side, MPS can retain each
 candidate's replay state between history chunks. This activates automatically when the full-history
@@ -1921,11 +1973,11 @@ over all exchanges before scoring.
 |--------|-------------|
 | `adg`, `adg_w` | Average Daily Gain (smoothed geometric) and its recency-biased counterpart |
 | `mdg`, `mdg_w` | Median Daily Gain and its recency-biased counterpart |
-| `gain` | Final balance gain (end/start ratio) |
+| `gain` | Smoothed terminal equity / starting equity; terminal equity averages the last up to three daily values |
 | `adg_strategy_eq`, `adg_strategy_eq_w` | Collateral-agnostic geometric growth on the synthetic strategy-equity curve |
 | `adg_rolling_hmean_strategy_eq` | Harmonic mean of automatic rolling 30/90/180-day-equivalent strategy-equity growth windows, dailyized and combined in log space. Higher values reward growth that survives many start/end windows; retain terminal ADG alongside it. |
 | `adg_time_integrated_strategy_eq` | Dailyized area under log strategy equity. Higher values reward earlier sustained growth; retain terminal ADG alongside it. |
-| `positive_gain_participation_strategy_eq` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a gain objective. |
+| `positive_gain_participation_strategy_eq` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a growth objective such as `adg_strategy_eq`. |
 | `mdg_strategy_eq`, `mdg_strategy_eq_w` | Median-day version of the same strategy-equity growth family |
 | `*_per_exposure_{long,short}` | Above metrics divided by the configured exposure limit per side |
 

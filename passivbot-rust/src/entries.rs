@@ -2,7 +2,7 @@ use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
 use crate::strategies::TrailingMartingaleEntryParams;
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, RuntimeOrderContext, StateParams,
-    TrailingPriceBundle, WeExcessAllowanceMode,
+    TrailingPriceBundle,
 };
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
@@ -22,9 +22,6 @@ pub fn wallet_exposure_limit_with_allowance(
 
 pub fn effective_we_excess_allowance_pct(bot_params: &BotParams, base_limit: f64) -> f64 {
     let raw = bot_params.risk_we_excess_allowance_pct.max(0.0);
-    if bot_params.risk_we_excess_allowance_mode == WeExcessAllowanceMode::LegacyRaw {
-        return raw;
-    }
     if !(base_limit.is_finite()
         && base_limit > 0.0
         && bot_params.total_wallet_exposure_limit.is_finite()
@@ -1443,7 +1440,6 @@ mod tests {
         let mut bot = BotParams {
             total_wallet_exposure_limit: 1.0,
             risk_we_excess_allowance_pct: 1.5,
-            risk_we_excess_allowance_mode: WeExcessAllowanceMode::Bounded,
             ..Default::default()
         };
 
@@ -1463,22 +1459,6 @@ mod tests {
         assert_eq!(
             wallet_exposure_limit_with_allowance_from_base(&bot, 0.5),
             0.5
-        );
-    }
-
-    #[test]
-    fn test_legacy_raw_we_excess_allowance_bypasses_total_limit_cap() {
-        let bot = BotParams {
-            total_wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 1.5,
-            risk_we_excess_allowance_mode: WeExcessAllowanceMode::LegacyRaw,
-            ..Default::default()
-        };
-
-        assert_eq!(effective_we_excess_allowance_pct(&bot, 1.0), 1.5);
-        assert_eq!(
-            wallet_exposure_limit_with_allowance_from_base(&bot, 1.0),
-            2.5
         );
     }
 

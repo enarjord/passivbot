@@ -301,6 +301,7 @@ impl Backtest<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
 
     const DAY: u64 = 86_400_000;
@@ -477,6 +478,8 @@ mod tests {
                 crate::hsl_evaluator::evaluate_for_simulator(crate::hsl_evaluator::Input {
                     snapshot: input.snapshot,
                     slots: 1,
+                    scale_budget_with_excess_allowance: false,
+                    exposure_budget: None,
                     span: 1.5,
                     threshold: 0.01,
                     cooldown_ms: 60_000,
@@ -544,6 +547,8 @@ mod tests {
             crate::hsl_evaluator::evaluate_for_simulator(crate::hsl_evaluator::Input {
                 snapshot: flat.snapshot,
                 slots: 0,
+                scale_budget_with_excess_allowance: false,
+                exposure_budget: None,
                 span: 1.5,
                 threshold: 0.01,
                 cooldown_ms: 0,
@@ -896,6 +901,7 @@ mod tests {
         use super::super::hsl_runtime::{Config, Policy};
         let policy = Policy {
             enabled: true,
+            scale_budget_with_excess_allowance: false,
             red_threshold: 0.05,
             ema_span_minutes: 1.0,
             cooldown_minutes_after_red: 10.0,
@@ -1454,6 +1460,80 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_executions_preserve_scope_cutoffs_and_empty_history() {
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, Input};
+        let data = candles(100, 2);
+        let btc = Array1::from_elem(100, 50000.);
+        let mut bt = make(&data, &btc);
+        bt.backtest_params.metrics_only = true;
+        for k in 0..60 {
+            fill(
+                &mut bt,
+                k,
+                0,
+                PositionSide::Long,
+                if k % 2 == 0 { 1.0 } else { -1.0 },
+                100.0,
+            );
+            for (side, coin, _mode, symbol) in [
+                (Some(SHORT), Some(0), snapshot::Mode::Coin, Some("C0")),
+                (Some(SHORT), None, snapshot::Mode::Pside, None),
+                (Some(LONG), Some(1), snapshot::Mode::Coin, Some("C1")),
+            ] {
+                let cutoff = bt.hsl_history_cutoff(side, coin);
+                assert_eq!(cutoff, Some((i64::MIN, bt.fills.len())));
+                let pside = side.map(|s| {
+                    if s == LONG {
+                        PositionSide::Long
+                    } else {
+                        PositionSide::Short
+                    }
+                });
+                let mode = || {
+                    if coin.is_some() {
+                        snapshot::Mode::Coin
+                    } else {
+                        snapshot::Mode::Pside
+                    }
+                };
+                let full = bt.hsl_inputs_at(k, mode(), pside, symbol, false).unwrap();
+                let clipped = bt
+                    .hsl_inputs_at_clipped(k, mode(), pside, symbol, false, cutoff)
+                    .unwrap();
+                assert_eq!(full.snapshot.start, clipped.snapshot.start);
+                let input = |snapshot| Input {
+                    snapshot,
+                    slots: 1,
+                    scale_budget_with_excess_allowance: false,
+                    exposure_budget: None,
+                    span: 3.5,
+                    threshold: 0.06,
+                    cooldown_ms: 600_000,
+                    restart: Restart::Always,
+                };
+                assert_eq!(
+                    serde_json::to_value(evaluate(input(full.snapshot)).unwrap()).unwrap(),
+                    serde_json::to_value(evaluate(input(clipped.snapshot)).unwrap()).unwrap()
+                );
+                if k % 10 == 0 {
+                    bt.hsl_cutoffs.clear();
+                    assert_eq!(bt.hsl_history_cutoff(side, coin), cutoff);
+                }
+            }
+        }
+        // The first relevant fill invalidates an empty-history prefix.
+        fill(&mut bt, 60, 0, PositionSide::Short, -1.0, 100.0);
+        let cutoff = bt.hsl_history_cutoff(Some(SHORT), Some(0));
+        assert_ne!(cutoff.unwrap().0, i64::MIN);
+        // Unrelated fills retain the selected episode, including its fill index.
+        fill(&mut bt, 61, 1, PositionSide::Long, 1.0, 200.0);
+        assert_eq!(bt.hsl_history_cutoff(Some(SHORT), Some(0)), cutoff);
+        bt.hsl_cutoffs.clear();
+        assert_eq!(bt.hsl_history_cutoff(Some(SHORT), Some(0)), cutoff);
+    }
+
+    #[test]
     fn latest_episode_suffix_preserves_current_decision() {
         use crate::hsl_controller::Restart;
         use crate::hsl_evaluator::{evaluate, Input};
@@ -1492,6 +1572,8 @@ mod tests {
                 let config = |snapshot| Input {
                     snapshot,
                     slots: 1,
+                    scale_budget_with_excess_allowance: false,
+                    exposure_budget: None,
                     span: 3.5,
                     threshold: 0.06,
                     cooldown_ms: 600_000,
@@ -1533,16 +1615,21 @@ mod tests {
             }
         }
         let btc = Array1::from_elem(75, 50000.);
-        for name in ["coin", "pside", "unified"] {
+        for name in ["coin", "coin_scaled", "pside", "unified"] {
             for restart in ["always", "never"] {
                 let mode = || match name {
-                    "coin" => snapshot::Mode::Coin,
+                    "coin" | "coin_scaled" => snapshot::Mode::Coin,
                     "pside" => snapshot::Mode::Pside,
                     _ => snapshot::Mode::Unified,
                 };
                 let mut bt = make(&data, &btc);
+                for params in &mut bt.bot_params_original {
+                    params.long.risk_we_excess_allowance_pct = 0.44;
+                    params.short.risk_we_excess_allowance_pct = 0.25;
+                }
                 let policy = Policy {
                     enabled: true,
+                    scale_budget_with_excess_allowance: name == "coin_scaled",
                     red_threshold: 0.06,
                     ema_span_minutes: 3.5,
                     cooldown_minutes_after_red: 5.,
@@ -1550,7 +1637,7 @@ mod tests {
                     panic_close_order_type: "limit".into(),
                 };
                 bt.backtest_params.equity_hard_stop_loss.hsl = Some(Config {
-                    mode: name.into(),
+                    mode: if name == "coin_scaled" { "coin" } else { name }.into(),
                     sides: [policy.clone(), policy.clone()],
                     portfolio: (name == "unified").then_some(policy.clone()),
                     coins: Default::default(),
@@ -1605,8 +1692,10 @@ mod tests {
                         let symbol = scope.coin.map(|c| bt.backtest_params.coins[c].as_str());
                         let full = bt.hsl_inputs_at(k, mode(), side, symbol, false).unwrap();
                         let expected = evaluate(Input {
+                            scale_budget_with_excess_allowance: name == "coin_scaled",
+                            exposure_budget: bt.hsl_exposure_budget(scope.side, scope.coin),
                             snapshot: full.snapshot,
-                            slots: if name == "coin" {
+                            slots: if name.starts_with("coin") {
                                 full.slots[scope.side.unwrap()] as u64
                             } else {
                                 1
@@ -1665,6 +1754,7 @@ mod tests {
         let mut bt = make(&data, &btc);
         let policy = Policy {
             enabled: true,
+            scale_budget_with_excess_allowance: false,
             red_threshold: 0.06,
             ema_span_minutes: 308.5,
             cooldown_minutes_after_red: 5.,
@@ -1696,6 +1786,8 @@ mod tests {
             let expected = evaluate(Input {
                 snapshot: full.snapshot,
                 slots: full.slots[LONG] as u64,
+                scale_budget_with_excess_allowance: false,
+                exposure_budget: None,
                 span: policy.ema_span_minutes,
                 threshold: policy.red_threshold,
                 cooldown_ms: 300_000,

@@ -99,7 +99,6 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
     | CONDITIONAL_HSL_OVERRIDE_PATHS
 )
 OVERRIDABLE_STANDALONE_BOT_KEYS = frozenset({"wallet_exposure_limit"})
-REMOVED_COIN_OVERRIDE_PATHS = frozenset({"risk.we_excess_allowance_mode"})
 
 
 def _active_shared_bot_override_paths(hsl_signal_mode: str) -> frozenset[str]:
@@ -287,6 +286,9 @@ def _extract_allowed_patch(
     """Extract explicitly supplied allowed leaves without hydrating defaults."""
 
     source_doc = deepcopy(_unwrap_override_document(document, source=source))
+    from .migrations.excess_allowance import retire_excess_allowance_mode
+
+    retire_excess_allowance_mode(source_doc, path=source)
     from .migrations.entry_ema import migrate_entry_ema_tree
     from .migrations.entry_cooldown import migrate_entry_cooldown_tree
 
@@ -330,21 +332,6 @@ def _extract_allowed_patch(
                 if strict:
                     raise ValueError(message)
                 logging.warning("%s; the file HSL values are ignored", message)
-            for removed_path in REMOVED_COIN_OVERRIDE_PATHS:
-                group_name, local_key = removed_path.split(".", 1)
-                flat_key = BOT_GROUP_FIELD_MAP[group_name][local_key]
-                group = side.get(group_name)
-                if flat_key in side or (isinstance(group, dict) and local_key in group):
-                    path = _format_override_path(
-                        coin, ("bot", pside, group_name, local_key)
-                    )
-                    message = (
-                        f"{path} is no longer overridable; configure "
-                        f"bot.{pside}.{removed_path} globally and remove it from {source}"
-                    )
-                    if strict:
-                        raise ValueError(message)
-                    logging.warning("%s; the file value is ignored", message)
             canonicalize_shared_bot_side(
                 side,
                 path_prefix=(source, "bot", pside),

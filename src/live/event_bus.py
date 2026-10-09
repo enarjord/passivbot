@@ -2086,6 +2086,15 @@ def _format_console_balance_changed(event: LiveEvent) -> str:
             f"snap={_format_console_number(_data_number(data, 'balance_snapped'))} | "
             f"equity={equity} source={source}"
         )
+    if data.get("equity_estimated") is True:
+        rendered += (
+            " estimate"
+            f" valuation={_format_console_label(_data_str(data, 'equity_valuation_source'))}"
+            f" observed_age_ms={_data_int(data, 'equity_observation_age_ms')}"
+        )
+    reason = _data_str(data, "equity_unavailable_reason")
+    if reason:
+        rendered += f" equity_reason={_format_console_label(reason)}"
     sample = format_balance_composition_sample(data.get("balance_composition"))
     return f"{rendered} assets={sample}" if sample else rendered
 
@@ -3287,6 +3296,59 @@ def format_forager_eligibility_console(data: Mapping[str, Any]) -> str:
     return message[:_FORAGER_ELIGIBILITY_CONSOLE_RECORD_LIMIT]
 
 
+def _hsl_candle_source_console(data: Mapping) -> str | None:
+    """One bounded source cause, shared by structured and fallback consoles."""
+    sources = data.get("candle_sources")
+    failures = sources.get("failures") if isinstance(sources, Mapping) else None
+    if not (
+        isinstance(failures, list) and failures and isinstance(failures[0], Mapping)
+    ):
+        return None
+    failure = next(
+        (
+            row
+            for row in failures
+            if isinstance(row, Mapping) and row.get("stage") == "cache"
+        ),
+        failures[0],
+    )
+
+    def token(value: Any, limit: int) -> str:
+        return re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(value or "-"))[:limit]
+
+    return (
+        "candle="
+        + token(failure.get("symbol"), 24)
+        + ":"
+        + token(failure.get("timeframe"), 4)
+        + "/"
+        + token(failure.get("stage"), 5)
+        + "/"
+        + token(failure.get("error_type"), 32)
+    )
+
+
+def _hsl_input_console(data: Mapping) -> tuple[Mapping | None, str | None]:
+    """Preserve required-input priority on both console paths."""
+    scopes = data.get("scopes")
+    rows = (
+        [row for row in scopes if isinstance(row, Mapping)]
+        if isinstance(scopes, list)
+        else []
+    )
+    row = next(
+        (row for row in rows if row.get("unavailable_reason")),
+        rows[0] if rows else None,
+    )
+    unavailable = data.get("unavailable_scope")
+    if isinstance(unavailable, Mapping) and unavailable.get("unavailable_reason"):
+        row = unavailable
+    if row is not None and row.get("unavailable_reason"):
+        reason = re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(row["unavailable_reason"]))[:64]
+        return row, "unavailable_reason=" + reason
+    return row, _hsl_candle_source_console(data)
+
+
 def _format_hsl_console(event: LiveEvent) -> str:
     data = event.data
 
@@ -3311,25 +3373,27 @@ def _format_hsl_console(event: LiveEvent) -> str:
             for key in ("green", "red", "inactive", "unavailable", "estimated")
         ),
     ]
+    row, input_cause = _hsl_input_console(data)
+    if input_cause:
+        parts.append(input_cause)
+
+    def optional(value: str) -> None:
+        if len(" ".join((*parts, value))) <= 240:
+            parts.append(value)
+
     missing = data.get("account_unavailable")
     if isinstance(missing, list) and missing:
-        parts.append("account=" + ",".join(token(value, 12) for value in missing[:3]))
-    scopes = data.get("scopes")
-    if isinstance(scopes, list) and scopes and isinstance(scopes[0], Mapping):
-        row = scopes[0]
-        parts.append(
+        optional("account=" + ",".join(token(value, 12) for value in missing[:3]))
+    stale_reasons = data.get("stale_reasons")
+    if isinstance(stale_reasons, list) and stale_reasons:
+        optional("stale_reason=" + token(stale_reasons[0], 64))
+    if row is not None:
+        optional(
             "scope=" + token(row.get("symbol"), 24) + "/" + token(row.get("pside"), 5)
         )
         reasons = row.get("estimates")
-        reason = row.get("unavailable_reason") or (
-            reasons[0] if isinstance(reasons, list) and reasons else None
-        )
-        if reason:
-            parts.append(("unavailable_reason=" if row.get('unavailable_reason') else "estimate=")
-                         + token(reason, 64))
-    stale_reasons = data.get('stale_reasons')
-    if isinstance(stale_reasons, list) and stale_reasons:
-        parts.insert(3, "stale_reason=" + token(stale_reasons[0], 64))
+        if not input_cause and isinstance(reasons, list) and reasons:
+            optional("estimate=" + token(reasons[0], 64))
     return " ".join(parts)
 
 

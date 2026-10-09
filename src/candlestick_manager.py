@@ -7766,8 +7766,6 @@ class CandlestickManager:
                         else np.empty((0,), dtype=CANDLE_DTYPE)
                     )
 
-                end_excl = int(end_ts) + period_ms
-
                 async with self._acquire_fetch_lock(symbol, out_tf):
                     try:
                         disk_arr = self._load_from_disk(symbol, start_ts, end_ts, timeframe=out_tf)
@@ -7801,6 +7799,37 @@ class CandlestickManager:
                                 self._tf_range_cache[symbol] = sym_cache
                                 return out_disk
 
+                    fetch_spans = [(int(start_ts), int(end_ts))]
+                    if (
+                        max_age_ms != 0
+                        and isinstance(disk_arr, np.ndarray)
+                        and disk_arr.size
+                    ):
+                        # Resume verified persisted history after a bounded read is
+                        # interrupted. Refetching its entire prefix can consume the
+                        # next deadline again without ever reaching newer candles.
+                        aligned = disk_arr[disk_arr["ts"] % period_ms == 0]
+                        missing = self._missing_spans_step(
+                            aligned, int(start_ts), int(end_ts), int(period_ms)
+                        )
+                        if missing:
+                            fetch_spans = []
+                            for gap_start, gap_end in missing:
+                                # Keep real neighbours in the same response so
+                                # KuCoin can still prove internal no-tick buckets.
+                                span_start = max(int(start_ts), gap_start - period_ms)
+                                span_end = min(int(end_ts), gap_end + period_ms)
+                                if (
+                                    fetch_spans
+                                    and span_start <= fetch_spans[-1][1] + period_ms
+                                ):
+                                    fetch_spans[-1] = (
+                                        fetch_spans[-1][0],
+                                        max(fetch_spans[-1][1], span_end),
+                                    )
+                                else:
+                                    fetch_spans.append((span_start, span_end))
+
                     persisted_batches = False
 
                     def _persist_tf_batch(batch: np.ndarray) -> None:
@@ -7809,22 +7838,35 @@ class CandlestickManager:
                         self._persist_batch(symbol, batch, timeframe=out_tf)
                         self._invalidate_ema_cache(symbol, timeframe=out_tf)
 
-                    try:
-                        fetched = await self._fetch_ohlcv_paginated(
-                            symbol,
-                            int(start_ts),
-                            int(end_excl),
-                            timeframe=out_tf,
-                            on_batch=_persist_tf_batch,
-                            raise_on_partial_empty_page=max_age_ms == 0,
-                        )
-                    except TypeError:
-                        fetched = await self._fetch_ohlcv_paginated(
-                            symbol,
-                            int(start_ts),
-                            int(end_excl),
-                            timeframe=out_tf,
-                        )
+                    fetched_ranges = []
+                    for span_start, span_end in fetch_spans:
+                        persisted_batches = False
+                        try:
+                            batch = await self._fetch_ohlcv_paginated(
+                                symbol,
+                                span_start,
+                                span_end + period_ms,
+                                timeframe=out_tf,
+                                on_batch=_persist_tf_batch,
+                                raise_on_partial_empty_page=max_age_ms == 0,
+                            )
+                        except TypeError:
+                            batch = await self._fetch_ohlcv_paginated(
+                                symbol,
+                                span_start,
+                                span_end + period_ms,
+                                timeframe=out_tf,
+                            )
+                        batch = self._slice_ts_range(batch, span_start, span_end)
+                        if batch.size:
+                            if not persisted_batches:
+                                _persist_tf_batch(batch)
+                            fetched_ranges.append(batch)
+                    fetched = (
+                        np.concatenate(fetched_ranges)
+                        if fetched_ranges
+                        else np.empty((0,), dtype=CANDLE_DTYPE)
+                    )
                     # The fetch may have evicted a previously persisted KuCoin
                     # sparse placeholder after a rejected real payload row
                     # proved that bucket unavailable. Reload before merging so
@@ -7853,8 +7895,6 @@ class CandlestickManager:
                             return out
                         return fetched
                     fetched_out = self._slice_ts_range(fetched, start_ts, end_ts)
-                    if fetched_out.size and not persisted_batches:
-                        self._persist_batch(symbol, fetched_out, timeframe=out_tf)
                     if isinstance(disk_arr, np.ndarray) and disk_arr.size:
                         disk_out = self._slice_ts_range(disk_arr, start_ts, end_ts)
                         out = self._slice_ts_range(

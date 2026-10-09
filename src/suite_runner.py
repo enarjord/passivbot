@@ -27,6 +27,9 @@ from config.metrics import canonicalize_metric_name
 from config.overrides import parse_overrides
 from config.param_paths import require_existing_config_path
 from config.parse import load_raw_config
+from config.scenario_overrides import (
+    normalize_scenario_overrides as _normalize_scenario_overrides,
+)
 from config.shared_bot import canonicalize_shared_bot_side
 from config.reducers import canonicalize_reducer_mapping, reducer_mapping_from_aliases
 from config_transform import ConfigTransformTracker, record_transform
@@ -59,6 +62,19 @@ from metrics_schema import (
     merge_suite_payload,
 )
 from config_utils import dump_config, sanitize_prepared_config_for_dump
+from session_artifacts import (
+    LAYOUT_VERSION,
+    SESSION_MANIFEST,
+    artifact_paths,
+    create_session_dir,
+    date_span,
+    effective_setup_config,
+    safe_component,
+    utc_datetime,
+    write_json,
+)
+from optimization.prepared_dataset_identity import materialized_dataset_identity
+from optimization.evaluation_implementation import evaluation_implementation_identity
 
 _SCENARIO_KEYS = frozenset(
     {
@@ -72,7 +88,6 @@ _SCENARIO_KEYS = frozenset(
         "overrides",
     }
 )
-_ATOMIC_SCENARIO_OVERRIDE_ROOTS = frozenset({"coin_overrides"})
 
 # --------------------------------------------------------------------------- #
 # Data containers
@@ -98,6 +113,8 @@ class ScenarioResult:
     metrics: Dict[str, Any]
     elapsed_seconds: float
     output_path: Optional[Path]
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
 
 
 @dataclass
@@ -780,41 +797,10 @@ def build_scenarios(
         )
 
     reducer_cfg = deepcopy(suite_cfg.get("reducer", {"default": "mean"}))
+    components = [safe_component(scenario.label).casefold() for scenario in scenarios]
+    if len(components) != len(set(components)):
+        raise ValueError("Scenario labels collide as filesystem directory names")
     return scenarios, reducer_cfg
-
-
-def _normalize_scenario_overrides(
-    overrides: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Flatten nested override documents while preserving atomic dynamic mappings."""
-    normalized: Dict[str, Any] = {}
-
-    def visit(mapping: Dict[str, Any], prefix: tuple[str, ...] = ()) -> None:
-        for raw_key, value in mapping.items():
-            if not isinstance(raw_key, str):
-                raise ValueError("Scenario override keys must be strings")
-            key = raw_key.strip()
-            if not key:
-                raise ValueError("Scenario override keys must not be empty")
-            path = (*prefix, key)
-            root = path[0].split(".", 1)[0]
-            if (
-                isinstance(value, dict)
-                and "." not in key
-                and root not in _ATOMIC_SCENARIO_OVERRIDE_ROOTS
-            ):
-                visit(value, path)
-                continue
-            dotted_path = ".".join(path)
-            if dotted_path in normalized:
-                raise ValueError(
-                    f"Scenario override path {dotted_path!r} is defined more than once"
-                )
-            normalized[dotted_path] = deepcopy(value)
-
-    if overrides:
-        visit(overrides)
-    return normalized
 
 
 def collect_suite_coin_sources(
@@ -1537,7 +1523,7 @@ async def run_backtest_scenario(
     start_ts = utc_ms()
     scenario_dir = None
     if results_root is not None:
-        scenario_dir = results_root / scenario.label
+        scenario_dir = results_root / safe_component(scenario.label)
         scenario_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine which dataset(s) to use based on scenario's exchange restriction
@@ -1621,6 +1607,8 @@ async def run_backtest_scenario(
         metrics=combined_metrics,
         elapsed_seconds=elapsed,
         output_path=scenario_dir,
+        started_at=utc_datetime(start_ts),
+        completed_at=utc_datetime(),
     )
 
 
@@ -1686,28 +1674,21 @@ def _run_combined_dataset(
     fills, equities_array, analysis = execute_backtest_fn(payload, scenario_config)
     per_exchange[dataset.exchange] = analysis
     if scenario_dir is not None:
-        output_dir = scenario_dir / dataset.exchange
+        output_dir = scenario_dir
         output_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            post_process_fn(
-                scenario_config,
-                hlcvs_slice,
-                fills,
-                equities_array,
-                btc_prices,
-                analysis,
-                str(output_dir),
-                dataset.exchange,
-                label=scenario.label,
-                plot_context=plot_context_factory(payload),
-            )
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logging.error(
-                "Scenario %s exchange %s: post-process failed (%s)",
-                scenario.label,
-                dataset.exchange,
-                exc,
-            )
+        post_process_fn(
+            scenario_config,
+            hlcvs_slice,
+            fills,
+            equities_array,
+            btc_prices,
+            analysis,
+            str(output_dir),
+            dataset.exchange,
+            label=scenario.label,
+            plot_context=plot_context_factory(payload),
+            output_directory=output_dir,
+        )
     del fills
     del equities_array
     return per_exchange
@@ -1727,6 +1708,12 @@ def _run_multi_dataset(
 ) -> Dict[str, Dict[str, Any]]:
     per_exchange: Dict[str, Dict[str, Any]] = {}
     allowed_exchanges = set(scenario.exchanges or available_exchanges)
+    output_count = sum(
+        1
+        for dataset in datasets.values()
+        if (not allowed_exchanges or dataset.exchange in allowed_exchanges)
+        and any(coin in dataset.coin_index for coin in scenario_coins)
+    )
     for exchange_key, dataset in datasets.items():
         if allowed_exchanges and dataset.exchange not in allowed_exchanges:
             continue
@@ -1765,28 +1752,25 @@ def _run_multi_dataset(
 
         per_exchange[exchange_key] = analysis
         if scenario_dir is not None:
-            try:
-                exchange_dir = scenario_dir / dataset.exchange
-                exchange_dir.mkdir(parents=True, exist_ok=True)
-                post_process_fn(
-                    scenario_config,
-                    hlcvs_slice,
-                    fills,
-                    equities_array,
-                    btc_prices,
-                    analysis,
-                    str(exchange_dir),
-                    dataset.exchange,
-                    label=f"{scenario.label}/{dataset.exchange}",
-                    plot_context=plot_context_factory(payload),
-                )
-            except Exception as exc:
-                logging.error(
-                    "Scenario %s exchange %s: post-process failed (%s)",
-                    scenario.label,
-                    dataset.exchange,
-                    exc,
-                )
+            exchange_dir = (
+                scenario_dir / safe_component(dataset.exchange)
+                if output_count > 1
+                else scenario_dir
+            )
+            exchange_dir.mkdir(parents=True, exist_ok=True)
+            post_process_fn(
+                scenario_config,
+                hlcvs_slice,
+                fills,
+                equities_array,
+                btc_prices,
+                analysis,
+                str(exchange_dir),
+                dataset.exchange,
+                label=f"{scenario.label}/{dataset.exchange}",
+                output_directory=exchange_dir,
+                plot_context=plot_context_factory(payload),
+            )
         del fills
         del equities_array
 
@@ -2089,6 +2073,81 @@ def summarize_scenario_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+def _suite_session_inputs(
+    scenarios,
+    base_config,
+    datasets,
+    master_coins,
+    master_ignored,
+    available_exchanges,
+    available_coins,
+    suite_coin_sources,
+    base_coins,
+    base_ignored,
+):
+    """Describe actual scenario slices without retaining copied market arrays."""
+    inputs, run_configs, coins, sources = [], [], set(), set()
+    actual = set(available_exchanges) - {"combined"}
+    for scenario in scenarios:
+        cfg, selected = apply_scenario(
+            base_config,
+            scenario,
+            master_coins=master_coins,
+            master_ignored=master_ignored,
+            available_exchanges=available_exchanges,
+            available_coins=available_coins,
+            base_coin_sources=suite_coin_sources,
+            base_coins=base_coins,
+            base_ignored=base_ignored,
+            quiet=True,
+        )
+        allowed = (set(scenario.exchanges) & actual) if scenario.exchanges else actual
+        allowed = allowed or actual
+        combined = "combined" in datasets and allowed == actual
+        candidates = (
+            {"combined": datasets["combined"]}
+            if combined
+            else {
+                key: dataset
+                for key, dataset in datasets.items()
+                if key != "combined" and dataset.exchange in allowed
+            }
+        )
+        data = {}
+        for key, dataset in candidates.items():
+            if combined:
+                subset, _ = filter_coins_by_exchange_assignment(
+                    selected,
+                    scenario.exchanges or dataset.available_exchanges,
+                    dataset.coin_exchange,
+                    default_exchange=dataset.exchange,
+                )
+            else:
+                subset = [coin for coin in selected if coin in dataset.coin_index]
+            if not subset:
+                continue
+            hlcvs, btc, timestamps, mss = _prepare_dataset_subset(
+                dataset, cfg, subset, scenario.label
+            )
+            data[key] = materialized_dataset_identity(
+                subset, hlcvs, btc, timestamps, mss
+            )
+            coins.update(subset)
+            sources.add(key)
+            del hlcvs, btc, timestamps, mss
+        if not data:
+            raise ValueError(f"Scenario {scenario.label} has no usable output datasets")
+        run_configs.append(cfg)
+        inputs.append(
+            {
+                "label": scenario.label,
+                "config": effective_setup_config(cfg),
+                "data": data,
+            }
+        )
+    return inputs, run_configs, sorted(coins), sorted(sources)
+
+
 @simulation_data_scope
 async def run_backtest_suite_async(
     config: Dict[str, Any],
@@ -2211,15 +2270,62 @@ async def run_backtest_suite_async(
         logging.info("Scenario dedup: %d -> %d", len(scenarios), len(deduped))
     scenarios = deduped
 
-    suite_timestamp = ts_to_date(utc_ms())[:19].replace(":", "_")
-    suite_dir = (
-        suite_output_root
-        if suite_output_root is not None
-        else Path(require_config_value(config, "backtest.base_dir"))
-        / "suite_runs"
-        / suite_timestamp
+    inputs, run_configs, run_coins, run_sources = _suite_session_inputs(
+        scenarios,
+        base_config,
+        datasets,
+        master_coins,
+        master_ignored,
+        dataset_available_exchanges,
+        available_coins,
+        suite_coin_sources,
+        base_coins,
+        base_ignored,
     )
-    suite_dir.mkdir(parents=True, exist_ok=True)
+    span, span_metadata = date_span(run_configs)
+    source = "combined" if len(run_sources) > 1 else run_sources[0]
+    setup = {
+        "version": 1,
+        "scenarios": inputs,
+        "reducer": reducer_cfg,
+        "implementation": evaluation_implementation_identity(),
+    }
+    if suite_output_root is None:
+        suite_dir, session_metadata = create_session_dir(
+            Path(require_config_value(config, "backtest.base_dir")) / "suite_runs",
+            coins=run_coins,
+            source=source,
+            span=span,
+            setup=setup,
+            scenarios=len(scenarios),
+            metadata={
+                "kind": "backtest_suite",
+                "coins": run_coins,
+                "data_sources": run_sources,
+                **span_metadata,
+            },
+        )
+    else:
+        # The embedding API may supply its own empty output root.
+        from session_artifacts import setup_hash
+        from uuid import uuid4
+
+        suite_dir = Path(suite_output_root)
+        suite_dir.mkdir(parents=True, exist_ok=True)
+        if any(suite_dir.iterdir()):
+            raise FileExistsError(f"Suite output root must be empty: {suite_dir}")
+        session_metadata = {
+            "layout_version": LAYOUT_VERSION,
+            "started_at": utc_datetime(),
+            "setup_sha256": setup_hash(setup),
+            "run_id": uuid4().hex,
+            "kind": "backtest_suite",
+            "setup": setup,
+            "coins": run_coins,
+            **span_metadata,
+        }
+        write_json(suite_dir / SESSION_MANIFEST, session_metadata)
+    suite_timestamp = session_metadata["started_at"]
 
     logging.info("Starting backtest suite: %d scenario(s)", len(scenarios))
     results: List[ScenarioResult] = []
@@ -2251,16 +2357,31 @@ async def run_backtest_suite_async(
     suite_metrics = build_suite_metrics_payload(results, reduced_summary)
     # Persist a lean, canonical payload: shared schema + elapsed per scenario.
     summary_payload = {
-        "suite_id": suite_timestamp,
+        "layout_version": LAYOUT_VERSION,
+        "suite_id": suite_dir.name,
+        "setup_sha256": session_metadata["setup_sha256"],
+        "run_id": session_metadata["run_id"],
         "meta": {
             "scenarios": [res.scenario.label for res in results],
             "timestamp": suite_timestamp,
+            "completed_at": utc_datetime(),
         },
         "suite_metrics": suite_metrics,
         "per_scenario": {
             res.scenario.label: {
                 "elapsed_seconds": res.elapsed_seconds,
-                "output_path": str(res.output_path) if res.output_path else None,
+                "started_at": res.started_at,
+                "completed_at": res.completed_at,
+                "output_path": (
+                    res.output_path.relative_to(suite_dir).as_posix()
+                    if res.output_path
+                    else None
+                ),
+                "artifacts": (
+                    artifact_paths(res.output_path, suite_dir)
+                    if res.output_path
+                    else {}
+                ),
             }
             for res in results
         },
@@ -2278,7 +2399,7 @@ async def run_backtest_suite_async(
     dump_config(saved_config, str(suite_dir / "config.json"))
 
     return SuiteSummary(
-        suite_id=suite_timestamp,
+        suite_id=suite_dir.name,
         scenarios=results,
         aggregate=reduced_summary,
         output_dir=suite_dir,

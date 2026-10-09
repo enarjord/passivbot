@@ -27,9 +27,9 @@ use crate::strategies::{
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
-    BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities,
-    EquityHardStopLossConfig, ExchangeParams, Fill, Order, OrderBook, OrderType, Position,
-    RuntimeBudgetState, RuntimeBudgetStatePair, StrategyParamsPairValue, TrailingPriceBundle,
+    BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
+    Order, OrderBook, OrderType, Position, RuntimeBudgetState, RuntimeBudgetStatePair,
+    StrategyParamsPairValue, TrailingPriceBundle,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,

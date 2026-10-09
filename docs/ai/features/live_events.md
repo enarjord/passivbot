@@ -72,6 +72,15 @@ omitted row. Deferred HSL account reports publish one initial balance snapshot, 
 composition transitions, using presentation-only anchors and passive cached equity (unknown
 when current inputs are absent). Publication performs no fetches or execution scheduling. Presentation anchors advance only
 after successful event enqueue or console fallback, so transient observer failures can retry.
+Balance-log equity requires complete held-position coverage and confirmed account state. It
+may reuse quotes already obtained for position logging within its 60-second diagnostic allowance,
+including completed-candle fallback; it performs no additional fetch. Trading and risk retain their
+own stricter freshness checks. `equity_estimated`, `equity_valuation_source` (market_quote,
+completed_candle, mixed, or flat), and `equity_observation_age_ms` describe the valuation. Age is
+since observation, not the underlying candle timestamp. Older or candle-derived estimates are
+labelled on the console. Missing, invalid, stale, or pending inputs leave equity unavailable with
+`equity_unavailable_reason`; partial PnL is never published as total equity.
+
 Console admission thereafter remains based solely on snapped-balance materiality. Visible balance lines may append a sanitized sample of at most two
 retained assets; composition-only changes remain structured/text durable but
 stay off the console.
@@ -464,6 +473,24 @@ raw/EMA/selected drawdown, configured threshold, RED/flat evidence times and app
 There is one portfolio scope in unified mode; side and coin modes retain their native topology.
 Unavailable input is never displayed as GREEN. Removed legacy tiers do not reappear in hsl
 payloads.
+
+The optional `candle_sources` diagnostic describes failures in the latest already-acquired HSL
+source batches, independently of decision freshness. It contains the complete `failure_count`,
+up to 16 deterministic `failures` rows (symbol, timeframe, fetch/cache stage and bounded exception
+type), and `omitted_failures`. Failed cache fallbacks precede fetch failures before sampling, so
+terminal source loss remains distinguishable from a fetch failure with successful cache recovery.
+Exception text and raw exchange payloads are never included. Source
+failure changes and recovery emit a status transition, including changes in omitted rows; repeated
+unchanged failures do not. The console shows one compact source cause when no current scope
+unavailability reason takes priority, including in the legacy/sink-error console fallback. This
+view neither fetches inputs nor changes risk reasons,
+readiness, retry policy or trading authority.
+
+An optional bounded `unavailable_scope` retains the first required-input cause before scope
+sampling, even when RED rows fill the event or monitor sample. Both consoles preserve that cause
+ahead of candle failures. Structured console records reserve space for counts and the primary
+cause, then include account, stale, scope and approximation context only while the complete
+record fits 240 characters; omitted console context remains in the structured observation.
 
 Smoke reports and dashboard event summaries consume these scoped status rows directly,
 including current raw-RED/EMA-pending loss and halted terminal timestamps. Complete

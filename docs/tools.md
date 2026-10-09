@@ -92,12 +92,14 @@ members contain that metric and Passivbot knows whether higher or lower is bette
 
 ## Pareto trade-off explorer
 
-`passivbot tool pareto-plot PATH` exports a standalone HTML explorer with all saved
+`passivbot tool pareto-plot [PATH]` exports a standalone HTML explorer with all saved
 objective, aggregate/mean, and statistic metrics. Choose X/Y metrics or switch to X/Y/Z
 inside the page; no rerun, server, or internet connection is needed. Use the full install
 profile (`python3 -m pip install -e ".[full]"`).
 
 ```bash
+# Omit PATH to use the latest populated optimizer Pareto front.
+passivbot tool pareto-plot --open
 passivbot tool pareto-plot optimize_results/.../pareto --open
 passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
 # Optional positional metrics set the initial axes; the HTML still includes all metrics.
@@ -106,8 +108,13 @@ passivbot tool pareto-plot optimize_results/... \
   --output plots/tradeoffs.html --open
 ```
 
-A run directory or individual candidate JSON is also accepted. Without positional metrics,
-the first two available metrics (scoring objectives first) are selected. Known metric aliases
+A run directory or individual candidate JSON is also accepted. If PATH is omitted, the tool
+uses the lexicographically latest `optimize_results/<run>/pareto` containing candidates,
+relative to the current working directory, matching the other Pareto tools. Run names include
+timestamps; directory modification times do not affect selection. Empty and sidecar-only
+fronts are skipped; malformed candidate data still fails visibly. Missing candidates produce
+a clear error. Positional initial metrics follow an explicit PATH. Without positional
+metrics, the first two available metrics (scoring objectives first) are selected. Known metric aliases
 are accepted. Metric selectors group objectives, other metrics, and named statistics;
 `stats.<metric>.<stat>` identifies an explicit statistic, such as `stats.adg_strategy_eq.mean`.
 Saved objective values take precedence over aggregates, which take precedence over means.
@@ -147,9 +154,12 @@ without recomputing a lower-dimensional Pareto front. Missing optional metrics a
 as unavailable, never zero; missing required scoring objectives still fail through the shared
 loader. JSON sidecars without scoring metadata are ignored.
 
-The default output is `pareto-plot-2d.html` or `pareto-plot-3d.html` according to the initial
-view. Use `--force` to replace existing output and `--open` to launch a browser. Regenerate
-older HTML files to obtain the new controls. Exports contain filenames and all saved metric
+Default plots go in `pareto_plots/` under the current working directory, named after the
+input: `optimize_results/<run>/pareto` or its run directory produces `pareto_plots/<run>.html`;
+a custom front directory uses its directory name, and a single JSON uses its filename stem.
+Both initial dimensions use the same filename because the HTML supports switching views.
+The generated directory is ignored by Git. `--output` overrides this location. Use `--force`
+to replace existing output and `--open` to launch a browser. Regenerate older HTML files to obtain the new controls. Exports contain filenames and all saved metric
 values, so keep plots made from private results private. Large fronts produce larger HTML files.
 
 ## Pareto transformations / static plots
@@ -225,6 +235,14 @@ passivbot tool iterative-backtester configs/examples/ema_anchor.json --auto-run 
 passivbot tool iterative-history-plot backtests/.../fills.csv
 ```
 
+Iterative sessions use the [shared session naming format](backtesting.md#backtest-results)
+under `backtests/iterative/`. The setup fingerprint describes the initial configuration,
+scoring and loaded data. Individual iterations use `run_000001/`, `run_000002/`, etc.;
+their execution timestamp remains in `analysis.json` rather than another directory component.
+Changing dataset inputs starts a new session with an updated setup fingerprint; numbering restarts
+there, while all earlier session artifacts remain intact. Iteration directories are created
+exclusively to prevent accidental replacement.
+
 ## Trailing parameter inspector
 
 `passivbot tool trailing-inspect` explains the effective `trailing_martingale` entry and close
@@ -268,6 +286,85 @@ passivbot tool trailing-inspect configs/examples/default_trailing_martingale_lon
   --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033 \
   --entry-threshold-base-pct 0.02 --json
 ```
+
+## Config cleanup and formatting
+
+`passivbot tool clean-config SRC DST` exports a clean config offline. The default `--mode full`
+uses the shared config normalization and schema cleaner: fill missing defaults, normalize supported
+V8 aliases, remove result metrics, helper metadata, unknown static fields and inactive strategy
+subtrees/bounds, then sort keys and write streamlined JSON. It accepts full or lean V8 configs and
+result envelopes containing a `config` object with `bot` and `live` sections. A missing bot side
+stays disabled. The command preserves authored date tokens such as `"now"`, approved/ignored coin
+lists and file references, sparse coin overrides, scenarios, reducers and optimizer runtime pins.
+It does not apply optimizer pins to bot values or flatten referenced override files.
+Relative `override_config_path` values are kept verbatim and resolve relative to the exported
+config's directory. Keep the output beside the input or update those references when relocating it.
+
+Modes:
+
+| Mode | Output |
+| --- | --- |
+| `full` (default) | All canonical sections, including backtest and optimize |
+| `live` | `config_version`, `bot`, `coin_overrides`, `live`, `logging`, `monitor` |
+| `backtest` | Backtest inputs and shared bot/live/logging sections; no optimize or monitor |
+| `optimize` | Optimizer and backtest inputs with shared bot/live/logging sections; no monitor |
+| `format` | Strict JSON formatting only; preserve every value, numeric spelling and duplicate object member |
+
+Cleanup validates selected sections using the shared loader before export; irrelevant sections are
+discarded before normalization. Only `format` accepts arbitrary JSON (including arrays and result
+documents) without requiring a config. Cleanup rejects duplicate object keys instead of silently
+choosing one. Dynamic schema areas such as scenarios and coin patches remain sparse. Full cleanup
+can change values through the same supported normalization/default rules as loading: inspect a new
+output before adopting it. Explicit strategy/HSL migrations remain separate: enabled pre-v8.6 HSL
+requires `migrate-hsl`, and V7 trailing-grid configs require `migrate-config-v7`. Cleanup does not
+authorize strategy migration or remove the need to re-backtest a migrated configuration.
+
+```shell
+# Default full cleanup to a separate file.
+passivbot tool clean-config configs/private/input.json configs/private/clean.json
+
+# Lean live export, preserving strategy and live policy.
+passivbot tool clean-config configs/private/input.json configs/private/live.json --mode live
+
+# Formatting only, without schema/default changes or metadata removal.
+passivbot tool clean-config input.json pretty.json --mode format
+passivbot tool clean-config input.json pretty.json --mode format --sort-keys --max-inline 100
+
+# Explicit in-place replacement (never the default).
+passivbot tool clean-config configs/private/input.json --in-place
+
+# Bulk: depth 1 (default) selects direct .json files; 2 includes one subdirectory level.
+# Keep relative paths and filenames under a separate destination tree.
+passivbot tool clean-config configs/private/raw configs/private/clean --max-depth 2
+passivbot tool clean-config configs/private/raw --in-place --max-depth 3 --mode format
+
+# Read-only preview; --check exits 1 if any source would change, 0 if already clean.
+passivbot tool clean-config configs/private/raw --dry-run --max-depth 2
+passivbot tool clean-config configs/private/raw --check --max-depth 2
+```
+
+`SRC DST` is required unless `--in-place`, `--dry-run` or `--check` is selected. Existing destinations
+are refused unless `--overwrite` is specified; even then a destination cannot alias a source file.
+Directory source/destination trees must be disjoint. Bulk discovery skips symlink files/directories.
+A directly selected source symlink can be cleaned in place, preserving the link and replacing its
+target. Directory depth must be at least 1; `--max_depth` is an alias for `--max-depth`.
+
+Single `.hjson` sources are parsed as HJSON; `--include-hjson` also selects them in bulk. Outputs
+retain their relative names/extensions and contain JSON, which is valid HJSON. Use `--input-format
+hjson` for HJSON stored in a `.json` file or `--input-format json` to force strict JSON. Format mode
+requires strict JSON. `--indent` and `--max-inline` control formatting; cleanup modes always sort
+keys while format mode sorts only with `--sort-keys`.
+
+The complete selected batch is parsed/normalized before any write. Validation failures leave all
+inputs and outputs untouched. Publication is atomic **per file**, preserving permissions and
+ownership of replaced files; new config files are private (owner read/write). A later filesystem
+failure can leave earlier files in a bulk run completed; the batch is not a directory transaction.
+The tool makes no network or authenticated exchange calls and starts no bot.
+
+`streamline-json` retains its existing in-place, recursively selected formatting interface for
+compatibility. Prefer `clean-config --mode format` for explicit output paths and bounded depth.
+The migration tools retain their own reports and explicit semantic choices; all cleanup modes use
+the shared config pipeline rather than adding a second migration implementation.
 
 ## Historical data helpers
 
@@ -834,7 +931,9 @@ passivbot tool generate-mcap-list -n 80 -m 200 -e binance,bybit -o configs/appro
 ## HSL configuration migration
 
 `passivbot tool migrate-hsl input.json output.json` prepares a separate HSL
-configuration without exchange access or deployment. To replace the input after full validation,
+configuration without exchange access or deployment. It works with the live-only installation,
+including configs that select the GPU optimizer; migration does not load optimizer or GPU runtimes.
+To replace the input after full validation,
 use `passivbot tool migrate-hsl input.json --in-place --restart-policy long=always`, choosing
 restart policy for each required scope. `--in-place` and an output path are mutually exclusive.
 Replacement is atomic and preserves file ownership and permissions; validation or write failure leaves the

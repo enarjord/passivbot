@@ -42,7 +42,7 @@ active configs with invalid limits.
 Implemented: Rust bounded `we_excess` now returns zero allowed exposure for
 non-positive/non-finite base WEL and zero excess headroom for
 non-positive/non-finite TWEL instead of falling back to the raw excess
-percentage. `legacy_raw` remains intentionally raw.
+percentage. Excess allowance is now bounded in every supported configuration.
 
 ### A3.1 - Reducer Stacking
 
