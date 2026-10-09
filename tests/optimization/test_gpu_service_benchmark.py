@@ -169,7 +169,10 @@ try:
     if child.stdout.readline().strip() != 'ready':
         raise RuntimeError('Child did not initialize its resident allocation')
     root = Path(f'/proc/{os.getpid()}')
-    if str(child.pid) not in (root/'task'/str(tid)/'children').read_text().split():
+    children_file = root/'task'/str(tid)/'children'
+    if not children_file.is_file():
+        raise SystemExit(77)  # This kernel/mount lacks optional task child lists.
+    if str(child.pid) not in children_file.read_text().split():
         raise RuntimeError('Child is not owned by the worker thread')
     if str(child.pid) in (root/'task'/str(os.getpid())/'children').read_text().split():
         raise RuntimeError('Fixture child unexpectedly belongs to the leader')
@@ -188,6 +191,8 @@ finally:
 '''
     completed = subprocess.run([sys.executable, '-c', script, str(Path(benchmark.__file__).parents[1])],
                                capture_output=True, text=True, timeout=45)
+    if completed.returncode == 77:
+        pytest.skip('Linux worker child lists are unavailable')
     assert completed.returncode == 0, completed.stderr
 
 
@@ -243,3 +248,13 @@ def test_successful_device_samples_support_availability_with_transient_gaps():
     rows = [{'process_tree_rss_bytes': 100},
             {'process_tree_rss_bytes': None, 'global_device_used_bytes': 42, 'global_gpu_utilization_max_pct': 0}]
     assert benchmark.sampling_availability(rows) == {'process_tree_rss': False, 'global_device': True}
+
+
+def test_real_worker_rss_control_skips_unsupported_child_lists(monkeypatch):
+    import sys
+    from pathlib import Path
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(Path, 'is_dir', lambda path: True)
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=77, stderr=''))
+    with pytest.raises(pytest.skip.Exception, match='worker child lists are unavailable'):
+        test_rss_tree_counts_a_real_linux_worker_spawned_child()

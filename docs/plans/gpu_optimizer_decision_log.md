@@ -3255,3 +3255,8 @@ Historical observations do not supersede those requirements or prove current acc
 - Final reporting validation passes all 71 focused Linux/CUDA controls and both
   optimized-Python callers with 72 exact results and clean resources. Checked
   production/tests remain unchanged; current-head review and CI still gate merge.
+
+- Honor unavailable child lists in the actual Linux worker regression as well:
+  probe the worker task file, exit cooperatively through child cleanup, and skip
+  unsupported kernels/mounts. The actual Linux positive control and unsupported
+  skip control pass; production code is unchanged by this test correction.
