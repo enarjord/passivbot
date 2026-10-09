@@ -14,7 +14,7 @@ from optimization.gpu.weighted_equity import (
     weighted_equity_from_samples, weighted_equity_history_bytes,
 )
 
-from optimization.gpu.specialization import unstuck_ema_required
+from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import record_replay_chunk
 from optimization.gpu.runtime import (
@@ -1088,6 +1088,14 @@ def _trailing_martingale_short_no_hsl_shader_library(
     return compile_shader(source)
 
 
+def _with_unstuck(source: str, enabled: bool) -> str:
+    if enabled:
+        return source
+    if "#if PASSIVBOT_UNSTUCK_ENABLED" not in source:
+        raise RuntimeError("GPU source is missing the unstuck ablation contract")
+    return "#define PASSIVBOT_UNSTUCK_ENABLED 0\n" + source
+
+
 def _with_unstuck_ema(source: str, enabled: bool) -> str:
     if enabled:
         return source
@@ -1130,6 +1138,7 @@ def _ema_anchor_multicoin_shader_library(
     unstuck_ema_enabled: bool = True,
     hsl_fact_capacity: int = 0,
     hsl_factual_only: bool = False,
+    unstuck_enabled: bool = True,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1143,6 +1152,7 @@ def _ema_anchor_multicoin_shader_library(
     )
     source = f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
+    source = _with_unstuck(source, unstuck_enabled)
     # Keep diagnostics for forced delist panic-loss parity even when the HSL
     # controllers and their per-candle scans are compiled away.
     source = _with_hsl_disabled(source, hsl_disabled)
@@ -1201,6 +1211,7 @@ def _trailing_martingale_multicoin_shader_library(
     unstuck_ema_enabled: bool = True,
     hsl_fact_capacity: int = 0,
     hsl_factual_only: bool = False,
+    unstuck_enabled: bool = True,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1223,6 +1234,7 @@ def _trailing_martingale_multicoin_shader_library(
     )
     source = f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
+    source = _with_unstuck(source, unstuck_enabled)
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     if weighted_raw_equity_enabled:
         source = "#define PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED 1\n" + source
@@ -2647,6 +2659,11 @@ class _MulticoinReplayRunner:
         loader, args = self._library_cache_call()
         return loader(*args)
 
+    def _unstuck_required(self, matrix):
+        if not getattr(self, "unstuck_specialization", True):
+            return True
+        return unstuck_required(matrix, self.parameter_keys, self._unstuck_ema_overrides)
+
     def _unstuck_ema_required(self, matrix):
         if not getattr(self, "unstuck_ema_specialization", True):
             return True
@@ -2991,6 +3008,7 @@ class _MulticoinReplayRunner:
         matrix = self._pack_params(params)
         self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(matrix)
         self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(matrix)
+        self.dispatch_unstuck_enabled = self._unstuck_required(matrix)
         packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
@@ -3242,6 +3260,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "dispatch_unstuck_ema_enabled", True),
             int(bool(getattr(self, "hsl_fact_capacity", 0))),
             getattr(self, "native_factual_hsl", False),
+            getattr(self, "dispatch_unstuck_enabled", True),
         )
 
 
@@ -3664,6 +3683,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "dispatch_unstuck_ema_enabled", True),
             int(bool(getattr(self, "hsl_fact_capacity", 0))),
             getattr(self, "native_factual_hsl", False),
+            getattr(self, "dispatch_unstuck_enabled", True),
         )
         return _trailing_martingale_multicoin_shader_library, args
 

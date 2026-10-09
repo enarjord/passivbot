@@ -521,7 +521,9 @@ struct TrailingMartingaleMulticoinSideState {
     float close_qty[MAX_COINS];
     float secondary_close_qty[MAX_COINS];
     float twel_close_qty[MAX_COINS];
+#if PASSIVBOT_UNSTUCK_ENABLED
     float unstuck_close_qty[MAX_COINS];
+#endif
     float close_gen_balance[MAX_COINS];
     float close_gen_allowed_wel[MAX_COINS];
     float close_gen_market_price[MAX_COINS];
@@ -548,7 +550,9 @@ struct TrailingMartingaleMulticoinSideState {
     int close_tick[MAX_COINS];
     int secondary_close_tick[MAX_COINS];
     int twel_close_tick[MAX_COINS];
+#if PASSIVBOT_UNSTUCK_ENABLED
     int unstuck_close_tick[MAX_COINS];
+#endif
     int close_grid_max_rungs[MAX_COINS];
     int close_grid_prefix_tick[MAX_COINS];
     bool selected[MAX_COINS];
@@ -1751,7 +1755,9 @@ inline void clear_tm_multicoin_coin_orders(
     side.close_qty[coin] = 0.0f;
     side.secondary_close_qty[coin] = 0.0f;
     side.twel_close_qty[coin] = 0.0f;
+#if PASSIVBOT_UNSTUCK_ENABLED
     side.unstuck_close_qty[coin] = 0.0f;
+#endif
     side.close_gen_balance[coin] = 0.0f;
     side.close_gen_allowed_wel[coin] = 0.0f;
     side.close_gen_market_price[coin] = 0.0f;
@@ -1760,7 +1766,9 @@ inline void clear_tm_multicoin_coin_orders(
     side.close_tick[coin] = 0;
     side.secondary_close_tick[coin] = 0;
     side.twel_close_tick[coin] = 0;
+#if PASSIVBOT_UNSTUCK_ENABLED
     side.unstuck_close_tick[coin] = 0;
+#endif
     side.close_grid_max_rungs[coin] = 500;
     side.close_grid_prefix_tick[coin] = 0;
     side.close_reconstruct_after_reducer[coin] = false;
@@ -2808,7 +2816,9 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.close_qty[c] = 0.0f;
         side.secondary_close_qty[c] = 0.0f;
         side.twel_close_qty[c] = 0.0f;
+#if PASSIVBOT_UNSTUCK_ENABLED
         side.unstuck_close_qty[c] = 0.0f;
+#endif
         side.close_gen_balance[c] = 0.0f;
         side.close_gen_allowed_wel[c] = 0.0f;
         side.close_gen_market_price[c] = 0.0f;
@@ -2835,7 +2845,9 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.close_tick[c] = 0;
         side.secondary_close_tick[c] = 0;
         side.twel_close_tick[c] = 0;
+#if PASSIVBOT_UNSTUCK_ENABLED
         side.unstuck_close_tick[c] = 0;
+#endif
         side.close_grid_max_rungs[c] = 500;
         side.close_grid_prefix_tick[c] = 0;
         side.selected[c] = false;
@@ -3531,6 +3543,7 @@ inline int select_tm_multicoin_unstuck_coin(
     thread float& selected_diff
 ) {
     selected_diff = INFINITY;
+#if PASSIVBOT_UNSTUCK_ENABLED
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
         / fmax(float(effective_n_positions), 1.0f);
@@ -3628,6 +3641,9 @@ inline int select_tm_multicoin_unstuck_coin(
         }
     }
     return selected_coin;
+#else
+    return -1;
+#endif
 }
 
 // Match exact Rust's per-symbol one-way eligibility before Forager selection
@@ -3864,7 +3880,9 @@ inline void generate_tm_multicoin_side_orders(
     thread float* close_qty = side.close_qty;
     thread float* secondary_close_qty = side.secondary_close_qty;
     thread float* twel_close_qty = side.twel_close_qty;
+#if PASSIVBOT_UNSTUCK_ENABLED
     thread float* unstuck_close_qty = side.unstuck_close_qty;
+#endif
     thread float* close_gen_balance = side.close_gen_balance;
     thread float* close_gen_allowed_wel = side.close_gen_allowed_wel;
     thread float* close_gen_market_price = side.close_gen_market_price;
@@ -3885,7 +3903,9 @@ inline void generate_tm_multicoin_side_orders(
     thread int* close_tick = side.close_tick;
     thread int* secondary_close_tick = side.secondary_close_tick;
     thread int* twel_close_tick = side.twel_close_tick;
+#if PASSIVBOT_UNSTUCK_ENABLED
     thread int* unstuck_close_tick = side.unstuck_close_tick;
+#endif
     thread int* close_grid_max_rungs = side.close_grid_max_rungs;
     thread int* close_grid_prefix_tick = side.close_grid_prefix_tick;
     thread bool* selected = side.selected;
@@ -4039,10 +4059,15 @@ inline void generate_tm_multicoin_side_orders(
     // One directional thread owns every coin on this side, allowing
     // the exact one-global-intent least-stuck selector across coins.
     for (int c = 0; c < C; ++c) {
+#if PASSIVBOT_UNSTUCK_ENABLED
         unstuck_close_qty[c] = 0.0f;
+#endif
+#if PASSIVBOT_UNSTUCK_ENABLED
         unstuck_close_tick[c] = 0;
+#endif
         close_is_unstuck_reducer[c] = false;
     }
+#if PASSIVBOT_UNSTUCK_ENABLED
     float balance_peak = balance + effective_realized_pnl_drawdown(account);
     int unstuck_coin = -1;
     float best_unstuck_diff = INFINITY;
@@ -4179,6 +4204,7 @@ inline void generate_tm_multicoin_side_orders(
         unstuck_close_qty[unstuck_coin] = selected_unstuck_qty;
         unstuck_close_tick[unstuck_coin] = selected_unstuck_tick;
     }
+#endif
     for (int c = 0; c < C; ++c) {
         entry_qty[c] = 0.0f;
         entry_strategy_qty[c] = 0.0f;
@@ -4564,8 +4590,13 @@ inline void generate_tm_multicoin_side_orders(
                 market_orders_allowed, market_order_near_touch_threshold
             );
         float wel_reducer_exec_price = float(wel_reducer_tick) * price_step;
+#if PASSIVBOT_UNSTUCK_ENABLED
         float raw_unstuck_reducer_qty = unstuck_close_qty[c];
         int raw_unstuck_reducer_tick = unstuck_close_tick[c];
+#else
+        float raw_unstuck_reducer_qty = 0.0f;
+        int raw_unstuck_reducer_tick = 0;
+#endif
         float unstuck_reducer_price =
             float(raw_unstuck_reducer_tick) * price_step;
         bool unstuck_reducer_market = raw_unstuck_reducer_qty > 0.0f
