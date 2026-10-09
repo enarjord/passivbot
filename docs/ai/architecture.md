@@ -56,13 +56,13 @@ Backtest loads config and OHLCV, invokes the Rust simulation, and emits results.
 candidate configs and evaluates them through the same Rust backtest contract. Differences between
 live and backtest runtime inputs require explicit parity tests rather than duplicated assumptions.
 
-The experimental `gpu_native` optimizer executes the existing GPU replay of Rust-owned
+The experimental `gpu` optimizer executes the existing GPU replay of Rust-owned
 backtest semantics. Python owns canonical preparation, ask/tell evolution, scoring/limits,
 Pareto/results and checkpoints; the CUDA service owns simulation, packing and residency.
 No CPU simulation validates native optimizer fitness during a run. Independent parity tools
 remain required for changes to backtest behavior, and native evaluation identities prevent
 reuse of CPU or screening/validation fitness. See `docs/gpu_backtest_service.md` for current
-limitations and `docs/plans/gpu_optimizer_contract.md` for the replacement acceptance checklist.
+limitations and `docs/plans/gpu_optimizer_contract.md` for the acceptance checklist.
 
 Live may annotate a known missing symbol EMA bundle so Rust can scope only consumers that actually
 need it. The annotation is not a fallback value: backtest and unannotated inputs stay strict, Rust

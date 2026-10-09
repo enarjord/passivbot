@@ -148,7 +148,9 @@ def prepare_candidate_parameters(config, markets, exchange):
     unpatched global values used by every other coin.
     """
     from backtest import prep_backtest_args
+    from config.gpu import validate_gpu_backtest_config
     from config.runtime_compile import compile_runtime_config
+    validate_gpu_backtest_config(config)
     effective = compile_runtime_config(config, runtime="backtest", record_step=False)
     effective["coin_overrides"] = {}
     bots, strategies, _markets, backtest = prep_backtest_args(

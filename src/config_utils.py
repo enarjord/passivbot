@@ -1500,7 +1500,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "BACKEND",
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
-        "help": "Optimizer backend: deap, pymoo, gpu (screening/CPU validation), or experimental gpu_native (CUDA simulations).",
+        "help": "Optimizer backend: deap, pymoo, or gpu (authoritative NVIDIA/CUDA simulations).",
     },
     "optimize.limits": {
         "visible": ["--limits"],
@@ -2206,10 +2206,7 @@ def add_arguments_recursively(
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
             elif full_name in {
                 "optimize.gpu.batch_size",
-                "optimize.gpu.population_size",
                 "optimize.gpu.max_dispatch_candidate_bars",
-                "optimize.gpu.exact_workers",
-                "optimize.gpu.max_pending_exact",
             }:
                 type_ = _gpu_sizing_cli_value
             elif full_name == "optimize.gpu.screening.scenarios":

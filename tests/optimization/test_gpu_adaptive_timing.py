@@ -255,24 +255,6 @@ def test_adaptive_temporal_chunks_preserve_all_outputs(recent):
             assert value == expected[key]
 
 
-def test_new_optimizer_dimensions_map_for_both_strategies_and_sides():
-    from optimization.backends.gpu_backend import (
-        EMA_STRATEGY_BOUND_MAP,
-        TRAILING_MARTINGALE_STRATEGY_BOUND_MAP,
-    )
-
-    expected = {
-        "entry_cooldown_min_duration_minutes": "entry_cooldown_min_duration_minutes",
-        "entry_cooldown_max_duration_minutes": "entry_cooldown_max_duration_minutes",
-        "entry_cooldown_weights_minutes_exposure_ratio": "entry_cooldown_exposure_weight",
-        "entry_cooldown_weights_minutes_adverse_directionality": "entry_cooldown_adverse_weight",
-        "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
-        "forager_score_weights_unilateralness": "forager_score_weights_unilateralness",
-    }
-    for mapping in (EMA_STRATEGY_BOUND_MAP, TRAILING_MARTINGALE_STRATEGY_BOUND_MAP):
-        for side in ("long", "short"):
-            for source, target in expected.items():
-                assert mapping[f"{side}_{source}"] == f"{side}_{target}"
 
 
 @GPU

@@ -53,7 +53,7 @@ def test_screened_offspring_use_only_full_survivor_fitness_and_records(monkeypat
 @pytest.mark.parametrize("stop", ["screening", "promotion", "full"])
 def test_screening_stage_interrupt_and_resume_preserve_full_results(monkeypatch, tmp_path, stop):
     guard_cpu(monkeypatch)
-    from optimization.backends.gpu_native_backend import _Search
+    from optimization.backends.gpu_backend import _Search
     original = _Search.checkpoint
     progress = {}
     def checkpoint(self, **kwargs):
@@ -146,7 +146,7 @@ def test_noop_screening_policy_uses_one_full_stage(monkeypatch, tmp_path, policy
 @pytest.mark.parametrize("corrupt", ["shape", "penalty", "evaluated", "version"])
 def test_resume_rejects_malformed_partial_screening_evidence(monkeypatch, tmp_path, corrupt):
     guard_cpu(monkeypatch)
-    from optimization.backends.gpu_native_backend import _Search
+    from optimization.backends.gpu_backend import _Search
     def stop(_self):
         raise KeyboardInterrupt
     monkeypatch.setattr(_Search, "promote_screening", stop)

@@ -170,7 +170,8 @@ enter evolutionary survival with the existing complete parents. Selecting every 
 or retaining every offspring bypasses the partial stage. Explicit objective/limit scenarios
 must remain in the screen. `iters` retains its cohort-generation interpretation; screening
 reduces the number of complete evaluations rather than extending the generation budget.
-Native checkpoint version 2 stores partial selection evidence separately from fitness.
+Native checkpoint version 3 stores partial selection evidence separately from fitness
+and rejects pre-cutover GPU state.
 Earlier experimental native checkpoints require a fresh run; saved configs remain usable seeds.
 
 Reject invalid requests and effective duplicate candidates before expensive work. Keep

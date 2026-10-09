@@ -182,6 +182,8 @@ def test_gpu_rejects_coarse_hsl_candles_before_loading_gpu_runtime(monkeypatch):
             ignore_sigint_in_worker=None,
             get_starting_configs=None,
             configs_to_individuals=None,
+            build_config_fn=None,
+            overrides_fn=None,
         )
 
 
@@ -190,7 +192,7 @@ def test_gpu_preparation_rejects_coarse_hsl_candles_before_torch_probe(
     monkeypatch, through_cli
 ):
     from optimize import _run_gpu_preparation_preflight
-    from optimization.backends.gpu_backend import validate_gpu_preparation_scope
+    from config.gpu import validate_gpu_backtest_config
 
     cfg, _, _ = inputs()
     fixed_side_bounds(cfg)
@@ -200,7 +202,7 @@ def test_gpu_preparation_rejects_coarse_hsl_candles_before_torch_probe(
     preflight = (
         _run_gpu_preparation_preflight
         if through_cli
-        else validate_gpu_preparation_scope
+        else lambda cfg, _suite: validate_gpu_backtest_config(cfg)
     )
     with pytest.raises(ValueError, match="GPU HSL requires 1m candles"):
         preflight(cfg, {"enabled": False})

@@ -1,6 +1,6 @@
 import logging
 
-from optimization.progress import SeedBootstrapProgress, OptimizerProgress, DriftProgress, duration, log_tokens
+from optimization.progress import OptimizerProgress, duration, log_tokens
 from pareto_store import ParetoStore
 
 
@@ -51,27 +51,6 @@ def test_pareto_flush_is_quiet_and_debug_keeps_detail(tmp_path, monkeypatch, cap
     assert any("Dropping candidate" in message for message in debug)
 
 
-def test_seed_progress_reports_waiting_and_resume_without_fabricated_eta(monkeypatch, caplog):
-    caplog.set_level(logging.INFO)
-    now = [10.0]
-    monkeypatch.setattr("optimization.progress.time.monotonic", lambda: now[0])
-    progress = SeedBootstrapProgress(10, completed=4, workers=2)
-    progress.update(4, inflight=2, queued=4)
-    assert len(caplog.records) == 1
-    now[0] = 69.999
-    progress.update(4, inflight=2, queued=4)
-    assert len(caplog.records) == 1
-    now[0] = 70.0
-    progress.update(4, inflight=2, queued=4)
-    assert "completed=4/10 inflight=2 queued=4 elapsed=1m00s eta_seed=unknown" in caplog.text
-    now[0] = 130.0
-    progress.update(6, inflight=2, queued=2)
-    assert "eta_seed=4m00s" in caplog.records[-1].getMessage()
-    now[0] = 135.0
-    progress.update(10, inflight=0, queued=0, force=True)
-    assert "exact complete" in caplog.records[-1].getMessage()
-    assert "eta_seed=0s" in caplog.records[-1].getMessage()
-    assert all(len(record.getMessage()) < 240 for record in caplog.records)
 
 
 def test_seed_clamps_are_one_warning_with_bounded_samples(caplog):
@@ -288,31 +267,6 @@ def test_optimizer_snapshot_cadence_phases_and_no_hidden_fields(monkeypatch, cap
     assert snapshot["gen"] == 2
 
 
-def test_drift_warning_churn_recovery_and_halt_are_presentation_only(monkeypatch, caplog):
-    caplog.set_level(logging.INFO)
-    now = [0.0]
-    monkeypatch.setattr("optimization.progress.time.monotonic", lambda: now[0])
-    reporter = DriftProgress(rank_halt=.9, constraint_halt=1, objective_tolerance=.01)
-    status = dict(warn_reason="GPU front rank is noisy but broad probes remain sound (rho=0.2)",
-        halt_reason=None, samples=20, probe_rank_samples=4, rho=.2, probe_rho=.99,
-        constraint_agreement=1)
-    reporter.update(status)
-    first_count = len(caplog.records)
-    status.update(rho=.3, warn_reason="GPU front rank is noisy but broad probes remain sound (rho=0.3)")
-    now[0] = 59.999
-    reporter.update(status)
-    assert len(caplog.records) == first_count
-    now[0] = 60
-    reporter.update(status)
-    assert len(caplog.records) == 2 * first_count
-    status["warn_reason"] = None
-    reporter.update(status)
-    assert "state=recovered" in caplog.records[-1].getMessage()
-    status["halt_reason"] = "GPU proxy/exact broad-probe rank drift exceeded safety threshold (rho=.1)"
-    reporter.update(status)
-    assert "state=halt" in caplog.text and "action=stop" in caplog.text
-    assert status["halt_reason"].endswith("(rho=.1)")
-    assert all(len(r.getMessage()) <= 240 for r in caplog.records)
 
 
 def test_durations_and_long_record_splitting(caplog):

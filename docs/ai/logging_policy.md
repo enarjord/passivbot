@@ -175,35 +175,20 @@ Explicit flushes emit no additional updates.
 Seed clamps print one warning per collected context with counts and at most three key samples;
 original values, bounds, adjusted values and source details are DEBUG.
 
-GPU logs identify generation and work phase: seed proxy screening, seed exact validation, evolution
-proxy screening/full evaluation, exact-worker waits, generation completion, and completion. An
-event-driven minute snapshot separates evolution proxy candidates completed in finished evaluations
-in this invocation, proxy-screened and exact seeds, evolution exact budget/completions/pending,
-current Pareto size/feasibility, accepted
-members in this invocation, time since its last Pareto change (unknown after resume until a new
-change), and run elapsed time. Phase transitions are immediate. Full optimizer options are DEBUG.
+GPU optimizer summaries identify the current cohort phase, generation, complete candidate
+count, screened count, pending requests and elapsed time. Phase changes are immediate;
+unchanged summaries are at most once per minute. Completed candidates and Pareto members
+remain independently durable; log cadence never controls persistence.
 
-Temporal replay prints scenario-group/stage context at start and correlates compact updates and
-completion with a replay ID. A replay evaluates one candidate batch across its historical bars
-(candle time steps); these bars and bars/second are batch-wide time steps, not candidate evaluations.
-History chunks bound the bars handled by each GPU kernel dispatch. Start logs show chunk size and
-updates/completion show actual kernel dispatch counts. Scenario-group progress separately reports
-completed candidate batches and candidate-scenario evaluations; with adaptive batching it does not
-invent a total batch count. Group context identifies scenarios sharing a compatible evaluation pass.
-Replay and group INFO progress are at most once per minute; intermediate replay updates are DEBUG.
-Use readable durations and explicitly scoped estimates: `eta_batch`, `eta_group`, and `eta_seed`;
-none is a whole-run estimate. `eta_generation` estimates the current ask/tell generation
-from the median of up to five completed generations in this invocation. It is unknown for the first
-generation, outside an active generation, and after an overrun; it does not predict CPU admission
-waits or the whole optimization. Include the currently applied exact-worker count. Exact seed validation reports minute-spaced completed/in-flight/queued counts
-while waiting, and immediate start/completion. Its ETA uses only completions in the current run;
-without such evidence it is unknown. Auto-tune logs distinguish requested/effective batch limits,
-starting batch/source, trial/retained/accepted width, throughput evidence and reason. Proxy drift
-warnings show condition, action, sample evidence and thresholds on transition and at most once per
-minute for unchanged conditions; numeric churn does not create new warning signatures. Recovery
-and safety halts are immediate, with full diagnostic detail at DEBUG and unchanged halt decisions.
-Presentation state is transient and never affects selection,
-result persistence, checkpoints, interruption, or worker failure policy.
+Temporal replay start/update/completion records carry a replay ID, historical-bar progress,
+actual command count and a scoped `eta_batch`. Bar counts are batch-wide time steps, not
+candidate evaluations. Replay INFO updates are at most once per minute; intermediate
+updates are DEBUG. Scenario/group context appears when supplied by a direct replay caller.
+The async service's worker progress must not pretend to know CPU search policy or generation.
+Auto-tune logs distinguish trial, accepted and retained widths with completed-work evidence
+and reasons. Command-duration targets are observational, not preemption guarantees.
+Presentation state is transient and never affects selection, persistence, checkpoints,
+interruption or worker failure policy.
 
 ## Fallback Visibility
 

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import optimize
-from optimization.backends.gpu_native_backend import run_backend
+from optimization.backends.gpu_backend import run_backend
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 from optimization.gpu.executor import GpuBacktestService, ReplayResult
 from optimization.native_checkpoint import load_checkpoint
@@ -29,7 +29,7 @@ def inputs(manager, *, n_obj=2):
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "128",
     ]))
-    config["optimize"].update(backend="gpu_native", population_size=4, iters=8, seed=12)
+    config["optimize"].update(backend="gpu", population_size=4, iters=8, seed=12)
     config["optimize"]["pymoo"]["algorithm"] = "nsga2" if n_obj == 2 else "nsga3"
     config["optimize"]["bounds"] = {}
     for side in ("long", "short"):
@@ -93,6 +93,25 @@ def guard_cpu(monkeypatch):
     monkeypatch.setattr(native, "CudaBacktestService", FakeService)
     FakeService.rows = []
     FakeService.failure = None
+
+
+@pytest.mark.parametrize("state", [
+    {"backend": "gpu_native", "version": 2},
+    {"backend": "gpu", "version": 2},
+    {"seed_bootstrap_complete": False},
+])
+def test_pre_cutover_checkpoint_cannot_supply_gpu_fitness(tmp_path, state):
+    checkpoint = tmp_path / "checkpoint.pkl"
+    checkpoint.write_bytes(pickle.dumps(state))
+    with pytest.raises(ValueError, match="compatible native checkpoint"):
+        load_checkpoint(checkpoint, {})
+
+
+def test_removed_checkpoint_class_has_a_fresh_run_instruction(tmp_path):
+    checkpoint = tmp_path / "checkpoint.pkl"
+    checkpoint.write_bytes(b"coptimization.backends.gpu_native_backend\nNativeSearchProblem\n.")
+    with pytest.raises(ValueError, match="start a fresh run.*saved configs"):
+        load_checkpoint(checkpoint, {})
 
 
 @pytest.mark.parametrize("n_obj,constrained", [(2, True), (2, False), (4, True)])
@@ -200,7 +219,7 @@ def test_native_contract_and_checkpoint_reject_other_engines_or_precision(monkey
 @pytest.mark.parametrize("fail_preparation", [False, True])
 def test_cpu_pipeline_starts_gpu_and_records_before_preparing_full_window(monkeypatch, tmp_path, fail_preparation):
     guard_cpu(monkeypatch)
-    import optimization.backends.gpu_native_backend as backend
+    import optimization.backends.gpu_backend as backend
     import optimization.gpu.native as native
     from optimization.native_planning import NativeCandidatePlanner
 

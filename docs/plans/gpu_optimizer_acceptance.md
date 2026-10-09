@@ -11,7 +11,7 @@ Dated decisions and prior measurements are preserved in the
 
 | Requirement | Evidence | Scope and remaining limits |
 | --- | --- | --- |
-| CPU search, GPU execution | `gpu_native_backend.py` uses ask/tell and canonical CPU scoring; `gpu.native`, `executor`, `datasets` and `residency` own execution independently of evolution | The service is reusable outside optimization. EMA/TM multicoin adapters share a private strategy-neutral allocation/retry owner with explicit parameter layouts; public legacy names and preparation helpers remain. |
+| CPU search, GPU execution | `gpu_backend.py` uses ask/tell and canonical CPU scoring; `gpu.native`, `executor`, `datasets` and `residency` own execution independently of evolution | The service is reusable outside optimization. EMA/TM multicoin adapters share a private strategy-neutral allocation/retry owner with explicit parameter layouts; public legacy names and preparation helpers remain. |
 | CPU request preparation isolation | `test_native_preparation_isolation.py` | Fresh processes prepare real candidate requests for both strategies with coin HSL enabled/disabled and unstuck enabled. GPU runtime, replay, Torch/CuPy and legacy benchmark imports are forbidden, as are CPU simulations. This does not replace the CPU optimizer/backtest/plot cutover checks. |
 | CPU optimize/backtest/plot isolation | `test_cpu_entrypoint_isolation.py` | Both strategies run actual CPU backtests and generate analysis/fill/equity/config exports plus PNG plots. DEAP and pymoo each start and resume two real CPU workers with GPU imports forbidden at interpreter startup. Tests keep the platform's default multiprocessing context. |
 | Immutable registered inputs | `test_gpu_datasets.py`, `test_gpu_service_acceptance_cuda.py` | Metadata and request parameters are snapshotted; borrowed views reject writes and source arrays remain unchanged after execution. The original owner must keep shared segments immutable and alive until service shutdown. |
@@ -70,8 +70,8 @@ by the contract; this design does not add a transaction journal or perfect searc
 | Resume state | Proxy evolution, exact-validation progress and pending validation metadata | CPU algorithm/cohort, complete fitness and separate partial screening evidence |
 | Tuning | GPU batch and CPU exact-worker coordination | Service width/accumulation and independent CPU consumption cadence |
 
-The gain is fewer authorities and independent ownership, not a promise of fewer files
-while both backends remain. `gpu_native_backend.py` delegates request preparation,
+The gain is fewer authorities and independent ownership. The retirement prototype removes
+the superseded validation implementation; publication remains acceptance-gated. `gpu_backend.py` delegates request preparation,
 collection, checkpoints and canonical scoring to focused CPU modules. CUDA code does
 not select survivors, evaluate limits or update Pareto. Cohort NSGA-II/III survival still
 waits for its evaluated offspring, while service completions, replenishment and storage
@@ -2125,3 +2125,22 @@ differs beyond the strict policy in five cases and fills/day in four;
 drawdown and completion pass all six. The other 153 fields per case remain
 policy-unassessed. Presence, finite values and small headline errors do not
 close per-metric acceptance, selection-materiality or full-search gates.
+
+## Local retirement prototype — acceptance pending
+
+The CUDA ask/tell implementation now occupies the existing `gpu` backend path in the
+local cutover prototype. Remove the intermediate backend, CPU validation pools/queues,
+drift probes, screened-seed policy, exact-worker tuner and obsolete replay calibration
+cache. Preserve service-owned completed-work width/delay tuning, physical history limits
+and adaptive temporal commands. Preserve independent direct-replay and CPU parity tools.
+
+The canonical GPU config has five settings: batch width, dispatch work ceiling, tuning
+mode, checkpoint interval and scenario screening. Population/search settings remain
+CPU-owned. Checkpoint version 3 rejects pre-cutover fitness; complete GPU results and
+partial selection evidence remain separate. Unsupported collateral/strategies are checked
+on the CPU before device preparation, including effective suite overrides.
+
+Local checks and documentation preparation are underway. This section is not a completed
+retirement gate: current verified CUDA caller checks, representative HSL resources,
+refreshed factual cohort comparisons, final cutover CLI/CPU isolation, independent review
+and all required CI remain prerequisites.

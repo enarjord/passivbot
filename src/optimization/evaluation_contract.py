@@ -134,7 +134,7 @@ def build_evaluation_contract(config: dict) -> dict:
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }
-    if config.get("optimize", {}).get("backend") == "gpu_native":
+    if config.get("optimize", {}).get("backend") == "gpu":
         # Authoritative GPU fitness must never inherit CPU/proxy-validation
         # compatibility. Source and dependency identities above include the
         # replay shader, CUDA lowering and host metric implementation.

@@ -2171,9 +2171,6 @@ class MpsSingleCoinProxy:
         *,
         end_step: int | None = None,
     ) -> list[dict]:
-        scratch_policy = getattr(self, "scratch_policy", None)
-        if scratch_policy is not None and candidates:
-            scratch_policy.activate(self)
         results: list[dict] = []
         torch = self._torch
         full_candle_count = max(
@@ -2225,7 +2222,7 @@ class MpsSingleCoinProxy:
         progress = _new_gpu_dispatch_progress(
             len(candidates),
             dispatch_batch_size,
-            adaptive=getattr(self, "batch_tuner", None) is not None,
+            adaptive=False,
         )
         for start, chunk in proxy_batches(
             self, candidates, dispatch_batch_size, end_step=effective_end_step
@@ -2543,6 +2540,8 @@ class MpsMulticoinProxy:
         factual_hsl: bool = False,
         factual_capacity_hints: dict | None = None,
     ):
+        from config.gpu import validate_gpu_backtest_config
+        validate_gpu_backtest_config(config)
         try:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
@@ -3248,7 +3247,7 @@ class MpsMulticoinProxy:
         progress = _new_gpu_dispatch_progress(
             len(candidates),
             dispatch_batch_size,
-            adaptive=getattr(self, "batch_tuner", None) is not None,
+            adaptive=False,
         )
         for start, chunk in proxy_batches(self, candidates, dispatch_batch_size):
             chunk_profile_started = (

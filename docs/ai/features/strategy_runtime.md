@@ -65,20 +65,16 @@ Optimizer selector contract:
 
 Seed evaluation contract:
 
-- Shared ingestion normalizes, clamps, quantizes, and deduplicates starting configs before each
-  backend applies its seed policy. GPU preparation and proxy setup use the bounds-clamped
-  input seed after fixed runtime and optimizer overrides. Bounds may change its enabled
-  sides relative to the input bot values; enabledness must remain fixed across the search.
-- CPU optimization exact-Rust evaluates every deduplicated seed before population trimming.
-- GPU `seed_bootstrap.mode=auto` exact-evaluates small pools and full-history proxy-screens pools
-  larger than `max_exact`. Screened pools exact-Rust validate a capped, constraint-aware diverse
-  proxy set; only that subset enters the authoritative exact archive.
-- Seed-bootstrap exact evaluations are recorded separately from the GPU evolutionary
-  `optimize.iters` budget. Exact fitness seeds the archive and vector-only initial sampling; exact
-  and proxy fitness must never share an NSGA objective matrix.
-- An incomplete bootstrap checkpoint owns its normalized seed plan. Resume does not depend on the
-  original seed files, including for anchored fine-tuning, and must recover any exact seed result
-  already flushed to durable history.
+- Shared ingestion normalizes, clamps, quantizes and deduplicates starting configs.
+  Canonical CPU preparation resolves bounds, anchors, fixed/runtime/scenario overrides and
+  effective side-enable views before compact GPU request encoding.
+- CPU optimizers evaluate every deduplicated seed with Rust CPU backtests. GPU optimization
+  evaluates every deduplicated seed and initial parent with its authoritative CUDA service.
+  Seed work is additional to the evolutionary `optimize.iters` budget.
+- Partial scenario-screening observations may select later offspring for full-suite evaluation;
+  they must never supply complete fitness, result records or Pareto membership.
+- Incomplete GPU checkpoints own normalized CPU search/cohort state and anchors, without
+  device handles or borrowed-memory names. Resume does not require original seed files.
 
 Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
 for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example

@@ -13,7 +13,7 @@ effects, use the standalone [GPU cohort benchmark](gpu_cohort_benchmark.md).
 The existing GPU simulator still has deliberate screening approximations. A passing
 comparison covers the selected inputs, metrics and policies; it does not certify all
 configurations. The development [contract](plans/gpu_optimizer_contract.md) tracks
-the work required before authoritative GPU optimization replaces screening/validation.
+the scoped evidence and numerical limitations of authoritative GPU optimization.
 
 ## Reproducible fixtures
 

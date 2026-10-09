@@ -3472,3 +3472,28 @@ Historical observations do not supersede those requirements or prove current acc
 - Complete the current 64-candidate, 22-metric factual cohort and six twenty-day, all-157-metric comparisons. HSL lifecycle timing agrees exactly in the cohort, while small strict drawdown ordering differences can still change a front. Preserve those differences and requested-limit evidence separately from general acceptance.
 - Identify the remaining coarse EMA-tail cutoff-bin average and logarithmic interval percentiles as distinct approximation consumers. Their former dependence on later CPU validation cannot establish authoritative native metric acceptance. Assess practical metric accuracy and selection effects before choosing a repair or an explicit bounded acceptance policy; do not silently widen tolerances.
 - Keep all 153 currently undefined per-metric policies visibly unassessed in each full-surface case. Finite output alone is functional evidence. Fixed-cohort selection diagnostics do not replace repeated-seed, full optimizer comparisons.
+
+### 2026-10-09 — Prepare final authoritative GPU cutover
+
+- Prepare the replacement in the existing `gpu` backend and remove the intermediate
+  optimizer backend, CPU validation pool/queue, drift, screened-seed and exact-worker
+  tuning responsibilities. Retain CPU search/cohort state, complete GPU fitness,
+  separate partial scenario selection and independent development parity tools.
+- Remove replay-owned calibration caches and scratch switching formerly coordinated
+  with CPU validation. Service-owned width/accumulation tuning, prepared history
+  ceilings and completed-command duration adaptation remain. No simulator or
+  precision change is required for retirement.
+- Keep five GPU execution/screening settings; search/population configuration remains
+  CPU-owned. Version 3 checkpoints reject earlier fitness, including removed Python
+  checkpoint classes, with fresh-run guidance. CPU preparation explicitly rejects
+  unsupported collateral/strategies before device imports and checks suite overrides.
+  Pre-cutover parameter preparation accepts a positive collateral cap despite the
+  simulation exclusion; the new regression closes that boundary.
+- The local optimizer suite passes 1,800 checks with 704 device-dependent skips.
+  Targeted native/ownership checks pass 258 with seven device skips; updated
+  checkpoint/preflight/progress/docs checks pass 39 without skips. All 181 affected
+  CPU optimizer/backtest/plot and Rust API callers pass with the verified extension.
+  This is local prototype evidence, not completed CUDA acceptance.
+- Keep retirement unpublished until representative factual resource/numerical
+  comparisons, current CUDA callers and cutover CLI controls pass, then obtain
+  independent current-head review and all required CI on development.

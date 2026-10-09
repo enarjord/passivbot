@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Replace GPU optimizer screening plus CPU validation with an authoritative asynchronous
+  CUDA backtest service and CPU-owned search, scenario screening, scoring and persistence.
+  Preserve CPU optimization and standalone backtests/plots. Remove obsolete validation,
+  drift and screened-seed controls; earlier GPU checkpoints require a fresh run.
+
+
 - EMA Anchor partial closes preserve valid minimum-size remainders when floating
   subtraction differs only by representation noise; genuinely undersized
   remainders still use full-position closes.

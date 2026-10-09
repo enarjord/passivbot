@@ -136,7 +136,7 @@ def test_two_side_choices_prepare_only_supported_topologies_and_reject_zero_side
 
 @pytest.mark.parametrize("duplicate_initial", [False, True])
 def test_native_anchors_survive_interrupt_and_resume_without_seed_files(monkeypatch, tmp_path, duplicate_initial):
-    from optimization.backends import gpu_native_backend as backend
+    from optimization.backends import gpu_backend as backend
 
     guard_cpu(monkeypatch)
     cohorts = {}
