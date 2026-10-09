@@ -33,7 +33,9 @@ Width one supplies isolated GPU metric references in two rounds. Fixed width
 eight and automatic execution run at least `--rounds` rounds each. Every result
 must retain its request/scenario identity and liquidation flag; metrics must
 agree with the width-one reference within eight float64 reduction ULPs. This
-permits machine-scale reduction differences, not float32 replay drift. Recovery
+permits machine-scale reduction differences, not float32 replay drift. Required
+result, ownership and integrity checks remain enabled under optimized Python
+execution. Recovery
 and weighted metrics are requested to include their history/reduction costs.
 
 The report separates first-use latency, warm median throughput, first completion

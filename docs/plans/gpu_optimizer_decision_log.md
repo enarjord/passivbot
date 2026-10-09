@@ -3173,3 +3173,35 @@ Historical observations do not supersede those requirements or prove current acc
   for insufficient per-scenario evidence. Keep report completion separate from
   tuner evidence sufficiency. Instrumentation is installed inside its cleanup
   scope so early CUDA setup failures cannot leave the replay method replaced.
+
+
+### 2026-10-09 — Preserve benchmark checks under optimized Python
+
+- Author review finds that Python assertions can disable required benchmark
+  result/integrity checks under optimized execution. Replace them with explicit
+  failures, retaining the same identity, metric, liquidation, residency and array
+  conditions. No simulation or comparison tolerance changes.
+- Corrupt/inconsistent result controls and an actual optimized-Python subprocess
+  confirm that result validation remains enabled. The accepted-path measurements
+  remain applicable; refresh real CUDA tool callers and fault cleanup on the final
+  guard implementation before publication.
+
+
+### 2026-10-09 — Complete default-window scenario trials
+
+- The larger bound completes after 151 automatic rounds and 59,904 exact results.
+  Base retains width 64 after larger/smaller trials; both smaller scenarios accept
+  width 128 after complete evidence windows. This exercises growth, rollback and
+  distinct scenario decisions without weakening evidence thresholds.
+- Shared inputs, one-device-dataset ownership, compact requested metrics, packing
+  cleanup and resource sampling pass. Record measured rates/resources in acceptance
+  while keeping causal speedup, global tuning optimality and broader project
+  acceptance unclaimed. Refresh final explicit-guard callers before publication.
+
+
+- Final explicit-guard validation passes both optimized-Python CUDA callers with
+  72 exact results and clean resources. Injected comparator rejection propagates,
+  restores instrumentation/CPU guards and closes the worker. All 27 focused
+  tool/window controls pass; checked source remains unchanged. Documentation
+  checks pass with only the existing size warnings. The slice is ready for
+  current-head independent review and required CI on development.

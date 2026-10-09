@@ -82,3 +82,37 @@ def test_scenario_preparation_aligns_dates_market_indices_and_requested_start():
     assert settings == {"B": {"first_valid_index": 0, "last_valid_index": 4},
                         "__meta__": {"requested_start_ts": 300_000}}
     assert config["backtest"]["start_date"] == "old" and markets["B"]["last_valid_index"] == 9
+
+
+@pytest.mark.parametrize('changes,message', [
+    ({'dataset_id': 'other'}, 'identity'),
+    ({'request_id': 'other'}, 'identity'),
+    ({'metrics': {}}, 'metric set'),
+    ({'metrics': {'x': float('nan')}}, 'Nonfinite'),
+    ({'metrics': {'x': 2.0}}, 'Metrics differ'),
+    ({'liquidated': True}, 'Liquidation differs'),
+])
+def test_result_validation_rejects_corrupt_or_inconsistent_results(changes, message):
+    reference = SimpleNamespace(dataset_id='a', request_id='r', metrics={'x': 1.0}, liquidated=False)
+    row = SimpleNamespace(**(vars(reference) | changes))
+    with pytest.raises(RuntimeError, match=message):
+        benchmark.validated_rounding(reference, row, 'a', 'r', ['x'])
+
+
+def test_result_validation_remains_enabled_under_optimized_python():
+    import subprocess
+    import sys
+
+    completed = subprocess.run([sys.executable, '-O', '-c', '''
+from types import SimpleNamespace
+from tools.gpu_service_benchmark import validated_rounding
+row = SimpleNamespace(dataset_id='wrong', request_id='r', metrics={'x': 1.0}, liquidated=False)
+try:
+    validated_rounding(None, row, 'a', 'r', ['x'])
+except RuntimeError as error:
+    if 'identity' not in str(error):
+        raise
+else:
+    raise SystemExit('Optimized Python skipped result validation')
+'''], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr

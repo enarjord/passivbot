@@ -141,6 +141,26 @@ def enough_windows(evidence, datasets, required):
                for name in datasets)
 
 
+def validated_rounding(reference, row, dataset_id, request_id, metrics):
+    """Validate benchmark results even when Python assertions are disabled."""
+    from tools.gpu_cohort_benchmark import _metric_rounding
+
+    if (row.dataset_id, row.request_id) != (dataset_id, request_id):
+        raise RuntimeError(f"Result identity differs for request {request_id!r}")
+    if set(row.metrics) != set(metrics):
+        raise RuntimeError(f"Requested metric set differs for request {request_id!r}")
+    if not all(math.isfinite(value) for value in row.metrics.values()):
+        raise RuntimeError(f"Nonfinite result for request {request_id!r}")
+    if reference is None:
+        return {}
+    differences = _metric_rounding(reference.metrics, row.metrics)
+    if differences is None:
+        raise RuntimeError(f"Metrics differ from GPU reference for request {request_id!r}")
+    if reference.liquidated != row.liquidated:
+        raise RuntimeError(f"Liquidation differs from GPU reference for request {request_id!r}")
+    return differences
+
+
 @contextmanager
 def forbid_cpu_simulations(backtest):
     def forbidden(*unused, **keywords):
@@ -219,9 +239,11 @@ def main(argv=None):
             report["prepared"].append(dict(name=name, coins=selected, rows=span))
         with master.attach() as shared:
             report["fixture_sha256"] = fixture_digest(shared)
-        assert report["fixture_sha256"] == fixture_digest((inputs[1], inputs[3], inputs[4]))
+        if report["fixture_sha256"] != fixture_digest((inputs[1], inputs[3], inputs[4])):
+            raise RuntimeError("Prepared shared arrays differ from the source fixture")
         if args.prepare_only:
-            assert not any(name in sys.modules for name in ["torch", "cupy", "optimization.gpu.mps_kernel"])
+            if any(name in sys.modules for name in ["torch", "cupy", "optimization.gpu.mps_kernel"]):
+                raise RuntimeError("Preparation imported a GPU execution module")
             Path(args.report).write_text(json.dumps(report, indent=2) + "\n")
             print("Prepared three shared-array scenarios without simulation", flush=True)
             return 0
@@ -229,7 +251,7 @@ def main(argv=None):
         import backtest
         from optimization.gpu.native import CudaBacktestService
         from optimization.gpu.executor import BacktestRequest
-        from tools.gpu_cohort_benchmark import _metric_rounding, _observe_batches
+        from tools.gpu_cohort_benchmark import _observe_batches
         from optimization.gpu.service import MpsMulticoinProxy
         controls.enter_context(forbid_cpu_simulations(backtest))
         original = MpsMulticoinProxy.evaluate_results
@@ -250,7 +272,8 @@ def main(argv=None):
                                        packing_entries=len(residency._entries),
                                        resident_entries=sum(any(isinstance(value, torch.Tensor)
                                            for value in entry["data"].values()) for entry in residency._entries.values())))
-                assert owner_rows[-1]["resident_entries"] == 1
+                if owner_rows[-1]["resident_entries"] != 1:
+                    raise RuntimeError("Replay retains more than one device dataset")
                 return result
             torch.cuda.reset_peak_memory_stats()
             phase = dict(width="auto" if width is None else width, rounds=[], batches=[],
@@ -287,17 +310,12 @@ def main(argv=None):
                             name, index, request_id, submitted = pending[future]
                             row = future.result(timeout=600)
                             now = time.perf_counter()
-                            assert (row.dataset_id, row.request_id) == (name, request_id)
-                            assert set(row.metrics) == set(metrics), (request_id, sorted(row.metrics))
-                            assert all(np.isfinite(value) for value in row.metrics.values())
                             key = name, index
-                            if width != 1:
-                                assert key in references, key
-                            if key not in references:
-                                references[key] = row
-                            differences = _metric_rounding(references[key].metrics, row.metrics)
-                            assert differences is not None, (key, references[key].metrics, row.metrics)
-                            assert references[key].liquidated == row.liquidated
+                            if width != 1 and key not in references:
+                                raise RuntimeError(f"Missing width-one reference for {key!r}")
+                            differences = validated_rounding(
+                                references.get(key), row, name, request_id, metrics)
+                            references.setdefault(key, row)
                             rounding += bool(differences)
                             latencies.append(now - submitted)
                             completions.append(now - started)
@@ -315,7 +333,8 @@ def main(argv=None):
                     phase["torch_peak_allocated"] = torch.cuda.max_memory_allocated()
                     phase["torch_peak_reserved"] = torch.cuda.max_memory_reserved()
                 phase["spill_removed_after_close"] = sampler.directory is None or not sampler.directory.exists()
-                assert phase["spill_removed_after_close"]
+                if not phase["spill_removed_after_close"]:
+                    raise RuntimeError("Packed spill files remain after service close")
             finally:
                 MpsMulticoinProxy.evaluate_results = original
                 sampler.stop.set()
@@ -326,7 +345,8 @@ def main(argv=None):
                 evidence, datasets, args.tuning_windows)
             with master.attach() as shared:
                 phase["source_arrays_unchanged"] = fixture_digest(shared) == report["fixture_sha256"]
-            assert phase["source_arrays_unchanged"]
+            if not phase["source_arrays_unchanged"]:
+                raise RuntimeError("Shared source arrays changed during execution")
             phase["owner_snapshots"] = owner_rows
             phase["resource_samples"] = sampler.rows
             phase["sampling_errors"] = sampler.errors

@@ -1644,3 +1644,34 @@ window each for early/late scenarios. Their width-128 trials accumulate about
 22 seconds toward the unchanged 30-second threshold. A larger bounded run is
 required before reporting completed trial decisions; do not shorten the evidence
 threshold or present the partial run as proof of convergence.
+
+
+The extended current-demand comparison uses the same EMA recipe with
+`--max-rounds 256`. It finishes successfully after 151 automatic rounds, with
+59,904 results matching isolated GPU references exactly and no reduction-rounding
+differences. The base scenario consumes fourteen windows and retains width 64
+after rejecting width-128 and width-32 trials. Early and late each complete two
+windows and accept width 128: measured per-window rates increase from
+207.546 to 412.129 and from 213.831 to 421.634 candidates/s respectively.
+These are scenario-specific measured decisions, not a globally optimal policy.
+
+Warm cohort rates for widths one, eight and automatic execution are 1.645, 12.131
+and 71.781 requests/s. First reference rounds take 230.213 and 233.413 seconds,
+slower than the earlier baseline. Different durations, dispatch shapes and
+operating conditions prevent a causal whole-search speedup claim.
+Automatic Torch allocation/reservation peaks are 26,851,328/50,331,648 bytes;
+sampled process-tree RSS/global device peaks are 1,304,571,904/1,513,095,168 bytes.
+Packing peaks at 4,888,848 bytes, with three cached entries and one resident
+dataset in every owner snapshot. Arrays remain unchanged, spill files are removed
+and sampling reports no errors. The checked source remains unchanged through
+completion. The broader resource, HSL, parity and search-quality gates remain open.
+
+
+Final explicit-failure tool checks use optimized Python for both strategy CLIs:
+three coins, 2,880 bars, two candidates and two rounds, producing 72 exact results
+across widths one/eight/automatic. Residency, unchanged inputs and spill cleanup
+pass without sampling errors. An injected comparator rejection propagates on the
+actual optimized CUDA path; replay instrumentation and CPU guards are restored
+and the worker closes. All 27 focused tool/window controls pass with the verified
+extension, and the final checked source remains unchanged. This strengthens
+failure detection without changing simulation or comparison tolerances.
