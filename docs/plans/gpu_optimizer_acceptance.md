@@ -2009,6 +2009,19 @@ reports an undersized remainder.
 Genuinely undersized remainders
 still trigger full closes; GPU strategy arithmetic remains unchanged.
 
+The repair's domain is narrower than the ordinary quantity rule. For a positive
+clip, a directly computed remainder at least `min_qty` keeps the clip unchanged.
+An undersized remainder can be repaired only when its deficit is at most
+`4 * f64::EPSILON * max(abs(position), abs(clip), abs(min_qty))`. Each operand
+must be finite and its next larger f64 spacing must be strictly smaller than
+`abs(qty_step)`. Corrected nearest step counts must be finite and no greater than
+`2^53` in magnitude; the position count minus the clip count must meet the minimum
+count. The fused residual corrects rounding in the division before that comparison.
+Failure of any repair condition retains the ordinary full-close decision for an
+undersized remainder. These bounds describe this repair, rather than a new
+configuration restriction or a general quantity tolerance. Keep the correction
+local unless another actual caller needs these same semantics.
+
 The corrected reference produces 1,020 fills and exactly matches GPU fill rate,
 completion ratio and HSL time-in-red. ADG absolute error is approximately
 `2.32e-8`, worst-drawdown error `1.01e-7`, and recovery p95 error `0.0020833`
@@ -2180,3 +2193,17 @@ Torch reserved peak is 25,165,824 bytes and packing peak is 10,033,620 bytes. Pr
 The source-backed continuation limitation is precise: `replay_factual_hsl` begins at `max(minute - lookback, 0)` before applying the factual cutoff, and `hsl_advance_scope` requires the same effective start, budget and factual identity. A sliding lookback, changed fills/budget, expired history or numerical guard therefore reconstructs fresh. A held-position continuation speedup cannot be extrapolated to this workload. These observations identify possible costs; this benchmark does not isolate the fraction attributable to each condition.
 
 The corresponding larger Trailing Martingale measurement remains open. These observations do not close numerical, final cutover or general resource acceptance by themselves.
+
+Before further marginal specialization, profile continuation attempts and successes,
+fresh-reconstruction reasons, reconstructed minute/pair counts and composition cost
+on busy workloads. Distinguish moving lookbacks, changed factual inputs/budgets and
+numerical safeguards; preserve those correctness guards. Instrumented measurements
+must identify their overhead and remain separate from uninstrumented timings.
+
+Batch-width tuning currently scores throughput and releases usable metrics only
+after a complete physical batch. Its command-duration controller does not bound
+that result latency. Evaluate a soft completion-duration target within the existing
+width policy, including slow single-candidate cases and cold/warm evidence, before
+claiming responsive automatic tuning. Do not add a separate tuning subsystem or
+interpret zero completed evidence windows as convergence. Representative optimizer
+comparisons remain distinct from fixed-cohort ranking and service throughput.

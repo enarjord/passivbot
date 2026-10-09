@@ -3535,3 +3535,21 @@ Historical observations do not supersede those requirements or prove current acc
   work. Describe the implemented completed-command controller separately from width
   tuning. This is documentation alignment; execution, numerical policy and search
   behavior are unchanged.
+
+### 2026-10-09 — Prioritize busy HSL and usable-result latency
+
+- Compact factual storage, eviction-safe capacity hints and neutral replay ownership
+  resolve their earlier resource/ownership problems. Guarded continuation remains
+  a partial scaling improvement; busy reconstruction cost is still an open issue.
+- Prioritize representative continuation/fallback/composition profiling before more
+  marginal kernel specialization. Preserve factual and numerical correctness guards;
+  do not treat stable held-position speedups as general workload evidence.
+- Evaluate usable-result latency alongside throughput in the existing batch-width
+  policy. A soft batch-completion duration target is a candidate design, not a
+  delivered guarantee; command-duration adaptation alone does not release fitness.
+- State the EMA minimum-remainder repair's f64 spacing, cancellation and integer
+  cardinality domain explicitly. Retain its regressions and local ownership; a shared
+  arithmetic helper requires another concrete consumer.
+- Keep representative optimizer evidence, practical numerical materiality and the
+  current cutover/device/review gates ahead of retirement publication. These priorities
+  do not claim completed profiling or change execution or numerical semantics.
