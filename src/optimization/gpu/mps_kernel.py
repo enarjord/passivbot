@@ -2313,6 +2313,7 @@ class _MulticoinReplayRunner:
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        compact_recovery_output: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
         raw_strategy_growth_enabled: bool = False,
@@ -2339,6 +2340,7 @@ class _MulticoinReplayRunner:
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
         self.hsl_raw_tail_enabled = bool(hsl_raw_tail_enabled)
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
+        self.compact_recovery_output = bool(compact_recovery_output)
         self.weighted_volume_enabled = bool(weighted_volume_enabled)
         self.raw_strategy_risk_enabled = bool(raw_strategy_risk_enabled)
         self.raw_strategy_growth_enabled = bool(raw_strategy_growth_enabled)
@@ -3082,10 +3084,17 @@ class _MulticoinReplayRunner:
             _decode_entry_interval_outputs(entry_interval_stats, entry_interval_counts)
         )
         if self.recovery_distribution_enabled:
-            output["strategy_eq_recovery_samples"] = recovery_samples
-            output["strategy_eq_recovery_sample_interval_days"] = (
-                self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
-            )
+            sample_interval_days = self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
+            if self.compact_recovery_output:
+                # Reduce accepted physical replays before logical sub-batches
+                # clone/join outputs. Raw histories remain available to direct
+                # diagnostic callers through the default output mode.
+                output["strategy_eq_recovery_distribution"] = strategy_eq_recovery_distribution_from_samples(
+                    recovery_samples, sample_interval_days=sample_interval_days,
+                )
+            else:
+                output["strategy_eq_recovery_samples"] = recovery_samples
+                output["strategy_eq_recovery_sample_interval_days"] = sample_interval_days
         if self.weighted_volume_enabled:
             output["volume_pct_per_day_avg_w"] = weighted_volume_from_samples(
                 volume_samples, output["first_eq_ts"], output["last_eq_ts"],
@@ -3266,6 +3275,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        compact_recovery_output: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
         raw_strategy_growth_enabled: bool = False,
@@ -3298,6 +3308,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            compact_recovery_output=compact_recovery_output,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             raw_strategy_growth_enabled=raw_strategy_growth_enabled,
@@ -3547,6 +3558,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        compact_recovery_output: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
         raw_strategy_growth_enabled: bool = False,
@@ -3588,6 +3600,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            compact_recovery_output=compact_recovery_output,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             raw_strategy_growth_enabled=raw_strategy_growth_enabled,
@@ -3838,6 +3851,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        compact_recovery_output: bool = False,
         weighted_volume_enabled: bool = False,
         raw_strategy_risk_enabled: bool = False,
         raw_strategy_growth_enabled: bool = False,
@@ -3871,6 +3885,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            compact_recovery_output=compact_recovery_output,
             weighted_volume_enabled=weighted_volume_enabled,
             raw_strategy_risk_enabled=raw_strategy_risk_enabled,
             raw_strategy_growth_enabled=raw_strategy_growth_enabled,

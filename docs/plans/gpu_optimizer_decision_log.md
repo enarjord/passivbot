@@ -2933,3 +2933,48 @@ Historical observations do not supersede those requirements or prove current acc
   callers with a verified extension, plus independent current-head review and CI,
   before integration. Keep this ownership cleanup separate from guarded HSL
   continuation and its numerical/performance acceptance.
+
+
+### 2026-10-08 — Compact recovery output within shared replay ownership
+
+- A native policy-switch control with two coins/both sides and 512 minute bars
+  shows raw recovery histories escaping physical replay admission. Set a 200,000-byte
+  scratch budget and retain a legal 512-record factual estimate after HSL-off work;
+  a 24-request HSL-on cohort splits into one-candidate replays. Factual scratch,
+  the recovery owner, cloned histories and their joined allocation coexist at
+  248,388 bytes, before subsequent reduction scratch. This is a bounded history
+  observation, not total device accounting or a capacity-learning reproduction.
+- Let native metric-service runners reduce each accepted physical recovery history
+  before sub-batch cloning/joining. Preserve raw output as the direct runner default
+  for diagnostics and legacy consumers. Keep the existing GPU recurrence/reducer
+  and metric semantics; do not reduce rejected factual attempts into fitness.
+- Extend the focused shared-owner extraction to own this compact result transport.
+  Reject malformed or ambiguous pre-reduced results; preserve the original opt-in
+  raw postprocessor. Nine host transport checks pass. Updated liquidation controls
+  observe reducer inputs, preserving raw-trajectory evidence without relying on
+  raw histories being returned from the metric service. Actual CUDA regression,
+  broader callers, independent review and CI remain required before integration.
+
+
+### 2026-10-09 — Complete shared-owner and compact-result validation
+
+- Affected validation passes 706 host/source/device checks: 154 execution/data/
+  residency/tuning, 301 service, fifteen layout controls, 35 recovery, 116 factual
+  replay, 53 device/transport, four optional-history, sixteen expired-history and
+  twelve real CLI/data/service cases. The latter retain CPU-forbidden optimizer
+  bootstrap/resume coverage. All checked sources remain unchanged after each run;
+  the final derivative changes only two budget tests and the acceptance record.
+- Both strategy regressions fail the preceding raw recovery transport at the
+  specific 248,388-byte allocation overlap. Corrected compact transport combines
+  672 bytes of recovery summaries for 24 requests and preserves results against
+  raw GPU diagnostic controls. No comparison tolerance or numerical recurrence
+  changes. Rust and shaders are unchanged in this slice.
+- Earlier fixed-width volume/equity controls also fail preceding code: HSL-off
+  releases its initial factual allowance, permitting widths six/five. Correct
+  tests to assert the effective physical history envelope; do not constrain
+  production scheduling merely to preserve an outdated width expectation.
+- Keep guarded continuation as a separate reviewed slice. Integrate the actual
+  development head, validate affected combined callers and obtain independent
+  current-head review plus required CI before merging the shared-owner slice.
+  Representative resources, numerical materiality and replacement retirement
+  remain whole-project gates.

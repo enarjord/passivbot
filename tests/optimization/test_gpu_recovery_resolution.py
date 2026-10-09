@@ -136,19 +136,17 @@ def test_native_recovery_observes_raw_strategy_liquidation_equity(
     assert equities[-1, 3] < 0 < equities[-1, 1]
     expected = equities[:, 3]
     observed = []
-    base = mps_kernel._MulticoinReplayRunner
-    original = base.run
+    original = mps_kernel.strategy_eq_recovery_distribution_from_samples
 
-    def capture(self, *args, **kwargs):
-        output = original(self, *args, **kwargs)
-        row = output["strategy_eq_recovery_samples"][0]
+    def capture(samples, **kwargs):
+        row = samples[0]
         observed.append(row[row.isfinite()].cpu().numpy().copy())
-        return output
+        return original(samples, **kwargs)
 
     def forbidden(*args, **kwargs):
         pytest.fail("native execution must not invoke CPU simulations")
 
-    monkeypatch.setattr(base, "run", capture)
+    monkeypatch.setattr(mps_kernel, "strategy_eq_recovery_distribution_from_samples", capture)
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
     monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
@@ -204,9 +202,12 @@ def test_native_dispatch_accounts_for_opt_in_recovery_memory(
         dispatches.append(len(parameters))
         result = original_run(self, parameters, **kwargs)
         assert len(self._recovery_buffers) == 1
-        finite = result["strategy_eq_recovery_samples"].isfinite().sum(dim=1)
+        assert "strategy_eq_recovery_samples" not in result
+        assert result["strategy_eq_recovery_distribution"].shape == (len(parameters), 7)
+        finite = self._recovery_buffers[len(parameters)].isfinite().sum(dim=1)
         count = ((result["last_eq_ts"] - result["first_eq_ts"]) / 60_000 + 1)
         np.testing.assert_array_equal(finite.cpu().numpy(), count.cpu().numpy())
+        assert len(parameters) * self._history_bytes_per_candidate() <= self.hsl_scratch_budget_bytes
         return result
     monkeypatch.setattr(base, "__init__", prepare)
     monkeypatch.setattr(base, "run", run)
@@ -216,5 +217,94 @@ def test_native_dispatch_accounts_for_opt_in_recovery_memory(
             futures = [service.submit(BacktestRequest(str(i), "recovery", {})) for i in range(8)]
             results = [future.result(timeout=120) for future in futures]
     assert sum(dispatches) == 8
-    assert max(dispatches) == 2
+    # Inactive native HSL releases its initial factual allowance; later work may
+    # grow beyond the first width while respecting the effective history envelope.
+    assert min(dispatches) >= 1
     assert all(result.metrics == results[0].metrics for result in results)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtime, monkeypatch, strategy):
+    import weakref
+    import backtest
+    from optimization.gpu import mps_kernel
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from tools.gpu_parity import build_parser, fixture_inputs, _native_dataset
+
+    inputs = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", "both", "--coins", "2", "--bars", "512",
+        "--hsl", "unified", "--hsl-red-threshold", ".99",
+    ]))
+    if strategy == "trailing_martingale":
+        # Keep factual activity below the retained estimate: this control isolates
+        # result storage, while overflow/capacity learning have separate coverage.
+        for side in ("long", "short"):
+            params = inputs[0]["bot"][side]["strategy"][strategy]
+            for section in ("entry", "close"):
+                params[section].update(
+                    threshold_base_pct=.9, threshold_we_weight=0.,
+                    threshold_volatility_1m_weight=0., threshold_volatility_1h_weight=0.,
+                )
+    base = mps_kernel._MulticoinReplayRunner
+    initial, run, concatenate = base.__init__, base.run, cuda_runtime.cat
+    current, dispatches, raw_joins, compact_joins = {}, [], [], []
+    raw_control = False
+
+    def prepare(self, *args, **kwargs):
+        if raw_control:
+            kwargs["compact_recovery_output"] = False
+        initial(self, *args, **kwargs)
+        self.hsl_scratch_budget_bytes = 200_000
+        current["owner"] = weakref.ref(self)
+
+    def execute(self, parameters, **kwargs):
+        result = run(self, parameters, **kwargs)
+        if self.hsl_fact_capacity == 0:
+            # Seed a legal retained estimate to isolate policy-changing admission.
+            # Capacity learning/residency are covered independently.
+            self.hsl_fact_capacity_learned = 512
+        dispatches.append(len(parameters))
+        return result
+
+    def capture(values, *args, **kwargs):
+        result = concatenate(values, *args, **kwargs)
+        if len(values) > 1 and all(isinstance(v, cuda_runtime.Tensor)
+                                  and v.device.type == "cuda" and v.ndim == 2 for v in values):
+            if result.shape[1] == 513:
+                owner = current["owner"]()
+                factual = sum(v.numel() * v.element_size()
+                              for pair in owner._hsl_scratch_buffers.values() for v in pair)
+                recovery = sum(v.numel() * v.element_size() for v in owner._recovery_buffers.values())
+                clones = sum(v.numel() * v.element_size() for v in values)
+                joined = result.numel() * result.element_size()
+                raw_joins.append(factual + recovery + clones + joined)
+            elif result.shape == (24, 7):
+                compact_joins.append(result.numel() * result.element_size())
+        return result
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("native recovery execution must not invoke CPU simulation")
+    monkeypatch.setattr(base, "__init__", prepare)
+    monkeypatch.setattr(base, "run", execute)
+    monkeypatch.setattr(cuda_runtime, "cat", capture)
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    monkeypatch.setattr(backtest, "run_backtest", forbidden)
+    monkeypatch.setattr(backtest.pbr, "run_backtest_bundle", forbidden)
+    metrics = (*METRICS, "hard_stop_time_in_red_pct")
+    with _native_dataset(inputs, "binance", metrics) as dataset:
+        with CudaBacktestService(batch_size=24, max_pending=32, max_batch_delay=.1, tuning_mode="off") as service:
+            service.register_dataset("policy", dataset)
+            service.submit(BacktestRequest("off", "policy", {"long_hsl_enabled": 0., "short_hsl_enabled": 0.})).result(timeout=600)
+            futures = [service.submit(BacktestRequest(str(i), "policy", {})) for i in range(24)]
+            results = [future.result(timeout=600) for future in futures]
+        assert 24 in dispatches and dispatches.count(1) >= 25
+        assert not raw_joins, f"Raw recovery histories escaped physical admission: {raw_joins} > 200000"
+        assert compact_joins == [24 * 7 * 4]
+        assert all(result.metrics == results[0].metrics for result in results)
+        # A separate raw diagnostic mode remains available and gives the same metrics.
+        raw_control = True
+        with CudaBacktestService(batch_size=1, tuning_mode="off") as service:
+            service.register_dataset("raw", dataset)
+            control = service.submit(BacktestRequest("raw", "raw", {})).result(timeout=600)
+        assert control.metrics == results[0].metrics

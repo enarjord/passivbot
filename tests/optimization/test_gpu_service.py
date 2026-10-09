@@ -333,6 +333,40 @@ def test_enabled_hsl_rejects_invalid_lookback(days):
         _hsl_lookback_bars({"pnls_max_lookback_days": days}, hsl_enabled=True)
 
 
+@pytest.mark.parametrize("malformed", [None, "dtype", "device", "columns", "rows", "bounds", "ambiguous", "non_tensor"])
+def test_compact_recovery_output_remains_on_device_and_rejects_bad_transport(monkeypatch, malformed):
+    class Device:
+        type = "cuda"
+    class Tensor:
+        device = Device()
+        dtype = "float32"
+        shape = (2, 7)
+        ndim = 2
+        def cpu(self):
+            pytest.fail("compact recovery transport must not copy to CPU")
+    fake = ModuleType("optimization.gpu.mps_kernel")
+    fake.torch = SimpleNamespace(Tensor=Tensor, float32="float32")
+    fake.MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
+    fake.strategy_eq_recovery_distribution_from_samples = lambda *a, **k: pytest.fail("compact recovery must not reduce twice")
+    monkeypatch.setitem(sys.modules, "optimization.gpu.mps_kernel", fake)
+    stats, bounds = Tensor(), Tensor()
+    bounds.shape = (2,)
+    output = {"strategy_eq_recovery_distribution": stats, "last_eq_ts": bounds}
+    if malformed == "dtype": stats.dtype = "float64"
+    elif malformed == "device": stats.device = SimpleNamespace(type="cpu")
+    elif malformed == "columns": stats.shape = (2, 6)
+    elif malformed == "rows": stats.shape = (1, 7)
+    elif malformed == "bounds": output.pop("last_eq_ts")
+    elif malformed == "ambiguous": output["strategy_eq_recovery_samples"] = object()
+    elif malformed == "non_tensor": output["strategy_eq_recovery_distribution"] = object()
+    if malformed:
+        with pytest.raises(RuntimeError, match="(Invalid compact GPU|Ambiguous GPU) recovery output"):
+            _mps_strategy_eq_recovery_distribution(output, {"strategy_eq_recovery_days_mean"})
+    else:
+        assert _mps_strategy_eq_recovery_distribution(output, {"strategy_eq_recovery_days_mean"}) is stats
+        assert _mps_strategy_eq_recovery_distribution(output, {"adg_strategy_eq"}) is None
+
+
 def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypatch):
     needed = {"strategy_eq_recovery_days_p99"}
 

@@ -11,7 +11,7 @@ Dated decisions and prior measurements are preserved in the
 
 | Requirement | Evidence | Scope and remaining limits |
 | --- | --- | --- |
-| CPU search, GPU execution | `gpu_native_backend.py` uses ask/tell and canonical CPU scoring; `gpu.native`, `executor`, `datasets` and `residency` own execution independently of evolution | The service is reusable outside optimization. Replay adapters still retain legacy names and preparation helpers. |
+| CPU search, GPU execution | `gpu_native_backend.py` uses ask/tell and canonical CPU scoring; `gpu.native`, `executor`, `datasets` and `residency` own execution independently of evolution | The service is reusable outside optimization. EMA/TM multicoin adapters share a private strategy-neutral allocation/retry owner with explicit parameter layouts; public legacy names and preparation helpers remain. |
 | CPU request preparation isolation | `test_native_preparation_isolation.py` | Fresh processes prepare real candidate requests for both strategies with coin HSL enabled/disabled and unstuck enabled. GPU runtime, replay, Torch/CuPy and legacy benchmark imports are forbidden, as are CPU simulations. This does not replace the CPU optimizer/backtest/plot cutover checks. |
 | CPU optimize/backtest/plot isolation | `test_cpu_entrypoint_isolation.py` | Both strategies run actual CPU backtests and generate analysis/fill/equity/config exports plus PNG plots. DEAP and pymoo each start and resume two real CPU workers with GPU imports forbidden at interpreter startup. Tests keep the platform's default multiprocessing context. |
 | Immutable registered inputs | `test_gpu_datasets.py`, `test_gpu_service_acceptance_cuda.py` | Metadata and request parameters are snapshotted; borrowed views reject writes and source arrays remain unchanged after execution. The original owner must keep shared segments immutable and alive until service shutdown. |
@@ -93,17 +93,41 @@ stay on the GPU; only seven summary columns pass to host metric processing.
 Dispatch-local reduction scratch replaces the global mutable buffer cache. A replay
 keeps only its current sample-buffer shape. History budgeting reserves 16 bytes per
 sample per candidate for samples, a possible contiguous-view copy, an index stack
-and a duration histogram, plus 56 bytes for the summary and scaled output. Native
-and retained service paths share the outer batch limit so internal replay splitting
-does not concatenate oversized sample histories before reduction. This is a history
-budget, not a complete device/host memory bound.
+and a duration histogram, plus 56 bytes for the summary and scaled output. Native metric-service runners reduce each accepted physical replay before internal
+sub-batches clone/join outputs. Direct diagnostic and retained legacy runners keep
+raw output by default. Physical replay admission includes reduction scratch; compact
+logical result assembly remains separate from this history envelope. This is a
+history budget, not a complete device/host memory bound.
 
 `test_gpu_recovery_resolution.py` covers strict plateaus, decreasing series, sparse
 samples, terminal padding, one/five-minute intervals, independent CUDA-stream scratch,
-and actual native dispatch under a two-candidate history budget. Twelve short native
+and actual native dispatch starting under a two-candidate history budget. When
+HSL-off work releases its allowance, later widths may grow within the effective
+physical envelope. Twelve short native
 replays compare all six distribution metrics with real CPU backtests across both
 strategies, long/short/both sides and one/two coins. Native-only budget cases forbid
 CPU simulation and preserve output identity across dispatches.
+
+Two additional policy-switch regressions use both strategies, two coins/both sides,
+512 bars, a 200,000-byte history allowance and a legally seeded retained factual
+capacity of 512. HSL-off work allows a logical cohort of 24; HSL-on work splits it
+into single-candidate physical replays. Earlier raw clones/joined histories coexist
+with factual/recovery ownership at 248,388 bytes, before subsequent reduction
+scratch. Compact native results instead join a 24-by-seven f32 tensor (672 bytes),
+with metrics identical across requests and to a separate raw GPU diagnostic control.
+This isolates result transport, not capacity learning, and does not claim complete
+device memory fits the history allowance. Failed factual attempts remain rejected
+before decoding/reduction; ambiguous or malformed compact payloads fail visibly.
+Both regressions fail the preceding raw transport with the specific admission
+violation and pass compact transport. All 35 recovery checks and 116 factual replay
+cases pass. Affected callers additionally pass 53 device/transport checks, sixteen
+expired-history checks and twelve real CLI/data/service controls, alongside 470
+host/layout/service checks. Four optional-history checks assert effective physical
+admission; their earlier fixed-width assertions fail on preceding code when
+HSL-off work legally admits widths of six (volume) or five (weighted equity).
+Production is unchanged in that test-only correction, and all checked sources
+remain unchanged after each run. Independent review/CI gate development integration;
+these bounded checks leave representative total-resource acceptance open.
 
 The public thirty-day synthetic fixture illustrates the resolution repair (all values
 in days). Before/after inputs and Rust sources are identical; non-recovery metrics
