@@ -27,6 +27,37 @@ CACHE_VERSION = 2
 _REPLAY_SAMPLES = ContextVar("gpu_tuning_replay_samples", default=None)
 
 
+class ReplayDurationController:
+    """Adjust history chunks from completed work, inside a fixed safety ceiling.
+
+    Duration is an execution target, not a preemption guarantee. Tails and
+    invalid timing samples do not train the controller. No extra replay is run.
+    """
+
+    def __init__(self, ceiling, *, target_seconds=1.0):
+        if type(ceiling) is not int or ceiling < 1:
+            raise ValueError("replay chunk ceiling must be a positive integer")
+        if not math.isfinite(target_seconds) or target_seconds <= 0:
+            raise ValueError("replay duration target must be positive and finite")
+        self.ceiling = self.bars = ceiling
+        self.target_seconds = target_seconds
+        self.fast_chunks = 0
+
+    def observe(self, bars, seconds):
+        if bars != self.bars or not math.isfinite(seconds) or seconds <= 0:
+            return
+        if seconds > self.target_seconds * 1.25:
+            self.bars = max(1, int(bars * self.target_seconds * 0.9 / seconds))
+            self.fast_chunks = 0
+        elif seconds < self.target_seconds * 0.5:
+            self.fast_chunks += 1
+            if self.fast_chunks >= 3:
+                self.bars = min(self.ceiling, self.bars * 2)
+                self.fast_chunks = 0
+        else:
+            self.fast_chunks = 0
+
+
 class ReplayEvidence(deque):
     def __init__(self):
         super().__init__(maxlen=128)

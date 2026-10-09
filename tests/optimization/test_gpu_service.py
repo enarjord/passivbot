@@ -3544,13 +3544,25 @@ def test_fill_pnl_lookback_matches_rust_bar_contract(days, interval, expected):
     )
 
 
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("device,factual,expected", [
     ("cuda", True, (True, 64, 128)),
     ("cuda", False, (False, 64, 11520)),
     ("mps", True, (False, 64, 11520)),
 ])
-def test_native_ema_plan_has_cuda_interrupt_boundaries(device, factual, expected):
+def test_native_plan_has_cuda_interrupt_boundaries(strategy, device, factual, expected):
+    if strategy == "trailing_martingale" and device == "cuda" and expected[0] is False:
+        expected = (True, 64, 8192)
     assert _mps_multicoin_dispatch_plan(
-        "ema_anchor", 64, n_bars=11520, n_coins=25, n_sides=2,
+        strategy, 64, n_bars=11520, n_coins=25, n_sides=2,
         max_candidate_bars=1_000_000_000, device=device, factual_hsl=factual,
     ) == expected
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("bars", [128, 512, 8192])
+def test_native_short_replays_have_interrupt_boundaries(strategy, bars):
+    assert _mps_multicoin_dispatch_plan(
+        strategy, 64, n_bars=bars, n_coins=25, n_sides=2,
+        max_candidate_bars=1_000_000_000, device="cuda", factual_hsl=True,
+    ) == (True, 64, 128)

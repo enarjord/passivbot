@@ -319,6 +319,9 @@ Completion requires:
   - [x] Let execution tuning learn actual warm partial dispatches and explore smaller
     widths when growth is blocked; representative tuning quality remains open.
 - [x] Add service-owned production batch tuning and prepared work/scratch dispatch limits.
+  - [x] Adapt native CUDA history chunks from completed command durations within
+    their existing ceilings; retain explicit observational-latency limits.
+    Representative wider-cohort and longer-suite scheduling acceptance remains open.
 - [x] Flush results/Pareto promptly; validate interruption and compatible resume.
 - [x] Prove no CPU backtest is invoked during GPU optimize/bootstrap/resume.
 - [ ] Retire superseded GPU screening/validation state and keep CPU functionality intact.
