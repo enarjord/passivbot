@@ -3245,3 +3245,13 @@ Historical observations do not supersede those requirements or prove current acc
   arrays and clean service ownership/cleanup. Checked sources remain unchanged.
   Rust and shaders are unchanged; independent new-head review and required CI
   remain mandatory before the development-only merge.
+
+
+- A further review finding identifies executable discovery as insufficient proof
+  of device-sample availability. Derive both resource availability flags from
+  completed observations. Device availability requires a usable memory/utilization
+  sample; transient errors remain recorded. Timeout, nonzero exit, malformed,
+  unsupported and empty-device controls verify unavailable reporting.
+- Final reporting validation passes all 71 focused Linux/CUDA controls and both
+  optimized-Python callers with 72 exact results and clean resources. Checked
+  production/tests remain unchanged; current-head review and CI still gate merge.

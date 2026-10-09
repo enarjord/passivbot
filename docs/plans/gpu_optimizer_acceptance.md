@@ -1716,3 +1716,8 @@ evidence. All 65 focused Linux/CUDA controls pass. Optimized-Python EMA/TM CLI
 refreshes complete 72 exact results with unchanged arrays and clean ownership/cleanup.
 Checked sources remain unchanged. These small callers establish the corrected
 validation path; earlier moderate resource observations retain their stated scope.
+
+Global-device availability now likewise derives from actual usable memory/utilization
+observations. Failed, empty or unsupported command output cannot advertise sampling
+as available. All 71 focused Linux/CUDA controls and 72 optimized-Python caller
+results pass on the final reporting correction; numerical comparison policy is unchanged.

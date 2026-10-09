@@ -90,6 +90,14 @@ class Sampler:
             self.stop.wait(max(0.01, 1.0 - row["sampler_seconds"]))
 
 
+def sampling_availability(rows):
+    return dict(
+        process_tree_rss=bool(rows) and all(row["process_tree_rss_bytes"] is not None for row in rows),
+        global_device=any("global_device_used_bytes" in row and "global_gpu_utilization_max_pct" in row
+                          for row in rows),
+    )
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strategy", choices=["ema_anchor", "trailing_martingale"], required=True)
@@ -286,9 +294,7 @@ def main(argv=None):
                     raise RuntimeError("Replay retains more than one device dataset")
                 return result
             torch.cuda.reset_peak_memory_stats()
-            phase = dict(width="auto" if width is None else width, rounds=[], batches=[],
-                         sampling_availability=dict(process_tree_rss=sys.platform.startswith("linux"),
-                                                    global_device=bool(sampler.smi)))
+            phase = dict(width="auto" if width is None else width, rounds=[], batches=[])
             sampler.thread.start()
             try:
                 MpsMulticoinProxy.evaluate_results = observed
@@ -359,8 +365,7 @@ def main(argv=None):
                 raise RuntimeError("Shared source arrays changed during execution")
             phase["owner_snapshots"] = owner_rows
             phase["resource_samples"] = sampler.rows
-            phase["sampling_availability"]["process_tree_rss"] = bool(sampler.rows) and all(
-                row["process_tree_rss_bytes"] is not None for row in sampler.rows)
+            phase["sampling_availability"] = sampling_availability(sampler.rows)
             phase["sampling_errors"] = sampler.errors
             phase["warm_median_seconds"] = statistics.median(row["seconds"] for row in phase["rounds"][1:])
             phase["warm_requests_per_second"] = 3 * args.candidates / phase["warm_median_seconds"]

@@ -1,4 +1,5 @@
 import hashlib
+import subprocess
 from types import SimpleNamespace
 
 import numpy as np
@@ -215,3 +216,30 @@ def test_unverified_runtime_fails_before_fixture_or_device_preparation(monkeypat
     monkeypatch.setattr(rust_utils, 'verify_loaded_runtime_extension', lambda: metadata)
     with pytest.raises(RuntimeError, match='source-fingerprint-verified'):
         benchmark.main(['--strategy', 'ema_anchor', '--report', 'unused.json'])
+
+
+@pytest.mark.parametrize('response', [
+    '', 'malformed', 'N/A, N/A',
+    subprocess.TimeoutExpired('nvidia-smi', 5),
+    subprocess.CalledProcessError(1, 'nvidia-smi'),
+])
+def test_failed_device_samples_do_not_claim_availability(monkeypatch, response):
+    sampler = benchmark.Sampler()
+    sampler.smi = 'installed-nvidia-smi'
+    monkeypatch.setattr(benchmark, 'rss_tree', lambda pid: 100)
+    def sample(*args, **kwargs):
+        if isinstance(response, Exception):
+            raise response
+        return response
+    monkeypatch.setattr(benchmark.subprocess, 'check_output', sample)
+    monkeypatch.setattr(sampler.stop, 'wait', lambda seconds: sampler.stop.set())
+    sampler._sample()
+    assert sampler.errors
+    assert not benchmark.sampling_availability(sampler.rows)['global_device']
+
+
+def test_successful_device_samples_support_availability_with_transient_gaps():
+    assert not benchmark.sampling_availability([])['global_device']
+    rows = [{'process_tree_rss_bytes': 100},
+            {'process_tree_rss_bytes': None, 'global_device_used_bytes': 42, 'global_gpu_utilization_max_pct': 0}]
+    assert benchmark.sampling_availability(rows) == {'process_tree_rss': False, 'global_device': True}

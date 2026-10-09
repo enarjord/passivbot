@@ -62,9 +62,11 @@ display and unrelated processes; it is not exclusive service VRAM. Sampling may
 miss short peaks. Linux RSS traverses children created by every process thread,
 including service-worker compiler children; whole-process CPU time
 includes its workers, preparation, in-process compilation and monitoring; it
-excludes compiler-child CPU time and is not isolated orchestrator cost. Linux procfs must expose child lists for each sampled process; unavailable
+excludes compiler-child CPU time and is not isolated orchestrator cost. Linux
+procfs must expose child lists for each sampled process; unavailable
 child lists produce a null RSS observation and disable process-tree availability
 in that phase rather than reporting parent-only memory. Unsupported or failed
-resource observations are explicit, and sampler
-errors are retained. The tool measures service execution only: it does not
+resource observations are explicit. Global-device availability requires at least
+one usable memory/utilization sample; finding the executable is insufficient.
+Sampler errors are retained. The tool measures service execution only: it does not
 establish Pareto quality, CPU optimizer throughput or whole-search speedup.
