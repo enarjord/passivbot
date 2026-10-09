@@ -1983,7 +1983,10 @@ with the actual native request/future service through the public parity tool.
 The source-level Rust test proves why an 18-step position must retain a
 nine-step remainder after a nine-step clip. A second regression covers `1e-8`
 minimum remainders after clips of 1, 10 and 1,000, accounting for cancellation
-error at the operand scale. Genuinely undersized remainders
+error at the operand scale. The allowance is capped at one quarter of a quantity
+step; an extreme-ratio regression preserves a valid two-step minimum remainder
+and consumes a genuinely one-step remainder after a 13,000,000-unit clip.
+Genuinely undersized remainders
 still trigger full closes; GPU strategy arithmetic remains unchanged.
 
 The corrected reference produces 1,020 fills and exactly matches GPU fill rate,
@@ -1999,7 +2002,7 @@ match exactly. No global tolerance or matching-nonfinite policy changes. This
 is a regression acceptance case, not certification of every recovery curve,
 limit threshold or strategy combination.
 
-All 336 Rust tests pass, with one existing ignored test, and default-feature
+All 337 Rust tests pass, with one existing ignored test, and default-feature
 test compilation plus rebuilt extension source verification pass. A further
 186 parity, Rust-backed caller, CPU backtest/plot/optimizer-isolation and native
 EMA CLI lifecycle checks pass without skips. Independent current-head review

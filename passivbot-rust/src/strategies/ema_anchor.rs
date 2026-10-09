@@ -210,10 +210,11 @@ fn calc_close_qty(
         return 0.0;
     }
     let remainder = position_size_abs - clip_qty;
-    // A valid minimum-size remainder must survive subtraction noise. Keep
-    // genuinely undersized remainders on the existing full-close path.
+    // Subtraction noise scales to the operands, but must never absorb an
+    // actual quantity-step deficit at extreme position/step ratios.
     let representation_tolerance =
-        f64::EPSILON * position_size_abs.abs().max(clip_qty.abs()).max(min_qty.abs()) * 4.0;
+        (f64::EPSILON * position_size_abs.abs().max(clip_qty.abs()).max(min_qty.abs()) * 4.0)
+            .min(exchange.qty_step.abs() * 0.25);
     if remainder < min_qty && min_qty - remainder > representation_tolerance {
         position_size_abs
     } else {
@@ -484,6 +485,55 @@ mod tests {
                 undersized
             );
         }
+    }
+
+    #[test]
+    fn close_clip_does_not_absorb_a_real_quantity_step_deficit() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-8,
+            min_qty: 2e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let balance = 1_300_000_000.0;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        let undersized = clip + exchange.qty_step;
+        let minimum = calc_min_entry_qty(1.0, &exchange);
+        assert!(undersized - clip < minimum);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                undersized,
+                1.0,
+            ),
+            undersized
+        );
+        // Adjacent steps remain distinguishable at this scale. Valid minimum
+        // remainders still retain the clip under the same producer inputs.
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                clip + minimum,
+                1.0,
+            ),
+            clip
+        );
     }
 
     #[test]
