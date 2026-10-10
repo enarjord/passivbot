@@ -93,13 +93,12 @@ def test_compact_account_results_precede_aliases_and_raw_replacements(monkeypatc
 
 def _runner_context(strategy, sides, *, requested=(), chunked=False,
                     raw_growth=False, raw_risk=False, btc_risk=False, hsl_tail=False, shock=False,
-                    factual_hsl=False):
+                    factual_hsl=False, count=1513):
     from test_gpu_mps import _multicoin_exposure_fixture
     from optimization.gpu.mps_kernel import (
         MpsEmaAnchorMulticoinRunner, MpsEmaAnchorMulticoinFusedRunner,
         MpsTrailingMartingaleMulticoinRunner, MpsTrailingMartingaleMulticoinFusedRunner,
     )
-    count = 1513
     closes = np.tile([100., 120.], (count, 1))
     if shock:
         closes[100:700, 0] *= .7

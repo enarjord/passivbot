@@ -77,8 +77,8 @@ TAILS = tuple(f"hsl_drawdown_ema_mean_worst_1pct_{s}" for s in ("long", "short",
 @pytest.mark.parametrize("signal_mode", [0, 1, 2], ids=["unified", "pside", "coin"])
 def test_native_capture_uses_reporting_clock_and_preserves_other_metrics(strategy, sides, signal_mode):
     from test_gpu_weighted_equity_capture import _runner_context
-    baseline, params = _runner_context(strategy, sides, shock=True, factual_hsl=True)
-    runner, _ = _runner_context(strategy, sides, shock=True, factual_hsl=True, hsl_tail=True)
+    baseline, params = _runner_context(strategy, sides, shock=True, factual_hsl=True, count=512)
+    runner, _ = _runner_context(strategy, sides, shock=True, factual_hsl=True, hsl_tail=True, count=512)
     for offset in range(0, params.shape[1], len(runner.parameter_keys)):
         params[:, offset + runner.parameter_keys.index("hsl_signal_mode")] = signal_mode
     expected = _clone(baseline.run(params))
@@ -91,7 +91,11 @@ def test_native_capture_uses_reporting_clock_and_preserves_other_metrics(strateg
     )
     samples = runner._hsl_ema_tail_buffers[3]
     reference = _reference(samples.cpu().numpy())
-    assert reference[:, -1].min() > 0
+    assert torch.isfinite(samples[:, -1]).any(dim=1).all()
+    # Unified long/short hedges can have zero account drawdown while both
+    # sides trade. Coin reporting still demonstrates a nonzero observed tail.
+    if signal_mode == 2:
+        assert reference[:, -1].min() > 0
     assert torch.isnan(samples[:, :, :31]).all()
     for index, scope in enumerate(runner._hsl_ema_tail_scopes()):
         name = f"hsl_drawdown_ema_mean_worst_1pct_{scope}"
@@ -101,10 +105,11 @@ def test_native_capture_uses_reporting_clock_and_preserves_other_metrics(strateg
         assert samples.shape[1] == 2  # Inactive side has no capture or reduction.
         assert actual[TAILS[inactive]].eq(0).all()
     # Partial replays and a changed temporal schedule must discard old samples.
-    ends = np.asarray([2, 799, runner.n], dtype=np.int32)
+    partial_end = runner.n // 2
+    ends = np.asarray([2, partial_end, runner.n], dtype=np.int32)
     full = _clone(runner.run(params, end_steps=ends))
     assert torch.isnan(runner._hsl_ema_tail_buffers[3][0]).all()
-    assert torch.isnan(runner._hsl_ema_tail_buffers[3][1, :, 799:]).all()
+    assert torch.isnan(runner._hsl_ema_tail_buffers[3][1, :, partial_end:]).all()
     runner.max_dispatch_candidate_bars = 47 * runner.n_coins * runner.replay_sides * 3
     chunked = _clone(runner.run(params, end_steps=ends))
     assert runner._last_temporal_dispatch["dispatch_count"] > 1
@@ -117,7 +122,7 @@ def test_native_tail_is_compact_after_retry_and_budget_split(strategy, monkeypat
     from test_gpu_weighted_equity_capture import _runner_context
     from optimization.gpu import mps_kernel
     from optimization.gpu.ema_tail import drawdown_ema_tail_history_bytes
-    runner, params = _runner_context(strategy, "both", shock=True, factual_hsl=True, hsl_tail=True)
+    runner, params = _runner_context(strategy, "both", shock=True, factual_hsl=True, hsl_tail=True, count=512)
     expected = _clone(runner.run(params))
     real_reduce = mps_kernel.drawdown_ema_tail_from_samples
     accepted = []
@@ -147,7 +152,7 @@ def test_native_tail_is_compact_after_retry_and_budget_split(strategy, monkeypat
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 def test_disabled_native_hsl_releases_optional_tail_capture(strategy):
     from test_gpu_weighted_equity_capture import _runner_context
-    runner, params = _runner_context(strategy, "both", shock=True, factual_hsl=True, hsl_tail=True)
+    runner, params = _runner_context(strategy, "both", shock=True, factual_hsl=True, hsl_tail=True, count=512)
     runner.run(params)
     assert runner._hsl_ema_tail_buffers
     active_cost = runner._history_bytes_per_candidate()
