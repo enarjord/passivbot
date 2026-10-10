@@ -3693,3 +3693,20 @@ Historical observations do not supersede those requirements or prove current acc
   replay. Use focused paired correctness/performance evidence. This changes work
   order, not the completion gates or risk contract; no universal speedup threshold
   is introduced and experimental performance work is not delivered acceptance.
+
+### 2026-10-10 — Combined retirement lifecycle qualification
+
+- Revision `0ebb723823` passes 29 CUDA CLI/service/lifecycle checks and six
+  CPU-entrypoint checks, without failures, errors or skips. The separate focused
+  backend/HSL host group passes 74 checks. CUDA optimization, seed bootstrap and
+  resume forbid CPU simulation; CPU backtest/plot/export and DEAP/pymoo
+  optimization/resume forbid GPU imports.
+- Actual service controls cover incremental admission/reuse, compact TM entry
+  counts and interruption of a 25-coin, 11,520-bar clipped-HSL request while
+  retaining completed results. Source/helper/loaded-extension fingerprints remain
+  identical before and after each phase. Unchanged Rust bytes permit reuse of the
+  prior source-matched artifact with its original build receipt.
+- Documentation-only successors retain the tested production source. Keep the
+  eight evolving comparisons, focused HSL performance improvements and final
+  current-head review/CI separate; these lifecycle passes do not certify arbitrary
+  numerical parity, search quality or master integration.

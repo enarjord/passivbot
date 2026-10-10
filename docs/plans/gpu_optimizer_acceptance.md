@@ -903,10 +903,10 @@ active kernel, and command-duration tuning is not a worst-case wall-clock bound.
 The service benchmark's cancellation/join path and production optimization's
 interrupt callback are different callers.
 
-1. Complete the frozen combined-source CUDA/CLI/lifecycle qualification, including
-   effective dispatch validation, scenario/bootstrap/resume/persistence behavior,
-   CPU dependency isolation and preservation of legacy CPU optimization/backtests.
-   Component receipts carry only when their relevant source bytes are unchanged.
+1. Preserve the completed combined-source qualification at `0ebb723823`: 29 CUDA
+   CLI/service/lifecycle checks and six CPU-entrypoint checks pass without skips.
+   Later production changes require affected requalification; component receipts
+   carry only when their relevant source bytes are unchanged.
 2. After the prioritized focused HSL performance work, complete the eight
    equal-budget evolving comparisons: both strategies, two
    seeds, CPU legacy versus native GPU, with a practical multi-scenario suite.
@@ -2348,11 +2348,27 @@ partial selection evidence remain separate. Unsupported collateral/strategies ar
 on the CPU before device preparation, including effective suite overrides.
 
 At revision `0ebb723823`, 74 source-matched backend/HSL host checks pass without
-skips. This is host evidence, not the combined CUDA qualification.
+skips. The separate combined qualification passes 29 CUDA checks in approximately
+849 seconds and six CPU-entrypoint checks in approximately 28 seconds, with no
+failures, errors or skips. CUDA checks cover native ask/tell CLI, single/suite
+screening, generated seeds, EMA-tail scoring/limits, interruption/resume and durable
+results with CPU simulations forbidden. Actual service checks cover incremental
+admission and replay reuse for both strategies, plus interruption of a 25-coin,
+11,520-bar clipped-HSL request without losing completed results. A three-coin TM
+control reuses compact initial-entry counts without CPU simulation. The separate
+CPU phase runs both strategies' standalone backtest/export/plot paths and real
+DEAP/pymoo workers through optimization and resume with GPU imports forbidden.
+
+Source/helper/loaded-extension fingerprints agree before and after both phases.
+The matching Rust artifact is reused from the prior combined build because all
+Rust source bytes are unchanged; its original build receipt is preserved rather
+than attributed to a new build. Documentation-only successors retain the tested
+production source unchanged. These checks establish the stated lifecycle and
+dependency boundaries, not universal numerical parity or search quality.
 
 This remains an incomplete retirement gate. The documented larger EMA/TM
 service measurements and scoped numerical decisions are complete evidence for
-their recipes. Combined-source CUDA/CLI/CPU-isolation qualification, the eight
-equal-budget evolving comparisons, independent current-head review and required
-CI remain pending. Measured busy-HSL latency remains an explicit performance
+their recipes. The eight equal-budget evolving comparisons, independent
+current-head review and required CI remain pending. Measured busy-HSL latency
+remains an explicit performance
 limitation; resource observations do not certify every workload.
