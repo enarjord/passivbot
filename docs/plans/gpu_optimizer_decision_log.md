@@ -3497,3 +3497,24 @@ Historical observations do not supersede those requirements or prove current acc
   preterminal signal. Use a local 2e-6 relative allowance for those newly covered
   six EMA fields; preserve every existing lifecycle/equity gate and the general
   comparison policies. Full current-head device qualification remains required.
+
+### Native initial-entry interval count reduction (qualification pending)
+
+- Rust measures consecutive normal initial entries per coin/position side. Partial
+  initials do not contribute; there are no leading or censored trailing gaps.
+- Prepared timelines are uniform, so every interval is an integer bar gap. One
+  candidate-owned histogram with bins 0..T suffices regardless of coin/side count.
+  Histograms avoid event-list capacity/retry machinery and retain zero gaps.
+- Native requested interval work uses the existing factual replay identity; legacy
+  128-bin entry and 512-bin fill-gap paths remain unchanged. No history-sized
+  compile variants or CPU simulations are introduced.
+- Histograms reset once per physical attempt and survive temporal chunks. Only
+  accepted replays reduce; subbatch joins carry five metrics instead of histograms.
+  Reduction uses an ordered int64 CDF and rank interpolation without sorting.
+- Admission reserves 32*(T+2)+512 bytes per candidate for counts, streamed stats
+  and conservative CDF/conversion workspace. This is not total VRAM accounting.
+  Integer address bounds and overflow sentinels fail visibly. T above 2**24 is
+  rejected instead of assuming float32 entry-index differences remain exact.
+- Device qualification, CPU percentile comparisons and resource measurements
+  remain required. Fill-gap population semantics differ; changing that producer
+  is deferred. A shared ordered-count reducer can be considered when needed.

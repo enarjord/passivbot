@@ -261,6 +261,9 @@ Completion requires:
     Representative acceptance remains required; the worker cutover is integrated
     on development.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
+- [ ] Qualify native exact TM initial-entry interval metrics, compact reduction,
+  scratch/index bounds and temporal/retry controls; assess remaining CPU trajectory
+  effects on percentile objectives and limits.
 - [ ] Qualify requested native EMA-tail observation capture, compact device
   reduction, scratch admission and feature-off behavior on CUDA; assess remaining
   CPU-curve discrepancies and representative objective/limit effects.

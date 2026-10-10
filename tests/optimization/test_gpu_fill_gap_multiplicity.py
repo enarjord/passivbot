@@ -58,19 +58,20 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
         observed.extend((output["fill_count"] - counts.sum(1) - 1).tolist())
         return result
     monkeypatch.setattr(metrics, "_fill_gap_metrics", capture)
-    interval_counts = []
+    interval_maxima = []
     original_intervals = metrics._entry_interval_metrics
 
     def capture_intervals(output, run, strategy_kind):
-        # Fill-gap refinement must not change the optional initial-entry ABI.
+        # Optional native initial-entry metrics stay compact and independent of
+        # the legacy 512-bin fill-gap distribution.
         if strategy_kind == "trailing_martingale":
-            assert output["entry_interval_hist"].shape[1] == 128
-            counts = output["entry_interval_hist"].clone()
+            assert output["entry_interval_native_metrics"].shape[1] == 5
+            compact = output["entry_interval_native_metrics"].clone()
             result = original_intervals(output, run, strategy_kind)
             cuda_runtime.testing.assert_close(
-                output["entry_interval_hist"], counts, rtol=0, atol=0,
+                output["entry_interval_native_metrics"], compact, rtol=0, atol=0,
             )
-            interval_counts.extend(output["entry_interval_count"].tolist())
+            interval_maxima.extend(compact[:, -1].tolist())
             return result
         return original_intervals(output, run, strategy_kind)
 
@@ -93,7 +94,7 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
     assert max(observed) > 0, "fixture must exercise multiple fills in a candle"
 
     if strategy == "trailing_martingale":
-        assert interval_counts and max(interval_counts) > 0
+        assert interval_maxima and max(interval_maxima) > 0
     else:
         assert first.metrics["entry_interval_hours_p95"] == 0.0
 
