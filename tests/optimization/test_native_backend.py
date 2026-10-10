@@ -143,6 +143,46 @@ def test_native_ask_tell_evolution_records_results_and_resumes_without_cpu(monke
         assert len(records) == 12
 
 
+def test_native_backend_validates_effective_fixed_runtime_config(monkeypatch, tmp_path):
+    guard_cpu(monkeypatch)
+    registered_collateral = []
+    register = FakeService.register_dataset
+    def observe_registration(self, dataset_id, dataset):
+        import json
+        registered_collateral.append(json.loads(dataset.config_json)["backtest"]["btc_collateral_cap"])
+        return register(self, dataset_id, dataset)
+    monkeypatch.setattr(FakeService, "register_dataset", observe_registration)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["backtest"]["btc_collateral_cap"] = 0.5
+        base.config["optimize"]["fixed_runtime_overrides"] = {"backtest.btc_collateral_cap": 0.0}
+        # CLI preflight and native dataset preparation both validate the effective
+        # runtime contract; the raw template must not introduce a second gate.
+        optimize._run_gpu_preparation_preflight(base.config, {})
+        records = []
+        execute(base, SimpleNamespace(record=records.append), tmp_path / "checkpoint.pkl")
+        assert registered_collateral and all(value == 0.0 for value in registered_collateral)
+        assert len(records) == len(FakeService.rows) == 8
+        assert all(row["backtest"]["btc_collateral_cap"] == 0.0 for row in records)
+
+
+def test_native_effective_unsupported_config_is_rejected_before_service(monkeypatch, tmp_path):
+    guard_cpu(monkeypatch)
+    import optimization.gpu.native as native
+    def forbidden_service(**_kwargs):
+        pytest.fail("unsupported effective config must fail before device service construction")
+    monkeypatch.setattr(native, "CudaBacktestService", forbidden_service)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["backtest"]["btc_collateral_cap"] = 0.0
+        base.config["optimize"]["fixed_runtime_overrides"] = {"backtest.btc_collateral_cap": 0.5}
+        with pytest.raises(ValueError, match="btc_collateral_cap=0"):
+            optimize._run_gpu_preparation_preflight(base.config, {})
+        with pytest.raises(ValueError, match="btc_collateral_cap=0"):
+            execute(base, SimpleNamespace(record=lambda _row: None), tmp_path / "checkpoint.pkl")
+        assert FakeService.rows == []
+
+
 @pytest.mark.parametrize("seeds", [False, True])
 def test_native_interrupt_checkpoint_retains_full_results_and_resumes_pending_gpu(monkeypatch, tmp_path, seeds):
     guard_cpu(monkeypatch)

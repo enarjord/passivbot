@@ -16,7 +16,7 @@ from pymoo.core.problem import Problem
 from pymoo.core.callback import Callback
 from pymoo.termination import get_termination
 
-from config.gpu import resolve_gpu_screening, validate_gpu_backtest_config
+from config.gpu import resolve_gpu_screening
 from optimization.backend_shared import load_starting_individuals
 from optimization.backends.pymoo_backend import (
     _build_algorithm, _build_random_sampling, _prepare_resumed_algorithm,
@@ -195,7 +195,6 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 configs_to_individuals_streaming=None, optimization_shape=None,
                 checkpoint_path=None, resume=False, interrupt_check=no_interrupt_requested,
                 standalone_candle_coins=None, **_cpu_only_arguments):
-    validate_gpu_backtest_config(config)
     from optimization.gpu.native import CudaBacktestService
     from optimization.gpu.autotune import is_auto
 

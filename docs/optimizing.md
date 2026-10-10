@@ -22,8 +22,8 @@ a fresh run even when the affected branch was not used. Hashing happens once dur
 with bounded memory use.
 Legacy results without historical evaluator and prepared-data evidence require a fresh run;
 current files or current code cannot establish how their scores were produced. Every reconstructed
-result in a compressed stream is validated, and GPU seed checkpoints carry the same evidence before
-reusing proxy scores. Importing starting candidate configs for fresh evaluation remains supported.
+result in a compressed stream is validated, and GPU checkpoints carry the same evidence before
+reusing native GPU metrics. Importing starting candidate configs for fresh evaluation remains supported.
 Moving an override file without changing its resolved values does not change this contract.
 Override files are resolved before CPU candidate evaluation and snapshotting. Every backend records
 the effective external suite and scenario filter, with prepared concrete scenario dates and resolved
