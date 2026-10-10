@@ -3507,7 +3507,7 @@ Historical observations do not supersede those requirements or prove current acc
   fixtures while preserving policy-unassessed report fields and the outstanding
   representative selection/limit gate. Current-head PR review and CI remain required.
 
-### Native initial-entry interval count reduction (qualification pending)
+### Native initial-entry interval count reduction
 
 - Rust measures consecutive normal initial entries per coin/position side. Partial
   initials do not contribute; there are no leading or censored trailing gaps.
@@ -3527,3 +3527,12 @@ Historical observations do not supersede those requirements or prove current acc
 - Device qualification, CPU percentile comparisons and resource measurements
   remain required. Fill-gap population semantics differ; changing that producer
   is deferred. A shared ordered-count reducer can be considered when needed.
+
+- The source-matched 22-check CUDA-enabled group passes without failures, errors
+  or skips. It includes CPU/CUDA ordered-count reducers, one/five-minute native
+  capture, partial/temporal/rejected-attempt isolation, zero gaps and real-service
+  compact payload reuse for both strategies. The rebuilt extension passes 341
+  Rust tests (one existing ignore) and default-feature compilation. Subsequent
+  development-base integration changes documentation only; preserve the original
+  qualification identity. The matched candidate cohort and its objective/limit
+  consequences remain separate numerical acceptance work.
