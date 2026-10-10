@@ -3534,5 +3534,21 @@ Historical observations do not supersede those requirements or prove current acc
   compact payload reuse for both strategies. The rebuilt extension passes 341
   Rust tests (one existing ignore) and default-feature compilation. Subsequent
   development-base integration changes documentation only; preserve the original
-  qualification identity. The matched candidate cohort and its objective/limit
-  consequences remain separate numerical acceptance work.
+  qualification identity.
+- A matched eight-candidate twenty-day cohort now completes CPU references and
+  cold/warm native replay with the same requested metrics. Reproduce its base
+  through `gpu-parity`'s TM long, two-coin, 28,800-bar, seed-43 fixture with coin
+  HSL threshold .002, EMA span 2.5 minutes, cooldown five minutes, unstuck, and
+  price shocks (coin 0, bar 1440, .7) and (coin 1, bar 1800, 1.3). Seven neighbors
+  multiply initial quantity by `.8 + .1*i` and the first entry EMA span by
+  `.9 + .04*i`, for i=1..7. The original candidate's p99 is
+  22.574666666666637 hours on CPU and GPU, replacing the old 23.417333333333296
+  bin estimate. Mean, median and maximum agree exactly; largest p95/p99 residuals
+  are 1.78e-15/3.55e-15 hours. All five interval rankings and the ADG/drawdown/p99
+  front agree, with zero CPU regret at GPU-selected optima. Nine literal
+  equality-limit flips are interpolation ULPs, below 1.3e-11 seconds. Accept
+  these interval differences for this cohort without changing comparison policy.
+- Companion metrics use the same completed simulations and remain separately
+  assessed. In particular, unchanged logarithmic fill-gap bins and recovery
+  ordering on F32 equity can change near ties; exact entry percentiles do not
+  certify those consumers or every metric on the requested surface.
