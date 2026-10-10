@@ -3253,10 +3253,13 @@ class _MulticoinReplayRunner:
                 if capacity < 1:
                     raise
                 self.interrupt_check()
+                cache_capacity = self._hsl_native_cache_capacity()
                 self.hsl_fact_capacity = capacity * 2
-                if self._disable_native_cache_over_budget():
-                    # Rejected work owns no accepted state. The next attempt
-                    # recompiles/re-measures the scalar ABI before admission.
+                cache_disabled = self._disable_native_cache_over_budget()
+                if cache_disabled or cache_capacity != self._hsl_native_cache_capacity():
+                    # Rejected work owns no accepted state. This includes a
+                    # factual-growth crossing of the per-cache cap: discard
+                    # the prior ABI size before provisional scalar admission.
                     self._replay_state_bytes = None
                     self._replay_states.clear()
                 if self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
