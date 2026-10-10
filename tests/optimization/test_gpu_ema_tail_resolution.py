@@ -74,10 +74,13 @@ TAILS = tuple(f"hsl_drawdown_ema_mean_worst_1pct_{s}" for s in ("long", "short",
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", ["long", "short", "both"])
-def test_native_capture_uses_reporting_clock_and_preserves_other_metrics(strategy, sides):
+@pytest.mark.parametrize("signal_mode", [0, 1, 2], ids=["unified", "pside", "coin"])
+def test_native_capture_uses_reporting_clock_and_preserves_other_metrics(strategy, sides, signal_mode):
     from test_gpu_weighted_equity_capture import _runner_context
     baseline, params = _runner_context(strategy, sides, shock=True, factual_hsl=True)
     runner, _ = _runner_context(strategy, sides, shock=True, factual_hsl=True, hsl_tail=True)
+    for offset in range(0, params.shape[1], len(runner.parameter_keys)):
+        params[:, offset + runner.parameter_keys.index("hsl_signal_mode")] = signal_mode
     expected = _clone(baseline.run(params))
     actual = _clone(runner.run(params))
     _equal(actual, expected, skip=TAILS)
