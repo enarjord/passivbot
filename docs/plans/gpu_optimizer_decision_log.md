@@ -3497,3 +3497,12 @@ Historical observations do not supersede those requirements or prove current acc
   preterminal signal. Use a local 2e-6 relative allowance for those newly covered
   six EMA fields; preserve every existing lifecycle/equity gate and the general
   comparison policies. Full current-head device qualification remains required.
+
+- Complete the current implementation's 81-check CUDA-enabled qualification with
+  no failures or skips, plus twelve separate host reducer/scalar controls. The
+  source-matched rebuilt extension passes 341 Rust tests (one existing ignore)
+  and default-feature compilation. Four public unified/pside comparisons confirm
+  zero unified side reports and measure maximum/tail residuals; record the recipe
+  and values in the acceptance map. Accept these small F32 differences for those
+  fixtures while preserving policy-unassessed report fields and the outstanding
+  representative selection/limit gate. Current-head PR review and CI remain required.
