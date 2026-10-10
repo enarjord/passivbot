@@ -3457,3 +3457,18 @@ Historical observations do not supersede those requirements or prove current acc
   default-feature compilation, touched-file formatting, rebuilt source verification,
   181 CPU caller checks and five documentation checks pass. Current CUDA,
   independent review and CI gates remain.
+
+
+### 2026-10-09 — Larger factual-HSL EMA resource observation
+
+- Complete the public 25-coin, 5,760-bar, four-candidate, three-scenario service recipe with unified HSL, one-day lookback and threshold 0.99. All 72 width-one/eight/automatic results agree exactly; one device dataset is resident, packed inputs are reused, source arrays stay unchanged and spill cleanup succeeds.
+- Wider execution improves warm elapsed time by approximately 18%, but increases first-result latency approximately fivefold. Keep this microbatch tradeoff visible rather than interpreting throughput as optimal responsiveness.
+- Report process-tree RSS, global device use, Torch allocation and packing separately. Global device use reaches about 4.72 GiB; its driver/display/other-process scope does not imply exclusive service ownership or a complete scratch guarantee.
+- The automatic phase completes zero production evidence windows. One warm sample per scenario cannot establish an optimal width. The moving HSL lookback and changed facts/budgets remain explicit fresh-reconstruction cases; do not extrapolate held-position continuation speedup to all traffic.
+- Keep the larger TM measurement, current metric-surface comparison and final cutover acceptance open. No new launch tuning or simulation tolerance follows from this measurement.
+
+### 2026-10-10 — Current factual metric assessment
+
+- Complete the current 64-candidate, 22-metric factual cohort and six twenty-day, all-157-metric comparisons. HSL lifecycle timing agrees exactly in the cohort, while small strict drawdown ordering differences can still change a front. Preserve those differences and requested-limit evidence separately from general acceptance.
+- Identify the remaining coarse EMA-tail cutoff-bin average and logarithmic interval percentiles as distinct approximation consumers. Their former dependence on later CPU validation cannot establish authoritative native metric acceptance. Assess practical metric accuracy and selection effects before choosing a repair or an explicit bounded acceptance policy; do not silently widen tolerances.
+- Keep all 153 currently undefined per-metric policies visibly unassessed in each full-surface case. Finite output alone is functional evidence. Fixed-cohort selection diagnostics do not replace repeated-seed, full optimizer comparisons.

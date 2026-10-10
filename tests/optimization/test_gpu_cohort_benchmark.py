@@ -334,8 +334,36 @@ def test_cli_dispatches_benchmark_help_without_full_dependency_gate(monkeypatch)
     assert observed == [("tools.gpu_cohort_benchmark", ["passivbot tool gpu-cohort-benchmark", "--help"])]
 
 
+def test_cohort_reference_uses_the_native_factual_simulation_contract(monkeypatch):
+    import sys
+
+    class ReferencePrepared(Exception):
+        pass
+
+    def reference(**kwargs):
+        # A service-equivalence check must compare the same simulation policy,
+        # rather than reject factual replay against the retired HSL observer.
+        assert kwargs.get("factual_hsl") is True
+        raise ReferencePrepared
+
+    monkeypatch.setitem(sys.modules, "optimization.gpu.service",
+                        SimpleNamespace(MpsMulticoinProxy=reference))
+    monkeypatch.setitem(sys.modules, "backtest", SimpleNamespace(
+        build_backtest_payload=lambda *a, **kw: None,
+        execute_backtest=lambda *a: (None, None, {"adg_strategy_eq": 0.0}),
+    ))
+    monkeypatch.setattr(benchmark, "_cohort", lambda *a: (
+        ({}, None, {}, None, None), [{}], [{}],
+    ))
+    args = SimpleNamespace(warm_runs=0, metrics=["adg_strategy_eq"])
+    with pytest.raises(ReferencePrepared):
+        benchmark._measure(SimpleNamespace(cuda=SimpleNamespace(synchronize=lambda: None)),
+                           args, "ema_anchor", 7)
+
+
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(strategy, tmp_path):
+@pytest.mark.parametrize("hsl", ["disabled", "unified"])
+def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(strategy, hsl, tmp_path):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("NVIDIA CUDA required")
@@ -343,6 +371,9 @@ def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(stra
     path.write_text(json.dumps({"strategy_eq_recovery_days_p95": {"absolute": 0, "relative": 0}}))
     args = options("--strategies", strategy, "--bars", "512", "--coins", "2",
                    "--candidates", "3", "--warm-runs", "1", "--widths", "1", "2", "auto",
+                   "--hsl", hsl, "--hsl-red-threshold", ".002",
+                   "--hsl-ema-span-minutes", "2.5", "--hsl-cooldown-minutes", "1000",
+                   "--price-shock", "0", "256", ".7", "--price-shock", "1", "320", "1.3",
                    "--metrics", "strategy_eq_recovery_days_p95", "volume_pct_per_day_avg_w", "adg_btc",
                    "--limit", "fills_gap_p95_hours", "greater_than", "1",
                    "--tolerances", str(path),
@@ -353,6 +384,7 @@ def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(stra
     json.dumps(report, allow_nan=False)
     case = report["cases"][0]
     assert report["runtime"]["rust_source_fingerprint"]
+    assert report["measurement_scope"]["gpu_replay"] == "native_factual"
     assert len(case["cpu_gpu_comparisons"]) == 3
     assert all(set(row["metrics"]) == set(args.metrics) for row in case["cpu_gpu_comparisons"])
     assert report["recipe"]["metrics"] == args.metrics

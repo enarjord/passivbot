@@ -360,7 +360,7 @@ def _measure(torch, args, strategy, seed):
     started = time.perf_counter()
     proxy = MpsMulticoinProxy(config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
                              exchange="binance", batch_size=len(parameters), needed_metrics=args.metrics,
-                             max_dispatch_candidate_bars=DISPATCH_BUDGET)
+                             max_dispatch_candidate_bars=DISPATCH_BUDGET, factual_hsl=True)
     prepare_seconds = time.perf_counter() - started
     direct_samples, reference = [], None
     for _ in range(args.warm_runs + 1):
@@ -418,7 +418,7 @@ def run_benchmark(args):
         direct_first_use_cache="not_cleared",
         native_first_use_cache="after_direct_runs_not_cleared",
         latency="caller_observed_since_submission", memory="torch_allocations_only",
-        dispatch_candidate_bars=DISPATCH_BUDGET), recipe=_recipe(args),
+        dispatch_candidate_bars=DISPATCH_BUDGET, gpu_replay="native_factual"), recipe=_recipe(args),
         tolerance_policy={name: vars(args.policies[name]) if name in args.policies else None
                           for name in args.metrics},
         runtime=dict(rust_source_fingerprint=runtime["expected_source_fingerprint"],

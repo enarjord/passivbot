@@ -2015,3 +2015,113 @@ default-feature compilation, touched-file formatting, rebuilt source verificatio
 passed 186 parity, Rust-backed caller and native EMA CLI lifecycle checks. Current
 resolution CUDA parity/native CLI verification, independent current-head review and
 CI remain integration gates. Earlier device results do not satisfy this gate.
+
+## Larger factual-HSL service resources — EMA measurement
+
+Use `gpu-service-benchmark --strategy ema_anchor --coins 25 --bars 5760 --candidates 4 --rounds 2 --hsl unified`, seed seven, both sides, one-day lookback and threshold 0.99. Three shared-data scenarios contain 25/full and two 8/half views. First-use and warm execution share the existing compiler caches. This is a synthetic service observation, not CPU throughput, a full optimization run or fresh cold-cache timing.
+
+All 72 request results and statuses match the isolated width-one references exactly, with zero reduction-rounding cases. Every owner snapshot has one resident dataset; packing reaches three entries. Source arrays remain unchanged, spill files are removed after shutdown and resource sampling reports no errors.
+
+| Width | Warm round seconds | Warm requests/s | First warm result seconds | Sampled process-tree RSS peak bytes | Sampled global device peak bytes | Torch allocated peak bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 684.437 | 0.017533 | 113.672 | 2,217,734,144 | 5,069,864,960 | 7,469,568 |
+| 8 | 559.797 | 0.021436 | 515.282 | 1,534,681,088 | 5,069,864,960 | 10,215,936 |
+| auto | 554.502 | 0.021641 | 509.100 | 1,543,335,936 | 5,069,864,960 | 10,215,936 |
+
+Wider execution reduces warm elapsed time by approximately 18%, while delaying the first result from 114 to 509–515 seconds. Completions remain bounded by a physical microbatch. Busy many-coin HSL remains expensive; this result establishes a measurable throughput/latency tradeoff, not a promise of speedup over CPU or optimal scheduling.
+
+The automatic phase collects one warm sample per scenario and completes zero unchanged production tuning windows. It executes actual cohorts of four under a width-64 proposal; the evidence does not establish an optimal width. Earlier sustained HSL-off measurements separately exercise completed windows.
+
+Torch reserved peak is 25,165,824 bytes and packing peak is 10,033,620 bytes. Process-tree RSS includes compiler children; global device use includes driver/display/other processes and is not exclusive service allocation. One-second samples may miss short peaks. Whole-process CPU time includes replay/preparation/driver activity and does not isolate orchestration. History/scratch admission is not a complete VRAM guarantee. These facts preserve wider and future device-resource limitations explicitly.
+
+The source-backed continuation limitation is precise: `replay_factual_hsl` begins at `max(minute - lookback, 0)` before applying the factual cutoff, and `hsl_advance_scope` requires the same effective start, budget and factual identity. A sliding lookback, changed fills/budget, expired history or numerical guard therefore reconstructs fresh. A held-position continuation speedup cannot be extrapolated to this workload. These observations identify possible costs; this benchmark does not isolate the fraction attributable to each condition.
+
+These observations do not close numerical, final cutover or general resource acceptance by themselves.
+
+## Larger factual-HSL service resources — Trailing Martingale measurement
+
+Repeat the preceding public service recipe with `--strategy trailing_martingale`.
+All 72 results and liquidation statuses match the isolated width-one references
+exactly, with zero reduction-rounding cases. All phases retain one device dataset,
+reach three packing entries, preserve shared source arrays, remove spill files
+at shutdown and report no sampling errors. This GPU-only comparison does not
+replace the pending
+current-reference parity and native optimizer acceptance checks.
+
+| Width | First-use round seconds | Warm round seconds | Warm requests/s | First warm result seconds | Sampled process-tree RSS peak bytes | Torch allocated peak bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 17,479.624 | 17,485.691 | 0.000686 | 3,829.666 | 2,726,207,488 | 11,951,616 |
+| 8 | 10,703.775 | 10,069.300 | 0.001192 | 9,426.111 | 2,663,030,784 | 28,646,400 |
+| auto | 10,509.293 | 10,048.788 | 0.001194 | 9,381.709 | 2,671,534,080 | 28,646,400 |
+
+Each round completes twelve logical requests across the three views. Wider
+batching reduces warm round time by approximately 42.5%, but delays the first
+result from about 64 minutes to 156–157 minutes. The absolute cost is substantial;
+these results strengthen the need to profile busy HSL reconstruction and consider
+usable-result latency within the existing batch policy. They do not establish
+CPU-relative speedup, optimizer search quality or an acceptable general latency.
+
+The automatic phase records two warm tuning samples, one for each half-history
+view, and zero completed production evidence windows. Its base-view controller
+has no retained samples. Actual physical cohorts contain four candidates; the
+final proposed width is 64, with ceiling 92 for the base view and 128 for the half
+views. Neither two samples nor the small configured cohort demonstrates tuning
+convergence or an optimal width.
+
+Torch reserved peaks are 25,165,824 bytes at width one and 46,137,344 bytes for
+wider execution. Sampled global device peaks are 5,332,008,960, 5,352,980,480 and
+5,361,369,088 bytes respectively. The preceding sampling and allocation limitations
+apply: global use is not exclusive service VRAM, process-tree RSS includes compiler
+children, and whole-process CPU time does not isolate orchestration. This completed
+resource cohort leaves representative full-search and remaining numerical,
+lifecycle and retirement gates open.
+
+## Current factual cohort and metric-surface observations
+
+After the minimum-remainder repair, the native factual cohort recipe compares
+64 candidates: EMA Anchor and Trailing Martingale, seeds 7 and 43, sixteen
+candidates per case, two coins, both sides and 3,000 minute bars. It requests
+22 metrics, unified HSL at threshold 0.002, span 2.5, one-day lookback and
+10,000-minute cooldown, with shocks `(0, 1500, 0.7)` and `(1, 1800, 1.3)`.
+Direct native replay and the request/future service use widths sixteen and
+automatic. The cohort tool and documentation checks pass 73 tests without
+skips; checked sources remain unchanged. These are fixed-candidate comparisons,
+not optimization runs or CPU validation of native optimizer fitness.
+
+Across all 64 candidates, HSL mean/maximum duration, trigger/restart rates,
+time in RED, completion ratio and initial-entry median/p95 agree exactly.
+The ADG/drawdown/RED fronts match for both EMA cases and TM seed 43.
+TM seed 7 changes one drawdown pair ordering and excludes one CPU-front member;
+the CPU drawdown regret at the GPU-selected minimum is 2.1962e-7. All four
+GPU-selected maximum-ADG candidates also maximize CPU ADG. The requested
+ADG, drawdown, RED and completion feasibility checks agree for all candidates;
+this does not establish agreement for thresholds placed inside their numerical
+differences or for other objectives.
+
+| Residual across the two seeds | EMA Anchor | Trailing Martingale |
+| --- | ---: | ---: |
+| Largest absolute ADG difference | 7.9057e-7 | 7.2922e-5 |
+| Largest absolute worst-drawdown difference | 2.3953e-6 | 3.8286e-6 |
+| Largest absolute EMA-tail drawdown difference | 1.5119e-4 | 5.2765e-5 |
+| Largest relative EMA-tail drawdown difference | 9.558% | 29.051% |
+| Largest absolute fill-gap p95 difference | 1 minute | 0 |
+| Largest absolute initial-entry p99 difference | 0 | 0.4415 hours |
+
+The EMA-tail reducer still averages a partially selected logarithmic bin,
+whereas CPU analysis selects the actual largest samples. Its systematic
+downward bias and changes to selected tail objectives remain an acceptance
+item. Initial-entry and fill-gap percentile bins have separate resolution
+limits; matching streamed means or HSL decisions does not prove these tails.
+No general numerical policy is widened. The two-day cohort lacks a CPU
+weighted exponential-fit result, so that field remains unassessed.
+
+A separate native comparison requests all 157 supported metrics on six
+twenty-day public shock fixtures: each strategy with long, short and both
+sides, two coins, seed 43, coin HSL at threshold 0.002, span 2.5 and
+five-minute cooldown, enabled unstuck and shocks `(0, 1440, 0.7)` and
+`(1, 1800, 1.3)`. All requested CPU/GPU values are present and finite in
+these cases. Of the four fields with existing comparison policies, ADG
+differs beyond the strict policy in five cases and fills/day in four;
+drawdown and completion pass all six. The other 153 fields per case remain
+policy-unassessed. Presence, finite values and small headline errors do not
+close per-metric acceptance, selection-materiality or full-search gates.
