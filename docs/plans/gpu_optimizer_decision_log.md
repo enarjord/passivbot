@@ -3506,3 +3506,24 @@ Historical observations do not supersede those requirements or prove current acc
   and values in the acceptance map. Accept these small F32 differences for those
   fixtures while preserving policy-unassessed report fields and the outstanding
   representative selection/limit gate. Current-head PR review and CI remain required.
+
+
+### 2026-10-10 — Empty selected factual scopes
+
+- Extend the existing native empty-history shortcut to coin and position-side
+  scopes. Selection already restricts their factual pairs; the shared helper
+  verifies empty retained tapes, native candles, flat reconstruction and actual
+  current exposure before evaluating one fresh endpoint. Retained activity in an
+  unrelated coin cannot disable a selected coin's shortcut. Current budget,
+  fractional EMA seed, later fills and terminal reconstruction remain unchanged.
+- Exercise actual factual callers in both strategy shader sources with two runtime
+  modes, long/short, inclusive expiry, unrelated retained activity, a current
+  budget change, later fills and genuine terminal fills. Reuse two compiler
+  ablations per strategy rather than specializing every runtime case. Source-
+  verified CUDA qualification remains required before integrating this slice.
+- All 77 focused Rust HSL regressions pass. The source-matched 15-check CUDA
+  caller/replay qualification also passes without failures or skips; the rebuilt
+  extension passes 341 Rust tests (one existing ignore) and default-feature
+  compilation. A subsequent development-base merge leaves production and these
+  focused test bytes unchanged. Broader ordering/numerical qualification retains
+  its own evidence. No numerical tolerance or performance acceptance is changed.

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native GPU coin and position-side HSL reuse the fresh current-position
+  singleton when every selected retained fill history is empty, preserving
+  current-budget evaluation and terminal-fill reconstruction.
+
 - Requested native GPU HSL EMA drawdown tails use eligible per-bar device
   observations instead of logarithmic cutoff-bin averages. Histories stay on
   the device, scratch admission includes their reduction, and unrequested or

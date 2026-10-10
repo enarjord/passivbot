@@ -10,6 +10,10 @@
 #define PASSIVBOT_HSL_INCREMENTAL_ENABLED PASSIVBOT_HSL_FACTUAL_ONLY
 #endif
 
+#ifndef PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED
+#define PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED PASSIVBOT_HSL_FACTUAL_ONLY
+#endif
+
 #ifndef PASSIVBOT_HSL_EMA_TAIL_ENABLED
 #define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0
 #endif
@@ -201,6 +205,35 @@ inline bool replay_factual_hsl(
         h.hsl.raw = h.hsl.ema = 0.0f; h.hsl.action = 0; h.hsl.flat_minute = -1;
         return !exposed;
     }
+    const float span = 2.0f / h.alpha - 1.0f;
+#if PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED
+    // Scope selection above already excludes unrelated coins and sides. The
+    // same current-position singleton applies to every empty selected scope.
+    if (exposed && !terminal) {
+        bool empty = true;
+        for (int p = 0; p < count; ++p)
+            empty = empty && hsl_pair_ring_view(rings[p], first).count == 0;
+        if (empty) {
+            for (int p = 0; p < count; ++p) {
+                pairs[p].facts = hsl_pair_ring_view(rings[p], first);
+                if (!hsl_reconstruct_pair(pairs[p].facts, pairs[p].current_size,
+                    pairs[p].current_basis, pairs[p].short_side, quantity_steps[p],
+                    pairs[p].events, pairs[p].history)) return false;
+            }
+            if (hsl_compose_empty_native_scope(pairs, count, first, minute,
+                budget, span, h.red_threshold, h.cooldown_minutes,
+                h.restart_policy == 2, result)) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+                h.scope_cursor.valid = false;
+#endif
+                h.hsl.raw = result.raw; h.hsl.ema = result.ema;
+                h.hsl.action = result.action; h.hsl.flat_minute = result.flat_minute;
+                h.hsl.last_observed = minute; h.hsl.exposed = exposed;
+                return true;
+            }
+        }
+    }
+#endif
     HslScopeCutoff cutoff;
 #if PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
     bool reused_cutoff;
@@ -211,7 +244,6 @@ inline bool replay_factual_hsl(
         cursors, prior_sizes, cutoff)) return false;
 #endif
     if (cutoff.found) first = max(first, cutoff.minute);
-    const float span = 2.0f / h.alpha - 1.0f;
     bool advanced = false;
 #if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
     if (reused_cutoff && exposed && !terminal) {
