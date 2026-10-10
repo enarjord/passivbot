@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native CUDA EMA Anchor unified HSL reuses bounded factual reconstruction and
+  controller summaries across rolling windows, with fresh replay for unsupported
+  or ambiguous inputs. Cache loss preserves risk intent; optional cache storage
+  is capped at 64 MiB per candidate within the existing shared scratch budget.
+  Other HSL scopes and Trailing Martingale retain their current default replay.
+
 - Replace GPU optimizer screening plus CPU validation with an authoritative asynchronous
   CUDA backtest service and CPU-owned search, scenario screening, scoring and persistence.
   Preserve CPU optimization and standalone backtests/plots. Remove obsolete validation,

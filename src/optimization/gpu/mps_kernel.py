@@ -123,6 +123,21 @@ def _hsl_layout(capacity: int, fact_capacity: int = 0, *, factual_only: bool = F
     return tree_size, storage_nodes
 
 
+def _hsl_native_cache_bytes(capacity: int, pair_capacity: int, fact_capacity: int) -> int:
+    """Exact one-owner scratch layout, independently of the number of controllers."""
+    if any(type(value) is not int or value < 0 for value in (capacity, pair_capacity, fact_capacity)):
+        raise ValueError("Invalid native HSL cache dimensions")
+    if not capacity or not pair_capacity or not fact_capacity:
+        return 0
+    if capacity % 64:
+        raise ValueError("Native HSL cache capacity must contain complete blocks")
+    align = lambda size: (size + 15) // 16 * 16
+    return sum(align(size) for size in (
+        96, pair_capacity * 128, capacity * 16, capacity * 8, capacity * 4,
+        capacity * 28, (capacity // 64) * 32, fact_capacity * 16,
+    ))
+
+
 def _with_hsl(source: str, capacity: int, fact_capacity: int = 0) -> str:
     if fact_capacity and not capacity:
         raise ValueError("GPU HSL facts require an HSL window")
@@ -1159,6 +1174,7 @@ def _ema_anchor_multicoin_shader_library(
     unstuck_enabled: bool = True,
     side: str | None = None,
     temporal_chunking: bool = False,
+    hsl_native_cache_capacity: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1170,7 +1186,11 @@ def _ema_anchor_multicoin_shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
         raw_tail_capacity=hsl_raw_tail_capacity,
     )
-    source = f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
+    source = (
+        f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
+        f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
+        f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
+    )
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
     source = _with_unstuck(source, unstuck_enabled)
     source = _with_multicoin_side(source, side)
@@ -1238,6 +1258,7 @@ def _trailing_martingale_multicoin_shader_library(
     hsl_factual_only: bool = False,
     unstuck_enabled: bool = True,
     side: str | None = None,
+    hsl_native_cache_capacity: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1258,7 +1279,11 @@ def _trailing_martingale_multicoin_shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
         raw_tail_capacity=hsl_raw_tail_capacity,
     )
-    source = f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
+    source = (
+        f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
+        f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
+        f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
+    )
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
     source = _with_unstuck(source, unstuck_enabled)
     source = _with_multicoin_side(source, side)
@@ -2722,13 +2747,54 @@ class _MulticoinReplayRunner:
         keys = self.parameter_keys
         return unstuck_ema_required(matrix, keys, self._unstuck_ema_overrides)
 
+    # Disposable unified factual arithmetic. Strategy subclasses enable only
+    # supported device shapes; this internal flag retains scalar ablation.
+    hsl_native_cache_enabled = False
+    hsl_native_cache_budget_bytes = 64 * 1024 * 1024
+
+    def _hsl_native_cache_capacity(self):
+        if not (getattr(self, "hsl_native_cache_enabled", False)
+                and getattr(self, "native_factual_hsl", False)
+                and self.bars.device.type == "cuda"
+                and getattr(self, "dispatch_native_hsl_cache_eligible", False)
+                and not getattr(self, "dispatch_native_hsl_cache_budget_disabled", False)
+                and self.hsl_capacity and getattr(self, "hsl_fact_capacity", 0)
+                and not getattr(self, "dispatch_hsl_disabled", False)):
+            return 0
+        capacity = ((self.hsl_capacity + 64 + 63) // 64) * 64
+        needed = _hsl_native_cache_bytes(
+            capacity, self.hsl_replay_sides * self.n_coins, self.hsl_fact_capacity
+        )
+        return capacity if needed <= self.hsl_native_cache_budget_bytes else 0
+
+    def _disable_native_cache_over_budget(self):
+        # Optional arithmetic must not prevent the authoritative histories from
+        # fitting. Latch off for this request/attempt before selecting its ABI;
+        # changing compiled state size must not oscillate cache admission.
+        if (self._hsl_native_cache_capacity()
+                and self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes):
+            self.dispatch_native_hsl_cache_budget_disabled = True
+            return True
+        return False
+
+    def _hsl_native_cache_bytes_per_candidate(self):
+        capacity = self._hsl_native_cache_capacity()
+        if not capacity:
+            return 0
+        return _hsl_native_cache_bytes(
+            capacity,
+            self.hsl_replay_sides * self.n_coins,
+            getattr(self, "hsl_fact_capacity", 0),
+        )
+
     def _hsl_history_bytes_per_candidate(self):
         if not self.hsl_capacity:
             return 0
         factual_only = getattr(self, "native_factual_hsl", False)
         _, nodes = _hsl_layout(self.hsl_capacity, getattr(self, "hsl_fact_capacity", 0),
                                factual_only=factual_only)
-        return self.hsl_scopes * (nodes * 32 + (0 if factual_only else self.hsl_capacity * 8))
+        return (self.hsl_scopes * (nodes * 32 + (0 if factual_only else self.hsl_capacity * 8))
+                + self._hsl_native_cache_bytes_per_candidate())
 
     def _hsl_ema_tail_scopes(self):
         return ("long", "short", "portfolio") if self.replay_sides == 2 else (self.side, "portfolio")
@@ -2786,7 +2852,10 @@ class _MulticoinReplayRunner:
             > self.hsl_scratch_budget_bytes
         ):
             raise ValueError("GPU history batch exceeds its scratch budget")
-        key = (batch_size, getattr(self, "hsl_fact_capacity", 0))
+        cache_bytes = self._hsl_native_cache_bytes_per_candidate()
+        row_shape = ((batch_size, cache_bytes // 4) if cache_bytes else
+                     (batch_size, self.hsl_scopes, 0 if factual_only else self.hsl_capacity * 2))
+        key = (batch_size, getattr(self, "hsl_fact_capacity", 0), cache_bytes)
         if key not in self._hsl_scratch_buffers:
             self._hsl_scratch_buffers = {
                 key: (
@@ -2796,7 +2865,7 @@ class _MulticoinReplayRunner:
                         device=gpu_device(),
                     ),
                     torch.empty(
-                        (batch_size, self.hsl_scopes, 0 if factual_only else self.hsl_capacity * 2),
+                        row_shape,
                         dtype=torch.int32,
                         device=gpu_device(),
                     ),
@@ -3021,13 +3090,20 @@ class _MulticoinReplayRunner:
         return np.stack(effective, axis=1)
 
     def _prepare_native_factual_hsl(self, params):
+        self.dispatch_native_hsl_cache_eligible = False
+        self.dispatch_native_hsl_cache_budget_disabled = False
         if not getattr(self, "native_factual_hsl", False):
             return
         keys = self.parameter_keys
         matrix = np.asarray(params, dtype=np.float32)
         if matrix.ndim != 2 or matrix.shape[1] != len(keys) * self.hsl_replay_sides:
             raise ValueError("invalid native GPU candidate parameter shape")
-        active = bool(np.any(self._native_hsl_effective_enablement(matrix, keys)))
+        effective = self._native_hsl_effective_enablement(matrix, keys)
+        active = bool(np.any(effective))
+        mode = keys.index("hsl_signal_mode")
+        unified = np.stack([matrix[:, mode + side * len(keys)] == 0
+                            for side in range(self.hsl_replay_sides)], axis=1)
+        self.dispatch_native_hsl_cache_eligible = bool(np.any(effective & unified))
         capacity = self.hsl_fact_capacity_learned if active else 0
         if capacity != self.hsl_fact_capacity:
             self._hsl_scratch_buffers.clear()
@@ -3178,6 +3254,11 @@ class _MulticoinReplayRunner:
                     raise
                 self.interrupt_check()
                 self.hsl_fact_capacity = capacity * 2
+                if self._disable_native_cache_over_budget():
+                    # Rejected work owns no accepted state. The next attempt
+                    # recompiles/re-measures the scalar ABI before admission.
+                    self._replay_state_bytes = None
+                    self._replay_states.clear()
                 if self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
                     self.hsl_fact_capacity = capacity
                     raise HslFactHistoryOverflow(
@@ -3220,6 +3301,11 @@ class _MulticoinReplayRunner:
         # The compiled ABI owns the state size. Include it in admission before
         # any candidate histories or persistent state buffers are allocated.
         self._prepare_replay_state_layout(library, library_args)
+        if self._disable_native_cache_over_budget():
+            loader, library_args = self._library_cache_call()
+            library, scalar_cold = _cached_library_with_miss(loader, *library_args)
+            cold |= scalar_cold
+            self._prepare_replay_state_layout(library, library_args)
         compiled = time.perf_counter() if profile else 0.0
         if self._history_bytes_per_candidate():
             split = self._run_history_batches(
@@ -3378,6 +3464,9 @@ class _MulticoinReplayRunner:
 class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
     """EMA Anchor parameter layout, packing and kernel dispatch."""
 
+    # Metal and other HSL scopes compile disposable unified arithmetic out.
+    hsl_native_cache_enabled = True
+
     parameter_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     coin_override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
     coin_override_label = "EMA"
@@ -3518,6 +3607,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "dispatch_unstuck_enabled", True),
             self._compiled_side(),
             self._temporal_replay_enabled(),
+            self._hsl_native_cache_capacity(),
         )
 
 
@@ -3942,6 +4032,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "native_factual_hsl", False),
             getattr(self, "dispatch_unstuck_enabled", True),
             self._compiled_side(),
+            self._hsl_native_cache_capacity(),
         )
         return _trailing_martingale_multicoin_shader_library, args
 

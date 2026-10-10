@@ -46,6 +46,49 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
         "--fixture", strategy, "--sides", "both", "--coins", str(coins),
         "--bars", "512", "--seed", "43",
     ]))
+    cache_interaction = strategy == "trailing_martingale" and coins == 3
+    physical_batches = []
+    logical_batches = []
+    admitted_caches = []
+    if cache_interaction:
+        from config import prepare_config
+        from config.hsl import generated_template
+        from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
+        inputs = list(inputs)
+        config = inputs[0]
+        if config["live"]["hsl_signal_mode"] != "unified":
+            config = generated_template(config, "unified")
+        config["live"].update(hsl_signal_mode="unified", pnls_max_lookback_days=1)
+        config["bot"]["hsl"].update(enabled=True, red_threshold=1., ema_span_minutes=2.5,
+            cooldown_minutes_after_red=5, restart_after_red_policy="always")
+        inputs[0] = prepare_config(config,verbose=False,target="canonical",runtime=None)
+        layout = MpsTrailingMartingaleMulticoinRunner._prepare_replay_state_layout
+        dispatch = MpsTrailingMartingaleMulticoinRunner._dispatch_replay
+        history_batches = MpsTrailingMartingaleMulticoinRunner._run_history_batches
+
+        def one_candidate_scratch(self,library,args):
+            layout(self,library,args)
+            # Include the compiled state and exact-entry reduction workspace;
+            # two logical requests must split without reducing their histories.
+            self.hsl_scratch_budget_bytes = 2*self._history_bytes_per_candidate()-1
+
+        def capture_dispatch(self,*args,**kwargs):
+            physical_batches.append(kwargs["batch_size"])
+            admitted_caches.append((self.hsl_native_cache_enabled,
+                                    self._hsl_native_cache_capacity() > 0))
+            assert kwargs["batch_size"] == 1
+            return dispatch(self,*args,**kwargs)
+
+        def capture_history_batches(self, params, **kwargs):
+            logical_batches.append(len(params))
+            return history_batches(self, params, **kwargs)
+
+        monkeypatch.setattr(MpsTrailingMartingaleMulticoinRunner,
+            "_run_history_batches", capture_history_batches)
+        monkeypatch.setattr(MpsTrailingMartingaleMulticoinRunner,
+            "_prepare_replay_state_layout",one_candidate_scratch)
+        monkeypatch.setattr(MpsTrailingMartingaleMulticoinRunner,
+            "_dispatch_replay",capture_dispatch)
     observed = []
     original = metrics._fill_gap_metrics
 
@@ -80,16 +123,30 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
         "fills_gap_p95_hours", "fills_gap_time_weighted_mean_hours",
         "entry_interval_hours_p95",
     )
-    with _native_dataset(inputs, "binance", names) as dataset:
-        with CudaBacktestService(batch_size=2, tuning_mode="off", max_batch_delay=0) as service:
-            service.register_dataset("gaps", dataset)
-            first = service.submit(BacktestRequest("first", "gaps", {})).result()
-            repeated = [service.submit(BacktestRequest(str(i), "gaps", {}))
-                        for i in range(3)]
-            for future in repeated:
-                assert future.result().metrics == first.metrics
-            assert set(first.metrics) == set(names)
-            assert all(np.isfinite(value) for value in first.metrics.values())
+    baseline = None
+    for cache in ((False,True) if cache_interaction else (None,)):
+        if cache_interaction:
+            monkeypatch.setattr(MpsTrailingMartingaleMulticoinRunner,"hsl_native_cache_enabled",cache)
+        with _native_dataset(inputs, "binance", names) as dataset:
+            with CudaBacktestService(batch_size=2, tuning_mode="off",
+                    max_batch_delay=.01 if cache_interaction else 0) as service:
+                service.register_dataset("gaps", dataset)
+                first = service.submit(BacktestRequest("first", "gaps", {})).result()
+                repeated = [service.submit(BacktestRequest(str(i), "gaps", {}))
+                            for i in range(3)]
+                for future in repeated:
+                    assert future.result().metrics == first.metrics
+                assert set(first.metrics) == set(names)
+                assert all(np.isfinite(value) for value in first.metrics.values())
+        if baseline is None:
+            baseline = first.metrics
+        else:
+            assert first.metrics == baseline
+    if cache_interaction:
+        assert physical_batches and set(physical_batches)=={1}
+        assert 2 in logical_batches, "two logical requests must exercise scratch splitting"
+        assert (False,False) in admitted_caches and (True,True) in admitted_caches
+        assert all(enabled == admitted for enabled,admitted in admitted_caches)
     assert observed and min(observed) >= 0
     assert max(observed) > 0, "fixture must exercise multiple fills in a candle"
 

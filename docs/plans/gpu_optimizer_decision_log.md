@@ -3710,3 +3710,23 @@ Historical observations do not supersede those requirements or prove current acc
   eight evolving comparisons, focused HSL performance improvements and final
   current-head review/CI separate; these lifecycle passes do not certify arbitrary
   numerical parity, search quality or master integration.
+
+
+### 2026-10-10 — Bounded unified HSL arithmetic reuse
+
+- CUDA EMA Anchor effective unified HSL may reuse per-pair factual reconstruction,
+  physical event scratch and fixed controller blocks. A reconstructed flat followed
+  by a retained opening fill certifies rolling-prefix repair; otherwise full pair
+  repair remains available. Changed or ambiguous facts, numerical query declines,
+  terminal evaluation and cache loss preserve the independent fresh composer.
+- Admission uses the actual runner device and effective request modes. Cache bytes
+  are counted once, capped at 64 MiB per candidate and included with compiled state,
+  factual histories and requested metric scratch in the existing shared budget.
+  If optional cache makes one candidate exceed that budget, the request retries
+  admission with a scalar ABI; later requests reconsider eligibility. Factual
+  overflow attempts still contribute no accepted metrics.
+- An internal compile ablation remains available. Metal, nonfactual replay,
+  coin/position-side-only HSL and disabled HSL compile the cache out; Trailing
+  Martingale retains scalar replay by default. This changes disposable arithmetic,
+  not HSL semantics, service ownership or public configuration. Combined-source
+  device qualification and performance acceptance remain separate gates.

@@ -15,6 +15,7 @@ const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
 const MPS_HSL_SOURCE: &str = include_str!("gpu/mps_hsl.metal");
 const MPS_HSL_HISTORY_SOURCE: &str = include_str!("gpu/mps_hsl_history.metal");
 const MPS_HSL_SCOPE_SOURCE: &str = include_str!("gpu/mps_hsl_scope.metal");
+const MPS_HSL_NATIVE_CACHE_SOURCE: &str = include_str!("gpu/mps_hsl_native_cache.metal");
 const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
 const MPS_BTC_RISK_COMMON_SOURCE: &str = include_str!("gpu/mps_btc_risk_common.metal");
 const MPS_EQUITY_BALANCE_DIFF_MARKER: &str = "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON";
@@ -70,8 +71,12 @@ fn compose_hsl_source(body: &str) -> String {
         .replacen(
             MPS_HSL_MARKER,
             &format!(
-                "{}\n{}\n{}\n{}",
-                MPS_HSL_SOURCE, MPS_HSL_HISTORY_SOURCE, MPS_HSL_SCOPE_SOURCE, MPS_HSL_COMMON_SOURCE
+                "{}\n{}\n{}\n{}\n{}",
+                MPS_HSL_SOURCE,
+                MPS_HSL_HISTORY_SOURCE,
+                MPS_HSL_SCOPE_SOURCE,
+                MPS_HSL_NATIVE_CACHE_SOURCE,
+                MPS_HSL_COMMON_SOURCE
             ),
             1,
         )

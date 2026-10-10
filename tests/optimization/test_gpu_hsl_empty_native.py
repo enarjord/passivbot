@@ -62,6 +62,7 @@ kernel void empty_native_caller(constant float* params, constant float* bars,
 def test_native_caller_empty_expiry_new_fill_and_terminal_ablation(strategy,closing):
     torch, reference=_device_reference()
     from optimization.gpu.runtime import compile_shader, gpu_device
+    from optimization.gpu.mps_kernel import _hsl_native_cache_bytes
     device=gpu_device()
     candles=np.zeros((25,4),dtype=np.float32)
     candles[:,:3]=100.0
@@ -78,15 +79,22 @@ def test_native_caller_empty_expiry_new_fill_and_terminal_ablation(strategy,clos
             '#define PASSIVBOT_HSL_TREE_SIZE 1\n'
             '#define PASSIVBOT_HSL_LOOKBACK 10\n'+source+_CALLER)
     outputs=[]
-    for enabled in (0,1):
+    variants=[(0,0),(1,0)]
+    if strategy=="ema_anchor" and not closing:
+        variants.append((1,1))
+    for enabled,cache in variants:
         trees=torch.zeros((2,26,32),dtype=torch.uint8,device=device)
-        rows=torch.empty(0,dtype=torch.int32,device=device)
+        words=_hsl_native_cache_bytes(128,1,16)//4 if cache else 0
+        rows=torch.empty(words,dtype=torch.int32,device=device)
         out=torch.full((25,7),float('nan'),dtype=torch.float32,device=device)
-        library=compile_shader(f'#define PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED {enabled}\n'+source)
+        library=compile_shader(f'#define PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED {enabled}\n'
+            f'#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {cache}\n'
+            '#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY 128\n'+source)
         library.empty_native_caller(params,bars,settings,trees,rows,out,int(closing),threads=1)
         outputs.append(out.cpu().numpy())
-    np.testing.assert_array_equal(outputs[0],outputs[1])
-    assert np.all(outputs[1][:,0]==1)
+    for output in outputs[1:]:
+        np.testing.assert_array_equal(outputs[0],output)
+        assert np.all(output[:,0]==1)
     # Opening fact expires while actual inventory is still held; a later fill
     # restores retained history. The mark-only and genuine close paths differ.
     assert np.all(outputs[1][11:15,5]==0)
