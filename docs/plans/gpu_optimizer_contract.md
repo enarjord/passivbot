@@ -267,6 +267,11 @@ Completion requires:
 - [ ] Qualify requested native EMA-tail observation capture, compact device
   reduction, scratch admission and feature-off behavior on CUDA; assess remaining
   CPU-curve discrepancies and representative objective/limit effects.
+  - [x] Qualify corrected capture, scopes, reporting clocks, retry/temporal isolation,
+    scratch admission and terminal handling: 81 focused checks pass with CUDA enabled;
+    four standalone CPU/GPU comparisons confirm unified side reports remain zero
+    and measure the corrected scope residuals. General numerical policy and
+    representative objective/limit acceptance remain separate.
 - [x] Replace hourly recovery distribution sampling with per-step GPU observations,
   budget their replay/reduction storage, and isolate mutable reduction scratch.
 - [x] Restore safe disabled-HSL single-side EMA ablation and verify all returned outputs.
