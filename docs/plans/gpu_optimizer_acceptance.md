@@ -855,8 +855,9 @@ with the same Rust/Python fingerprints as the exact-entry cohort above.
 
 At bar 1592, CPU sizing balance `1042.3523134359966` and native F32 balance
 `1042.349365234375` straddle the `1042.35` boundary at simulated ask `69.49`.
-The floor `balance * .5 * .005 / 69.49` rounds to `.038` versus `.037`
-on a `.001` quantity step. At bar 1747, native basis `115.99400329589844`
+The recalculated initial-quantity lower bound `balance * .5 * .005 / 69.49`
+lies on either side of `.0375` and rounds to the nearest `.001` quantity step:
+`.038` versus `.037`. At bar 1747, native basis `115.99400329589844`
 and threshold `.0010000746697187424` yield an F32 recursive short-entry
 target `116.11000061035156`; division by the price step rounds onto tick 11611;
 the same native basis/threshold inputs evaluated at higher precision lie above
