@@ -2036,4 +2036,42 @@ Torch reserved peak is 25,165,824 bytes and packing peak is 10,033,620 bytes. Pr
 
 The source-backed continuation limitation is precise: `replay_factual_hsl` begins at `max(minute - lookback, 0)` before applying the factual cutoff, and `hsl_advance_scope` requires the same effective start, budget and factual identity. A sliding lookback, changed fills/budget, expired history or numerical guard therefore reconstructs fresh. A held-position continuation speedup cannot be extrapolated to this workload. These observations identify possible costs; this benchmark does not isolate the fraction attributable to each condition.
 
-The corresponding larger Trailing Martingale measurement remains open. These observations do not close numerical, final cutover or general resource acceptance by themselves.
+These observations do not close numerical, final cutover or general resource acceptance by themselves.
+
+## Larger factual-HSL service resources — Trailing Martingale measurement
+
+Repeat the preceding public service recipe with `--strategy trailing_martingale`.
+All 72 results and liquidation statuses match the isolated width-one references
+exactly, with zero reduction-rounding cases. All phases retain one device dataset,
+reach three packing entries, preserve shared source arrays, remove spill files
+at shutdown and report no sampling errors. This GPU-only comparison does not
+replace the pending
+current-reference parity and native optimizer acceptance checks.
+
+| Width | First-use round seconds | Warm round seconds | Warm requests/s | First warm result seconds | Sampled process-tree RSS peak bytes | Torch allocated peak bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 17,479.624 | 17,485.691 | 0.000686 | 3,829.666 | 2,726,207,488 | 11,951,616 |
+| 8 | 10,703.775 | 10,069.300 | 0.001192 | 9,426.111 | 2,663,030,784 | 28,646,400 |
+| auto | 10,509.293 | 10,048.788 | 0.001194 | 9,381.709 | 2,671,534,080 | 28,646,400 |
+
+Each round completes twelve logical requests across the three views. Wider
+batching reduces warm round time by approximately 42.5%, but delays the first
+result from about 64 minutes to 156–157 minutes. The absolute cost is substantial;
+these results strengthen the need to profile busy HSL reconstruction and consider
+usable-result latency within the existing batch policy. They do not establish
+CPU-relative speedup, optimizer search quality or an acceptable general latency.
+
+The automatic phase records two warm tuning samples, one for each half-history
+view, and zero completed production evidence windows. Its base-view controller
+has no retained samples. Actual physical cohorts contain four candidates; the
+final proposed width is 64, with ceiling 92 for the base view and 128 for the half
+views. Neither two samples nor the small configured cohort demonstrates tuning
+convergence or an optimal width.
+
+Torch reserved peaks are 25,165,824 bytes at width one and 46,137,344 bytes for
+wider execution. Sampled global device peaks are 5,332,008,960, 5,352,980,480 and
+5,361,369,088 bytes respectively. The preceding sampling and allocation limitations
+apply: global use is not exclusive service VRAM, process-tree RSS includes compiler
+children, and whole-process CPU time does not isolate orchestration. This completed
+resource cohort leaves representative full-search and remaining numerical,
+lifecycle and retirement gates open.
