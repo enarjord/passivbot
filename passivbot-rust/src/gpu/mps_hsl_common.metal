@@ -207,7 +207,9 @@ inline bool replay_factual_hsl(
     }
     const float span = 2.0f / h.alpha - 1.0f;
 #if PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED
-    if (h.signal_mode == HSL_SIGNAL_UNIFIED && exposed && !terminal) {
+    // Scope selection above already excludes unrelated coins and sides. The
+    // same current-position singleton applies to every empty selected scope.
+    if (exposed && !terminal) {
         bool empty = true;
         for (int p = 0; p < count; ++p)
             empty = empty && hsl_pair_ring_view(rings[p], first).count == 0;

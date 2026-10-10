@@ -3490,3 +3490,20 @@ Historical observations do not supersede those requirements or prove current acc
   strategy/side/terminal-cause parity cases to all six EMA maxima/tails at their
   unchanged tolerances. Twelve host reducer/decoder controls pass; rebuilt device
   qualification and current-head review remain integration gates.
+
+
+### 2026-10-10 — Empty selected factual scopes
+
+- Extend the existing native empty-history shortcut to coin and position-side
+  scopes. Selection already restricts their factual pairs; the shared helper
+  verifies empty retained tapes, native candles, flat reconstruction and actual
+  current exposure before evaluating one fresh endpoint. Retained activity in an
+  unrelated coin cannot disable a selected coin's shortcut. Current budget,
+  fractional EMA seed, later fills and terminal reconstruction remain unchanged.
+- Exercise actual factual callers in both strategy shader sources with two runtime
+  modes, long/short, inclusive expiry, unrelated retained activity, a current
+  budget change, later fills and genuine terminal fills. Reuse two compiler
+  ablations per strategy rather than specializing every runtime case. Source-
+  verified CUDA qualification remains required before integrating this slice.
+- All 77 focused Rust HSL regressions pass. Device caller and replay qualification
+  remain pending; no numerical tolerance or performance acceptance is changed.
