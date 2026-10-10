@@ -136,7 +136,10 @@ def test_native_gap_capture_temporal_partial_and_compact_join(sides, interval_mi
     ])))
     if interval_minutes != 1:
         inputs[0]["backtest"]["candle_interval_minutes"] = interval_minutes
-        inputs[4] = inputs[4][0] + np.arange(len(inputs[4]), dtype=np.int64) * interval_minutes * 60_000
+        interval_ms = interval_minutes * 60_000
+        first_ts = int(inputs[4][0]) // interval_ms * interval_ms
+        inputs[4] = first_ts + np.arange(len(inputs[4]), dtype=np.int64) * interval_ms
+        inputs[2]["__meta__"]["data_interval_minutes"] = interval_minutes
     config, candles, markets, btc, timestamps = inputs
     replay = MpsMulticoinProxy(config=deepcopy(config), hlcvs=candles, mss=markets,
         btc=btc, timestamps=timestamps, exchange="binance", batch_size=3,
@@ -174,11 +177,15 @@ def test_rejected_factual_attempt_does_not_reduce_or_reuse_entry_counts(monkeypa
     from test_gpu_weighted_equity_capture import _runner_context
     runner, params = _runner_context("trailing_martingale", "both", shock=True,
                                     factual_hsl=True, count=512)
-    uncaptured = {key: value.clone() for key, value in runner.run(params).items()}
+    uncaptured = {key: value.clone() if isinstance(value, torch.Tensor) else value
+                  for key, value in runner.run(params).items()}
     runner.entry_interval_enabled = True
     captured = runner.run(params)
     for key, value in uncaptured.items():
-        torch.testing.assert_close(captured[key], value, rtol=0, atol=0, equal_nan=True)
+        if isinstance(value, torch.Tensor):
+            torch.testing.assert_close(captured[key], value, rtol=0, atol=0, equal_nan=True)
+        else:
+            assert captured[key] == value
     assert set(captured) == set(uncaptured) | {"entry_interval_native_metrics"}
     expected = captured["entry_interval_native_metrics"].clone()
     real_reduce = mps_kernel.entry_intervals_from_counts
@@ -201,10 +208,12 @@ def test_native_gap_accumulator_zero_gap_empty_population_and_invalid_counts():
     import passivbot_rust
     from rust_utils import verify_loaded_runtime_extension
     from optimization.gpu.runtime import compile_shader
+    from optimization.gpu.mps_kernel import _with_hsl
     verify_loaded_runtime_extension()
     source = ("#define PASSIVBOT_HSL_FACTUAL_ONLY 1\n"
+              "#define PASSIVBOT_HSL_LOOKBACK 32\n"
               "#define PASSIVBOT_ENTRY_INTERVAL_ENABLED 1\n"
-              + passivbot_rust.mps_trailing_martingale_multicoin_source_py() + r"""
+              + _with_hsl(passivbot_rust.mps_trailing_martingale_multicoin_source_py(), 34, 1) + r"""
 kernel void entry_gap_probe(device float* stats, device int* counts,
     uint b [[thread_position_in_grid]]) {
     float last = -1.0f;
