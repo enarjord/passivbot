@@ -494,6 +494,10 @@ struct TrailingMartingaleMulticoinSideState {
     HslState hsl;
     HslState coin_hsl[MAX_COINS];
     HslStrategyEquityStats hsl_strategy_eq;
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float hsl_report_ema_max;
+    float hsl_portfolio_report_ema_max;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     HslDrawdownEmaTailStats hsl_ema_tail;
     HslDrawdownEmaTailStats hsl_portfolio_ema_tail;
@@ -2765,6 +2769,10 @@ inline void init_trailing_martingale_multicoin_side_state(
 ) {
     side.hsl = config.hsl_template;
     side.hsl_strategy_eq = init_hsl_strategy_equity_stats();
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    side.hsl_report_ema_max = 0.0f;
+    side.hsl_portfolio_report_ema_max = 0.0f;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     side.hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
     side.hsl_portfolio_ema_tail = init_hsl_drawdown_ema_tail_stats();
@@ -5164,6 +5172,9 @@ kernel void passivbot_tm_multicoin_replay_state_bytes(device uint* result) {
 struct TrailingMartingaleMulticoinFusedReplayState {
     TrailingMartingaleMulticoinReplayState common;
     TrailingMartingaleMulticoinSideState short_side;
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float portfolio_hsl_report_ema_max;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     HslDrawdownEmaTailStats portfolio_hsl_ema_tail;
 #endif
@@ -5376,6 +5387,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
     int liquidation_day = -1;
     HslTimeObservation hsl_time = init_hsl_time_observation();
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float portfolio_hsl_report_ema_max = 0.0f;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     HslDrawdownEmaTailStats portfolio_hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
 #endif
@@ -5443,6 +5457,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
 #if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
         recovery_start_k = replay_states[b].common.recovery_start_k;
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        portfolio_hsl_report_ema_max = replay_states[b].portfolio_hsl_report_ema_max;
 #endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
         portfolio_hsl_ema_tail = replay_states[b].portfolio_hsl_ema_tail;
@@ -5902,6 +5919,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             int long_tier = record_multicoin_hsl_report(
                 long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions,
                 long_hsl_ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+                , long_side.hsl_report_ema_max
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
                 , long_side.hsl_ema_tail
 #endif
@@ -5909,10 +5929,20 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             int short_tier = record_multicoin_hsl_report(
                 short_side.hsl, short_side.coin_hsl, C, short_effective_n_positions,
                 short_hsl_ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+                , short_side.hsl_report_ema_max
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
                 , short_side.hsl_ema_tail
 #endif
             );
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            portfolio_hsl_report_ema_max = fmax(portfolio_hsl_report_ema_max, fmax(
+                observed_multicoin_hsl_ema(long_side.hsl, long_side.coin_hsl,
+                    C, long_effective_n_positions),
+                observed_multicoin_hsl_ema(short_side.hsl, short_side.coin_hsl,
+                    C, short_effective_n_positions)));
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
 #if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
             portfolio_hsl_ema_tail.last_sample = NAN;
@@ -6138,6 +6168,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
         replay_states[b].common.recovery_start_k = recovery_start_k;
 #endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        replay_states[b].portfolio_hsl_report_ema_max = portfolio_hsl_report_ema_max;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
         replay_states[b].portfolio_hsl_ema_tail = portfolio_hsl_ema_tail;
 #endif
@@ -6303,6 +6336,16 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             hsl_report_end_step(hsl_time), scalars, scalar_offset + 32
         );
     }
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    scalars[scalar_offset + 17] = 0.0f;
+    scalars[scalar_offset + 55] = 0.0f;
+    scalars[scalar_offset + 56] = 0.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    scalars[scalar_offset + 17] = portfolio_hsl_report_ema_max;
+    scalars[scalar_offset + 55] = long_side.hsl_report_ema_max;
+    scalars[scalar_offset + 56] = short_side.hsl_report_ema_max;
+#endif
+#endif
     scalars[scalar_offset + 57] = tm_multicoin_entry_initial_balance_pct(
         short_config, short_coin_overrides,
         wallet_exposure_denominator_n_positions(
@@ -6997,10 +7040,17 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         if (can_generate && alive && balance > 0.0f && equity > liquidation_floor) {
             int sampled_tier = record_multicoin_hsl_report(
                 hsl, coin_hsl, C, effective_n_positions, hsl_ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+                , side.hsl_report_ema_max
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
                 , side.hsl_ema_tail
 #endif
             );
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            side.hsl_portfolio_report_ema_max = fmax(side.hsl_portfolio_report_ema_max,
+                observed_multicoin_hsl_ema(hsl, coin_hsl, C, effective_n_positions));
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
 #if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
             side.hsl_portfolio_ema_tail.last_sample = NAN;
@@ -7350,6 +7400,18 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             scalar_offset + 32
         );
     }
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Native metric maxima use the same bar observations as CPU analysis,
+    // independently of controller refreshes at fill/terminal boundaries.
+    scalars[scalar_offset + 17] = 0.0f;
+    scalars[scalar_offset + 55] = 0.0f;
+    scalars[scalar_offset + 56] = 0.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    scalars[scalar_offset + 17] = side.hsl_portfolio_report_ema_max;
+    scalars[scalar_offset + 55] = short_side ? 0.0f : side.hsl_report_ema_max;
+    scalars[scalar_offset + 56] = short_side ? side.hsl_report_ema_max : 0.0f;
+#endif
+#endif
     // The untraded opposite side is a constant curve over the same equity
     // horizon. Strict new-peak recovery includes that entire unrecovered tail.
     const float inactive_recovery_ms = first_eq_k >= 0.0f && last_eq_k >= 0.0f

@@ -1457,7 +1457,7 @@ def _require_available_held_valuation(scalars):
         raise HslFactHistoryOverflow("GPU HSL factual history overflow")
 
 
-def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
+def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_factual_hsl=False) -> dict:
     _require_available_held_valuation(scalars)
     active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
 
@@ -1566,13 +1566,18 @@ def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
             scalars, 64, reserved_columns=3
         ),
     }
+    if native_factual_hsl:
+        # Column 17 is unused by legacy shared replay. Native reporting owns a
+        # distinct portfolio maximum, since unified side signals are zero.
+        output["hsl_drawdown_ema_max_portfolio"] = scalars[:, 17]
     if btc_risk_enabled:
         output.update(_decode_btc_risk_outputs(daily, active_days, 9))
     return output
 
 
-def _decode_multicoin_fused_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
-    output = _decode_outputs(daily, scalars, gaps, btc_risk_enabled=btc_risk_enabled)
+def _decode_multicoin_fused_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_factual_hsl=False) -> dict:
+    output = _decode_outputs(daily, scalars, gaps, btc_risk_enabled=btc_risk_enabled,
+                             native_factual_hsl=native_factual_hsl)
     long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
     output.update(
         {
@@ -2839,7 +2844,8 @@ class _MulticoinReplayRunner:
         return combined
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
+        return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
 
     def _hsl_ema_tail_sample_buffer(self, batch_size):
         if not self._hsl_ema_tail_samples_enabled():
@@ -3719,7 +3725,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
+        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
 
 
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
@@ -4198,7 +4205,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
+        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):

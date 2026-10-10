@@ -723,7 +723,7 @@ inline int hsl_report_tier(thread const HslState& h) {
     return h.enabled && (h.red_active_now || h.halted) ? 3 : 0;
 }
 
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
 // The public portfolio EMA series observes the maximum current signal on each
 // bar. Reducing each side's tail first would discard their joint time ordering.
 inline float observed_multicoin_hsl_ema(
@@ -747,6 +747,9 @@ inline float observed_multicoin_hsl_ema(
 inline int record_multicoin_hsl_report(
     thread HslState& aggregate, thread HslState* coins, int coin_count,
     int effective_n_positions, bool ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    , thread float& report_ema_max
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     , thread HslDrawdownEmaTailStats& ema_tail
 #endif
@@ -754,28 +757,29 @@ inline int record_multicoin_hsl_report(
     bool enabled = aggregate.enabled;
     int tier = hsl_report_tier(aggregate);
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
-    // Ineligible bars must not repeat the preceding eligible observation.
+    // Reset the current bar before recording its scope observation.
     ema_tail.last_sample = NAN;
 #endif
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
     float drawdown_ema = fabs(aggregate.drawdown_ema);
 #if PASSIVBOT_HSL_FACTUAL_ONLY
     // Unified has one portfolio controller, not a controller for each side.
     // The portfolio observation below retains its signal; side reports are zero.
-    if (aggregate.signal_mode == HSL_SIGNAL_UNIFIED) drawdown_ema = 0.0f;
+    if (aggregate.signal_mode == HSL_SIGNAL_UNIFIED || !aggregate.enabled
+            || effective_n_positions <= 0) drawdown_ema = 0.0f;
 #endif
 #endif
     if (aggregate.signal_mode == HSL_SIGNAL_COIN) {
         enabled = false;
         tier = 0;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
         drawdown_ema = 0.0f;
 #endif
         if (effective_n_positions > 0) {
             for (int c = 0; c < coin_count; ++c) {
                 enabled = enabled || coins[c].enabled;
                 tier = max(tier, hsl_report_tier(coins[c]));
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
                 if (coins[c].enabled)
                     drawdown_ema = fmax(drawdown_ema, fabs(coins[c].drawdown_ema));
 #endif
@@ -783,6 +787,14 @@ inline int record_multicoin_hsl_report(
         }
         ema_eligible = enabled;
     }
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Rust records each bar's enabled scope signal, including cooldown bars.
+    // Permission to generate orders is not the EMA reporting clock.
+    ema_eligible = true;
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    report_ema_max = fmax(report_ema_max, drawdown_ema);
+#endif
     if (ema_eligible) {
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
         update_hsl_drawdown_ema_tail_stats(ema_tail, drawdown_ema);

@@ -68,6 +68,9 @@ def _equal(actual, expected, *, skip=()):
             assert actual[key] == value, key
 
 
+MAXIMA = tuple(f"hsl_drawdown_ema_max_{s}" for s in ("long", "short", "portfolio"))
+
+
 TAILS = tuple(f"hsl_drawdown_ema_mean_worst_1pct_{s}" for s in ("long", "short", "portfolio"))
 
 
@@ -100,6 +103,12 @@ def test_native_capture_uses_reporting_clock_and_preserves_other_metrics(strateg
     for index, scope in enumerate(runner._hsl_ema_tail_scopes()):
         name = f"hsl_drawdown_ema_mean_worst_1pct_{scope}"
         np.testing.assert_allclose(actual[name].cpu(), reference[:, index], rtol=2e-7, atol=1e-9)
+        observed_max = samples[:, index].nan_to_num(nan=0.).abs().amax(dim=1)
+        torch.testing.assert_close(actual[f"hsl_drawdown_ema_max_{scope}"], observed_max,
+                                   rtol=0, atol=0)
+        # Native analysis shares the bar clock across scopes, including halted
+        # cooldown observations. Order-generation eligibility cannot thin tails.
+        assert torch.equal(torch.isfinite(samples[:, index]), torch.isfinite(samples[:, -1]))
         if signal_mode == 0 and scope != "portfolio":
             # Rust reports the unified signal only at portfolio scope. Side
             # channels must not copy it, including single-side simulations.
@@ -170,4 +179,49 @@ def test_disabled_native_hsl_releases_optional_tail_capture(strategy):
     assert not runner._hsl_ema_tail_buffers
     assert not runner._hsl_ema_tail_samples_enabled()
     assert runner._history_bytes_per_candidate() < active_cost
-    assert all(output[key].eq(0).all() for key in TAILS)
+    assert all(output[key].eq(0).all() for key in (*TAILS, *MAXIMA))
+
+
+def test_native_portfolio_ema_maximum_is_independent_of_zero_unified_sides():
+    from optimization.gpu.metrics import _hard_stop_ema_drawdown_metrics
+
+    output = {
+        "hsl_drawdown_ema_max_long": torch.tensor([0., .12]),
+        "hsl_drawdown_ema_max_short": torch.tensor([0., .08]),
+        "hsl_drawdown_ema_max_portfolio": torch.tensor([.2, .12]),
+    }
+    metrics = _hard_stop_ema_drawdown_metrics(output)
+    np.testing.assert_array_equal(metrics["drawdown_worst_ema_strategy_eq"],
+                                  output["hsl_drawdown_ema_max_portfolio"].double())
+    assert metrics["drawdown_worst_ema_strategy_eq_long"][0] == 0
+    assert metrics["drawdown_worst_ema_strategy_eq_short"][0] == 0
+    # Retained observation-engine outputs keep their historical side reduction.
+    del output["hsl_drawdown_ema_max_portfolio"]
+    legacy = _hard_stop_ema_drawdown_metrics(output)
+    assert legacy["drawdown_worst_ema_strategy_eq"][0] == 0
+
+
+@pytest.mark.parametrize("fused", [False, True])
+@pytest.mark.parametrize("feature", ["BASE", "EMA_TAIL", "RAW_DRAWDOWN", "ALL"])
+def test_native_ema_maximum_reuses_reserved_scalar_without_aliasing_metrics(fused, feature):
+    from optimization.gpu import mps_kernel as kernel
+
+    prefix = "MPS_MULTICOIN_FUSED" if fused else "MPS_MULTICOIN"
+    suffix = "SCALAR_COLS" if feature == "ALL" else f"{feature}_SCALAR_COLS"
+    scalars = torch.zeros((1, getattr(kernel, f"{prefix}_{suffix}")))
+    scalars[:, 17] = .2
+    scalars[:, 55], scalars[:, 56] = .12, .08
+    scalars[:, -3], scalars[:, -2], scalars[:, -1] = .15, 123., 456.
+    daily = torch.zeros((1, 1, 9))
+    daily[:, :, 1] = float("inf")
+    gaps = torch.zeros((1, 512), dtype=torch.int32)
+    decode = kernel._decode_multicoin_fused_outputs if fused else kernel._decode_outputs
+    legacy = decode(daily, scalars, gaps)
+    native = decode(daily, scalars, gaps, native_factual_hsl=True)
+    assert "hsl_drawdown_ema_max_portfolio" not in legacy
+    assert native.pop("hsl_drawdown_ema_max_portfolio").item() == pytest.approx(.2)
+    assert native.keys() == legacy.keys()
+    for name in native:
+        np.testing.assert_array_equal(native[name], legacy[name], err_msg=name)
+    assert native["hsl_drawdown_ema_max_long"].item() == pytest.approx(.12)
+    assert native["hsl_drawdown_ema_max_short"].item() == pytest.approx(.08)
