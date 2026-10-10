@@ -230,6 +230,7 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
     from optimization.gpu import mps_kernel
     from optimization.gpu.executor import BacktestRequest
     from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.service import MpsMulticoinProxy
     from tools.gpu_parity import build_parser, fixture_inputs, _native_dataset
 
     inputs = fixture_inputs(build_parser().parse_args([
@@ -248,7 +249,9 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
                 )
     base = mps_kernel._MulticoinReplayRunner
     initial, run, concatenate = base.__init__, base.run, cuda_runtime.cat
+    original_dispatch = base._dispatch_replay
     current, dispatches, raw_joins, compact_joins = {}, [], [], []
+    physical_dispatches = []
     raw_control = False
 
     def prepare(self, *args, **kwargs):
@@ -283,10 +286,16 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
                 compact_joins.append(result.numel() * result.element_size())
         return result
 
+    def dispatch(self, library, kernel_args, end_steps, *, batch_size):
+        assert batch_size * self._history_bytes_per_candidate() <= self.hsl_scratch_budget_bytes
+        physical_dispatches.append(batch_size)
+        return original_dispatch(self, library, kernel_args, end_steps, batch_size=batch_size)
+
     def forbidden(*args, **kwargs):
         pytest.fail("native recovery execution must not invoke CPU simulation")
     monkeypatch.setattr(base, "__init__", prepare)
     monkeypatch.setattr(base, "run", execute)
+    monkeypatch.setattr(base, "_dispatch_replay", dispatch)
     monkeypatch.setattr(cuda_runtime, "cat", capture)
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
@@ -298,10 +307,38 @@ def test_native_recovery_policy_switch_combines_only_compact_results(cuda_runtim
             service.submit(BacktestRequest("off", "policy", {"long_hsl_enabled": 0., "short_hsl_enabled": 0.})).result(timeout=600)
             futures = [service.submit(BacktestRequest(str(i), "policy", {})) for i in range(24)]
             results = [future.result(timeout=600) for future in futures]
-        assert 24 in dispatches and dispatches.count(1) >= 25
+        assert sum(dispatches) >= 25
         assert not raw_joins, f"Raw recovery histories escaped physical admission: {raw_joins} > 200000"
-        assert compact_joins == [24 * 7 * 4]
         assert all(result.metrics == results[0].metrics for result in results)
+        # Service admission may split the pending cohort before calling a runner.
+        # Exercise the runner's compact logical assembly directly, rather than
+        # assuming that the service must hide 24 serial replays behind one batch.
+        config, candles, markets, btc, timestamps = inputs
+        direct = MpsMulticoinProxy(
+            config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+            exchange="binance", batch_size=24, needed_metrics=metrics, factual_hsl=True,
+            max_dispatch_candidate_bars=500_000_000,
+        )
+        owner = direct.fused_runner
+        owner.hsl_fact_capacity = owner.hsl_fact_capacity_learned = 512
+        parameters = np.concatenate(
+            [direct._parameter_matrix([{}] * 24, side) for side in ("long", "short")], axis=1,
+        )
+        single = {key: value.clone() if isinstance(value, cuda_runtime.Tensor) else value
+                  for key, value in owner.run(parameters[:1]).items()}
+        joined_before = len(compact_joins)
+        grouped = owner.run(parameters)
+        assert compact_joins[joined_before:] == [24 * 7 * 4]
+        assert physical_dispatches and max(physical_dispatches) < 24
+        assert not raw_joins
+        for key, value in grouped.items():
+            expected = single[key]
+            if isinstance(value, cuda_runtime.Tensor):
+                cuda_runtime.testing.assert_close(value, expected.expand_as(value), rtol=0, atol=0,
+                                                 equal_nan=True)
+            else:
+                assert value == expected
+        del owner, direct, parameters, single, grouped
         # A separate raw diagnostic mode remains available and gives the same metrics.
         raw_control = True
         with CudaBacktestService(batch_size=1, tuning_mode="off") as service:
