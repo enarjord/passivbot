@@ -2075,3 +2075,53 @@ apply: global use is not exclusive service VRAM, process-tree RSS includes compi
 children, and whole-process CPU time does not isolate orchestration. This completed
 resource cohort leaves representative full-search and remaining numerical,
 lifecycle and retirement gates open.
+
+## Current factual cohort and metric-surface observations
+
+After the minimum-remainder repair, the native factual cohort recipe compares
+64 candidates: EMA Anchor and Trailing Martingale, seeds 7 and 43, sixteen
+candidates per case, two coins, both sides and 3,000 minute bars. It requests
+22 metrics, unified HSL at threshold 0.002, span 2.5, one-day lookback and
+10,000-minute cooldown, with shocks `(0, 1500, 0.7)` and `(1, 1800, 1.3)`.
+Direct native replay and the request/future service use widths sixteen and
+automatic. The cohort tool and documentation checks pass 73 tests without
+skips; checked sources remain unchanged. These are fixed-candidate comparisons,
+not optimization runs or CPU validation of native optimizer fitness.
+
+Across all 64 candidates, HSL mean/maximum duration, trigger/restart rates,
+time in RED, completion ratio and initial-entry median/p95 agree exactly.
+The ADG/drawdown/RED fronts match for both EMA cases and TM seed 43.
+TM seed 7 changes one drawdown pair ordering and excludes one CPU-front member;
+the CPU drawdown regret at the GPU-selected minimum is 2.1962e-7. All four
+GPU-selected maximum-ADG candidates also maximize CPU ADG. The requested
+ADG, drawdown, RED and completion feasibility checks agree for all candidates;
+this does not establish agreement for thresholds placed inside their numerical
+differences or for other objectives.
+
+| Residual across the two seeds | EMA Anchor | Trailing Martingale |
+| --- | ---: | ---: |
+| Largest absolute ADG difference | 7.9057e-7 | 7.2922e-5 |
+| Largest absolute worst-drawdown difference | 2.3953e-6 | 3.8286e-6 |
+| Largest absolute EMA-tail drawdown difference | 1.5119e-4 | 5.2765e-5 |
+| Largest relative EMA-tail drawdown difference | 9.558% | 29.051% |
+| Largest absolute fill-gap p95 difference | 1 minute | 0 |
+| Largest absolute initial-entry p99 difference | 0 | 0.4415 hours |
+
+The EMA-tail reducer still averages a partially selected logarithmic bin,
+whereas CPU analysis selects the actual largest samples. Its systematic
+downward bias and changes to selected tail objectives remain an acceptance
+item. Initial-entry and fill-gap percentile bins have separate resolution
+limits; matching streamed means or HSL decisions does not prove these tails.
+No general numerical policy is widened. The two-day cohort lacks a CPU
+weighted exponential-fit result, so that field remains unassessed.
+
+A separate native comparison requests all 157 supported metrics on six
+twenty-day public shock fixtures: each strategy with long, short and both
+sides, two coins, seed 43, coin HSL at threshold 0.002, span 2.5 and
+five-minute cooldown, enabled unstuck and shocks `(0, 1440, 0.7)` and
+`(1, 1800, 1.3)`. All requested CPU/GPU values are present and finite in
+these cases. Of the four fields with existing comparison policies, ADG
+differs beyond the strict policy in five cases and fills/day in four;
+drawdown and completion pass all six. The other 153 fields per case remain
+policy-unassessed. Presence, finite values and small headline errors do not
+close per-metric acceptance, selection-materiality or full-search gates.
