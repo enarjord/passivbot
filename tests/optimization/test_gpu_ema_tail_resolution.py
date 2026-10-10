@@ -100,6 +100,13 @@ def test_native_capture_uses_reporting_clock_and_preserves_other_metrics(strateg
     for index, scope in enumerate(runner._hsl_ema_tail_scopes()):
         name = f"hsl_drawdown_ema_mean_worst_1pct_{scope}"
         np.testing.assert_allclose(actual[name].cpu(), reference[:, index], rtol=2e-7, atol=1e-9)
+        if signal_mode == 0 and scope != "portfolio":
+            # Rust reports the unified signal only at portfolio scope. Side
+            # channels must not copy it, including single-side simulations.
+            assert actual[name].eq(0).all()
+            observed = samples[:, index][torch.isfinite(samples[:, index])]
+            assert observed.numel() > 0
+            assert observed.eq(0).all()
     if sides != "both":
         inactive = int(sides == "long")
         assert samples.shape[1] == 2  # Inactive side has no capture or reduction.

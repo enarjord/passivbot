@@ -759,6 +759,11 @@ inline int record_multicoin_hsl_report(
 #endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     float drawdown_ema = fabs(aggregate.drawdown_ema);
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Unified has one portfolio controller, not a controller for each side.
+    // The portfolio observation below retains its signal; side reports are zero.
+    if (aggregate.signal_mode == HSL_SIGNAL_UNIFIED) drawdown_ema = 0.0f;
+#endif
 #endif
     if (aggregate.signal_mode == HSL_SIGNAL_COIN) {
         enabled = false;
