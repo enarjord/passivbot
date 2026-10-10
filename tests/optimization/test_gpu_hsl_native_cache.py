@@ -306,11 +306,13 @@ def test_owner_scratch_admission_and_compile_ablation():
     # never returns the rejected result; the next request reconsiders admission.
     from optimization.gpu.mps_kernel import HslFactHistoryOverflow
     runner.native_factual_hsl = True
+    runner.max_dispatch_candidate_bars = 1_000_000
     for side in range(2):
         matrix[:,keys.index("hsl_enabled")+side*len(keys)] = 1
         matrix[:,keys.index("hsl_signal_mode")+side*len(keys)] = 0
     for boundary in ("scratch", "cache"):
-        runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = 256
+        initial_capacity = 256 if boundary == "scratch" else 4096
+        runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = initial_capacity
         runner._replay_states = {"old": object()}
         runner._replay_state_bytes = 777
         runner.hsl_native_cache_budget_bytes = 64*1024**2
@@ -318,12 +320,21 @@ def test_owner_scratch_admission_and_compile_ablation():
         runner._prepare_native_factual_hsl(matrix)
         initial_total = runner._history_bytes_per_candidate()
         if boundary == "scratch":
-            runner.hsl_fact_capacity = 512
+            runner.hsl_fact_capacity = initial_capacity*2
             runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate()-1
             assert initial_total <= runner.hsl_scratch_budget_bytes
-            runner.hsl_fact_capacity = 256
+            runner.hsl_fact_capacity = initial_capacity
         else:
             runner.hsl_native_cache_budget_bytes = runner._hsl_native_cache_bytes_per_candidate()
+            runner.hsl_fact_capacity = initial_capacity*2
+            assert runner._hsl_native_cache_capacity() == 0
+            # Old compiled-state bytes would falsely reject growing facts; the
+            # scalar history alone fits, and the prior cache attempt also fit.
+            old_abi_total = runner._history_bytes_per_candidate()
+            runner.hsl_scratch_budget_bytes = old_abi_total-1
+            assert old_abi_total-777 < runner.hsl_scratch_budget_bytes
+            runner.hsl_fact_capacity = initial_capacity
+            assert initial_total <= runner.hsl_scratch_budget_bytes
         attempts = []
         runner.interrupt_check = lambda: None
 
@@ -340,8 +351,9 @@ def test_owner_scratch_admission_and_compile_ablation():
 
         runner._run_factual_attempt = overflow_then_accept
         assert runner.run(matrix) == {"accepted": True}
-        assert attempts == [256,512]
-        assert runner.last_hsl_fact_retries == 1 and runner.hsl_fact_capacity_learned == 512
+        assert attempts == [initial_capacity,initial_capacity*2]
+        assert runner.last_hsl_fact_retries == 1
+        assert runner.hsl_fact_capacity_learned == initial_capacity*2
     runner.hsl_native_cache_budget_bytes = 64*1024**2
     runner.hsl_scratch_budget_bytes = 512*1024**2
     runner._run_factual_attempt = lambda params, **kwargs: {"cache": runner._hsl_native_cache_capacity()}
