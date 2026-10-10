@@ -3554,8 +3554,9 @@ Historical observations do not supersede those requirements or prove current acc
   capture, partial/temporal/rejected-attempt isolation, zero gaps and real-service
   compact payload reuse for both strategies. The rebuilt extension passes 341
   Rust tests (one existing ignore) and default-feature compilation. Subsequent
-  development-base integration changes documentation only; preserve the original
-  qualification identity.
+  development-base integration leaves the entry-interval implementation and its
+  focused tests unchanged; preserve the original qualification identity.
+  Qualification of the combined implementation remains a separate gate.
 - A matched eight-candidate twenty-day cohort now completes CPU references and
   cold/warm native replay with the same requested metrics. Reproduce its base
   through `gpu-parity`'s TM long, two-coin, 28,800-bar, seed-43 fixture with coin

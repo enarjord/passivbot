@@ -333,7 +333,8 @@ float32 margin. That spacing is not a universal CPU/GPU error bound. Histories a
 not retained or transferred, and the streamed squared-gap moment is unchanged.
 At this measurement, initial-entry intervals used their separate 128-bin format
 and decoder. Legacy replay retains that format; the later requested native exact
-count replacement is pending qualification in the initial-entry acceptance row.
+count replacement has its own device and limited-cohort qualification in the
+initial-entry acceptance row.
 
 The same public seven-day eleven-metric cohorts reproduce the effect. Candidate
 parameters, input identities, all CPU values and all ten non-gap GPU metrics are
@@ -361,7 +362,7 @@ have no eligible tuning samples in these underfilled cohorts. Regression tests c
 float32 bin boundaries, distinct 29/30/31-minute gaps, the actual EMA cohorts and
 simultaneously requested 512-bin fill gaps and initial-entry metrics. The original
 qualification used 128-bin entry intervals; the regression now checks the compact
-native exact-count payload, pending its device qualification. Native-only cases
+native exact-count payload, covered by the separate 22-check qualification. Native-only cases
 forbid CPU simulations. Actual Metal execution and long-gap materiality remain open.
 
 ## Explicit objective-vector diagnostics
