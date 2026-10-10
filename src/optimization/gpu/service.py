@@ -88,6 +88,7 @@ def _noop_interrupt_check():
 
 
 CORE_OUTPUT_KEYS = {
+    "hsl_drawdown_ema_max_portfolio",
     "hsl_drawdown_ema_mean_worst_1pct_portfolio",
     *WEIGHTED_EQUITY_METRICS,
     "raw_strategy_day_max_dd",
@@ -2617,6 +2618,7 @@ class MpsMulticoinProxy:
             self.strategy_kind == "trailing_martingale"
             and self.needed_metrics & ENTRY_INTERVAL_METRICS
         )
+        self.native_factual_hsl = bool(factual_hsl)
         self.param_keys = (
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
             if self.strategy_kind == "trailing_martingale"
@@ -3453,6 +3455,10 @@ class MpsMulticoinProxy:
                 "raw_strategy_day_end_eq", "raw_strategy_day_min_eq"
             }.issubset(output):
                 raise RuntimeError("GPU raw strategy-equity daily summaries are missing")
+            if (getattr(self, "native_factual_hsl", False)
+                    and any(name.startswith("drawdown_worst_ema_strategy_eq") for name in self.needed_metrics)
+                    and "hsl_drawdown_ema_max_portfolio" not in output):
+                raise RuntimeError("native HSL EMA maximum requires its observed portfolio payload")
             if (
                 "drawdown_worst_mean_1pct_ema_strategy_eq" in self.needed_metrics
                 and (fused_runner is not None or len(self.sides) == 1)

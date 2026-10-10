@@ -1615,7 +1615,7 @@ def _hard_stop_panic_loss_metrics(out: dict, run) -> dict:
 
 
 def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
-    """Reduce per-side HSL EMA maxima using Rust's public metric contract."""
+    """Expose observed native scopes; preserve legacy directional reductions."""
 
     required = {
         "hsl_drawdown_ema_max_long",
@@ -1629,7 +1629,11 @@ def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
     long_ema_max = out["hsl_drawdown_ema_max_long"].to(torch.float64)
     short_ema_max = out["hsl_drawdown_ema_max_short"].to(torch.float64)
     return {
-        "drawdown_worst_ema_strategy_eq": long_ema_max.maximum(short_ema_max),
+        "drawdown_worst_ema_strategy_eq": (
+            out["hsl_drawdown_ema_max_portfolio"].to(torch.float64)
+            if "hsl_drawdown_ema_max_portfolio" in out
+            else long_ema_max.maximum(short_ema_max)
+        ),
         "drawdown_worst_ema_strategy_eq_long": long_ema_max,
         "drawdown_worst_ema_strategy_eq_short": short_ema_max,
     }

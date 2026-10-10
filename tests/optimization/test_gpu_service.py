@@ -122,7 +122,7 @@ def test_proxy_constructors_reject_exact_only_metrics_before_setup(
 
     with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
         proxy_cls(
-            config={},
+            config=get_template_config(),
             hlcvs=None,
             mss={},
             btc=None,

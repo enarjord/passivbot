@@ -68,11 +68,17 @@ content/evaluation fingerprints, precision stamps and resume compatibility separ
 Portfolio `drawdown_worst_mean_1pct_ema_strategy_eq` observes the maximum enabled
 HSL scope signal on each completed reporting bar before reducing its worst 1%.
 Shared replay returns one compact portfolio-tail scalar; combining already reduced
-long/short tails loses their joint clock. Requested EMA tails use bounded histograms
-and remain compiled away when absent. Single-side temporal replay retains the
-observation summary across dispatches. The retained directional single-coin proxy
-still uses its historical side-tail reduction; native optimization requires the
-observed portfolio summary and rejects a missing payload.
+long/short tails loses their joint clock. Requested native EMA tails retain bounded
+device observations and reduce the actual largest `max(floor(count / 100), 1)`
+samples after replay succeeds. Scratch admission includes capture and reduction;
+unrequested or disabled HSL capture remains compiled away. Temporal replay retains
+observations across dispatches, while a rejected attempt starts again with empty
+capture. Unified HSL reports only at portfolio scope; its long/short channels are
+zero. Reporting includes cooldown bars and the fresh mark-driven liquidation signal,
+without adding samples for fill-boundary controller refreshes. The retained legacy
+observation engine and directional single-coin proxy keep their historical reductions;
+native optimization requires its observed portfolio summary and rejects a missing
+payload. Exact selection does not eliminate CPU/GPU float32 trajectory differences.
 
 ## CPU completion scoring
 

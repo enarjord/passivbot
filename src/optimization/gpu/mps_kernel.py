@@ -14,6 +14,10 @@ from optimization.gpu.weighted_equity import (
     weighted_equity_from_samples, weighted_equity_history_bytes,
 )
 
+from optimization.gpu.ema_tail import (
+    drawdown_ema_tail_from_samples, drawdown_ema_tail_history_bytes,
+)
+
 from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import record_replay_chunk, ReplayDurationController
@@ -1453,7 +1457,7 @@ def _require_available_held_valuation(scalars):
         raise HslFactHistoryOverflow("GPU HSL factual history overflow")
 
 
-def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
+def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_factual_hsl=False) -> dict:
     _require_available_held_valuation(scalars)
     active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
 
@@ -1562,13 +1566,18 @@ def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
             scalars, 64, reserved_columns=3
         ),
     }
+    if native_factual_hsl:
+        # Column 17 is unused by legacy shared replay. Native reporting owns a
+        # distinct portfolio maximum, since unified side signals are zero.
+        output["hsl_drawdown_ema_max_portfolio"] = scalars[:, 17]
     if btc_risk_enabled:
         output.update(_decode_btc_risk_outputs(daily, active_days, 9))
     return output
 
 
-def _decode_multicoin_fused_outputs(daily, scalars, gaps, *, btc_risk_enabled=False) -> dict:
-    output = _decode_outputs(daily, scalars, gaps, btc_risk_enabled=btc_risk_enabled)
+def _decode_multicoin_fused_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_factual_hsl=False) -> dict:
+    output = _decode_outputs(daily, scalars, gaps, btc_risk_enabled=btc_risk_enabled,
+                             native_factual_hsl=native_factual_hsl)
     long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
     output.update(
         {
@@ -2621,6 +2630,7 @@ class _MulticoinReplayRunner:
         self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._volume_buffers: dict[int, torch.Tensor] = {}
         self._weighted_equity_buffers: dict[int, torch.Tensor] = {}
+        self._hsl_ema_tail_buffers: dict[int, torch.Tensor] = {}
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
         self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
         self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
@@ -2715,6 +2725,14 @@ class _MulticoinReplayRunner:
                                factual_only=factual_only)
         return self.hsl_scopes * (nodes * 32 + (0 if factual_only else self.hsl_capacity * 8))
 
+    def _hsl_ema_tail_scopes(self):
+        return ("long", "short", "portfolio") if self.replay_sides == 2 else (self.side, "portfolio")
+
+    def _hsl_ema_tail_samples_enabled(self):
+        return bool(getattr(self, "native_factual_hsl", False)
+                    and getattr(self, "hsl_ema_tail_enabled", False)
+                    and getattr(self, "hsl_fact_capacity", 0))
+
     def _history_bytes_per_candidate(self):
         return (
             self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
@@ -2728,6 +2746,8 @@ class _MulticoinReplayRunner:
                if self.recovery_distribution_enabled else 0)
             + (_volume_history_bytes(self.n)
                if getattr(self, "weighted_volume_enabled", False) else 0)
+            + (drawdown_ema_tail_history_bytes(self.n, len(self._hsl_ema_tail_scopes()))
+               if self._hsl_ema_tail_samples_enabled() else 0)
         )
 
     def _unstuck_history_buffers(self, batch_size):
@@ -2824,7 +2844,26 @@ class _MulticoinReplayRunner:
         return combined
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
+        return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
+
+    def _hsl_ema_tail_sample_buffer(self, batch_size):
+        if not self._hsl_ema_tail_samples_enabled():
+            self._hsl_ema_tail_buffers.clear()
+            return None
+        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+            raise ValueError("GPU HSL EMA tail exceeds its scratch budget")
+        if batch_size not in self._hsl_ema_tail_buffers:
+            self._hsl_ema_tail_buffers = {
+                batch_size: torch.empty(
+                    (batch_size, len(self._hsl_ema_tail_scopes()), self.n),
+                    dtype=torch.float32, device=gpu_device(),
+                )
+            }
+        samples = self._hsl_ema_tail_buffers[batch_size]
+        # Reset on every physical attempt, including retries and partial replays.
+        samples.fill_(float("nan"))
+        return samples
 
     def _recovery_sample_buffer(self, batch_size: int):
         if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
@@ -3202,6 +3241,7 @@ class _MulticoinReplayRunner:
         )
         volume_samples = self._volume_sample_buffer(batch_size)
         weighted_equity_samples = self._weighted_equity_sample_buffer(batch_size)
+        hsl_ema_tail_samples = self._hsl_ema_tail_sample_buffer(batch_size)
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
         entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
             batch_size
@@ -3246,6 +3286,7 @@ class _MulticoinReplayRunner:
             recovery_samples,
             volume_samples,
             weighted_equity_samples,
+            hsl_ema_tail_samples,
             batch_size=batch_size,
         )
         if profile:
@@ -3268,6 +3309,12 @@ class _MulticoinReplayRunner:
             self.last_profile = {}
             wait_for_cuda_stream()
         output = self._decode(daily, scalars, gaps)
+        if hsl_ema_tail_samples is not None:
+            # Decode rejects overflow/malformed attempts before any metrics are
+            # reduced or published. Join only compact accepted sub-batch results.
+            ema_tails = drawdown_ema_tail_from_samples(hsl_ema_tail_samples)
+            for index, scope in enumerate(self._hsl_ema_tail_scopes()):
+                output[f"hsl_drawdown_ema_mean_worst_1pct_{scope}"] = ema_tails[:, index]
         if self.raw_strategy_risk_enabled:
             output["raw_strategy_day_max_dd"] = daily[:, :, -1]
         if self.raw_strategy_growth_enabled:
@@ -3364,6 +3411,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
         recovery_samples,
         volume_samples,
         weighted_equity_samples,
+        hsl_ema_tail_samples,
         *,
         batch_size: int,
     ) -> None:
@@ -3397,6 +3445,8 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             kernel_args += (volume_samples,)
         if self.weighted_equity_cols:
             kernel_args += (weighted_equity_samples,)
+        if self._hsl_ema_tail_samples_enabled():
+            kernel_args += (hsl_ema_tail_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
@@ -3631,6 +3681,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         recovery_samples,
         volume_samples,
         weighted_equity_samples,
+        hsl_ema_tail_samples,
         *,
         batch_size: int,
     ) -> None:
@@ -3665,6 +3716,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (volume_samples,)
         if self.weighted_equity_cols:
             kernel_args += (weighted_equity_samples,)
+        if self._hsl_ema_tail_samples_enabled():
+            kernel_args += (hsl_ema_tail_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
@@ -3672,7 +3725,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
+        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
 
 
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
@@ -3884,6 +3938,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         recovery_samples,
         volume_samples,
         weighted_equity_samples,
+        hsl_ema_tail_samples,
         *,
         batch_size: int,
     ) -> None:
@@ -3920,6 +3975,8 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             kernel_args += (volume_samples,)
         if self.weighted_equity_cols:
             kernel_args += (weighted_equity_samples,)
+        if self._hsl_ema_tail_samples_enabled():
+            kernel_args += (hsl_ema_tail_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
@@ -4101,6 +4158,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         recovery_samples,
         volume_samples,
         weighted_equity_samples,
+        hsl_ema_tail_samples,
         *,
         batch_size: int,
     ) -> None:
@@ -4138,6 +4196,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             kernel_args += (volume_samples,)
         if self.weighted_equity_cols:
             kernel_args += (weighted_equity_samples,)
+        if self._hsl_ema_tail_samples_enabled():
+            kernel_args += (hsl_ema_tail_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
@@ -4145,7 +4205,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled)
+        return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):

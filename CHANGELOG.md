@@ -11,6 +11,14 @@ since the latest release tag; these features may already be available when insta
   Preserve CPU optimization and standalone backtests/plots. Remove obsolete validation,
   drift and screened-seed controls; earlier GPU checkpoints require a fresh run.
 
+- Requested native GPU HSL EMA drawdown tails use eligible per-bar device
+  observations instead of logarithmic cutoff-bin averages. Histories stay on
+  the device, scratch admission includes their reduction, and unrequested or
+  disabled HSL work does not allocate them. Native EMA maxima and tails share
+  the bar-reporting clock, including cooldown observations; controller refreshes
+  at fill boundaries do not add report samples, while mark-driven liquidation
+  retains its final bar signal. Unified HSL reports its EMA
+  maximum and tail only at portfolio scope, with zero long/short values.
 
 - EMA Anchor partial closes preserve valid minimum-size remainders when floating
   subtraction differs only by representation noise; genuinely undersized

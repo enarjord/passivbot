@@ -14,6 +14,10 @@
 #define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0
 #endif
 
+#ifndef PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+#define PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTS_ENABLED > 0)
+#endif
+
 #ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
 #define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 0
 #endif
@@ -422,15 +426,14 @@ inline float hsl_strategy_equity_recovery_max_steps(
     );
 }
 
-// Exact Rust sorts every retained drawdown-EMA sample before averaging the
-// largest floor(1%) (at least one). Keeping that unbounded series per Metal
-// thread would make large optimizer populations impractical. The proxy uses a
-// deterministic log histogram with exact per-bin sums/counts; only the partial
-// cutoff bin is approximated. Exact validations and drift gates remain
-// authoritative. The preprocessor removes this state and work unless one of
-// the tail metrics is requested.
+// Native factual replay captures requested observations in bounded device
+// storage and reduces the actual largest floor(1%) after an accepted replay.
+// The legacy observation replay retains its approximate log histogram. Neither
+// path changes the controller's signal or clock. Unrequested work is compiled out.
 struct HslDrawdownEmaTailStats {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    float last_sample;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
     float sample_count;
     float counts[HSL_EMA_TAIL_BINS];
     float sums[HSL_EMA_TAIL_BINS];
@@ -441,7 +444,9 @@ struct HslDrawdownEmaTailStats {
 
 inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats() {
     HslDrawdownEmaTailStats stats;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    stats.last_sample = NAN;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
     stats.sample_count = 0.0f;
     for (int i = 0; i < HSL_EMA_TAIL_BINS; ++i) {
         stats.counts[i] = 0.0f;
@@ -467,17 +472,25 @@ inline void update_hsl_drawdown_ema_tail_stats(
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     if (!isfinite(drawdown_ema)) return;
     float value = fabs(drawdown_ema);
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    stats.last_sample = value;
+#else
     int bin = hsl_drawdown_ema_tail_bin(value);
     stats.sample_count += 1.0f;
     stats.counts[bin] += 1.0f;
     stats.sums[bin] += value;
+#endif
 #endif
 }
 
 inline float hsl_drawdown_ema_mean_worst_1pct(
     thread HslDrawdownEmaTailStats& stats
 ) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    // A successful native result must replace this sentinel with the device
+    // reduction. An unreduced observational placeholder is never valid fitness.
+    return NAN;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED && !PASSIVBOT_HSL_FACTUAL_ONLY
     if (!(stats.sample_count > 0.0f)) return 0.0f;
     float worst_n = fmax(floor(stats.sample_count * 0.01f), 1.0f);
     float remaining = worst_n;
@@ -710,7 +723,21 @@ inline int hsl_report_tier(thread const HslState& h) {
     return h.enabled && (h.red_active_now || h.halted) ? 3 : 0;
 }
 
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+inline bool hsl_mark_terminal_observation_eligible(
+    float balance, float equity, float liquidation_floor, bool at_fill_boundary
+) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Rust evaluates and reports the last bar-close signal on a mark-driven
+    // liquidation. A liquidating fill has no fresh bar signal to repeat.
+    // This admits observation only; liquidation still prevents further fills.
+    return isfinite(balance) && balance > 0.0f && isfinite(equity)
+        && equity <= liquidation_floor && !at_fill_boundary;
+#else
+    return false;
+#endif
+}
+
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
 // The public portfolio EMA series observes the maximum current signal on each
 // bar. Reducing each side's tail first would discard their joint time ordering.
 inline float observed_multicoin_hsl_ema(
@@ -734,26 +761,39 @@ inline float observed_multicoin_hsl_ema(
 inline int record_multicoin_hsl_report(
     thread HslState& aggregate, thread HslState* coins, int coin_count,
     int effective_n_positions, bool ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    , thread float& report_ema_max
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     , thread HslDrawdownEmaTailStats& ema_tail
 #endif
 ) {
     bool enabled = aggregate.enabled;
     int tier = hsl_report_tier(aggregate);
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    // Reset the current bar before recording its scope observation.
+    ema_tail.last_sample = NAN;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
     float drawdown_ema = fabs(aggregate.drawdown_ema);
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Unified has one portfolio controller, not a controller for each side.
+    // The portfolio observation below retains its signal; side reports are zero.
+    if (aggregate.signal_mode == HSL_SIGNAL_UNIFIED || !aggregate.enabled
+            || effective_n_positions <= 0) drawdown_ema = 0.0f;
+#endif
 #endif
     if (aggregate.signal_mode == HSL_SIGNAL_COIN) {
         enabled = false;
         tier = 0;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
         drawdown_ema = 0.0f;
 #endif
         if (effective_n_positions > 0) {
             for (int c = 0; c < coin_count; ++c) {
                 enabled = enabled || coins[c].enabled;
                 tier = max(tier, hsl_report_tier(coins[c]));
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
                 if (coins[c].enabled)
                     drawdown_ema = fmax(drawdown_ema, fabs(coins[c].drawdown_ema));
 #endif
@@ -761,6 +801,14 @@ inline int record_multicoin_hsl_report(
         }
         ema_eligible = enabled;
     }
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Rust records each bar's enabled scope signal, including cooldown bars.
+    // Permission to generate orders is not the EMA reporting clock.
+    ema_eligible = true;
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    report_ema_max = fmax(report_ema_max, drawdown_ema);
+#endif
     if (ema_eligible) {
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
         update_hsl_drawdown_ema_tail_stats(ema_tail, drawdown_ema);

@@ -204,13 +204,30 @@ def test_liquidation_retains_elapsed_red_interval(strategy, sides, terminal_fill
         for side in ("long", "short")
         for name in ("peak_recovery_days", "drawdown_worst", "drawdown_worst_mean_1pct")
     )
-    metrics = (metric, *durations, *side_equity)
-    report = run_comparison(tuple(inputs), "bybit", metrics,
-                            {name: MetricTolerance(1e-8, 1e-6) for name in metrics},
+    ema_metrics = tuple(
+        f"{name}_strategy_eq{suffix}"
+        for suffix in ("", "_long", "_short")
+        for name in ("drawdown_worst_ema", "drawdown_worst_mean_1pct_ema")
+    )
+    metrics = (metric, *durations, *side_equity, *ema_metrics)
+    policies = {name: MetricTolerance(1e-8, 1e-6) for name in metrics}
+    # The four panic-fill fixtures differ by at most 6.3e-8 (1.78e-6 relative)
+    # in their preterminal float32 EMA. Keep lifecycle/equity gates unchanged;
+    # this local allowance covers rounding in the newly requested EMA reports.
+    policies.update({name: MetricTolerance(1e-8, 2e-6) for name in ema_metrics})
+    report = run_comparison(tuple(inputs), "bybit", metrics, policies,
                             diagnostics=True, gpu_engine="native")
     expected = 0 if terminal_fill else 1 / 3
     assert report["diagnostics"]["gpu"]["native_result"]["liquidated"]
     assert report["metrics"][metric]["cpu"] == pytest.approx(expected)
     for name in durations:
         assert report["metrics"][name]["cpu"] == pytest.approx(0 if terminal_fill else 1)
+    # A mark crash adds the fresh terminal loss signal; a liquidating panic
+    # fill retains only preceding bar signals. The terminal mark must not be
+    # mistaken for another fill-boundary observation or silently omitted.
+    long_ema = report["metrics"]["drawdown_worst_ema_strategy_eq_long"]["cpu"]
+    if terminal_fill:
+        assert 0 < long_ema < .1
+    else:
+        assert long_ema > 1
     assert report["passed"], report["metrics"]
