@@ -914,10 +914,10 @@ over all exchanges before scoring.
 | `drawdown_worst` | Maximum peak-to-trough drawdown |
 | `drawdown_worst_mean_1pct` | Mean of worst 1% daily worst drawdowns, computed from full-resolution drawdowns before daily reduction |
 | `drawdown_worst_strategy_eq` | Worst drawdown on collateral-agnostic strategy equity |
-| `drawdown_worst_ema_strategy_eq` | Worst EMA-smoothed strategy-equity drawdown, shared as `max(long, short)` |
+| `drawdown_worst_ema_strategy_eq` | Worst portfolio EMA-smoothed strategy-equity drawdown, using each observation's maximum enabled HSL signal scope |
 | `drawdown_worst_mean_1pct_strategy_eq` | Mean of worst 1% daily worst strategy-equity drawdowns, computed from full-resolution strategy-equity drawdowns before daily reduction |
 | `drawdown_worst_mean_1pct_strategy_eq_{long,short}` | Mean of worst 1% daily worst strategy-equity drawdowns for the long or short HSL controller |
-| `drawdown_worst_mean_1pct_ema_strategy_eq` | Mean of worst 1% EMA-smoothed strategy-equity drawdown samples, shared as `max(long, short)` |
+| `drawdown_worst_mean_1pct_ema_strategy_eq` | Mean of worst 1% portfolio EMA-smoothed drawdown observations; each observation takes the maximum enabled HSL signal scope before tail selection |
 | `expected_shortfall_1pct` | Mean of worst 1% daily losses (CVaR) |
 | `equity_balance_diff_neg_max` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |
 | `equity_balance_diff_neg_mean` / `pos_mean` | Average divergence between equity and balance (split by sign as above) |
