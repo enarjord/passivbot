@@ -3472,3 +3472,37 @@ Historical observations do not supersede those requirements or prove current acc
 - Complete the current 64-candidate, 22-metric factual cohort and six twenty-day, all-157-metric comparisons. HSL lifecycle timing agrees exactly in the cohort, while small strict drawdown ordering differences can still change a front. Preserve those differences and requested-limit evidence separately from general acceptance.
 - Identify the remaining coarse EMA-tail cutoff-bin average and logarithmic interval percentiles as distinct approximation consumers. Their former dependence on later CPU validation cannot establish authoritative native metric acceptance. Assess practical metric accuracy and selection effects before choosing a repair or an explicit bounded acceptance policy; do not silently widen tolerances.
 - Keep all 153 currently undefined per-metric policies visibly unassessed in each full-surface case. Finite output alone is functional evidence. Fixed-cohort selection diagnostics do not replace repeated-seed, full optimizer comparisons.
+
+### 2026-10-10 — Requested native EMA-tail resolution
+
+- Implement channel-major, device-resident long/short/portfolio observations at the existing HSL reporting clock. Reduce the actual worst one percent after a physical replay is accepted; clone and join only compact summaries across scratch-limited sub-batches. Keep the legacy histogram for its remaining observation-engine consumers.
+- Compile capture only when native factual HSL and requested tails are active. Preserve candidate-specific eligibility, inactive sides, per-bar portfolio maxima and partial/temporal replay boundaries. Reset capture on each attempt; overflow and malformed attempts remain rejected before reduction.
+- Replace native per-thread histogram arrays with the latest observation. Include capture and conservative reduction-workspace admission alongside other requested histories; this allowance is not a total-VRAM guarantee. No new user parameter or accuracy autotuner is introduced.
+- Verify the local reducer against an independent sorted reference and rebuild/source-verify the Rust extension. Rust tests pass. Current-head CUDA replay, CPU comparison and resource/performance measurements remain pending; the numerical and retirement gates stay open. Existing evaluator source/dependency identities include the changed shaders and imported reducer, so old saved fitness is incompatible without a separate checkpoint-format change.
+- The first standalone unified-HSL cohort exposed a reporting-scope defect: native side tails copied the portfolio controller, while the Rust bar-signal report attributes that controller only to portfolio scope. Set native unified side observations to zero without changing the portfolio signal, controller or legacy observation engine. Extend all strategy/side/signal-mode capture controls with explicit scope assertions; requalification and matched cohort comparison are required before publication.
+
+- A focused unified/pside diagnostic also exposes controller-wide maxima leaking into unified side reports and side tails dropping cooldown bars. Native maxima now accumulate from accepted reporting-bar signals, with a distinct compact portfolio output; unified side maxima remain zero. Native side tails use the same reporting clock as the portfolio, independently of order-generation permission. Controller/legacy reporting state is preserved. The existing capture matrix additionally compares reported maxima against retained observations and checks equal scope clocks, including partial replay and temporal continuation. Device qualification and matched CPU comparisons remain required; no numerical tolerance is widened.
+
+- Independent current-head review identifies one retained reporting gap: native
+  evaluation and capture omit the terminal mark-driven liquidation bar, whereas
+  Rust records its fresh signal. Admit that native observation while preserving
+  fill-terminal exclusion and the legacy guards. Extend the existing eight
+  strategy/side/terminal-cause parity cases to all six EMA maxima/tails at their
+  unchanged tolerances. Twelve host reducer/decoder controls pass; rebuilt device
+  qualification and current-head review remain integration gates.
+
+- The eight terminal-cause CUDA comparisons confirm the fresh mark signal and
+  unchanged lifecycle outputs. The four panic-fill EMA reports differ from Rust
+  by at most 6.3e-8 absolute (1.78e-6 relative), ordinary float32 rounding in the
+  preterminal signal. Use a local 2e-6 relative allowance for those newly covered
+  six EMA fields; preserve every existing lifecycle/equity gate and the general
+  comparison policies. Full current-head device qualification remains required.
+
+- Complete the current implementation's 81-check CUDA-enabled qualification with
+  no failures or skips, plus twelve separate host reducer/scalar controls. The
+  source-matched rebuilt extension passes 341 Rust tests (one existing ignore)
+  and default-feature compilation. Four public unified/pside comparisons confirm
+  zero unified side reports and measure maximum/tail residuals; record the recipe
+  and values in the acceptance map. Accept these small F32 differences for those
+  fixtures while preserving policy-unassessed report fields and the outstanding
+  representative selection/limit gate. Current-head PR review and CI remain required.

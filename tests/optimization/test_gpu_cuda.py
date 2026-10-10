@@ -1113,7 +1113,8 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, w
     })
     buffers = [object() for _ in range(12)]
     runner._dispatch(
-        library, *buffers, weighted_equity_samples=None, batch_size=65
+        library, *buffers, weighted_equity_samples=None,
+        hsl_ema_tail_samples=None, batch_size=65
     )
     assert len(calls) == 1
     assert len(calls[0][0]) == 17 + int(fused) + int(weighted_volume)
