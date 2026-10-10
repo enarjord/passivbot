@@ -139,7 +139,12 @@ def test_native_gap_capture_temporal_partial_and_compact_join(sides, interval_mi
         interval_ms = interval_minutes * 60_000
         first_ts = int(inputs[4][0]) // interval_ms * interval_ms
         inputs[4] = first_ts + np.arange(len(inputs[4]), dtype=np.int64) * interval_ms
-        inputs[2]["__meta__"]["data_interval_minutes"] = interval_minutes
+        inputs[2]["__meta__"].update(
+            data_interval_minutes=interval_minutes, requested_start_ts=int(inputs[4][0])
+        )
+        # Prepared validity bounds retain the producer's one-minute index units.
+        for coin in inputs[0]["backtest"]["coins"]["binance"]:
+            inputs[2][coin]["last_valid_index"] = len(inputs[1]) * interval_minutes - 1
     config, candles, markets, btc, timestamps = inputs
     replay = MpsMulticoinProxy(config=deepcopy(config), hlcvs=candles, mss=markets,
         btc=btc, timestamps=timestamps, exchange="binance", batch_size=3,
