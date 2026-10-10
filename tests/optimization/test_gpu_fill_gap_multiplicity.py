@@ -56,12 +56,16 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
         from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
         inputs = list(inputs)
         config = inputs[0]
+        candle_coins = list(config["backtest"]["coins"]["binance"])
         if config["live"]["hsl_signal_mode"] != "unified":
             config = generated_template(config, "unified")
         config["live"].update(hsl_signal_mode="unified", pnls_max_lookback_days=1)
         config["bot"]["hsl"].update(enabled=True, red_threshold=1., ema_span_minutes=2.5,
             cooldown_minutes_after_red=5, restart_after_red_policy="always")
         inputs[0] = prepare_config(config,verbose=False,target="canonical",runtime=None)
+        # Prepared candle columns retain their original order across canonical
+        # configuration normalization, which removes this derived metadata.
+        inputs[0]["backtest"]["coins"] = {"binance": candle_coins}
         layout = MpsTrailingMartingaleMulticoinRunner._prepare_replay_state_layout
         dispatch = MpsTrailingMartingaleMulticoinRunner._dispatch_replay
         history_batches = MpsTrailingMartingaleMulticoinRunner._run_history_batches
@@ -131,7 +135,14 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
             with CudaBacktestService(batch_size=2, tuning_mode="off",
                     max_batch_delay=.01 if cache_interaction else 0) as service:
                 service.register_dataset("gaps", dataset)
-                first = service.submit(BacktestRequest("first", "gaps", {})).result()
+                first_future = service.submit(BacktestRequest("first", "gaps", {}))
+                if cache_interaction:
+                    # Queue both initial requests before the first compiled ABI
+                    # teaches service admission the one-candidate scratch limit.
+                    initial_peer = service.submit(BacktestRequest("initial-peer", "gaps", {}))
+                first = first_future.result()
+                if cache_interaction:
+                    assert initial_peer.result().metrics == first.metrics
                 repeated = [service.submit(BacktestRequest(str(i), "gaps", {}))
                             for i in range(3)]
                 for future in repeated:
