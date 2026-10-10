@@ -3384,3 +3384,76 @@ Historical observations do not supersede those requirements or prove current acc
   environment skip, including twelve real native standalone/suite lifecycle
   cases without CPU simulation. Current-head independent review and CI remain
   integration gates.
+
+
+### 2026-10-09 — Keep EMA minimum-remainder comparisons stable
+
+- A source-level close-sizing regression proves that a position of 18 quantity
+  steps with a nine-step minimum/clip can close fully because raw subtraction
+  compares the nine-step remainder below its minimum by binary representation
+  noise. Preserve the valid clip when that difference lies within four f64
+  epsilon-scaled units at the position/clip/minimum operand scale and aligned
+  quantity-step counts establish a valid minimum remainder. Keep genuinely
+  subminimum remainders, including small nonzero deficits, on the full-close path.
+- Fix the shared Rust strategy producer rather than reproducing its rounding
+  artifact in GPU arithmetic or adding Python trading policy. The regression
+  fails the old producer; the preceding quarter-step revision passes 337 Rust tests, with
+  one existing ignored test. Default-feature test compilation passes. Rebuilt
+  extension source verification passes. The preceding operand-scaled revision
+  passed the public native-service parity regression and 185 affected
+  caller/CPU-entrypoint/CLI controls without skips. The step-capped revision
+  passes 181 rebuilt CPU caller checks; its current CUDA parity/native CLI
+  verification remains an integration gate. The documented four-day fixture
+  matches fill rate exactly and
+  reduces recovery-p95 error to about three minutes; keep its five-minute
+  recovery gate scoped to that nearly flat regression curve. Independent
+  current-head review and CI remain integration gates.
+
+- PR #1954's public-data-boundary review finding is addressed before merge.
+  Updated head `8b6e99b0a5` clears independent review and all required CI;
+  merge `46218c2f28` integrates adaptive dispatch into development.
+
+- PR #1955 review identifies cancellation when the position/clip is much larger
+  than the remaining minimum. Scale subtraction tolerance to its operands.
+  A regression with `1e-8` steps and clips of 1, 10 and 1,000 fails the preceding
+  remainder-scaled code; include real half-minimum deficits at those magnitudes.
+  Updated-head validation, independent review and CI remain merge gates.
+
+- Updated PR #1955 review also identifies that operand tolerance can exceed a
+  real quantity step at extreme position/step ratios. Cap the allowance at one
+  quarter of a step. A regression fails the preceding code for a 13,000,000
+  clip, `1e-8` step and two-step minimum; valid minimum remainders remain clips,
+  while a one-step deficit still closes fully. Rebuild/caller verification and
+  new exact-head review/CI are required before integration.
+
+- A further exact-head review reproduces the quarter-step crossover: a
+  40,000,000-unit clip plus one `1e-8` step leaves a representable remainder
+  whose subtraction deficit exceeds the quarter-step allowance. Raise the
+  ceiling to half a step, retaining the operand-scaled noise bound. Add the
+  reproducing regression and preserve full closes for a real one-step deficit
+  at the same operand scale. All 338 Rust tests pass, with one existing ignore;
+  default-feature compilation, rebuilt source verification, 181 CPU caller
+  checks and five documentation checks pass. Current-build CUDA verification,
+  independent review and required CI remain integration gates.
+
+- Further exact-head review reproduces a real three-step remainder below a
+  four-step minimum that subtraction rounds close enough for the half-step
+  allowance. Replace fractional-step caps with aligned cardinality checks inside
+  the existing operand-noise boundary. Quantities must have finite, exactly
+  countable f64 step cardinalities before repairing an undersized subtraction;
+  otherwise retain the ordinary full-close decision. The new regression fails
+  the half-step revision. All 339 Rust tests pass, with one existing ignore;
+  default-feature compilation, source-verified rebuild, 181 CPU caller checks and
+  five documentation checks pass. Current CUDA, independent review and CI gates
+  remain.
+
+- Further review demonstrates that exactly countable integer values alone do
+  not make float division recover the original cardinality. Reproduce the
+  one-step/two-step minimum case where quantity spacing exceeds the step.
+  Require distinguishable adjacent quantity steps before near-minimum repair;
+  otherwise retain the ordinary full-close decision. Correct quotient double
+  rounding with a fused residual in the supported domain, with a separate
+  producer regression. All 341 Rust tests pass, with one existing ignore;
+  default-feature compilation, touched-file formatting, rebuilt source verification,
+  181 CPU caller checks and five documentation checks pass. Current CUDA,
+  independent review and CI gates remain.

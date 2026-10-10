@@ -1972,3 +1972,46 @@ runtime, with one environment skip. These include twelve real native TM/EMA
 standalone/suite startup, interruption and resume cases with CPU simulations
 forbidden, as well as legacy exact-worker option roundtrips.
 Current-head independent review and CI remain required before integration.
+
+
+## EMA close minimum-remainder regression
+
+`test_gpu_ema_close_remainder_cuda.py` uses the public seed-seven EMA fixture,
+25 coins, both sides and 5,760 minute bars, with HSL disabled, base quantity
+`0.01` and EMA span zero `5.0`. It compares the corrected shared Rust producer
+with the actual native request/future service through the public parity tool.
+The source-level Rust test proves why an 18-step position must retain a
+nine-step remainder after a nine-step clip. A second regression covers `1e-8`
+minimum remainders after clips of 1, 10 and 1,000, accounting for cancellation
+error at the operand scale. Accept a near-minimum subtraction discrepancy only
+when aligned quantity-step counts confirm a valid remainder. This replaces
+fractional-step caps, which can reject valid remainders or absorb genuine deficits
+at extreme ratios. Regressions cover 13,000,000- and 40,000,000-unit clips and a
+three-step remainder below a four-step minimum at a countable quadrillion-step
+ratio. Recovery also requires adjacent quantity steps to remain distinguishable
+at each operand's floating-point spacing. A fused residual corrects division
+rounding before comparing cardinalities. Above those quantity-resolution or
+countability bounds, retain the ordinary full-close decision when subtraction
+reports an undersized remainder.
+Genuinely undersized remainders
+still trigger full closes; GPU strategy arithmetic remains unchanged.
+
+The corrected reference produces 1,020 fills and exactly matches GPU fill rate,
+completion ratio and HSL time-in-red. ADG absolute error is approximately
+`2.32e-8`, worst-drawdown error `1.01e-7`, and recovery p95 error `0.0020833`
+days (about three minutes). The previous four-hour p95 discrepancy therefore
+does not justify copying the old CPU close artifact into GPU arithmetic.
+
+This fixture uses a scoped five-minute absolute measurement gate for its three
+strict recovery-duration distributions on a nearly flat curve. Return,
+drawdown and volume gates remain much smaller; required structural metrics
+match exactly. No global tolerance or matching-nonfinite policy changes. This
+is a regression acceptance case, not certification of every recovery curve,
+limit threshold or strategy combination.
+
+The resolution revision passes 341 Rust tests, with one existing ignored test,
+default-feature compilation, touched-file formatting, rebuilt source verification,
+181 CPU caller checks without skips and five documentation checks. The earlier operand-scaled revision
+passed 186 parity, Rust-backed caller and native EMA CLI lifecycle checks. Current
+resolution CUDA parity/native CLI verification, independent current-head review and
+CI remain integration gates. Earlier device results do not satisfy this gate.
