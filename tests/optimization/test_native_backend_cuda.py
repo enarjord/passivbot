@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import math
 import pickle
 import signal
 from pathlib import Path
@@ -14,7 +15,7 @@ import pytest
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
                                                                     screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
-                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False, sides="both"):
+                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False, sides="both", hsl_tail=False):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
@@ -66,6 +67,16 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             dict(metric="adg_strategy_eq", goal="max"),
             dict(metric="strategy_eq_recovery_days_p95", goal="min"),
         ]
+    if hsl_tail:
+        config["optimize"]["scoring"] = [
+            dict(metric="adg_strategy_eq", goal="max"),
+            dict(metric="hsl_drawdown_ema_mean_worst_1pct_portfolio", goal="min"),
+        ]
+        config["optimize"]["limits"].extend(
+            dict(metric=f"hsl_drawdown_ema_mean_worst_1pct_{side}",
+                 penalize_if="greater_than", value=0.05)
+            for side in ("long", "short")
+        )
     config["optimize"]["gpu"].update(batch_size=None if automatic else 2, checkpoint_interval_seconds=0)
     if screening:
         config["optimize"]["gpu"]["screening"] = dict(scenarios=["base"], min_survivors=1, survival_fraction=0.5)
@@ -164,6 +175,9 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             assert stored[0][CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
             if recovery:
                 assert 0 <= stored[0]["metrics"]["unpenalized_objectives"][1] <= len(candles) / 1440
+            if hsl_tail:
+                tail = stored[0]["metrics"]["unpenalized_objectives"][1]
+                assert math.isfinite(tail) and tail >= 0
             members = list(Path(self.store.pareto_dir).glob("*.json"))
             assert members
             assert json.loads(members[0].read_text())[CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
@@ -229,6 +243,12 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     assert list((tmp_path / "optimize_results").iterdir()) == [directory]
     assert (directory / "session.json").read_bytes() == manifest_bytes
     assert len(records()) == (8 if screening else 12)
+    if hsl_tail:
+        expanded = {}
+        for row in records():
+            expanded = optimize.deep_updated(expanded, row)
+            tail = expanded["metrics"]["unpenalized_objectives"][1]
+            assert math.isfinite(tail) and tail >= 0
     if scaled_hsl:
         expanded = {}
         for row in records():
@@ -365,4 +385,16 @@ async def test_native_portfolio_ema_cli_interrupts_and_resumes_without_cpu(
     await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
         monkeypatch, tmp_path, suite, True, True, screening=suite,
         strategy_kind=strategy_kind, scaled_hsl=True, portfolio_ema=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite", [False, True])
+async def test_native_hsl_ema_tail_cli_scores_limits_and_resumes_without_cpu(
+    monkeypatch, tmp_path, strategy_kind, suite,
+):
+    await test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(
+        monkeypatch, tmp_path, suite, True, True, screening=suite,
+        strategy_kind=strategy_kind, scaled_hsl=True, hsl_tail=True,
     )
