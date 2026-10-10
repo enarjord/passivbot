@@ -261,6 +261,9 @@ Completion requires:
     Representative acceptance remains required; the worker cutover is integrated
     on development.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
+- [ ] Qualify requested native EMA-tail observation capture, compact device
+  reduction, scratch admission and feature-off behavior on CUDA; assess remaining
+  CPU-curve discrepancies and representative objective/limit effects.
 - [x] Replace hourly recovery distribution sampling with per-step GPU observations,
   budget their replay/reduction storage, and isolate mutable reduction scratch.
 - [x] Restore safe disabled-HSL single-side EMA ablation and verify all returned outputs.

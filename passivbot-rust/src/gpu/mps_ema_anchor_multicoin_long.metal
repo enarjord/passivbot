@@ -3026,6 +3026,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
     device float* weighted_equity_samples,
 #endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -3520,8 +3523,16 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #endif
             );
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+            side.hsl_portfolio_ema_tail.last_sample = NAN;
+#endif
             update_hsl_drawdown_ema_tail_stats(side.hsl_portfolio_ema_tail,
                 observed_multicoin_hsl_ema(hsl, coin_hsl, C, effective_n_positions));
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+            hsl_ema_tail_samples[int(b) * 2 * T + k] = side.hsl_ema_tail.last_sample;
+            hsl_ema_tail_samples[(int(b) * 2 + 1) * T + k]
+                = side.hsl_portfolio_ema_tail.last_sample;
+#endif
 #endif
             if (sampled_tier >= 0) {
                 record_hsl_time_observation(hsl_time, float(k), sampled_tier);
@@ -4101,6 +4112,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #endif
 #if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
     device float* weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
@@ -4758,11 +4772,19 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #endif
             );
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+            portfolio_hsl_ema_tail.last_sample = NAN;
+#endif
             update_hsl_drawdown_ema_tail_stats(portfolio_hsl_ema_tail, fmax(
                 observed_multicoin_hsl_ema(long_side.hsl, long_side.coin_hsl,
                     C, long_effective_n_positions),
                 observed_multicoin_hsl_ema(short_side.hsl, short_side.coin_hsl,
                     C, short_effective_n_positions)));
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+            hsl_ema_tail_samples[(int(b) * 3) * T + k] = long_side.hsl_ema_tail.last_sample;
+            hsl_ema_tail_samples[(int(b) * 3 + 1) * T + k] = short_side.hsl_ema_tail.last_sample;
+            hsl_ema_tail_samples[(int(b) * 3 + 2) * T + k] = portfolio_hsl_ema_tail.last_sample;
+#endif
 #endif
             if (long_tier >= 0 || short_tier >= 0) {
                 record_hsl_time_observation(hsl_time, float(k), max(long_tier, short_tier));
@@ -5220,6 +5242,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
     device float* weighted_equity_samples,
 #endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -5251,6 +5276,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #endif
 #if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
         weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+        hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -5293,6 +5321,9 @@ kernel void passivbot_ema_anchor_multicoin(
 #if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
     device float* weighted_equity_samples,
 #endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -5329,6 +5360,9 @@ kernel void passivbot_ema_anchor_multicoin(
 #endif
 #if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
         weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+        hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -5371,6 +5405,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
     device float* weighted_equity_samples,
 #endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -5402,6 +5439,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #endif
 #if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
         weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+        hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0

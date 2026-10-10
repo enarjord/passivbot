@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Requested native GPU HSL EMA drawdown tails use eligible per-bar device
+  observations instead of logarithmic cutoff-bin averages. Histories stay on
+  the device, scratch admission includes their reduction, and unrequested or
+  disabled HSL work does not allocate them.
+
 - EMA Anchor partial closes preserve valid minimum-size remainders when floating
   subtraction differs only by representation noise; genuinely undersized
   remainders still use full-position closes.

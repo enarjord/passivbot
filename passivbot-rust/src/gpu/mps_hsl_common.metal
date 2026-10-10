@@ -14,6 +14,10 @@
 #define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0
 #endif
 
+#ifndef PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+#define PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTS_ENABLED > 0)
+#endif
+
 #ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
 #define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 0
 #endif
@@ -422,15 +426,14 @@ inline float hsl_strategy_equity_recovery_max_steps(
     );
 }
 
-// Exact Rust sorts every retained drawdown-EMA sample before averaging the
-// largest floor(1%) (at least one). Keeping that unbounded series per Metal
-// thread would make large optimizer populations impractical. The proxy uses a
-// deterministic log histogram with exact per-bin sums/counts; only the partial
-// cutoff bin is approximated. Exact validations and drift gates remain
-// authoritative. The preprocessor removes this state and work unless one of
-// the tail metrics is requested.
+// Native factual replay captures requested observations in bounded device
+// storage and reduces the actual largest floor(1%) after an accepted replay.
+// The legacy observation replay retains its approximate log histogram. Neither
+// path changes the controller's signal or clock. Unrequested work is compiled out.
 struct HslDrawdownEmaTailStats {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    float last_sample;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
     float sample_count;
     float counts[HSL_EMA_TAIL_BINS];
     float sums[HSL_EMA_TAIL_BINS];
@@ -441,7 +444,9 @@ struct HslDrawdownEmaTailStats {
 
 inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats() {
     HslDrawdownEmaTailStats stats;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    stats.last_sample = NAN;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
     stats.sample_count = 0.0f;
     for (int i = 0; i < HSL_EMA_TAIL_BINS; ++i) {
         stats.counts[i] = 0.0f;
@@ -467,17 +472,25 @@ inline void update_hsl_drawdown_ema_tail_stats(
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     if (!isfinite(drawdown_ema)) return;
     float value = fabs(drawdown_ema);
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    stats.last_sample = value;
+#else
     int bin = hsl_drawdown_ema_tail_bin(value);
     stats.sample_count += 1.0f;
     stats.counts[bin] += 1.0f;
     stats.sums[bin] += value;
+#endif
 #endif
 }
 
 inline float hsl_drawdown_ema_mean_worst_1pct(
     thread HslDrawdownEmaTailStats& stats
 ) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    // A successful native result must replace this sentinel with the device
+    // reduction. An unreduced observational placeholder is never valid fitness.
+    return NAN;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED && !PASSIVBOT_HSL_FACTUAL_ONLY
     if (!(stats.sample_count > 0.0f)) return 0.0f;
     float worst_n = fmax(floor(stats.sample_count * 0.01f), 1.0f);
     float remaining = worst_n;
@@ -740,6 +753,10 @@ inline int record_multicoin_hsl_report(
 ) {
     bool enabled = aggregate.enabled;
     int tier = hsl_report_tier(aggregate);
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    // Ineligible bars must not repeat the preceding eligible observation.
+    ema_tail.last_sample = NAN;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     float drawdown_ema = fabs(aggregate.drawdown_ema);
 #endif
