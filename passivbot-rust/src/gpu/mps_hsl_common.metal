@@ -723,6 +723,20 @@ inline int hsl_report_tier(thread const HslState& h) {
     return h.enabled && (h.red_active_now || h.halted) ? 3 : 0;
 }
 
+inline bool hsl_mark_terminal_observation_eligible(
+    float balance, float equity, float liquidation_floor, bool at_fill_boundary
+) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Rust evaluates and reports the last bar-close signal on a mark-driven
+    // liquidation. A liquidating fill has no fresh bar signal to repeat.
+    // This admits observation only; liquidation still prevents further fills.
+    return isfinite(balance) && balance > 0.0f && isfinite(equity)
+        && equity <= liquidation_floor && !at_fill_boundary;
+#else
+    return false;
+#endif
+}
+
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
 // The public portfolio EMA series observes the maximum current signal on each
 // bar. Reducing each side's tail first would discard their joint time ordering.

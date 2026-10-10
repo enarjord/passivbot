@@ -5685,10 +5685,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
         bool can_sample_hsl = (long_can_generate || short_can_generate)
-            && alive
-            && joint_portfolio_can_generate(
-                account, hsl_equity, liquidation_floor
-            );
+            && alive && (joint_portfolio_can_generate(
+                account, hsl_equity, liquidation_floor)
+                || hsl_mark_terminal_observation_eligible(
+                    account.balance, hsl_equity, liquidation_floor,
+                    hsl_report_at_fill_boundary));
         const bool long_hsl_ema_eligible =
             long_side.hsl.enabled && !long_side.hsl.halted;
         const bool short_hsl_ema_eligible =
@@ -5914,8 +5915,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             account, long_unrealized, short_unrealized
         );
 #if !PASSIVBOT_HSL_DISABLED
-        if (can_sample_hsl && joint_portfolio_can_generate(
-                account, equity, liquidation_floor)) {
+        if (can_sample_hsl && (joint_portfolio_can_generate(
+                account, equity, liquidation_floor) || hsl_mark_terminal_observation_eligible(
+                    account.balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
             int long_tier = record_multicoin_hsl_report(
                 long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions,
                 long_hsl_ema_eligible
@@ -6888,8 +6890,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #if !PASSIVBOT_HSL_DISABLED
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
-        if (can_generate && alive
-            && balance > 0.0f && balance + hsl_unrealized > liquidation_floor) {
+        if (can_generate && alive && balance > 0.0f
+            && (balance + hsl_unrealized > liquidation_floor
+                || hsl_mark_terminal_observation_eligible(
+                    balance, balance + hsl_unrealized, liquidation_floor,
+                    hsl_report_at_fill_boundary))) {
             if (coin_hsl_mode) {
                 for (int c = 0; c < C; ++c) {
                     int coin_offset = c * COIN_COLS;
@@ -7037,7 +7042,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         }
         float equity = balance + unrealized;
 #if !PASSIVBOT_HSL_DISABLED
-        if (can_generate && alive && balance > 0.0f && equity > liquidation_floor) {
+        if (can_generate && alive && balance > 0.0f
+            && (equity > liquidation_floor || hsl_mark_terminal_observation_eligible(
+                balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
             int sampled_tier = record_multicoin_hsl_report(
                 hsl, coin_hsl, C, effective_n_positions, hsl_ema_eligible
 #if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED

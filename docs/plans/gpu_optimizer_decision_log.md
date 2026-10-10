@@ -3482,3 +3482,11 @@ Historical observations do not supersede those requirements or prove current acc
 - The first standalone unified-HSL cohort exposed a reporting-scope defect: native side tails copied the portfolio controller, while the Rust bar-signal report attributes that controller only to portfolio scope. Set native unified side observations to zero without changing the portfolio signal, controller or legacy observation engine. Extend all strategy/side/signal-mode capture controls with explicit scope assertions; requalification and matched cohort comparison are required before publication.
 
 - A focused unified/pside diagnostic also exposes controller-wide maxima leaking into unified side reports and side tails dropping cooldown bars. Native maxima now accumulate from accepted reporting-bar signals, with a distinct compact portfolio output; unified side maxima remain zero. Native side tails use the same reporting clock as the portfolio, independently of order-generation permission. Controller/legacy reporting state is preserved. The existing capture matrix additionally compares reported maxima against retained observations and checks equal scope clocks, including partial replay and temporal continuation. Device qualification and matched CPU comparisons remain required; no numerical tolerance is widened.
+
+- Independent current-head review identifies one retained reporting gap: native
+  evaluation and capture omit the terminal mark-driven liquidation bar, whereas
+  Rust records its fresh signal. Admit that native observation while preserving
+  fill-terminal exclusion and the legacy guards. Extend the existing eight
+  strategy/side/terminal-cause parity cases to all six EMA maxima/tails at their
+  unchanged tolerances. Twelve host reducer/decoder controls pass; rebuilt device
+  qualification and current-head review remain integration gates.
