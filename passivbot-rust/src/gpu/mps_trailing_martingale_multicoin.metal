@@ -1946,6 +1946,9 @@ inline bool process_tm_multicoin_side_fills(
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
     device float* entry_interval_stats,
     device int* entry_interval_counts,
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+    int entry_interval_bins,
+#endif
 #endif
     int b,
     int k,
@@ -2520,6 +2523,9 @@ inline bool process_tm_multicoin_side_fills(
                         record_initial_entry_interval(
                             entry_interval_stats, entry_interval_counts, b,
                             side.last_initial_entry_k[c], float(k)
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+                            , entry_interval_bins
+#endif
                         );
                     }
 #endif
@@ -2606,6 +2612,9 @@ inline bool process_tm_multicoin_side_fills(
                     record_initial_entry_interval(
                         entry_interval_stats, entry_interval_counts, b,
                         side.last_initial_entry_k[c], float(k)
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+                        , entry_interval_bins
+#endif
                     );
                 }
 #endif
@@ -2657,6 +2666,9 @@ inline bool process_tm_multicoin_side_fills(
                 record_initial_entry_interval(
                     entry_interval_stats, entry_interval_counts, b,
                     side.last_initial_entry_k[c], float(k)
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+                    , entry_interval_bins
+#endif
                 );
             }
 #endif
@@ -5256,6 +5268,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
     init_entry_interval_output(
         entry_interval_stats, entry_interval_counts, b
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+        , T + 1
+#endif
     );
 #endif
     const int stop_k = clamp(end_steps[b], 1, T - 1);
@@ -5589,6 +5604,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+            T + 1,
+#endif
 #endif
             int(b), k, C, false, alive,
             collect_coin_fill_counts, loss_gate_enabled,
@@ -5617,6 +5635,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+            T + 1,
+#endif
 #endif
             int(b), k, C, true, alive,
             collect_coin_fill_counts, loss_gate_enabled,
@@ -6562,6 +6583,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
     init_entry_interval_output(
         entry_interval_stats, entry_interval_counts, b
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+        , T + 1
+#endif
     );
 #endif
     const int stop_k = clamp(end_steps[b], 1, T - 1);
@@ -6846,6 +6870,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             coin_settings, coin_overrides, coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+            T + 1,
+#endif
 #endif
             int(b), k, C, short_side, alive,
             collect_coin_fill_counts, loss_gate_enabled,

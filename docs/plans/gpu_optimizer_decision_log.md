@@ -3527,3 +3527,50 @@ Historical observations do not supersede those requirements or prove current acc
   compilation. A subsequent development-base merge leaves production and these
   focused test bytes unchanged. Broader ordering/numerical qualification retains
   its own evidence. No numerical tolerance or performance acceptance is changed.
+
+### Native initial-entry interval count reduction
+
+- Rust measures consecutive normal initial entries per coin/position side. Partial
+  initials do not contribute; there are no leading or censored trailing gaps.
+- Prepared timelines are uniform, so every interval is an integer bar gap. One
+  candidate-owned histogram with bins 0..T suffices regardless of coin/side count.
+  Histograms avoid event-list capacity/retry machinery and retain zero gaps.
+- Native requested interval work uses the existing factual replay identity; legacy
+  128-bin entry and 512-bin fill-gap paths remain unchanged. No history-sized
+  compile variants or CPU simulations are introduced.
+- Histograms reset once per physical attempt and survive temporal chunks. Only
+  accepted replays reduce; subbatch joins carry five metrics instead of histograms.
+  Reduction uses an ordered int64 CDF and rank interpolation without sorting.
+- Admission reserves 32*(T+2)+512 bytes per candidate for counts, streamed stats
+  and conservative CDF/conversion workspace. This is not total VRAM accounting.
+  Integer address bounds and overflow sentinels fail visibly. T above 2**24 is
+  rejected instead of assuming float32 entry-index differences remain exact.
+- Device qualification, CPU percentile comparisons and resource measurements
+  remain required. Fill-gap population semantics differ; changing that producer
+  is deferred. A shared ordered-count reducer can be considered when needed.
+
+- The source-matched 22-check CUDA-enabled group passes without failures, errors
+  or skips. It includes CPU/CUDA ordered-count reducers, one/five-minute native
+  capture, partial/temporal/rejected-attempt isolation, zero gaps and real-service
+  compact payload reuse for both strategies. The rebuilt extension passes 341
+  Rust tests (one existing ignore) and default-feature compilation. Subsequent
+  development-base integration leaves the entry-interval implementation and its
+  focused tests unchanged; preserve the original qualification identity.
+  Qualification of the combined implementation remains a separate gate.
+- A matched eight-candidate twenty-day cohort now completes CPU references and
+  cold/warm native replay with the same requested metrics. Reproduce its base
+  through `gpu-parity`'s TM long, two-coin, 28,800-bar, seed-43 fixture with coin
+  HSL threshold .002, EMA span 2.5 minutes, cooldown five minutes, unstuck, and
+  price shocks (coin 0, bar 1440, .7) and (coin 1, bar 1800, 1.3). Seven neighbors
+  multiply initial quantity by `.8 + .1*i` and the first entry EMA span by
+  `.9 + .04*i`, for i=1..7. The original candidate's p99 is
+  22.574666666666637 hours on CPU and GPU, replacing the old 23.417333333333296
+  bin estimate. Mean, median and maximum agree exactly; largest p95/p99 residuals
+  are 1.78e-15/3.55e-15 hours. All five interval rankings and the ADG/drawdown/p99
+  front agree, with zero CPU regret at GPU-selected optima. Nine literal
+  equality-limit flips are interpolation ULPs, below 1.3e-11 seconds. Accept
+  these interval differences for this cohort without changing comparison policy.
+- Companion metrics use the same completed simulations and remain separately
+  assessed. In particular, unchanged logarithmic fill-gap bins and recovery
+  ordering on F32 equity can change near ties; exact entry percentiles do not
+  certify those consumers or every metric on the requested surface.

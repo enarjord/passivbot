@@ -88,6 +88,7 @@ def _noop_interrupt_check():
 
 
 CORE_OUTPUT_KEYS = {
+    "entry_interval_native_metrics",
     "hsl_drawdown_ema_max_portfolio",
     "hsl_drawdown_ema_mean_worst_1pct_portfolio",
     *WEIGHTED_EQUITY_METRICS,
@@ -3460,6 +3461,11 @@ class MpsMulticoinProxy:
                     and any(name.startswith("drawdown_worst_ema_strategy_eq") for name in self.needed_metrics)
                     and "hsl_drawdown_ema_max_portfolio" not in output):
                 raise RuntimeError("native HSL EMA maximum requires its observed portfolio payload")
+            if (getattr(self, "native_factual_hsl", False)
+                    and self.strategy_kind == "trailing_martingale"
+                    and self.needed_metrics & ENTRY_INTERVAL_METRICS
+                    and "entry_interval_native_metrics" not in output):
+                raise RuntimeError("native entry intervals require compact exact metrics")
             if (
                 "drawdown_worst_mean_1pct_ema_strategy_eq" in self.needed_metrics
                 and (fused_runner is not None or len(self.sides) == 1)
