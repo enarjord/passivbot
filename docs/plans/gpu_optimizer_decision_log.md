@@ -3655,3 +3655,41 @@ Historical observations do not supersede those requirements or prove current acc
   assessed. In particular, unchanged logarithmic fill-gap bins and recovery
   ordering on F32 equity can change near ties; exact entry percentiles do not
   certify those consumers or every metric on the requested surface.
+
+
+### 2026-10-10 — Scoped numerical foundation and acceptance reconciliation
+
+- Accept the completed twenty-day, eight-candidate TM-long exact-entry cohort:
+  all five interval rankings and the ADG/drawdown/p99 front agree. Record the
+  interpolation equality-boundary flips without changing comparison policies.
+  Companion six EMA maxima/tails preserve individual and ADG-paired fronts and
+  selected CPU optima, completing that representative selection assessment.
+- Accept the same cohort's existing fill-gap upper-bin approximation and
+  minute-scale recovery residual as explicit foundation limitations. Preserve
+  the 54-second fill-gap discrepancy and approximately one-minute recovery
+  discrepancy, including tight-ceiling feasibility/front changes. The acceptance
+  map states the losing intermediate tradeoffs; coarse-limit agreement is not
+  a guarantee for arbitrary tight limits or scalar weights.
+- Classify the six-day two-coin TM fixture's first quantity and fill-count
+  differences as demonstrated F32 order-boundary behavior. Ordered scalar arithmetic
+  reproduces the native decisions; HSL transitions agree at the canonical close
+  clock. Accept that case's recorded +11 fills and +.212153% relative USD ADG
+  difference without requiring identical trajectories or widening tool policy.
+  Do not claim every upstream rounding contribution or every BTC reducer is proved.
+- Separate historical pre-replacement failures from current scoped acceptance.
+  Keep their recipes and values visible, remove duplicate EMA resource evidence
+  and the obsolete claim that the larger TM measurement is still open. Preserve
+  busy-HSL cost, physical-batch result latency and incomplete tuning-window
+  limitations as focused performance concerns.
+- Close only demonstrated baseline, bounded-allocation, inventory, requested-
+  surface/specialization, EMA companion and cadence mechanism checklist items.
+  Combined-source CUDA/CLI/lifecycle qualification, eight equal-budget evolving
+  searches, CPU preservation/retirement, final documentation, current-head review
+  and required CI remain pending. Presence/status checks do not certify all 157
+  metrics; fields without numerical policy remain unassessed. Master integration
+  remains a separate decision.
+- Prioritize meaningful HSL backtest speed improvements before scheduling the
+  remaining evolving-search comparisons, so subsequent tests benefit from faster
+  replay. Use focused paired correctness/performance evidence. This changes work
+  order, not the completion gates or risk contract; no universal speedup threshold
+  is introduced and experimental performance work is not delivered acceptance.

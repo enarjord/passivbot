@@ -587,6 +587,11 @@ resource/performance acceptance remain open.
 
 ## Raw strategy recovery observations
 
+Historical measurement scope, reconciled 2026-10-10: this section records the
+producer repair and its then-observed curve residuals. The later minimum-remainder
+regression and scoped twenty-day decisions below have their own recipes; they
+do not establish that every earlier residual was reproduced and eliminated.
+
 Rust's strategy equity is starting balance plus factual net realized PnL and
 unrealized PnL. Account liquidation clamping must not replace that curve when
 sampling the six strategy recovery distribution metrics. Shared EMA/TM single-
@@ -622,8 +627,9 @@ non-recovery metrics. In one case recovery p95 moves from 13.425105 to 12.422327
 days against CPU's 12.468854. Quantizing that CPU curve to float32 alone gives
 13.434931 days: strict ordering near flat samples can amplify small rounding.
 Another case retains 90 versus 91 fills and a 3.366703 versus 2.608437-day recovery
-p95. Keep those residuals visible and assess optimizer materiality separately;
-general standalone-tool tolerances are unchanged.
+p95. Keep these historical, recipe-specific residuals visible; the later scoped
+recovery decisions are not a claim that this different aligned-curve fixture was
+fixed. General standalone-tool tolerances are unchanged.
 
 ## Current native approximation inventory
 
@@ -645,10 +651,11 @@ An existing reducer or output field does not establish native support.
 | Recovery, weighted volume and weighted equity | Requested per-step GPU histories feed strict recovery and canonical suffix/daily reducers. Recovery-resolution, weighted-volume and weighted-equity tests isolate input definitions, cutoffs, optional capture and dispatch bounds. | Input-definition repairs do not remove float32 curve/trajectory sensitivity, especially strict recovery ordering near plateaus. Full histories remain on device. |
 | Legacy-only fallbacks | Directional single-coin volume/tail helpers and daily peak-recovery helpers still exist. The native service uses shared replay, requires the observed portfolio tail, and rejects exact-only metric names. | Do not count an unused fallback as accepted native behavior or retain the old optimizer merely to preserve its approximations. |
 
-Per-metric policy and measured feasibility/selection evidence remain required for
-acceptance. The all-supported-metric audit checks presence and finite/sentinel
-handling; its undefined policies are explicitly unassessed. Neither this table nor
-finite output alone closes the numerical gate.
+The [scoped decisions below](#practical-numerical-foundation--scoped-decisions)
+record the numerical foundation accepted for the measured recipes. The
+all-supported-metric audit checks presence and finite/sentinel handling; its
+undefined policies remain explicitly unassessed. Neither this table nor finite
+output alone certifies an arbitrary objective, limit or trading trajectory.
 
 ## Native EMA tail and reporting qualification
 
@@ -683,8 +690,9 @@ Unified long/short reports are exactly zero in both engines. Pside reports retai
 their own signals and a separately observed portfolio tail. These residuals are
 accepted for the stated scope fixtures under the practical F32 contract. The
 machine-readable comparison keeps all six fields policy-unassessed because no
-general per-metric tolerances were supplied. Matched objective/limit consequences
-remain a separate numerical gate; these observations do not certify arbitrary
+general per-metric tolerances were supplied. The completed twenty-day companion
+records matched EMA objective/limit consequences in the scoped decisions below.
+Together these observations accept the stated cases; they do not certify arbitrary
 tight limits, identical trajectories, general speedup or optimizer retirement.
 
 Reproduce the capture and reporting controls with the source-verified extension:
@@ -787,48 +795,133 @@ control establishes state continuity and its measured overhead, not optimizer
 throughput, optimal chunk size or a general elapsed-time guarantee. Duration-based
 dispatch tuning and representative larger-suite resource acceptance remain open.
 
+## Practical numerical foundation — scoped decisions
+
+Decision date: 2026-10-10. Accept the following measured discrepancies for the
+initial architectural foundation under the practical F32 contract. This is an
+explicit case-by-case decision, not a blanket error allowance or a certificate
+for all 157 metrics. The standalone comparison policies and strict failures
+remain unchanged. Missing outputs, changed metric populations, unsupported
+requests, incorrect risk semantics and rejected overflow attempts remain defects.
+
+### Twenty-day exact-entry cohort and its companions
+
+The exact-entry qualification uses revision `98b43a6a38`, Rust fingerprint
+`4ac908e4912a79d428b48149183001b71f4f56d02a8d9d533deef2e0da3810c8`,
+and Python fingerprint
+`839c29228a17054e40088c143ca29ecf47b1b7682796feca0d834614f56956d4`.
+Its 22-check CUDA-enabled group passes without failures, errors or skips;
+this count includes host reducer checks and actual CUDA replay/service checks.
+Reproduce the cohort with the public `gpu-parity` TM-long fixture: two coins,
+28,800 one-minute bars, seed 43, coin HSL threshold `.002`, EMA span `2.5`,
+one-day lookback, five-minute cooldown, enabled unstuck and shocks
+`(0, 1440, .7)` and `(1, 1800, 1.3)`. Candidate zero is the base; neighbors
+`i=1..7` multiply initial quantity by `.8 + .1*i` and the first entry EMA span
+by `.9 + .04*i`.
+
+All 157 returned native values are identical between cold and warm passes;
+CPU/GPU availability/finite/sentinel status classes agree for all eight candidates.
+That status agreement is not numerical acceptance of 153 fields without default
+policies. Each native pass accepts one eight-candidate replay without retries.
+Five entry values per candidate are returned from device reduction; raw histogram
+counts are not transferred.
+
+| Family | Observed error and selection consequence | Scoped decision and limit |
+| --- | --- | --- |
+| Five normal initial-entry interval metrics | Mean/median/max agree exactly; largest p95/p99 errors are 1.78e-15/3.55e-15 hours. All five rankings and the ADG/drawdown/p99 front agree; GPU-selected optima have zero CPU regret. Base p99 is 22.574666666666637 hours in both engines, replacing the old 23.417333333333296-hour bin estimate. | Accept this corrected population/reducer and cohort. Nine literal CPU-equality ceiling flips are interpolation differences below 1.3e-11 seconds; a 23-hour p99 ceiling agrees for all eight. Zero-gap evidence belongs to component controls, since this cohort contains no zero gaps. Histories above 2**24 bars remain rejected. |
+| Six strategy-equity EMA maxima/tails | Largest maximum error is 1.8762e-8; largest tail error is 1.4867e-7. Short reports are zero. All six individual and ADG-paired fronts/rankings agree, with zero CPU regret at selected optima. | Accept these companion residuals together with the separately qualified EMA/TM unified/pside scope controls. Literal equality ceilings can flip (11 maximum and 13 tail comparisons across portfolio/long fields); tested .02/.1/.5 ceilings agree. Do not infer arbitrary tight-limit equality. |
+| Fill-gap p95 | Native returns 151 minutes; CPU returns 150.10, 150.15 or 151. Maximum overstatement is 54 seconds. ADG+gap front changes from CPU [5,7] to GPU [7]; candidate 5 offers 54 seconds lower p95, while 7 gains 1.0178 basis points/day ADG. | Accept the existing 512-bin upper-edge approximation for this foundation, with resolution explicitly visible. Fixed 1/6/24-hour ceilings agree; a 2.51-hour ceiling admits CPU [0,1,2,5] and no GPU candidates. The 54-second observation is not a universal bound. |
+| Recovery p95/p99 | Largest differences are about 1.000008/1.000005 minutes; maximum recovery agrees exactly. ADG+p95 front changes from [4,6,7] to [2,6,7]; ADG+p99 front remains [4,6,7]. | Accept the measured minute-scale residual for this scenario, without assigning its exact origin to percentile ULPs. A 129.6-minute p95 ceiling changes best feasible ADG from candidate 4 to 2, losing 1.0487 basis points/day; at 130.5 minutes both select 6. Fixed 1/5/20-day ceilings agree. Strict curve crossing and intermediate tradeoffs remain sensitive. |
+
+These are real limit/front consequences, including the recovery example's
+16.53% difference relative to candidate 4's CPU daily growth. Foundation
+acceptance therefore does not promise interchangeable tight duration limits.
+It accepts the measured native simulation and declared approximation, with
+standalone CPU comparison available when such a limit matters. The separate
+minimum-remainder regression accepts its approximately three-minute recovery
+p95 residual under a fixture-local five-minute gate; it does not supply a
+universal recovery allowance. No further broad sweep is required solely to
+turn these scoped decisions into global tolerances.
+
+### F32 order-boundary behavior in a six-day TM fixture
+
+Use the public two-coin, both-side TM fixture with 8,640 minute bars, seed 43,
+coin HSL threshold `.002`, span `2.5`, one-day lookback, five-minute cooldown,
+unstuck and the same shocks at 1440/1800. BTC collateral is zero. For a varying
+BTC reporting numeraire, interpolate the seven anchors
+`[50000, 63000, 71000, 43000, 39000, 56000, 48000]` at `6*i/8639`, then multiply
+by `1 + .025*sin(2*pi*i/360)`. The measurement uses revision `0a71833feb`,
+with the same Rust/Python fingerprints as the exact-entry cohort above.
+
+At bar 1592, CPU sizing balance `1042.3523134359966` and native F32 balance
+`1042.349365234375` straddle the `1042.35` boundary at simulated ask `69.49`.
+The floor `balance * .5 * .005 / 69.49` rounds to `.038` versus `.037`
+on a `.001` quantity step. At bar 1747, native basis `115.99400329589844`
+and threshold `.0010000746697187424` yield an F32 recursive short-entry
+target `116.11000061035156`; division by the price step rounds onto tick 11611;
+the same native basis/threshold inputs evaluated at higher precision lie above
+that tick and ceil to 11612, matching the CPU tick. The native ladder fits one
+additional rung. Applying the kernel's ordered F32 scalar arithmetic to these
+inputs reproduces the native position size and basis at both first differences. These explain the discrete decisions;
+they do not isolate every upstream balance rounding contribution or attribute
+all subsequent metric differences to just those two events.
+
+HSL RED/restart transitions agree after applying Rust's input-bar-plus-one
+close-time convention. Zero BTC collateral excludes the reporting numeraire
+as the cause of USD sizing divergence; it does not certify every BTC reducer.
+The final result has 62,235 CPU versus 62,246 native fills (+.017675%), USD ADG
+`.004063052279239976` versus `.004071672151410688` (+.212153% relative), and
+worst-drawdown difference `-1.2817e-6`. The largest relative error among its
+40 requested fields is about .228625% for USD Sortino.
+
+Accept this fixture's demonstrated F32-sensitive order-boundary behavior and
+recorded fitness residuals. Do not require identical long-history fill paths
+or introduce a new general tolerance. Its 36 policy-unassessed fields remain
+unassessed; the two strict ADG/fills-day failures remain visible. This single
+candidate supplies no ranking/feasibility guarantee or recovery/fill-gap evidence.
+A future targeted precision improvement at a discrete boundary requires its
+own correctness and performance evidence.
+
 ## Work still required before legacy retirement
 
-A larger native-suite pilot uses 25 coins, both sides, 11,520 minute bars,
-eight candidates and unified HSL (`gpu-service-benchmark`, seed seven, one-day
-lookback and threshold 0.99). Its isolated width-one reference phase does not
-complete a round after more than 35 minutes and is stopped. No completed-phase
-resource, throughput or parity acceptance follows. The active work also prevents
-shutdown completing within six minutes of an interrupt. The tool cancels queued
-requests but joins its running worker; it does not pass an interrupt callback.
-Production optimization supplies its own callback, while an active CUDA kernel
-still cannot observe that callback until it returns. Keep these caller and kernel
-limits distinct. Profile individual completions, reconstruction/retry costs and
-launch geometry before another long all-width comparison; larger busy-HSL and
-long-interruption acceptance remain open.
+As of 2026-10-10, the numerical decisions above and the completed component,
+scenario, specialization and service measurements define the initial foundation.
+They replace a requirement for another broad metric sweep with explicit scope
+and limitations. Combined-source qualification and actual evolving searches
+remain distinct from fixed-candidate comparisons.
 
-1. Finish the code-backed approximation inventory for the actual native shared-account
-   path. In particular assess requested histogram tails, recovery trajectories, partial-day
-   weighting and HSL observation timing using meaningful samples and canonical limit
-   decisions. A refreshed all-157-metric audit has no missing or non-finite outputs in
-   six long shock cases after the lifecycle, side-equity and weighted-ratio corrections.
-   Finite output is not acceptance. An independent recovery investigation also exposed
-   account-equity sampling where raw strategy equity is required; the corrected
-   producer now passes the liquidation regressions above. Assess its residual numerical
-   differences separately. Long-cooldown/history-
-   expiry duration materiality and histogram/trajectory differences still need assessment.
-   Keep strict measurements visible; justify bounded
-   accepted differences
-   by optimization/risk materiality rather than widening gates to hide failures.
-2. Consolidate representative specialized/general metric and risk evidence for both
-   strategies, sides, one-way/hedged accounts, gaps/delisting and scenario suites.
-   Removed shared-account loss envelopes are resolved behavior, not accepted decimal
-   noise. Legacy directional-only approximations need not become native limitations.
-3. Refresh the [cohort measurements](../gpu_cohort_benchmark.md) after the semantic
-   replacements, and measure larger suite resource use. Distinguish cold compilation,
-   warm useful throughput, completed-work tuning evidence and CPU orchestration cost.
-   Architectural improvement is sufficient initially; a marginal speedup is not mandatory.
-4. Preserve and verify CPU optimize, standalone backtests and plot/export dependency
-   isolation while removing superseded validation workers, drift/checkpoint machinery
-   and obsolete controls. Publish that cutover only after the earlier gates pass.
-5. Reconcile delivered user/AI contracts, complete exact-head automatic review and CI,
-   and audit every completion criterion. Development acceptance does not authorize
-   integration into master.
+A historical pre-temporal native-suite pilot used 25 coins, both sides, 11,520
+minute bars, eight candidates and unified HSL (`gpu-service-benchmark`, seed seven,
+one-day lookback and threshold .99). It stopped without a completed width-one
+round after more than 35 minutes; shutdown did not complete within six minutes
+of interruption. It supplies no completed-phase resource or parity acceptance.
+Later temporal-command controls and the completed EMA/TM resource measurements
+below supersede treating that pilot as an unmeasured current resource gate.
+They retain a real limitation: cancelling a queued request cannot interrupt an
+active kernel, and command-duration tuning is not a worst-case wall-clock bound.
+The service benchmark's cancellation/join path and production optimization's
+interrupt callback are different callers.
+
+1. Complete the frozen combined-source CUDA/CLI/lifecycle qualification, including
+   effective dispatch validation, scenario/bootstrap/resume/persistence behavior,
+   CPU dependency isolation and preservation of legacy CPU optimization/backtests.
+   Component receipts carry only when their relevant source bytes are unchanged.
+2. After the prioritized focused HSL performance work, complete the eight
+   equal-budget evolving comparisons: both strategies, two
+   seeds, CPU legacy versus native GPU, with a practical multi-scenario suite.
+   Record preparation/compilation separately from warm search, actual stored
+   results/fronts and lifecycle behavior. These are the final search comparison,
+   not eight more fixed-candidate parity cases or proof of identical trajectories.
+3. Preserve the documented numerical decisions and measured resource/latency
+   limitations. Busy many-coin HSL cost, useful-result latency and incomplete
+   tuning evidence warrant focused performance work; architectural improvement
+   is sufficient initially, without requiring marginal speedup or optimal tuning.
+4. Retire superseded validation workers, drift/checkpoint machinery and obsolete
+   controls only after the combined qualification and search comparison pass.
+   Preserve standalone parity tooling, CPU optimize and backtest/plot/export paths.
+5. Reconcile delivered user/AI contracts, complete exact-head independent and
+   automatic review plus required CI, and audit every completion criterion.
+   Development acceptance does not authorize integration into master.
 
 
 ## Completed HSL history expiry
@@ -886,6 +979,11 @@ reported without widening general policy. Same-observation correctness does not
 approve the separate unified reconstruction/selection difference.
 
 ## Unified HSL cohort materiality
+
+Historical pre-factual-reconstruction measurement, reconciled 2026-10-10:
+retain the failed values below as evidence for the replacement, not as a current
+unresolved HSL definition failure. The later factual reconstruction and matched
+cohort sections document the outlier resolution.
 
 The reproducible command in [the cohort guide](../gpu_cohort_benchmark.md) measures
 64 matched candidates: EMA/TM, seeds 7/43, 16 candidates each, two coins and both
@@ -1897,6 +1995,13 @@ independent current-head review and required CI and is integrated into developme
 
 ## Granular larger HSL diagnostics
 
+Historical diagnostics, reconciled 2026-10-10: the four-day recovery/fill
+discrepancy below precedes the minimum-remainder correction documented next.
+That correction matches the 1,020-fill reference and reduces recovery p95 error
+to about three minutes. Timing and interruption observations retain their stated
+source/caller scope; later temporal and completed resource measurements add
+separate evidence.
+
 Isolate the base scenario's first public seed-seven EMA candidate from the larger
 service recipe: 25 coins, both sides, quantity `0.01`, EMA span zero `5.0`, unified
 HSL threshold `0.99`, one-day lookback and the ten service-benchmark metrics.
@@ -2156,9 +2261,27 @@ children, and whole-process CPU time does not isolate orchestration. This comple
 resource cohort leaves representative full-search and remaining numerical,
 lifecycle and retirement gates open.
 
-## Current factual cohort and metric-surface observations
+Before further marginal specialization, profile continuation attempts and successes,
+fresh-reconstruction reasons, reconstructed minute/pair counts and composition cost
+on busy workloads. Distinguish moving lookbacks, changed factual inputs/budgets and
+numerical safeguards; preserve those correctness guards. Instrumented measurements
+must identify their overhead and remain separate from uninstrumented timings.
 
-After the minimum-remainder repair, the native factual cohort recipe compares
+Batch-width tuning currently scores throughput and releases usable metrics only
+after a complete physical batch. Its command-duration controller does not bound
+that result latency. Evaluate a soft completion-duration target within the existing
+width policy, including slow single-candidate cases and cold/warm evidence, before
+claiming responsive automatic tuning. Do not add a separate tuning subsystem or
+interpret zero completed evidence windows as convergence. Representative optimizer
+comparisons remain distinct from fixed-cohort ranking and service throughput.
+
+## Historical factual cohort and metric-surface baseline
+
+This baseline is retained as of 2026-10-10. It follows the minimum-remainder
+repair but predates the exact EMA-tail and initial-entry reducers; its old tail/bin
+errors are not current acceptance failures for those replacements.
+
+The native factual cohort recipe compares
 64 candidates: EMA Anchor and Trailing Martingale, seeds 7 and 43, sixteen
 candidates per case, two coins, both sides and 3,000 minute bars. It requests
 22 metrics, unified HSL at threshold 0.002, span 2.5, one-day lookback and
@@ -2208,10 +2331,10 @@ drawdown and completion pass all six. The other 153 fields per case remain
 policy-unassessed. Presence, finite values and small headline errors do not
 close per-metric acceptance, selection-materiality or full-search gates.
 
-## Local retirement prototype — acceptance pending
+## Retirement candidate — acceptance pending
 
 The CUDA ask/tell implementation now occupies the existing `gpu` backend path in the
-local cutover prototype. Remove the intermediate backend, CPU validation pools/queues,
+cutover candidate. Remove the intermediate backend, CPU validation pools/queues,
 drift probes, screened-seed policy, exact-worker tuner and obsolete replay calibration
 cache. Preserve service-owned completed-work width/delay tuning, physical history limits
 and adaptive temporal commands. Preserve independent direct-replay and CPU parity tools. The parity command defaults
@@ -2223,43 +2346,12 @@ CPU-owned. Checkpoint version 3 rejects pre-cutover fitness; complete GPU result
 partial selection evidence remain separate. Unsupported collateral/strategies are checked
 on the CPU before device preparation, including effective suite overrides.
 
-Local checks and documentation preparation are underway. This section is not a completed
-retirement gate: current verified CUDA caller checks, representative HSL resources,
-refreshed factual cohort comparisons, final cutover CLI/CPU isolation, independent review
-and all required CI remain prerequisites.
+At revision `0ebb723823`, 74 source-matched backend/HSL host checks pass without
+skips. This is host evidence, not the combined CUDA qualification.
 
-## Larger factual-HSL service resources — EMA measurement
-
-Use `gpu-service-benchmark --strategy ema_anchor --coins 25 --bars 5760 --candidates 4 --rounds 2 --hsl unified`, seed seven, both sides, one-day lookback and threshold 0.99. Three shared-data scenarios contain 25/full and two 8/half views. First-use and warm execution share the existing compiler caches. This is a synthetic service observation, not CPU throughput, a full optimization run or fresh cold-cache timing.
-
-All 72 request results and statuses match the isolated width-one references exactly, with zero reduction-rounding cases. Every owner snapshot has one resident dataset; packing reaches three entries. Source arrays remain unchanged, spill files are removed after shutdown and resource sampling reports no errors.
-
-| Width | Warm round seconds | Warm requests/s | First warm result seconds | Sampled process-tree RSS peak bytes | Sampled global device peak bytes | Torch allocated peak bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 684.437 | 0.017533 | 113.672 | 2,217,734,144 | 5,069,864,960 | 7,469,568 |
-| 8 | 559.797 | 0.021436 | 515.282 | 1,534,681,088 | 5,069,864,960 | 10,215,936 |
-| auto | 554.502 | 0.021641 | 509.100 | 1,543,335,936 | 5,069,864,960 | 10,215,936 |
-
-Wider execution reduces warm elapsed time by approximately 18%, while delaying the first result from 114 to 509–515 seconds. Completions remain bounded by a physical microbatch. Busy many-coin HSL remains expensive; this result establishes a measurable throughput/latency tradeoff, not a promise of speedup over CPU or optimal scheduling.
-
-The automatic phase collects one warm sample per scenario and completes zero unchanged production tuning windows. It executes actual cohorts of four under a width-64 proposal; the evidence does not establish an optimal width. Earlier sustained HSL-off measurements separately exercise completed windows.
-
-Torch reserved peak is 25,165,824 bytes and packing peak is 10,033,620 bytes. Process-tree RSS includes compiler children; global device use includes driver/display/other processes and is not exclusive service allocation. One-second samples may miss short peaks. Whole-process CPU time includes replay/preparation/driver activity and does not isolate orchestration. History/scratch admission is not a complete VRAM guarantee. These facts preserve wider and future device-resource limitations explicitly.
-
-The source-backed continuation limitation is precise: `replay_factual_hsl` begins at `max(minute - lookback, 0)` before applying the factual cutoff, and `hsl_advance_scope` requires the same effective start, budget and factual identity. A sliding lookback, changed fills/budget, expired history or numerical guard therefore reconstructs fresh. A held-position continuation speedup cannot be extrapolated to this workload. These observations identify possible costs; this benchmark does not isolate the fraction attributable to each condition.
-
-The corresponding larger Trailing Martingale measurement remains open. These observations do not close numerical, final cutover or general resource acceptance by themselves.
-
-Before further marginal specialization, profile continuation attempts and successes,
-fresh-reconstruction reasons, reconstructed minute/pair counts and composition cost
-on busy workloads. Distinguish moving lookbacks, changed factual inputs/budgets and
-numerical safeguards; preserve those correctness guards. Instrumented measurements
-must identify their overhead and remain separate from uninstrumented timings.
-
-Batch-width tuning currently scores throughput and releases usable metrics only
-after a complete physical batch. Its command-duration controller does not bound
-that result latency. Evaluate a soft completion-duration target within the existing
-width policy, including slow single-candidate cases and cold/warm evidence, before
-claiming responsive automatic tuning. Do not add a separate tuning subsystem or
-interpret zero completed evidence windows as convergence. Representative optimizer
-comparisons remain distinct from fixed-cohort ranking and service throughput.
+This remains an incomplete retirement gate. The documented larger EMA/TM
+service measurements and scoped numerical decisions are complete evidence for
+their recipes. Combined-source CUDA/CLI/CPU-isolation qualification, the eight
+equal-budget evolving comparisons, independent current-head review and required
+CI remain pending. Measured busy-HSL latency remains an explicit performance
+limitation; resource observations do not certify every workload.

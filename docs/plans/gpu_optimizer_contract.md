@@ -131,12 +131,20 @@ candidate-dependent indicators; do not trade unbounded memory for hypothetical r
 Measure throughput, completion latency, memory, transfer overhead and useful work, not
 GPU utilization alone.
 
+Prioritize focused, meaningful HSL speed improvements before the remaining
+evolving-search comparisons, so later qualification and experiments benefit from
+faster backtests. Preserve risk semantics and use paired correctness/performance
+evidence; a contract change requires a separate decision. This execution priority
+does not replace the final comparisons or impose a universal speedup threshold.
+
 ## Practical parity and numerical policy
 
 Prefer float32 where its benefits justify it. Bitwise float32/float64 identity is not
 required. Use explicit absolute/relative tolerances per metric, with sample sufficiency
 and documented non-finite sentinels handled intentionally. Tolerances are provisional
 until baseline observations, not a global percentage applied indiscriminately.
+The acceptance map records [case-scoped numerical decisions](gpu_optimizer_acceptance.md#practical-numerical-foundation--scoped-decisions);
+these decisions do not change the standalone tool's policies or certify every metric.
 
 Evaluate discrepancies case by case for material effect on trading paths, risk decisions,
 feasibility and optimizer selection. Do not chase decimal noise or require perfect
@@ -222,7 +230,9 @@ Completion requires:
 - [x] Commit/publish this contract on the development branch; master unchanged.
 - [x] Inventory current supported topologies, metrics, deliberate approximations and direct callers.
 - [x] Establish isolated NVIDIA runtime with source-fingerprint verification.
-- [ ] Record reproducible CPU/GPU parity and cold/warm benchmark baselines.
+- [x] Record reproducible CPU/GPU parity and cold/warm benchmark baselines.
+  Preserve each measurement's source and recipe; refreshed equal-budget evolving
+  comparisons remain a final acceptance gate.
   - [x] Add public synthetic cohort measurements with first-use/warm scope, direct/native
     equivalence, completion latency and CPU ranking/feasibility evidence for two seeds.
 
@@ -234,17 +244,25 @@ Completion requires:
 - [x] Register immutable data, reuse packing/compilation, isolate mutable replay state.
 - [x] Add prepared shared-array metadata with explicit column binding and worker-owned residency.
 - [x] Bind canonical standalone/lazy suite preparation to the service without copying candle histories.
-- [ ] Demonstrate incremental completions and bounded memory on CUDA.
+- [x] Demonstrate incremental completions and bounded memory on CUDA.
+  This covers admission, resident replay allocations and the measured larger service
+  recipes; it is not a total-VRAM guarantee for arbitrary inputs.
   - [x] Prove incremental admission/completions and bounded replay allocations on CUDA;
-    total device/host/disk resource measurements remain in representative acceptance.
+    the larger service measurements record device/host/disk observations with
+    explicit sampling and future-workload limitations.
 
 ### Authoritative simulation and tooling
 
 - [x] Implement standalone GPU/CPU parity tooling with structured diagnostics.
-- [ ] Audit approximation inventory against representative correctness cases.
-- [ ] Resolve material differences and record accepted numerical discrepancies.
+- [x] Audit approximation inventory against representative correctness cases.
+  The code-backed inventory separates definition controls, measured cases and
+  policy-unassessed fields; it does not certify all 157 output values.
+- [x] Resolve material differences and record accepted numerical discrepancies.
+  The initial foundation has explicit case-scoped decisions; keep tight-limit and
+  trajectory limitations visible. Final combined acceptance remains below.
   - [x] Align active coin HSL's empty retained-fill history with Rust's fresh
-    current-position loss estimate; retained-fill and aggregate differences remain open.
+    current-position loss estimate; the subsequent factual reconstruction resolves
+    the measured retained-fill and aggregate outlier.
   - [x] Develop opt-in retained factual-fill reconstruction, bounded device storage,
     actual scope episode boundaries and disposable cutoff caching. Component,
     native full/chunk/growth/discard and matched candidate evidence is recorded in
@@ -261,20 +279,25 @@ Completion requires:
     HSL lifecycle/loss and 56 optimizer CLI/data/service controls also pass.
     Representative acceptance remains required; the worker cutover is integrated
     on development.
-- [ ] Verify requested metric surface and specialized/general kernel equivalence.
+- [x] Verify requested metric surface and specialized/general kernel equivalence.
+  The documented cases cover requested presence/status and the stated reducer and
+  compiler controls. Fields without declared tolerances remain policy-unassessed;
+  finite output is not an accuracy pass.
 - [x] Qualify native exact TM initial-entry interval metrics, compact reduction,
   scratch/index bounds and temporal/retry controls: the 22-check CUDA-enabled group
   passes, and the eight-candidate twenty-day cohort preserves all five interval
   rankings and the ADG/drawdown/p99 front. This accepts that cohort only; arbitrary
   CPU/GPU fill trajectories and combined retirement qualification remain separate.
-- [ ] Qualify requested native EMA-tail observation capture, compact device
-  reduction, scratch admission and feature-off behavior on CUDA; assess remaining
-  CPU-curve discrepancies and representative objective/limit effects.
+- [x] Qualify requested native EMA-tail observation capture, compact device
+  reduction, scratch admission and feature-off behavior on CUDA; assess CPU-curve
+  discrepancies and representative objective/limit effects on the documented cases.
   - [x] Qualify corrected capture, scopes, reporting clocks, retry/temporal isolation,
     scratch admission and terminal handling: 81 focused checks pass with CUDA enabled;
     four standalone CPU/GPU comparisons confirm unified side reports remain zero
-    and measure the corrected scope residuals. General numerical policy and
-    representative objective/limit acceptance remain separate.
+    and measure the corrected scope residuals. The completed eight-candidate
+    twenty-day companion preserves all six EMA rankings/fronts and CPU-selected
+    optima, with explicitly recorded equality-boundary sensitivity. This is
+    case-scoped acceptance, not a general numerical policy.
 - [x] Replace hourly recovery distribution sampling with per-step GPU observations,
   budget their replay/reduction storage, and isolate mutable reduction scratch.
 - [x] Restore safe disabled-HSL single-side EMA ablation and verify all returned outputs.
@@ -307,7 +330,9 @@ Completion requires:
     scores or skipping required full-suite collection; keep caches bounded and run-local.
   - [x] Add CPU-owned native survivor selection, full seed/bootstrap evaluation and checkpointed
     screening/promotion/full stages; exclude incomplete observations from fitness/storage.
-- [ ] Tune execution and CPU result/evolution cadence without implicit numerical changes.
+- [x] Tune execution and CPU result/evolution cadence without implicit numerical changes.
+  Completed-work and CPU-cadence controls establish the mechanism; larger busy-HSL
+  measurements document its throughput/latency limits rather than optimal tuning.
   - [x] Give native factual HSL compact storage independent of the bypassed legacy
     observation tree/window; preserve the legacy layout for remaining consumers.
     Source-verified CUDA allocation and replay controls, independent review and CI
