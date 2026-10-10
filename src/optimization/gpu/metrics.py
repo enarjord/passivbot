@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 
 import torch
+from optimization.gpu.entry_intervals import ENTRY_INTERVAL_NAMES
 
 from optimization.gpu.model import GAP_BINS
 
@@ -898,6 +899,13 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
         )
     if strategy_kind != "trailing_martingale":
         return {name: zeros for name in ENTRY_INTERVAL_METRICS}
+
+    if "entry_interval_native_metrics" in out:
+        values = out["entry_interval_native_metrics"]
+        if (values.dtype != torch.float64 or values.shape != (len(zeros), len(ENTRY_INTERVAL_NAMES))
+                or not bool(torch.isfinite(values).all()) or bool((values < 0).any())):
+            raise RuntimeError("native entry interval compact metrics are malformed")
+        return {name: values[:, column] for column, name in enumerate(ENTRY_INTERVAL_NAMES)}
 
     required = (
         "entry_interval_sum_steps",

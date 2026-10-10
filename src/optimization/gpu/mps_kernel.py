@@ -17,6 +17,9 @@ from optimization.gpu.weighted_equity import (
 from optimization.gpu.ema_tail import (
     drawdown_ema_tail_from_samples, drawdown_ema_tail_history_bytes,
 )
+from optimization.gpu.entry_intervals import (
+    entry_interval_history_bytes, entry_intervals_from_counts,
+)
 
 from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
 from optimization.gpu.replay_progress import TemporalReplayProgress
@@ -2491,6 +2494,8 @@ class _MulticoinReplayRunner:
         self.btc_prices = _btc_risk_price_tensor(btc_prices, expected_count=self.n)
         self.equity_balance_diff_enabled = bool(equity_balance_diff_enabled)
         self.entry_interval_enabled = bool(entry_interval_enabled)
+        if self._exact_entry_intervals_enabled():
+            entry_interval_history_bytes(self.n)
         if (
             self.entry_interval_enabled
             and not self.supports_entry_interval
@@ -2728,6 +2733,10 @@ class _MulticoinReplayRunner:
     def _hsl_ema_tail_scopes(self):
         return ("long", "short", "portfolio") if self.replay_sides == 2 else (self.side, "portfolio")
 
+    def _exact_entry_intervals_enabled(self):
+        return bool(getattr(self, "native_factual_hsl", False)
+                    and getattr(self, "entry_interval_enabled", False))
+
     def _hsl_ema_tail_samples_enabled(self):
         return bool(getattr(self, "native_factual_hsl", False)
                     and getattr(self, "hsl_ema_tail_enabled", False)
@@ -2748,6 +2757,8 @@ class _MulticoinReplayRunner:
                if getattr(self, "weighted_volume_enabled", False) else 0)
             + (drawdown_ema_tail_history_bytes(self.n, len(self._hsl_ema_tail_scopes()))
                if self._hsl_ema_tail_samples_enabled() else 0)
+            + (entry_interval_history_bytes(self.n)
+               if self._exact_entry_intervals_enabled() else 0)
         )
 
     def _unstuck_history_buffers(self, batch_size):
@@ -2965,6 +2976,13 @@ class _MulticoinReplayRunner:
     def _entry_interval_buffers(self, batch_size: int):
         if not self.entry_interval_enabled:
             return None, None
+        count_cols = MPS_ENTRY_INTERVAL_COUNT_COLS
+        if self._exact_entry_intervals_enabled():
+            if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+                raise ValueError("native entry intervals exceed the scratch budget")
+            count_cols = self.n + 2
+            if batch_size * count_cols > np.iinfo(np.int32).max:
+                raise ValueError("native entry interval buffer exceeds integer addressing bounds")
         if batch_size not in self._entry_interval_stat_buffers:
             self._entry_interval_stat_buffers = {
                 batch_size: torch.zeros(
@@ -2975,7 +2993,7 @@ class _MulticoinReplayRunner:
             }
             self._entry_interval_count_buffers = {
                 batch_size: torch.zeros(
-                    (batch_size, MPS_ENTRY_INTERVAL_COUNT_COLS),
+                    (batch_size, count_cols),
                     dtype=torch.int32,
                     device=gpu_device(),
                 )
@@ -3323,9 +3341,14 @@ class _MulticoinReplayRunner:
             output["raw_strategy_day_min_eq"] = daily[:, :, offset + 1]
         output.update(self._reduce_weighted_equity(weighted_equity_samples, output))
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
-        output.update(
-            _decode_entry_interval_outputs(entry_interval_stats, entry_interval_counts)
-        )
+        if self._exact_entry_intervals_enabled():
+            output["entry_interval_native_metrics"] = entry_intervals_from_counts(
+                entry_interval_counts, int(self.run_config.interval_ms),
+            )
+        else:
+            output.update(
+                _decode_entry_interval_outputs(entry_interval_stats, entry_interval_counts)
+            )
         if self.recovery_distribution_enabled:
             sample_interval_days = self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
             if self.compact_recovery_output:

@@ -151,6 +151,48 @@ inline bool hsl_scope_visit(
     return true;
 }
 
+// Native candles have evaluation-local forward/backfill. With no retained
+// execution in any selected pair, reconstruction is flat until the actual
+// exposed endpoint; fresh composition replaces that curve by this singleton.
+// Reuse the same signal visitor, never yesterday's peak, EMA or permission.
+inline bool hsl_compose_empty_native_scope(
+    thread HslScopePair* pairs, int pair_count, int start, int end,
+    float budget, float span, float threshold, float cooldown, bool never_restart,
+    thread HslScopeResult& result
+) {
+    if (pair_count < 1 || end < start || !isfinite(budget) || budget <= 0.0f
+        || !isfinite(span) || span < 1.0f || !isfinite(threshold)
+        || threshold <= 0.0f || threshold > 1.0f || !isfinite(cooldown)
+        || cooldown < 0.0f) return false;
+    HslPairSum upnl;
+    hsl_pair_sum_reset(upnl, 0.0f);
+    bool exposed = false;
+    for (int p = 0; p < pair_count; ++p) {
+        thread const HslScopePair& pair = pairs[p];
+        if (pair.facts.count != 0 || pair.candles == nullptr
+            || pair.history.opening_size != 0.0f || pair.history.flat_correction_minute >= 0
+            || pair.sequence_stride < 1 || pair.price_stride < 1) return false;
+        HslPairSample sample;
+        if (!hsl_sample_pair(pair.history, pair.events, 0, 0, end, end, false,
+            pair.current_size, pair.current_basis, pair.current_mark,
+            hsl_scope_price_at(pair, end, start, end), pair.multiplier,
+            pair.short_side, sample)) return false;
+        exposed = exposed || sample.size != 0.0f;
+        hsl_pair_sum_add(upnl, sample.upnl);
+    }
+    if (!exposed) return false;
+    result.raw = result.ema = result.latest_flat_raw = result.latest_flat_ema = 0.0f;
+    result.action = result.point_count = 0;
+    result.flat_minute = result.latest_flat_minute = -1;
+    HslScopeSignal signal;
+    hsl_scope_signal_reset(signal, 0.0f);
+    HslScopePoint point;
+    point.minute = end; point.pnl = 0.0f; point.upnl = hsl_pair_sum_value(upnl);
+    point.exposed = 1; point.flatten = 0;
+    return hsl_scope_visit(signal, budget, 2.0f / (span + 1.0f), threshold,
+        cooldown, never_restart, start, false, point, result, nullptr, 0);
+}
+
 inline int hsl_scope_pair_sequence(thread const HslScopePair& pair, int logical) {
     return pair.sequences[hsl_pair_slot(pair.facts, logical) * pair.sequence_stride];
 }

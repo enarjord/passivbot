@@ -262,6 +262,11 @@ Completion requires:
     Representative acceptance remains required; the worker cutover is integrated
     on development.
 - [ ] Verify requested metric surface and specialized/general kernel equivalence.
+- [x] Qualify native exact TM initial-entry interval metrics, compact reduction,
+  scratch/index bounds and temporal/retry controls: the 22-check CUDA-enabled group
+  passes, and the eight-candidate twenty-day cohort preserves all five interval
+  rankings and the ADG/drawdown/p99 front. This accepts that cohort only; arbitrary
+  CPU/GPU fill trajectories and combined retirement qualification remain separate.
 - [ ] Qualify requested native EMA-tail observation capture, compact device
   reduction, scratch admission and feature-off behavior on CUDA; assess remaining
   CPU-curve discrepancies and representative objective/limit effects.

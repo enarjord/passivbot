@@ -11,6 +11,16 @@ since the latest release tag; these features may already be available when insta
   Preserve CPU optimization and standalone backtests/plots. Remove obsolete validation,
   drift and screened-seed controls; earlier GPU checkpoints require a fresh run.
 
+- Native GPU coin and position-side HSL reuse the fresh current-position
+  singleton when every selected retained fill history is empty, preserving
+  current-budget evaluation and terminal-fill reconstruction.
+
+- Native GPU Trailing Martingale initial-entry interval metrics use exact
+  integer bar-gap counts and device percentile reduction instead of logarithmic
+  bin edges. Requested histories and reduction scratch are budgeted; only compact
+  metrics leave the replay. Histories exceeding the existing float32 bar-index
+  precision bound are rejected. Legacy diagnostic GPU replay retains its histogram.
+
 - Requested native GPU HSL EMA drawdown tails use eligible per-bar device
   observations instead of logarithmic cutoff-bin averages. Histories stay on
   the device, scratch admission includes their reduction, and unrequested or
