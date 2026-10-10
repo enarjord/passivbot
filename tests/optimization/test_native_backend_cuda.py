@@ -70,10 +70,10 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     if hsl_tail:
         config["optimize"]["scoring"] = [
             dict(metric="adg_strategy_eq", goal="max"),
-            dict(metric="hsl_drawdown_ema_mean_worst_1pct_portfolio", goal="min"),
+            dict(metric="drawdown_worst_mean_1pct_ema_strategy_eq", goal="min"),
         ]
         config["optimize"]["limits"].extend(
-            dict(metric=f"hsl_drawdown_ema_mean_worst_1pct_{side}",
+            dict(metric=f"drawdown_worst_mean_1pct_ema_strategy_eq_{side}",
                  penalize_if="greater_than", value=0.05)
             for side in ("long", "short")
         )
