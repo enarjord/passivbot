@@ -620,7 +620,7 @@ An existing reducer or output field does not establish native support.
 | Trading trajectories | Shared EMA/TM kernels use float32 strategy/account state. Native and specialized/general tests cover the stated topology, order, risk and replay cases. | Threshold rounding can alter later fills; assess risk, feasibility and selected configs rather than demand identical long trajectories. |
 | Completed HSL episodes | The native worker reconstructs current scope episodes from retained simulator fill facts and causal closes, with fresh current budgets and an explicitly disposable cutoff memo. The component, temporal, matched-cohort and native lifecycle checks below distinguish this from retained observation replay, which remains on the legacy screening route. | The material HSL cohort outlier is resolved and all 42 wider native lifecycle/loss cases pass; general numerical and risk acceptance still requires the stated representative gates. |
 | Active coin HSL without retained fills | Factual native reconstruction evaluates an exposed current position from its actual endpoint when clipped facts no longer establish historical exposure. The earlier 82 empty-history controls (66 probes and 16 real caller cases) validate the retained legacy observation route; factual pair/scope endpoint controls and native replay/temporal checks validate the replacement. | Current-position loss protection must remain available after expiry. Keep these route-specific controls distinct, and assess downstream float32 trajectories rather than treating component equality as universal simulator acceptance. |
-| HSL EMA drawdown tails | Requested native replay captures eligible long/short/portfolio observations in bounded device histories and reduces their actual largest `max(floor(count / 100), 1)` values. The legacy observation engine retains 32 logarithmic bins. `test_gpu_portfolio_ema_tail.py` covers portfolio ownership; `test_gpu_ema_tail_resolution.py` adds independent sorted-reference, partial-clock, retry and compact sub-batch controls. | CUDA replay/resource qualification is pending for the new capture. Removing cutoff-bin averaging does not remove float32 trajectory differences or establish every tail objective/limit policy. |
+| HSL EMA drawdown tails | Requested native replay captures eligible long/short/portfolio observations in bounded device histories and reduces their actual largest `max(floor(count / 100), 1)` values. The legacy observation engine retains 32 logarithmic bins. `test_gpu_portfolio_ema_tail.py` covers portfolio ownership; `test_gpu_ema_tail_resolution.py` adds independent sorted-reference, partial-clock, retry and compact sub-batch controls. | Requested capture, reporting scopes and clocks pass the focused CUDA controls and matched scope comparisons below. Exact selection on the observed GPU curve does not remove float32 trajectory differences or establish every tail objective/limit policy. |
 | Side raw daily drawdown tails | Retain a bounded sorted list of daily maxima. Capacity covers the worst floor(1%) of the prepared UTC horizon and belongs to shader-cache identity. Current-day queries do not flush or mutate replay state. `test_gpu_daily_tail.py` covers selection, horizon bounds and CUDA replay isolation. | Selection is exact on the GPU's observed float32 curve; CPU/GPU curves may still differ. Full replay and matched kernel evidence are recorded below; this does not accept unrelated trajectory or HSL reconstruction differences. |
 | Fill-gap percentiles | `_fill_gap_metrics` uses 512 logarithmic positive-gap bins, upper-edge decoding, actual boundary gaps and restored same-candle zero multiplicity. Multiplicity/reducer tests and the three-objective cohorts above expose the remaining residuals. | The same gap population can still be quantized; upper edges are not a universal CPU/GPU trajectory error bound. |
 | Initial-entry interval percentiles | `_entry_interval_metrics` retains 128 bins for TM; streamed mean/maximum are separate. `test_gpu_metrics.py` checks totals, malformed counts, upper-edge percentiles and EMA's canonical zero case. | Median/p95/p99 are approximations even when mean/maximum agree; representative selection/limit materiality remains unassessed. |
@@ -631,6 +631,55 @@ Per-metric policy and measured feasibility/selection evidence remain required fo
 acceptance. The all-supported-metric audit checks presence and finite/sentinel
 handling; its undefined policies are explicitly unassessed. Neither this table nor
 finite output alone closes the numerical gate.
+
+## Native EMA tail and reporting qualification
+
+Implementation revision `b2e709a878` passes 81 focused checks with CUDA enabled,
+with no failures, errors or skips. Twelve separate host reducer/scalar controls
+also pass. The rebuilt Rust extension has source fingerprint
+`1eb54145fa425dd86b15aedddddc80b28cdd0b1229c7c8edfb53bc0c6a15c6cf`;
+341 Rust tests pass, with one existing ignore, and default-feature compilation passes.
+The checks cover exact sorted selection, scope ownership, cooldown reporting,
+partial and temporal replay, rejected retries, compact joining, capture admission,
+disabled consumers and native CLI scoring/resumption without CPU simulation.
+
+The eight terminal-cause comparisons include both strategies, with long-only and
+both-side mark-driven and panic-fill liquidation. Their six newly covered EMA fields use
+fixture-local absolute `1e-8` plus relative `2e-6` allowances, informed by the
+measured rounding at panic fills. Existing lifecycle and side-equity assertions
+remain unchanged. This does not widen the standalone tool's default policies.
+
+Four standalone comparisons use public synthetic inputs: both sides, two coins,
+3,000 one-minute bars, seed 43, RED threshold `.002`, EMA span `2.5` minutes,
+one-day lookback and `10000`-minute cooldown, with price shocks
+`(0, 1500, .7)` and `(1, 1800, 1.3)`.
+
+| Strategy | Signal scope | Largest absolute EMA-maximum error | Largest absolute EMA-tail error |
+| --- | --- | ---: | ---: |
+| EMA Anchor | Unified | 7.488e-7 | 4.078e-7 |
+| Trailing Martingale | Unified | 2.712e-8 | 2.192e-8 |
+| EMA Anchor | Pside | 2.872e-7 | 6.022e-8 |
+| Trailing Martingale | Pside | 5.018e-8 | 1.186e-8 |
+
+Unified long/short reports are exactly zero in both engines. Pside reports retain
+their own signals and a separately observed portfolio tail. These residuals are
+accepted for the stated scope fixtures under the practical F32 contract. The
+machine-readable comparison keeps all six fields policy-unassessed because no
+general per-metric tolerances were supplied. Matched objective/limit consequences
+remain a separate numerical gate; these observations do not certify arbitrary
+tight limits, identical trajectories, general speedup or optimizer retirement.
+
+Reproduce the capture and reporting controls with the source-verified extension:
+
+```bash
+PYTHONPATH=src python -m pytest -q \
+  tests/optimization/test_gpu_ema_tail_resolution.py \
+  tests/optimization/test_gpu_hsl_ordering.py::test_liquidation_retains_elapsed_red_interval \
+  tests/optimization/test_native_backend_cuda.py::test_native_hsl_ema_tail_cli_scores_limits_and_resumes_without_cpu
+```
+
+The 81-check qualification additionally includes the affected launch-option,
+diagnostic-layout, weighted-capture, recovery and retained legacy-tail controls.
 
 ## Exact side raw daily tails
 
