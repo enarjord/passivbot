@@ -426,12 +426,11 @@ Trade-offs:
 
 - Intra-interval fill ordering is lost (fills occur only at the aggregated bar boundaries).
 - Metrics are still time-correct because analysis uses timestamps rather than bar indices.
-- The Apple MPS backend supports aggregated intervals for single- and multi-coin EMA Anchor and
-  Trailing Martingale runs in long-only, short-only, and fused long+short form. It converts
-  minute-denominated strategy and Forager EMA spans, static per-coin overrides,
-  and elapsed-time cooldowns to candle periods, compounds HSL's one-minute EMA decay over each
-  candle, and preserves Rust's boundary-crossing behavior when an interval does not evenly divide
-  an hour; exact Rust validation remains authoritative.
+- Native CUDA optimization supports aggregated candles with HSL disabled. Enabled HSL requires
+  one-minute candles. Minute-denominated strategy/Forager EMA spans and elapsed-time cooldowns
+  retain their time meaning. GPU results supply fitness directly; compare interval-sensitive
+  metrics separately with the [standalone parity tool](gpu_parity.md). Apple Metal optimization
+  is deferred.
 
 ### Fine-Tuning Specific Parameters
 

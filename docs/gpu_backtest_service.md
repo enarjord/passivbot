@@ -373,11 +373,12 @@ widths within the fixed dispatch ceiling and observes only completely validated 
 results. Width changes occur between dispatches; FIFO dataset choice, cancellation,
 backpressure and fail-stop producer semantics remain independent of tuning.
 
-The shared-account engine now permits 1..64 selected coins. This facade uses that
-implementation internally; legacy optimizer routing is unchanged. Short synthetic
-one-coin measurements show a substantial throughput disadvantage against the old
-single-coin implementation. Kernel ablation and representative measurements are required
-before selecting the final native optimizer's default execution policy.
+The shared-account engine permits 1..64 selected coins and supplies the authoritative
+`gpu` optimizer backend. Retained directional replay is available only through explicit
+diagnostic tooling. Earlier short synthetic one-coin measurements showed a throughput
+disadvantage against that directional implementation; they do not measure the current
+complete optimizer or establish a universal throughput advantage. Compiler specialization
+and adaptive dispatch select execution policy within the native service.
 
 Shared-account EMA/TM coin HSL uses the current position's last factual fill to
 detect when no fills remain in the inclusive lookback. Held exposure then uses a
