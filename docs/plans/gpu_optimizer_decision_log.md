@@ -3521,5 +3521,9 @@ Historical observations do not supersede those requirements or prove current acc
   budget change, later fills and genuine terminal fills. Reuse two compiler
   ablations per strategy rather than specializing every runtime case. Source-
   verified CUDA qualification remains required before integrating this slice.
-- All 77 focused Rust HSL regressions pass. Device caller and replay qualification
-  remain pending; no numerical tolerance or performance acceptance is changed.
+- All 77 focused Rust HSL regressions pass. The source-matched 15-check CUDA
+  caller/replay qualification also passes without failures or skips; the rebuilt
+  extension passes 341 Rust tests (one existing ignore) and default-feature
+  compilation. A subsequent development-base merge leaves production and these
+  focused test bytes unchanged. Broader ordering/numerical qualification retains
+  its own evidence. No numerical tolerance or performance acceptance is changed.
