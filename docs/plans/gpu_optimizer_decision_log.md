@@ -3490,3 +3490,10 @@ Historical observations do not supersede those requirements or prove current acc
   strategy/side/terminal-cause parity cases to all six EMA maxima/tails at their
   unchanged tolerances. Twelve host reducer/decoder controls pass; rebuilt device
   qualification and current-head review remain integration gates.
+
+- The eight terminal-cause CUDA comparisons confirm the fresh mark signal and
+  unchanged lifecycle outputs. The four panic-fill EMA reports differ from Rust
+  by at most 6.3e-8 absolute (1.78e-6 relative), ordinary float32 rounding in the
+  preterminal signal. Use a local 2e-6 relative allowance for those newly covered
+  six EMA fields; preserve every existing lifecycle/equity gate and the general
+  comparison policies. Full current-head device qualification remains required.
