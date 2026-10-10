@@ -117,9 +117,11 @@ def test_native_full_replay_empty_compile_ablation_preserves_all_outputs(monkeyp
             monkeypatch.setattr(mps_kernel,'compile_shader',
                 lambda source,*args,_enabled=enabled,**kwargs: compiler(
                     f'#define PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED {_enabled}\n'+source,*args,**kwargs))
-            # Short physical lookback forces expiry inside a full native run.
+            # Full replay smoke coverage uses the supported public lookback.
+            # This short fixture does not reach expiry; actual caller tests
+            # above cover expiry with a bounded shader-level physical window.
             proxy=make_proxy('unified',strategy,('long',),minutes=384,
-                             lookback=10/1440,factual_hsl=True)
+                             lookback=1,factual_hsl=True)
             _,output=raw(proxy,[{}])
             results.append(output)
         assert results[0].keys()==results[1].keys()
