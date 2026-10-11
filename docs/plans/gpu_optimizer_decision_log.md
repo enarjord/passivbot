@@ -3812,3 +3812,18 @@ Historical observations do not supersede those requirements or prove current acc
 - CUDA/Rust execution bytes are unchanged; preserve their original qualification
   attribution. Current-head independent/automatic review, CI and development
   integration remain separate delivery gates.
+
+
+### 2026-10-11 — Complete the CUDA architectural foundation on development
+
+- Integrate [PR #1960](https://github.com/enarjord/passivbot/pull/1960)'s reviewed
+  successor `feb8547af5f2a6350ace392fd6cf420cc8bfb803` into
+  `codex/gpu-native-optimizer` at `f693c50f69e67ad42db5166f63f32d9f4d8661d1`
+  after current-head independent and automatic review and all three required CI
+  checks. The final population migration is included in that reviewed successor;
+  prior-head CI is not its gate.
+- Complete the seven initial foundation criteria with the evidence and accepted
+  limits in the [final foundation status](gpu_optimizer_acceptance.md#final-foundation-status).
+  The bounded old-pipeline TM timeout remains a failed execution with partial
+  evidence; numerical policies and future performance scope are unchanged.
+- Master integration remains a separate decision.

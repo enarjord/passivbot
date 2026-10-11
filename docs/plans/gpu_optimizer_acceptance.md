@@ -7,7 +7,8 @@ run outside optimization. Coverage and numerical decisions apply to the document
 cases, without certifying every configuration, metric or search trajectory.
 Historical measurements remain below and in the
 [decision and progress log](gpu_optimizer_decision_log.md); the
-[final foundation status](#final-foundation-status) identifies the remaining gates.
+[final foundation status](#final-foundation-status) records completed development
+acceptance and its limits.
 
 ## Ownership and lifecycle foundation
 
@@ -894,12 +895,16 @@ own correctness and performance evidence.
 
 ## Final foundation status
 
-The candidate uses an asynchronous CUDA backtest service and CPU-owned
-preparation, scenario screening, scoring, selection and persistence. CPU
-optimization and standalone backtest/plot/export paths remain available. The
-superseded GPU screening/CPU-validation implementation is removed in the
-candidate; development acceptance still requires the comparison and delivery
-gates below.
+The asynchronous CUDA backtest service and CPU-owned preparation, scenario
+screening, scoring, selection and persistence are integrated into development.
+CPU optimization and standalone backtest/plot/export paths remain available;
+the superseded GPU screening/CPU-validation implementation is removed.
+[PR #1960](https://github.com/enarjord/passivbot/pull/1960) merges reviewed
+successor `feb8547af5f2a6350ace392fd6cf420cc8bfb803` into
+`codex/gpu-native-optimizer` at `f693c50f69e67ad42db5166f63f32d9f4d8661d1`
+after current-head independent/automatic review and required CI. The initial
+foundation is complete within the evidence and accepted limits below. Master
+integration remains a separate decision.
 
 | Gate | Evidence and current status |
 | --- | --- |
@@ -908,7 +913,7 @@ gates below.
 | Repeated-seed evolving comparison | **Complete for the documented recipe:** eight equal-budget CPU/native jobs, both strategies and two seeds, with 96 complete stored records each; [timing and limits below](#representative-evolving-search-and-common-reference-fronts). |
 | Common-reference front/limit materiality | **Complete for the documented recipe:** four paired-front comparisons use common CPU metrics, with measured tradeoff differences and the completion-only limit scope [below](#representative-evolving-search-and-common-reference-fronts). |
 | Old screening/CPU-validation baseline | **Complete as a bounded comparison:** EMA completes 40 records; TM reaches the 180-second cap with 13 persisted records. Both eight-seed bootstraps match their CPU references; the overall baseline run remains failed. The [bounded baseline](#old-screeningcpu-validation-baseline) retains the actual timeout and partial scope. |
-| Current-head review, CI and development integration | **Pending.** Master integration remains a separate decision. |
+| Current-head review, CI and development integration | **Complete for the delivered foundation:** [PR #1960](https://github.com/enarjord/passivbot/pull/1960)'s reviewed successor `feb8547af5f2a6350ace392fd6cf420cc8bfb803` passes the required checks and is merged at `f693c50f69e67ad42db5166f63f32d9f4d8661d1` into `codex/gpu-native-optimizer`. Master integration remains a separate decision. |
 
 The completed numerical-family decisions, service resource measurements and
 feature/lifecycle controls remain evidence for their recipes. They do not require
@@ -2356,8 +2361,9 @@ Persistence is promptly flushed but is not a power-loss transaction guarantee;
 unfinished GPU work may repeat after resume without erasing durable Pareto members.
 
 The [final foundation status](#final-foundation-status) records affected
-qualification, completed scoped search comparisons and still-pending old-pipeline
-and delivery gates.
+qualification, completed scoped search comparisons, the accepted bounded
+old-pipeline baseline and completed development delivery. Master integration
+remains a separate decision.
 Earlier `0ebb723823` results remain attributed to that revision: 74 backend/HSL
 host checks, 29 CUDA CLI/service/lifecycle checks and six CPU-entrypoint checks
 pass without skips. They establish their lifecycle and dependency boundaries,
@@ -2592,5 +2598,7 @@ replace the missing remainder. Independent inspection verifies all 53 stored
 records across both strategies and the matched-bootstrap comparisons. This
 limited baseline is accepted for the initial architecture comparison while the
 overall failed outcome remains visible; it establishes no completed TM search,
-equal-budget search quality or universal speedup. Current-head review, CI and
-development integration remain required.
+equal-budget search quality or universal speedup. The
+[final foundation status](#final-foundation-status) records PR #1960's completed
+current-head review, CI and development integration; master integration remains
+a separate decision.
