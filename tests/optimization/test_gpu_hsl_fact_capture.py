@@ -221,7 +221,7 @@ def test_actual_overflow_checks_interrupt_before_retry(reference, strategy, side
 
 
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
-def test_temporal_overflow_marker_survives_later_dispatches(reference, sides):
+def test_temporal_overflow_rejects_before_replaying_remaining_history(reference, sides):
     from test_gpu_hsl_multicoin import make_proxy, raw
     proxy = make_proxy("unified", "trailing_martingale", sides, minutes=512)
     runner, baseline = raw(proxy, [{}])
@@ -231,7 +231,7 @@ def test_temporal_overflow_marker_survives_later_dispatches(reference, sides):
     runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate()
     with pytest.raises(RuntimeError, match="single-candidate scratch budget"):
         raw(proxy, [{}])
-    assert runner._last_temporal_dispatch["dispatch_count"] > 1
+    assert runner._last_temporal_dispatch["rejected_at_bar"] < runner.n - 1
 
 
 def test_temporal_capacity_growth_restarts_factual_state_and_preserves_outputs(reference):

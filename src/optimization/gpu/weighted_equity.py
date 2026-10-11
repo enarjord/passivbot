@@ -21,24 +21,31 @@ from optimization.gpu.metrics import (
 
 
 def weighted_equity_history_bytes(sample_capacity, n_days, requested):
-    """Reserve resident f32 curves and sequential f64 reduction working space.
-
-    Controlled CUDA peak measurements use under 67 scratch bytes per observation.
-    Reserve 80 plus daily work and compact results; allocator/driver overhead is
-    covered by the service's separate device headroom. Curves reduce sequentially.
-    """
+    """Resident f32 curves and compact results for one replay candidate."""
     requested = set(requested)
     curves = int(bool(requested & WEIGHTED_RAW_EQUITY_METRICS)) + int(
         bool(requested & WEIGHTED_ACCOUNT_EQUITY_METRICS)
     )
     if not curves:
         return 0
-    return int(sample_capacity) * (curves * 4 + 80) + int(n_days) * 256 + len(requested) * 8
+    return int(sample_capacity) * curves * 4 + len(requested) * 8
+
+
+def weighted_equity_workspace_bytes(sample_capacity, n_days, requested):
+    """One shared reduction workspace, independent of replay batch width.
+
+    Controlled CUDA peaks use under 67 scratch bytes per observation. Reserve
+    80 plus daily work; allocator/driver overhead has separate device headroom.
+    Both curves and candidates reduce sequentially.
+    """
+    if not set(requested) & (WEIGHTED_RAW_EQUITY_METRICS | WEIGHTED_ACCOUNT_EQUITY_METRICS):
+        return 0
+    return int(sample_capacity) * 80 + int(n_days) * 256
 
 
 def weighted_equity_from_samples(
     samples, *, first_timestamps_ms, sample_counts, interval_ms,
-    n_days, requested, curve, fill_counts=None,
+    n_days, requested, curve, fill_counts=None, candidate_batch_size=1,
 ):
     """Reduce true suffixes without transferring histories to the caller.
 
@@ -73,6 +80,26 @@ def weighted_equity_from_samples(
         or fill_counts.device != samples.device
     ):
         raise ValueError("account weighted equity requires aligned actual fill counts")
+
+    if (not isinstance(candidate_batch_size, int) or isinstance(candidate_batch_size, bool)
+            or candidate_batch_size < 1):
+        raise ValueError("weighted equity reduction batch size must be a positive integer")
+    if batch > candidate_batch_size:
+        # Only compact results survive between reductions. All resident curves
+        # stay on device; temporary history-sized tensors share one workspace.
+        pieces = {name: [] for name in requested}
+        for start in range(0, batch, candidate_batch_size):
+            stop = start + candidate_batch_size
+            result = weighted_equity_from_samples(
+                samples[start:stop], first_timestamps_ms=first_timestamps_ms[start:stop],
+                sample_counts=sample_counts[start:stop], interval_ms=interval_ms,
+                n_days=n_days, requested=requested, curve=curve,
+                fill_counts=None if fill_counts is None else fill_counts[start:stop],
+                candidate_batch_size=candidate_batch_size,
+            )
+            for name, value in result.items():
+                pieces[name].append(value)
+        return {name: torch.cat(values) for name, values in pieces.items()}
 
     indices = torch.arange(capacity, device=samples.device)[None, :].expand(batch, -1)
     valid = indices < sample_counts[:, None]

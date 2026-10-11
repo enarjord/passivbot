@@ -169,3 +169,74 @@ def test_interleaved_resident_curves_are_not_mutated_or_assumed_contiguous():
     torch.testing.assert_close(interleaved, original, rtol=0, atol=0, equal_nan=True)
     for name in expected:
         torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("curve", ["raw_strategy", "account"])
+def test_shared_workspace_matches_wide_reduction(device, curve, monkeypatch):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    interval = FIXTURE["cases"][0]["interval_ms"]
+    cases = [case for case in FIXTURE["cases"] if case["interval_ms"] == interval]
+    # Exercise heterogeneous endpoints and padding even at a sparse cadence.
+    cases += [{**cases[0], "equities": cases[0]["equities"][:2]}]
+    samples, kwargs = _inputs(cases, device=device, dtype=torch.float32, curve=curve)
+    names = cases[0]["expected_raw"] if curve == "raw_strategy" else cases[0]["expected_account"]["initial_fill"]
+    expected = reducer.weighted_equity_from_samples(
+        samples, requested=names, candidate_batch_size=len(cases), **kwargs)
+    widths = []
+    original = reducer._smoothed_adg
+    def measured(ends, active):
+        widths.append(len(ends))
+        return original(ends, active)
+    monkeypatch.setattr(reducer, "_smoothed_adg", measured)
+    actual = reducer.weighted_equity_from_samples(samples, requested=names, **kwargs)
+    assert len(cases) > 1 and widths and set(widths) == {1}
+    # CUDA can select a different reduction kernel for one row, changing a
+    # final f64 bit. Keep this substantially tighter than the Rust goldens.
+    tolerance = 4 * torch.finfo(torch.float64).eps if device == "cuda" else 0
+    for name in expected:
+        torch.testing.assert_close(actual[name], expected[name], rtol=tolerance,
+                                   atol=tolerance, equal_nan=True, msg=name)
+
+
+def test_workspace_is_reserved_once_for_wider_resident_batch():
+    n, days = 2_000_000, 1400
+    requested = {"adg_strategy_eq_w", "calmar_ratio_w_usd"}
+    resident = reducer.weighted_equity_history_bytes(n, days, requested)
+    workspace = reducer.weighted_equity_workspace_bytes(n, days, requested)
+    assert resident == n * 8 + len(requested) * 8
+    assert workspace == n * 80 + days * 256
+    assert reducer.weighted_equity_workspace_bytes(n, days, []) == 0
+    assert 16 * resident + workspace < 512 * 1024**2
+
+
+@pytest.mark.parametrize("width", [0, -1, True, 1.5])
+def test_invalid_reduction_width_is_rejected(width):
+    samples, kwargs = _inputs([FIXTURE["cases"][0]], device="cpu", dtype=torch.float32, curve="raw_strategy")
+    with pytest.raises(ValueError, match="batch size"):
+        reducer.weighted_equity_from_samples(samples, requested=["adg_strategy_eq_w"],
+                                            candidate_batch_size=width, **kwargs)
+
+
+@pytest.mark.parametrize("curve", ["raw_strategy", "account"])
+def test_cuda_wide_reduction_fits_one_reserved_workspace(curve):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    batch, capacity, days = 16, 200_000, 140
+    names = {f"{stem}_strategy_eq_w" if curve == "raw_strategy" else f"{stem}_w_usd"
+             for stem in reducer.WEIGHTED_EQUITY_STEMS}
+    samples = torch.full((batch, capacity), 100., device="cuda", dtype=torch.float32)
+    kwargs = dict(first_timestamps_ms=torch.zeros(batch, device="cuda", dtype=torch.float64),
+                  sample_counts=torch.full((batch,), capacity, device="cuda", dtype=torch.long),
+                  interval_ms=60000, n_days=days, curve=curve, requested=names)
+    if curve == "account":
+        kwargs["fill_counts"] = torch.ones(batch, device="cuda")
+    torch.cuda.synchronize()
+    baseline = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+    actual = reducer.weighted_equity_from_samples(samples, **kwargs)
+    torch.cuda.synchronize()
+    peak = torch.cuda.max_memory_allocated() - baseline
+    assert peak <= reducer.weighted_equity_workspace_bytes(capacity, days, names)
+    assert all(value.shape == (batch,) and torch.isfinite(value).all() for value in actual.values())

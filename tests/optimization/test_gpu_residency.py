@@ -448,6 +448,8 @@ def test_factual_capacity_survives_production_residency_eviction(runtime, runner
             self.hsl_fact_capacity = self.hsl_fact_capacity_learned = 256
         def _history_bytes_per_candidate(self):
             return self.hsl_fact_capacity * 16
+        def _history_batch_bytes(self, count):
+            return count * self._history_bytes_per_candidate()
     manager = CudaSuiteResidency()
     estimates = {}
     def owner(key, hints):
@@ -499,8 +501,29 @@ def test_capacity_restore_rejects_malformed_or_over_budget_estimates(hint):
             pass
         def _history_bytes_per_candidate(self):
             return self.hsl_fact_capacity * 16
+        def _history_batch_bytes(self, count):
+            return count * self._history_bytes_per_candidate()
     owner = object.__new__(MpsMulticoinProxy)
     owner.run = owner.data = None
     owner._factual_capacity_hints = {"long": hint}
     with pytest.raises(ValueError, match="Invalid learned|exceeds scratch budget"):
+        owner._construct_runner("long", Runner, {})
+
+
+def test_capacity_restore_includes_shared_metric_workspace():
+    from optimization.gpu.service import MpsMulticoinProxy
+    class Runner:
+        native_factual_hsl = True
+        hsl_fact_capacity_learned = 256
+        hsl_scratch_budget_bytes = 70000
+        def __init__(self, *args, **kwargs):
+            pass
+        def _history_bytes_per_candidate(self):
+            return self.hsl_fact_capacity * 16
+        def _history_batch_bytes(self, count):
+            return count * self._history_bytes_per_candidate() + 8192
+    owner = object.__new__(MpsMulticoinProxy)
+    owner.run = owner.data = None
+    owner._factual_capacity_hints = {"long": 4096}
+    with pytest.raises(ValueError, match="exceeds scratch budget"):
         owner._construct_runner("long", Runner, {})
