@@ -3101,7 +3101,7 @@ class MpsMulticoinProxy:
                 raise ValueError("Invalid learned GPU HSL factual capacity")
             capacity = max(capacity, runner.hsl_fact_capacity_learned)
             runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = capacity
-            if runner._history_bytes_per_candidate() > runner.hsl_scratch_budget_bytes:
+            if runner._history_batch_bytes(1) > runner.hsl_scratch_budget_bytes:
                 raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
         return runner
 
