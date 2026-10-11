@@ -93,6 +93,12 @@ def test_cuda_independent_blocks_preserve_every_output(monkeypatch, strategy, mo
     _, expected = raw(proxy, candidates, end_steps=ends)
     expected = {key: value.clone() if isinstance(value, torch.Tensor) else value
                 for key, value in expected.items()}
+    # Reject an actual producer overflow between chunks, grow worker storage,
+    # and reconstruct from the beginning before publishing accepted results.
+    runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = 1
+    _, recovered = raw(proxy, candidates, end_steps=ends)
+    assert runner.last_hsl_fact_retries > 0
+    equal_outputs(expected, recovered)
     original = CudaShaderLibrary.__getattr__
     def prior_geometry(self, name):
         launch = original(self, name)
