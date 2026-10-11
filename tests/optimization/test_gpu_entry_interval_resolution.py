@@ -90,6 +90,7 @@ def test_native_gap_allocation_reset_budget_and_index_bounds(monkeypatch):
     monkeypatch.setattr(mps_kernel, "gpu_device", lambda *args: "cpu")
     runner = object.__new__(mps_kernel._MulticoinReplayRunner)
     runner.n, runner.native_factual_hsl, runner.entry_interval_enabled = 1004, True, True
+    runner.n_days, runner.weighted_equity_metrics = 1, frozenset()
     runner._entry_interval_stat_buffers, runner._entry_interval_count_buffers = {}, {}
     runner._history_bytes_per_candidate = lambda: entry_interval_history_bytes(runner.n)
     runner.hsl_scratch_budget_bytes = 2 * runner._history_bytes_per_candidate()
