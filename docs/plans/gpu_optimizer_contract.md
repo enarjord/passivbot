@@ -15,7 +15,7 @@ simpler, more capable, or more efficient implementations. Acceptance scope must
 not be silently weakened.
 
 The [acceptance evidence map](gpu_optimizer_acceptance.md) separates verified ownership,
-search/storage and device cases from the remaining simulator, resource and cutover gates.
+search/storage and device cases from accepted numerical, resource and performance limits.
 
 ## Branch and publication policy
 
@@ -374,9 +374,11 @@ Completion requires:
 - [x] Flush results/Pareto promptly; validate interruption and compatible resume.
 - [x] Prove no CPU backtest is invoked during GPU optimize/bootstrap/resume.
 - [x] Retire superseded GPU screening/validation state and keep CPU functionality intact.
-  The candidate removes the old pipeline and passes the affected native/CPU
-  qualification. Current-head review, CI and development integration remain
-  separate requirements below.
+  The replacement removes the old pipeline and passes the affected native/CPU
+  qualification. [PR #1960](https://github.com/enarjord/passivbot/pull/1960)
+  integrates reviewed successor `feb8547af5f2a6350ace392fd6cf420cc8bfb803` into
+  `codex/gpu-native-optimizer` at `f693c50f69e67ad42db5166f63f32d9f4d8661d1`
+  after current-head review and required CI.
 
 ### Acceptance
 
@@ -396,9 +398,9 @@ Completion requires:
   remain unchanged; 341 Rust tests and the default build/check are attributed to
   the original `3d8581225f` build. This closes the stated qualification, not the
   comparison, numerical-unassessed or development-integration gates.
-- [ ] Complete development-branch PR review and CI for all delivered slices.
-- [ ] Update user-facing/AI contracts for the delivered behavior on the development branch.
-- [ ] Reconcile this checklist and leave master integration for a separate decision.
+- [x] Complete development-branch PR review and CI for all delivered implementation slices.
+- [x] Update user-facing/AI contracts for the delivered behavior on the development branch.
+- [x] Reconcile this checklist and leave master integration for a separate decision.
 
 Current comparison, cache-performance and delivery gates are consolidated in the
 [final foundation status](gpu_optimizer_acceptance.md#final-foundation-status).
