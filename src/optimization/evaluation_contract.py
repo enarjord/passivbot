@@ -134,6 +134,13 @@ def build_evaluation_contract(config: dict) -> dict:
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }
+    half_life = effective.get("backtest", {}).get("ew_half_life_days")
+    if half_life is not None:
+        from config.ew import EW_DEFINITION_VERSION
+        contract["exponential_weighting"] = {
+            "half_life_days": half_life,
+            "definition_version": EW_DEFINITION_VERSION,
+        }
     if config.get("optimize", {}).get("backend") == "gpu":
         # Authoritative GPU fitness must never inherit CPU/proxy-validation
         # compatibility. Source and dependency identities above include the

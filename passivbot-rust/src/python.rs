@@ -1,6 +1,5 @@
 use crate::analysis::{
-    analyze_backtest_pair, analyze_backtest_pair_with_profile, analyze_backtest_usd_with_profile,
-    FillActivityMetrics,
+    analyze_backtest_pair_with_options, analyze_backtest_usd_with_profile, FillActivityMetrics,
 };
 use crate::backtest::Backtest;
 use crate::closes::{
@@ -89,6 +88,60 @@ fn profile_to_py_dict(
         py_profile.set_item("rust_total_ms", started.elapsed().as_secs_f64() * 1000.0)?;
     }
     Ok(py_profile.unbind())
+}
+
+#[pyfunction(signature = (equity, timestamps_ms, half_life_days, candle_interval_minutes=1))]
+pub fn calculate_ew_metrics(
+    py: Python<'_>,
+    equity: Vec<f64>,
+    timestamps_ms: Vec<u64>,
+    half_life_days: f64,
+    candle_interval_minutes: u64,
+) -> PyResult<PyObject> {
+    let result = crate::ew::analyze_ew_equity(
+        &equity,
+        &timestamps_ms,
+        half_life_days,
+        candle_interval_minutes,
+    )
+    .map_err(PyValueError::new_err)?;
+    Ok(struct_to_py_dict(py, &result)?.into_py(py))
+}
+
+fn attach_ew_analysis(
+    py: Python<'_>,
+    dict: &Py<PyDict>,
+    curve_name: &str,
+    curve: &crate::ew::EwAnalysis,
+    strategy: &crate::ew::EwAnalysis,
+) -> PyResult<()> {
+    for (analysis, suffix) in [(curve, "_ew"), (strategy, "_strategy_eq_ew")] {
+        if let Some(metrics) = analysis.metrics {
+            for (key, value) in [
+                ("adg", metrics.adg),
+                ("sharpe_ratio", metrics.sharpe_ratio),
+                ("sortino_ratio", metrics.sortino_ratio),
+                ("omega_ratio", metrics.omega_ratio),
+            ] {
+                dict.bind(py).set_item(format!("{key}{suffix}"), value)?;
+            }
+        }
+    }
+    let metadata = PyDict::new_bound(py);
+    metadata.set_item(curve_name, struct_to_py_dict(py, &curve.metadata)?)?;
+    metadata.set_item("strategy_eq", struct_to_py_dict(py, &strategy.metadata)?)?;
+    dict.bind(py).set_item("_ew_metadata", metadata)?;
+    Ok(())
+}
+
+fn remove_legacy_weighted_metrics(py: Python<'_>, dict: &Py<PyDict>) -> PyResult<()> {
+    let keys: Vec<String> = dict.bind(py).keys().extract()?;
+    for key in keys {
+        if key.ends_with("_w") {
+            dict.bind(py).del_item(key)?;
+        }
+    }
+    Ok(())
 }
 
 fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
@@ -1204,6 +1257,7 @@ fn run_backtest_core<'py>(
     profile_add(&mut rust_profile, "rust_input_parse_ms", input_parse_start);
 
     let metrics_only = backtest_params.metrics_only;
+    let calculate_legacy_w = !metrics_only || backtest_params.calculate_legacy_w;
     let skip_btc_analysis = metrics_only
         && backtest_params.skip_btc_analysis
         && backtest_params.btc_collateral_cap <= 0.0;
@@ -1232,6 +1286,7 @@ fn run_backtest_core<'py>(
                 &backtest.total_wallet_exposures,
                 backtest.liquidated(),
                 profile_enabled,
+                calculate_legacy_w,
             );
             if profile_enabled {
                 rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
@@ -1243,12 +1298,14 @@ fn run_backtest_core<'py>(
             (analysis_usd, Analysis::default())
         } else if profile_enabled {
             let ((analysis_usd, analysis_btc), analysis_profile) =
-                analyze_backtest_pair_with_profile(
+                analyze_backtest_pair_with_options(
                     &fills,
                     &equities,
                     backtest.balance.use_btc_collateral,
                     &backtest.total_wallet_exposures,
                     backtest.liquidated(),
+                    true,
+                    calculate_legacy_w,
                 );
             rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
             rust_profile.push((
@@ -1259,13 +1316,16 @@ fn run_backtest_core<'py>(
             rust_profile.push(("rust_analysis_pair_ms", analysis_profile.total_ms));
             (analysis_usd, analysis_btc)
         } else {
-            analyze_backtest_pair(
+            analyze_backtest_pair_with_options(
                 &fills,
                 &equities,
                 backtest.balance.use_btc_collateral,
                 &backtest.total_wallet_exposures,
                 backtest.liquidated(),
+                false,
+                calculate_legacy_w,
             )
+            .0
         };
         analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
         analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
@@ -1519,6 +1579,32 @@ fn run_backtest_core<'py>(
         } else {
             struct_to_py_dict(py, &analysis_btc)?
         };
+        if !calculate_legacy_w {
+            remove_legacy_weighted_metrics(py, &py_analysis_usd)?;
+            remove_legacy_weighted_metrics(py, &py_analysis_btc)?;
+        }
+        if let Some(half_life_days) = backtest_params.ew_half_life_days {
+            let calc = |series: &[f64]| -> PyResult<crate::ew::EwAnalysis> {
+                let mut result = crate::ew::analyze_ew_equity(
+                    series,
+                    &equities.timestamps_ms,
+                    half_life_days,
+                    backtest_params.candle_interval_minutes,
+                ).map_err(PyValueError::new_err)?;
+                if backtest.liquidated() {
+                    result.metrics = None;
+                    result.metadata.status = "liquidated";
+                }
+                Ok(result)
+            };
+            let strategy_ew = calc(backtest.strategy_equity_series_for_artifacts())?;
+            let usd_ew = calc(&equities.usd_total_equity)?;
+            attach_ew_analysis(py, &py_analysis_usd, "usd", &usd_ew, &strategy_ew)?;
+            if !skip_btc_analysis {
+                let btc_ew = calc(&equities.btc_total_equity)?;
+                attach_ew_analysis(py, &py_analysis_btc, "btc", &btc_ew, &strategy_ew)?;
+            }
+        }
         let hsl_report = hsl_report_to_py(py, &backtest)?;
         profile_add(
             &mut rust_profile,
@@ -1839,6 +1925,23 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
+        ew_half_life_days: match dict.get_item("ew_half_life_days")? {
+            Some(item) if !item.is_none() => {
+                let value = item.extract::<f64>()?;
+                if !value.is_finite() || value < 1.0 {
+                    return Err(PyValueError::new_err(
+                        "ew_half_life_days must be finite and at least 1 day",
+                    ));
+                }
+                Some(value)
+            }
+            _ => None,
+        },
+        calculate_legacy_w: dict
+            .get_item("calculate_legacy_w")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(true),
         hsl_detailed_report: dict
             .get_item("hsl_detailed_report")?
             .map(|item| item.extract::<bool>())

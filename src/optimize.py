@@ -92,6 +92,7 @@ from config.shared_bot import (
 )
 from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 from config.metrics import resolve_metric_value
+from config.ew import is_ew_metric, needs_legacy_weighted_analysis
 from config.scoring import (
     ObjectiveSpec,
     default_scoring_weights,
@@ -213,6 +214,7 @@ from suite_runner import (
 from metrics_schema import (
     MetricAggregationError,
     build_scenario_metrics,
+    validate_required_ew_metrics,
     flatten_metric_stats,
 )
 from optimization.bounds import (
@@ -841,6 +843,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     # Released configurations without this setting used strict crossing at zero.
     old_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
     new_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
+    old_bt.setdefault("ew_half_life_days", None)
+    new_bt.setdefault("ew_half_life_days", None)
     old_opt = _canonicalize_resume_optimize(entry.get("optimize") or {})
     new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
@@ -857,6 +861,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "coins",
         "coin_sources",
         "dynamic_wel_by_tradability",
+        "ew_half_life_days",
         "end_date",
         "exchanges",
         "filter_by_min_effective_cost",
@@ -1887,6 +1892,10 @@ class Evaluator:
                         )
             else:
                 self.seen_hashes[individual_hash] = None
+        required_metrics = [
+            *(spec.metric for spec in self.scoring_specs),
+            *(check["metric"] for check in self.limit_checks),
+        ]
         analyses = {}
         liquidated = False
         skip_btc_analysis = _optimizer_can_skip_btc_analysis(
@@ -1905,6 +1914,7 @@ class Evaluator:
                 self.timestamps.get(exchange),
                 metrics_only=True,
                 skip_btc_analysis=skip_btc_analysis,
+                calculate_legacy_w=needs_legacy_weighted_analysis(required_metrics),
             )
             try:
                 fills, equities_array, analysis = execute_backtest(payload, config)
@@ -1941,6 +1951,7 @@ class Evaluator:
             del fills
             del equities_array
         try:
+            validate_required_ew_metrics(analyses, required_metrics)
             scenario_metrics = build_scenario_metrics(analyses)
             aggregate_stats = scenario_metrics.get("stats", {})
             flat_stats = flatten_metric_stats(aggregate_stats)
@@ -2065,7 +2076,11 @@ class Evaluator:
         for idx, spec in enumerate(self.scoring_specs):
             if objective_values is None:
                 val = resolve_metric_value(analyses_combined, f"{spec.metric}_mean")
-                if val is None and spec.metric.endswith(("_usd", "_btc")):
+                if (
+                    val is None
+                    and spec.metric.endswith(("_usd", "_btc"))
+                    and not is_ew_metric(spec.metric)
+                ):
                     val = resolve_metric_value(
                         analyses_combined,
                         f"{spec.metric.rsplit('_', 1)[0]}_mean",
@@ -2313,11 +2328,44 @@ class SuiteEvaluator:
 
         return self.build_scenario_candidate_config(config, ctx)
 
+    def required_metrics_for_scenario(self, label):
+        return [
+            *(
+                spec.metric
+                for spec, basis in zip(self.base.scoring_specs, self.objective_bases)
+                if basis.scenario is None or basis.scenario == label
+            ),
+            *(
+                check["metric"]
+                for check in self.base.limit_checks
+                if check.get("scenario") is None or check["scenario"] == label
+            ),
+        ]
+
     def score_scenario_results(
         self, scenario_results: List[ScenarioResult]
     ) -> Dict[str, Any]:
         """Apply the canonical suite reducers, objectives, and limits to scenario stats."""
 
+        result_labels = {result.scenario.label for result in scenario_results}
+        for ctx in getattr(self, "contexts", []):
+            if ctx.label not in result_labels and any(
+                is_ew_metric(metric)
+                for metric in self.required_metrics_for_scenario(ctx.label)
+            ):
+                raise MetricAggregationError(
+                    f"required EW scenario {ctx.label!r} is absent from evaluation"
+                )
+        for result in scenario_results:
+            stats = result.metrics.get("stats", {})
+            validate_required_ew_metrics(
+                {
+                    result.scenario.label: {
+                        metric: values.get("mean") for metric, values in stats.items()
+                    }
+                },
+                self.required_metrics_for_scenario(result.scenario.label),
+            )
         reduce_started = time.perf_counter()
         reduced_summary = reduce_metrics(scenario_results, self.reducer_cfg)
         reduce_metrics_ms = (time.perf_counter() - reduce_started) * 1000.0
@@ -2356,7 +2404,11 @@ class SuiteEvaluator:
                 source_stats = reduced_stats_flat
                 reducer = basis.reducer or "mean"
             value = resolve_metric_value(source_stats, f"{spec.metric}_{reducer}")
-            if value is None and spec.metric.endswith(("_usd", "_btc")):
+            if (
+                value is None
+                and spec.metric.endswith(("_usd", "_btc"))
+                and not is_ew_metric(spec.metric)
+            ):
                 value = resolve_metric_value(
                     source_stats,
                     f"{spec.metric.rsplit('_', 1)[0]}_{reducer}",
@@ -2508,6 +2560,9 @@ class SuiteEvaluator:
                     coin_indices=coin_indices,
                     metrics_only=True,
                     skip_btc_analysis=skip_btc_analysis,
+                    calculate_legacy_w=needs_legacy_weighted_analysis(
+                        self.required_metrics_for_scenario(ctx.label)
+                    ),
                     runtime_config=runtime_config,
                     execution_settings=execution_settings,
                 )
@@ -2570,6 +2625,9 @@ class SuiteEvaluator:
 
             phase_start = _profile_start(profile_enabled)
             try:
+                validate_required_ew_metrics(
+                    analyses, self.required_metrics_for_scenario(ctx.label)
+                )
                 combined_metrics = combine(analyses)
             except MetricAggregationError as exc:
                 error = f"{exc.__class__.__name__}: {exc}"

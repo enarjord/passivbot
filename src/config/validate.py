@@ -109,6 +109,9 @@ def validate_config(
     validate_limit_order_fill_buffer_pct(
         config["backtest"]["limit_order_fill_buffer_pct"]
     )
+    from .ew import validate_ew_config
+
+    validate_ew_config(config)
     require_config_dict(config, "monitor")
     _validate_fixed_runtime_overrides(config)
     fixed_runtime = {

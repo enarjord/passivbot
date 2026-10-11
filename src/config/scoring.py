@@ -19,6 +19,14 @@ class ScenarioSelection(Enum):
 
 
 DEFAULT_OBJECTIVE_GOALS = {
+    "adg_ew": "max",
+    "sharpe_ratio_ew": "max",
+    "sortino_ratio_ew": "max",
+    "omega_ratio_ew": "max",
+    "adg_strategy_eq_ew": "max",
+    "sharpe_ratio_strategy_eq_ew": "max",
+    "sortino_ratio_strategy_eq_ew": "max",
+    "omega_ratio_strategy_eq_ew": "max",
     "n_days": "max",
     "positions_held_per_day": "min",
     "positions_held_per_day_w": "min",

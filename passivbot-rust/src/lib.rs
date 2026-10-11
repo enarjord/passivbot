@@ -6,6 +6,7 @@ mod constants;
 mod dynamic;
 mod entries;
 mod entry_cooldown;
+mod ew;
 mod gpu;
 mod hsl;
 mod hsl_candle_free;
@@ -123,6 +124,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_ew_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(hsl::signal_py, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_controller::hsl_controller, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_trace::hsl_trace, m)?)?;

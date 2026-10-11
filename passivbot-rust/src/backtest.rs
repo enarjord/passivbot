@@ -2049,12 +2049,16 @@ impl<'a> Backtest<'a> {
                     let mut trackers = Vec::new();
                     for (bp, enabled) in [&pair.long, &pair.short].iter().zip(enabled) {
                         if *enabled
-                            && !trackers.iter().any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
+                            && !trackers
+                                .iter()
+                                .any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
                         {
                             trackers.push((
                                 bp.unilateralness_ema_span_1m,
-                                crate::unilateralness::RollingRms::new(bp.unilateralness_ema_span_1m)
-                                    .expect("validated unilateralness span"),
+                                crate::unilateralness::RollingRms::new(
+                                    bp.unilateralness_ema_span_1m,
+                                )
+                                .expect("validated unilateralness span"),
                             ));
                         }
                     }
@@ -4340,6 +4344,9 @@ impl<'a> Backtest<'a> {
             peak_recovery_days_strategy_eq,
             ..full
         });
+        if self.backtest_params.metrics_only && !self.backtest_params.calculate_legacy_w {
+            return subset_metrics[0];
+        }
         for i in 1..10 {
             let fraction = 1.0 / (1.0 + i as f64);
             let start_idx = (n as f64 - fraction * (n as f64)).round() as usize;
@@ -4855,6 +4862,8 @@ mod tests {
             btc_collateral_cap: 0.9,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -4931,6 +4940,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -4995,6 +5006,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5096,6 +5109,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5178,6 +5193,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5261,6 +5278,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5353,6 +5372,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5433,6 +5454,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5525,6 +5548,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5665,6 +5690,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5792,6 +5819,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6054,6 +6083,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6142,6 +6173,18 @@ mod tests {
         assert!((actual.drawdown_worst_mean_1pct_strategy_eq - 0.85).abs() < 1e-9);
         assert!((legacy_tail_aligned.drawdown_worst_mean_1pct_strategy_eq - 0.50).abs() < 1e-9);
 
+        bt.backtest_params.calculate_legacy_w = false;
+        let skipped = bt.strategy_equity_metrics_from_series(&series, None, Some(&actual_timestamps));
+        assert_eq!(skipped.adg_strategy_eq, actual.adg_strategy_eq);
+        assert_eq!(skipped.drawdown_worst_strategy_eq, actual.drawdown_worst_strategy_eq);
+        assert_eq!(skipped.strategy_eq_recovery_days_max, actual.strategy_eq_recovery_days_max);
+        assert_eq!(skipped.adg_strategy_eq_w, 0.0);
+        bt.backtest_params.metrics_only = false;
+        let standalone = bt.strategy_equity_metrics_from_series(&series, None, Some(&actual_timestamps));
+        assert_eq!(standalone.adg_strategy_eq_w, actual.adg_strategy_eq_w);
+        bt.backtest_params.metrics_only = true;
+        bt.backtest_params.calculate_legacy_w = true;
+
         // Public overall EMA tails retain simultaneous signal observations.
         // The two largest stresses occur on different sides and different bars:
         // tail(max(long, short)) = 0.9, but max(tail(long), tail(short)) = 0.6.
@@ -6193,6 +6236,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6253,6 +6298,8 @@ mod tests {
                 btc_collateral_cap: 0.0,
                 btc_collateral_ltv_cap: None,
                 metrics_only: true,
+                ew_half_life_days: None,
+                calculate_legacy_w: true,
                 hsl_detailed_report: false,
                 skip_btc_analysis: false,
                 filter_by_min_effective_cost: false,
@@ -6321,6 +6368,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6393,6 +6442,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6471,6 +6522,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6544,6 +6597,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6624,6 +6679,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6719,6 +6776,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6819,6 +6878,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6896,6 +6957,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7007,6 +7070,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7088,6 +7153,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7171,6 +7238,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7259,6 +7328,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7358,6 +7429,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7433,6 +7506,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7511,6 +7586,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,

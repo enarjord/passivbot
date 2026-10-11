@@ -20,6 +20,7 @@ between schemas, package versions, and tags.
 
 - **base_dir**: Location to save backtest results.
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
+- **ew_half_life_days**: `null` by default (disabled), or a finite number at least `1`, including fractional days such as `180.5`. Required when scoring or limits select an `_ew` metric. Applies globally across exchanges and scenarios; scenario overrides are rejected. CLI: `--backtest.ew_half_life_days 180.5` (or `null` to disable). See [exponential metric definitions](metrics.md#exponential-recency-weighting).
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. The most exercised choices are `binance` and `bybit`, which are also the current default profile. `bitget` and `gateio` are supported, with the GateIO history caveat below. `kucoin` has archive-fetch support but should be treated as experimental for backtesting until broader real-data smoke coverage is collected. Use short exchange names in configs; Passivbot converts to CCXT-specific IDs such as `binanceusdm` and `kucoinfutures` only when it talks to CCXT.
   Binance backtests fill missing v2 1m data from Binance Vision monthly archives first, eligible

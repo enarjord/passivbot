@@ -324,6 +324,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: false,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: true,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
