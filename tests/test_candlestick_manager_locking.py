@@ -290,7 +290,7 @@ async def test_stalled_refresh_preserves_pages_releases_lock_and_ws_can_extend(t
     async def repeated_tail(_symbol, since, _limit, **_kwargs):
         calls.append(since)
         assert len(calls) <= 2
-        return [[i * minute, 100, 101, 99, 100, 1] for i in (995, 996, 997)]
+        return [[i * minute, 100, 103, 99, 100 if len(calls) == 1 else 102, 1] for i in (995, 996, 997)]
 
     cm._ccxt_fetch_ohlcv_once = repeated_tail
     symbol = "SPARSE/USDT:USDT"
@@ -299,6 +299,7 @@ async def test_stalled_refresh_preserves_pages_releases_lock_and_ws_can_extend(t
     assert cm._held_fetch_locks == {}
     assert cm.get_last_final_ts(symbol) == 997 * minute
     assert 998 * minute not in set(cm._cache[symbol]["ts"])
+    assert cm._cache[symbol][-1]["c"] == 102
 
     # A successor-proven WS row can extend the preserved REST basis after
     # pagination yields; the missing open tail was never fabricated.

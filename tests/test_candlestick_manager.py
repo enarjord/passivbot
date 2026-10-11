@@ -5985,7 +5985,7 @@ async def test_paginated_sparse_tail_stops_when_response_does_not_advance(
         calls.append(since)
         assert len(calls) <= 2, "pagination repeated an unchanged sparse tail"
         last = 2 if len(calls) == 1 else tail
-        return [[start + i * period, 100, 101, 99, 100, 1] for i in range(last + 1)]
+        return [[start + i * period, 100, 103, 99, 100 if len(calls) == 1 else 102, 1] for i in range(last + 1)]
 
     cm._ccxt_fetch_ohlcv_once = fetch_once
     request = cm._fetch_ohlcv_paginated(
@@ -5999,8 +5999,10 @@ async def test_paginated_sparse_tail_stops_when_response_does_not_advance(
     else:
         result = await request
     assert len(calls) == 2
-    assert len(batches) == 1
-    assert list(result["ts"]) == [start + i * period for i in range(3)]
+    assert len(batches) == 2
+    assert batches[1][-1]["c"] == 102
+    assert set(result["ts"]) == {start + i * period for i in range(3)}
+    assert any(row["c"] == 102 for row in result)
 
 
 @pytest.mark.asyncio
