@@ -197,7 +197,7 @@ def test_shared_workspace_matches_wide_reduction_exactly(device, curve, monkeypa
 
 
 def test_workspace_is_reserved_once_for_wider_resident_batch():
-    n, days = 2_510_281, 1745
+    n, days = 2_000_000, 1400
     requested = {"adg_strategy_eq_w", "calmar_ratio_w_usd"}
     resident = reducer.weighted_equity_history_bytes(n, days, requested)
     workspace = reducer.weighted_equity_workspace_bytes(n, days, requested)

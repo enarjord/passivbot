@@ -63,12 +63,12 @@ def test_chunk_geometry_preserves_apple_and_spreads_cuda(monkeypatch, device, bl
 
 def test_outer_admission_reserves_shared_workspace_once():
     runner = object.__new__(mps_kernel.MpsTrailingMartingaleMulticoinRunner)
-    runner.n, runner.n_days = 2_510_281, 1745
+    runner.n, runner.n_days = 2_000_000, 1400
     runner.weighted_equity_metrics = {"adg_strategy_eq_w"}
     runner._history_bytes_per_candidate = lambda: runner.n * 4 + 8
     runner.hsl_scratch_budget_bytes = 512 * 1024**2
     limit = runner._history_batch_limit()
-    assert limit == 33
+    assert limit == 47
     assert runner._history_batch_bytes(limit) <= runner.hsl_scratch_budget_bytes
     assert runner._history_batch_bytes(limit + 1) > runner.hsl_scratch_budget_bytes
     assert history_dispatch_ceiling(SimpleNamespace(runner=runner), 500) == limit
