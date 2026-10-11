@@ -73,8 +73,8 @@ struct HslScopeSignal {
     bool baseline_ready;
 };
 
-// Disposable scalar continuation of a known exposed episode. The caller must
-// independently prove unchanged factual inputs; no cached permission is stored.
+// Disposable scalar continuation of a known exposed or completed flat episode.
+// The caller independently proves unchanged facts; no cached permission is stored.
 struct HslScopeCursor {
     float peak;
     float ema;
@@ -84,6 +84,10 @@ struct HslScopeCursor {
     int minute;
     int start;
     int point_count;
+    int latest_flat_minute;
+    float latest_flat_raw;
+    float latest_flat_ema;
+    bool exposed;
     bool valid;
 };
 
@@ -200,14 +204,33 @@ inline int hsl_scope_pair_sequence(thread const HslScopePair& pair, int logical)
 inline bool hsl_advance_scope(
     thread HslScopeCursor& cursor, int start, int minute, float upnl,
     float budget, float alpha, float threshold, float cooldown, bool never_restart,
-    thread HslScopeResult& result
+    bool exposed, thread HslScopeResult& result
 ) {
     if (!cursor.valid || start != cursor.start || minute != cursor.minute + 1
-        || budget != cursor.budget || alpha != cursor.alpha
+        || budget != cursor.budget || alpha != cursor.alpha || exposed != cursor.exposed
         || !isfinite(upnl) || !isfinite(budget) || budget <= 0.0f
         || !isfinite(alpha) || alpha <= 0.0f || alpha > 1.0f
         || !isfinite(threshold) || threshold <= 0.0f || threshold > 1.0f
         || !isfinite(cooldown) || cooldown < 0.0f) return false;
+    // A completed, genuinely flat episode has an exact zero signal. Unchanged
+    // facts, budget, quotes and window preserve its terminal raw/EMA samples;
+    // current policy and time still decide cooldown. Terminal callbacks always
+    // use the independent composer to include the closing execution itself.
+    if (!exposed) {
+        result.raw = result.ema = 0.0f;
+        result.latest_flat_minute = cursor.latest_flat_minute;
+        result.latest_flat_raw = cursor.latest_flat_raw;
+        result.latest_flat_ema = cursor.latest_flat_ema;
+        result.flat_minute = fmin(cursor.latest_flat_raw, cursor.latest_flat_ema) > threshold
+            ? cursor.latest_flat_minute : -1;
+        if (result.flat_minute >= 0 && (result.flat_minute < start
+            || (!never_restart && float(minute - result.flat_minute) >= cooldown)))
+            result.flat_minute = -1;
+        result.action = result.flat_minute >= 0 ? 1 : 0;
+        result.point_count = cursor.point_count + 1;
+        cursor.minute = minute; cursor.point_count = result.point_count;
+        return true;
+    }
     HslScopeSignal signal;
     signal.peak = cursor.peak;
     signal.raw = 0.0f;
@@ -417,11 +440,18 @@ inline bool hsl_compose_scope(
             }
         }
         float denominator = budget + signal.peak;
-        cursor->valid = current_exposed && !estimated && !reconstructed_flat
-            && !before_price && complete && stable_prefix && signal.ready
+        bool exposed_cursor = current_exposed && !estimated && !reconstructed_flat
             && result.flat_minute < 0 && result.latest_flat_minute < 0
             && isfinite(signal.peak) && isfinite(final_pnl)
             && isfinite(denominator) && denominator > 0.0f;
+        bool flat_cursor = !current_exposed && reconstructed_flat
+            && signal.raw == 0.0f && signal.ema == 0.0f;
+        cursor->valid = !before_price && complete && stable_prefix && signal.ready
+            && (exposed_cursor || flat_cursor);
+        cursor->exposed = current_exposed;
+        cursor->latest_flat_minute = result.latest_flat_minute;
+        cursor->latest_flat_raw = result.latest_flat_raw;
+        cursor->latest_flat_ema = result.latest_flat_ema;
         cursor->peak = signal.peak; cursor->ema = signal.ema;
         cursor->pnl = final_pnl; cursor->budget = budget; cursor->alpha = alpha;
         cursor->minute = end; cursor->start = start;
