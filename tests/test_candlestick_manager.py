@@ -5969,9 +5969,10 @@ def test_rejected_duplicate_timestamp_is_accepted_when_any_row_is_valid(tmp_path
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strict", [False, True])
 @pytest.mark.parametrize("tail", [2, 1], ids=["repeated", "regressed"])
+@pytest.mark.parametrize("corrected_close", [98, 102])
 @pytest.mark.parametrize("timeframe,period", [("1m", ONE_MIN_MS), ("1h", 60 * ONE_MIN_MS)])
 async def test_paginated_sparse_tail_stops_when_response_does_not_advance(
-    tmp_path, strict, tail, timeframe, period
+    tmp_path, strict, tail, corrected_close, timeframe, period
 ):
     class Exchange:
         id = "kucoinfutures"
@@ -5985,7 +5986,7 @@ async def test_paginated_sparse_tail_stops_when_response_does_not_advance(
         calls.append(since)
         assert len(calls) <= 2, "pagination repeated an unchanged sparse tail"
         last = 2 if len(calls) == 1 else tail
-        return [[start + i * period, 100, 103, 99, 100 if len(calls) == 1 else 102, 1] for i in range(last + 1)]
+        return [[start + i * period, 100, 103, 97, 100 if len(calls) == 1 else corrected_close, 1] for i in range(last + 1)]
 
     cm._ccxt_fetch_ohlcv_once = fetch_once
     request = cm._fetch_ohlcv_paginated(
@@ -6000,9 +6001,10 @@ async def test_paginated_sparse_tail_stops_when_response_does_not_advance(
         result = await request
     assert len(calls) == 2
     assert len(batches) == 2
-    assert batches[1][-1]["c"] == 102
+    assert batches[1][-1]["c"] == corrected_close
     assert set(result["ts"]) == {start + i * period for i in range(3)}
-    assert any(row["c"] == 102 for row in result)
+    assert len(result) == 3
+    assert all(row["c"] == corrected_close for row in result if row["ts"] <= start + tail * period)
 
 
 @pytest.mark.asyncio
@@ -6022,4 +6024,4 @@ async def test_paginated_overlap_with_advancing_tail_completes(tmp_path):
         "SPARSE/USDT:USDT", start, start + 5 * ONE_MIN_MS, raise_on_partial_empty_page=True
     )
     assert not pages
-    assert set(result["ts"]) == {start + i * ONE_MIN_MS for i in range(5)}
+    assert list(result["ts"]) == [start + i * ONE_MIN_MS for i in range(5)]

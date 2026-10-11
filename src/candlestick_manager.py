@@ -5980,7 +5980,9 @@ class CandlestickManager:
         def _partial_rows() -> np.ndarray:
             if not all_rows:
                 return np.empty((0,), dtype=CANDLE_DTYPE)
-            return np.sort(np.concatenate(all_rows), order="ts")
+            if len(all_rows) == 1:
+                return all_rows[0].copy()
+            return self._merge_overwrite(all_rows[0], np.concatenate(all_rows[1:]))
 
         def _raise_terminal_empty_page(message: str) -> None:
             raise OhlcvTerminalEmptyPage(
@@ -6283,7 +6285,7 @@ class CandlestickManager:
         )
         if not all_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
-        return np.sort(np.concatenate(all_rows), order="ts")
+        return _partial_rows()
 
     # ----- Public helpers required by tests -----
 
