@@ -270,15 +270,17 @@ Completion requires:
     remaining small numerical differences are accepted only for those fixtures.
   - [x] Adopt factual replay in the default native worker and version the semantic
     checkpoint contract after independent review and CI on development.
-  - [ ] Consolidate wider feature/lifecycle, specialization, scenario, resource and
-    performance acceptance. Keep the old optimizer until its replacement passes
-    the relevant gates.
-    Worker validation proves effective candidate/coin-policy dispatch,
-    capacity learning across HSL-on/off/on transitions, preserved existing EMA
-    disabled-HSL ablation and asynchronous service delivery. All 42 wider native
-    HSL lifecycle/loss and 56 optimizer CLI/data/service controls also pass.
-    Representative acceptance remains required; the worker cutover is integrated
-    on development.
+  - [x] Consolidate wider feature/lifecycle, specialization, scenario, resource and
+    performance acceptance. The final affected qualification passes 38
+    CUDA-enabled checks plus six CPU-entrypoint checks, carried across the
+    host-only correction that passes two GCC checks. Paired warm and eight
+    evolving/four-front comparisons are complete for their stated recipes;
+    numerical and resource limits remain explicit. The independently checked
+    old-pipeline baseline is accepted with its actual partial TM timeout; this
+    does not certify every workload or numerical field. Current-head delivery
+    review/CI/integration remain tracked in the
+    [final foundation status](gpu_optimizer_acceptance.md#final-foundation-status),
+    rather than inferred from historical component counts.
 - [x] Verify requested metric surface and specialized/general kernel equivalence.
   The documented cases cover requested presence/status and the stated reducer and
   compiler controls. Fields without declared tolerances remain policy-unassessed;
@@ -350,6 +352,14 @@ Completion requires:
     replay, including cache loss, fills, budgets, clipping, numerical conditions and
     CPU parity. Independent review and CI pass on development; broader resources
     and whole-optimizer performance remain separate gates.
+    The final candidate adds disposable CUDA EMA unified controller summaries,
+    capped at 64 MiB per candidate within the shared 512 MiB history/scratch
+    budget. Cache ambiguity, terminal evaluation or failed admission returns to
+    independent scalar replay; other default scopes remain unchanged. Final
+    paired warm acceptance is complete for the two-coin EMA unified recipe:
+    two alternating B1 pairs give a 3.92259× median warm ratio with stated metric
+    and memory scope. This does not establish cold-start or universal speedup;
+    whole-optimizer comparisons remain separate in the current status below.
   - [x] Integrate a focused strategy-neutral multicoin replay owner and compact
     physical recovery results. Affected host/CUDA/CLI and combined continuation
     validation, current-head independent review and required CI pass on development.
@@ -363,15 +373,37 @@ Completion requires:
     Representative wider-cohort and longer-suite scheduling acceptance remains open.
 - [x] Flush results/Pareto promptly; validate interruption and compatible resume.
 - [x] Prove no CPU backtest is invoked during GPU optimize/bootstrap/resume.
-- [ ] Retire superseded GPU screening/validation state and keep CPU functionality intact.
+- [x] Retire superseded GPU screening/validation state and keep CPU functionality intact.
+  The candidate removes the old pipeline and passes the affected native/CPU
+  qualification. Current-head review, CI and development integration remain
+  separate requirements below.
 
 ### Acceptance
 
-- [ ] Compare representative baselines and document architectural simplification.
-- [ ] Run required Rust/native Python/device/CLI checks with verified builds.
+- [x] Compare representative baselines and document architectural simplification.
+  The eight equal-budget CPU/native evolving runs and four common-reference
+  fronts are complete for the documented 12-coin, three-scenario throughput
+  recipe. Stored fitness and Pareto records match; numerical tradeoff and timing
+  limits are explicit. The old screening/CPU-validation baseline is measured:
+  EMA completes 40 records, while TM times out with 13 persisted records.
+  Independent inspection verifies both eight-seed CPU-reference matches and
+  accepts the bounded baseline while retaining its failed terminal status and
+  missing full-TM scope. This is not an equal-budget old/new search-quality pass.
+- [x] Run required Rust/native Python/device/CLI checks with verified builds.
+  The final affected qualification carries 38 CUDA-enabled and six CPU-entrypoint
+  passes at `f629b46811` across the test-only successor `1239e7bac0`, which passes
+  both corrected GCC host checks. Production bytes and the verified extension
+  remain unchanged; 341 Rust tests and the default build/check are attributed to
+  the original `3d8581225f` build. This closes the stated qualification, not the
+  comparison, numerical-unassessed or development-integration gates.
 - [ ] Complete development-branch PR review and CI for all delivered slices.
 - [ ] Update user-facing/AI contracts for the delivered behavior on the development branch.
 - [ ] Reconcile this checklist and leave master integration for a separate decision.
+
+Current comparison, cache-performance and delivery gates are consolidated in the
+[final foundation status](gpu_optimizer_acceptance.md#final-foundation-status).
+Historical component measurements retain their original revisions and scope;
+fixed-candidate parity does not replace the evolving or old-pipeline comparison.
 
 ## Decision and progress log
 

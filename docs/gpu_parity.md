@@ -10,10 +10,13 @@ never calls this tool.
 For repeated cohort throughput, caller-observed completion latency and Pareto
 effects, use the standalone [GPU cohort benchmark](gpu_cohort_benchmark.md).
 
-The existing GPU simulator still has deliberate screening approximations. A passing
-comparison covers the selected inputs, metrics and policies; it does not certify all
-configurations. The development [contract](plans/gpu_optimizer_contract.md) tracks
-the scoped evidence and numerical limitations of authoritative GPU optimization.
+Native GPU replay uses F32 arithmetic and the declared metric approximations. A
+passing comparison covers only the selected inputs, metrics and policies; it does
+not certify all configurations. Retained legacy replay is an explicit diagnostic
+option. Normal GPU optimization consumes native metrics directly and does not
+call this comparator. The development [contract](plans/gpu_optimizer_contract.md)
+tracks scoped evidence and numerical limitations, including
+[bounded EMA unified HSL reuse](plans/gpu_optimizer_acceptance.md#bounded-ema-unified-hsl-arithmetic-reuse).
 
 ## Reproducible fixtures
 

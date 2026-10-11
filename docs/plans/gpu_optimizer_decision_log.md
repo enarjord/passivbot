@@ -3730,3 +3730,65 @@ Historical observations do not supersede those requirements or prove current acc
   Martingale retains scalar replay by default. This changes disposable arithmetic,
   not HSL semantics, service ownership or public configuration. Combined-source
   device qualification and performance acceptance remain separate gates.
+
+
+### 2026-10-10 — Final affected qualification and pending delivery
+
+- The final candidate has one authoritative CUDA execution service and CPU-owned
+  preparation, scenario screening, scoring, selection and persistence. Preserve
+  CPU entrypoints, independent parity tools and compatible durable resume;
+  pre-cutover GPU fitness checkpoints require a fresh run.
+- Revision `f629b46811` passes 38 CUDA-enabled checks and six CPU-entrypoint checks
+  without failures, errors or skips. Its GCC host shim initially selects a double
+  math overload. The test-only `1239e7bac0` correction preserves float overloads
+  and both host checks pass. All 960 other source files are unchanged, permitting
+  explicit carry of the earlier 44 passes without claiming a new 46-check run.
+  The source-identical extension reuses the verified `3d8581225f` build, with
+  341 Rust tests passed and default build/check success.
+- Bound initial optional arithmetic reuse to CUDA EMA unified HSL: 64 MiB per
+  candidate within shared 512 MiB history/scratch admission, with current-budget
+  evaluation and independent fresh replay on declines. The final two-coin,
+  3,000-minute EMA unified anchored/busy recipe has a median 3.92259× warm ratio
+  across two alternating B1 pairs. All 151 non-EMA values/liquidation status agree
+  exactly; six EMA values meet the existing combined policy (maximum absolute
+  error 4.88217e-9, tail error 4.29281e-10). The owner costs 152,672 bytes;
+  accounted storage increases by 152,720 bytes including temporal state.
+  Peak Torch allocation rises from 1,194,496 to 1,347,584 bytes, reserved memory
+  stays at 2 MiB. CPU preflight is separate, with no timed compilation/retries or
+  CPU simulations. First-useful warmup is 77.265 seconds OFF versus 95.634 ON;
+  overlapping compile/load/startup intervals are not summed or claimed faster.
+  The result is fixture-scoped, with adaptive rather than fixed chunk shapes;
+  no universal HSL or GPU/CPU gain is inferred.
+- Complete eight equal-budget evolving runs (two strategies × two seeds × CPU
+  legacy/native) on the 12-coin, four-day, three-scenario throughput recipe.
+  Each persists 96 complete unique records, with matching paired initial
+  populations; all 98 saved Pareto members match stored fitness. GPU optimization
+  forbids CPU simulation. Four separate common-reference front diagnostics reuse
+  57 CPU records and evaluate 21 unseen union candidates after search.
+- Accept the measured tradeoff consequences for that recipe: no completion-limit
+  feasibility flips, maximum front ADG discrepancy 1.03485e-4 and drawdown
+  discrepancy 9.03750e-6. Eight of 29 and four of 17 TM native-front members are
+  dominated under common CPU metrics; relative front regret changes in both
+  directions across seeds. This is scoped practical acceptance, without a global
+  tolerance change or a causal F32 claim from aggregate outcomes.
+- Four CPU workers beat native EMA on this small suite. Native TM later-generation
+  throughput is about 1.26–1.31 times faster, with first-seed shader construction/
+  load overhead 45.773 seconds. HSL is disabled and the completion-only limit is
+  not threshold-adjacent risk evidence; no universal speed or identical trajectory
+  is promised. Preserve unassessed metric and broader resource/latency limits.
+- Measure the old screening/CPU-validation pipeline at `d2804ac79a` with eight
+  matched initial seed hashes plus 32 requested evolution CPU validations,
+  preserving its drift policy. EMA completes 40 records in 146.118 seconds;
+  TM times out at 180.322 seconds with 13 records and 14 CPU submissions.
+  First stored results take 72.280/132.465 seconds; shader construction/load
+  totals are 59.311/108.108 seconds and overlap startup. Preserve the actual
+  TM failure and missing terminal resource/full-checkpoint scope. This is a
+  bounded old-pipeline baseline, without an equal-96-budget search quality or
+  speed ratio. Independent inspection verifies all 53 stored records and exact
+  CPU-reference agreement for all 16 matched-bootstrap records. Accept the
+  measured limited comparison while retaining the failed TM outcome, unfinished
+  submission and uncompleted 32-validation drift-window scope.
+- Final documentation, current-head independent/automatic review, required CI and
+  development integration remain pending. Master integration is separate. The
+  [final foundation status](gpu_optimizer_acceptance.md#final-foundation-status)
+  is the current gate list; prior dated entries remain historical evidence.
