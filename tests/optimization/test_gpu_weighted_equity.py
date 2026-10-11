@@ -217,3 +217,26 @@ def test_invalid_reduction_width_is_rejected(width):
     with pytest.raises(ValueError, match="batch size"):
         reducer.weighted_equity_from_samples(samples, requested=["adg_strategy_eq_w"],
                                             candidate_batch_size=width, **kwargs)
+
+
+@pytest.mark.parametrize("curve", ["raw_strategy", "account"])
+def test_cuda_wide_reduction_fits_one_reserved_workspace(curve):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    batch, capacity, days = 16, 200_000, 140
+    names = {f"{stem}_strategy_eq_w" if curve == "raw_strategy" else f"{stem}_w_usd"
+             for stem in reducer.WEIGHTED_EQUITY_STEMS}
+    samples = torch.full((batch, capacity), 100., device="cuda", dtype=torch.float32)
+    kwargs = dict(first_timestamps_ms=torch.zeros(batch, device="cuda", dtype=torch.float64),
+                  sample_counts=torch.full((batch,), capacity, device="cuda", dtype=torch.long),
+                  interval_ms=60000, n_days=days, curve=curve, requested=names)
+    if curve == "account":
+        kwargs["fill_counts"] = torch.ones(batch, device="cuda")
+    torch.cuda.synchronize()
+    baseline = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+    actual = reducer.weighted_equity_from_samples(samples, **kwargs)
+    torch.cuda.synchronize()
+    peak = torch.cuda.max_memory_allocated() - baseline
+    assert peak <= reducer.weighted_equity_workspace_bytes(capacity, days, names)
+    assert all(value.shape == (batch,) and torch.isfinite(value).all() for value in actual.values())
