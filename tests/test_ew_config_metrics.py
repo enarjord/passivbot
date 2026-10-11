@@ -234,3 +234,49 @@ def test_cli_half_life_numeric_null_and_omission(initial):
     assert config["backtest"]["ew_half_life_days"] == 180.5
     update_config_with_args(config, parser.parse_args(["--backtest.ew_half_life_days", "null"]))
     assert config["backtest"]["ew_half_life_days"] is None
+
+
+def test_disabled_ew_limit_does_not_require_half_life():
+    from config import prepare_config
+    from config.ew import configured_ew_metrics
+    config = get_template_config()
+    config["optimize"]["limits"] = [
+        {"metric": "adg_strategy_eq_ew", "enabled": False,
+         "penalize_if": "less_than", "value": 0}
+    ]
+    assert configured_ew_metrics(config) == set()
+    validate_ew_config(config)
+    prepared = prepare_config(config, verbose=False)
+    assert prepared["backtest"]["ew_half_life_days"] is None
+    assert prepared["optimize"]["limits"][0]["enabled"] is False
+    assert prepared["optimize"]["scoring"] == config["optimize"]["scoring"]
+
+
+@pytest.mark.parametrize("metric,feature", [
+    ("adg_strategy_eq_w", "weighted_raw_equity"),
+    ("adg_w_usd", "weighted_account_equity"),
+])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_native_active_legacy_limits_control_analysis_capture(metric, feature, enabled):
+    from optimization.native_results import CanonicalResultScorer
+    from optimization.gpu.service import mps_requested_metric_features
+    from optimize import Evaluator
+    config = get_template_config()
+    config["backtest"]["ew_half_life_days"] = 180.5
+    config["optimize"]["scoring"] = [
+        {"metric": "adg_strategy_eq_ew", "goal": "max"}
+    ]
+    config["optimize"]["limits"] = [
+        {"metric": metric, "enabled": enabled,
+         "penalize_if": "less_than", "value": 0}
+    ]
+    evaluator = Evaluator(hlcvs_specs={"binance": None}, btc_usd_specs={},
+                          msss={}, config=config)
+    required = CanonicalResultScorer(evaluator).required_metrics("base")
+    assert "adg_strategy_eq_ew" in required
+    assert (metric in required) is enabled
+    features = mps_requested_metric_features(required, strategy_kind="trailing_martingale")
+    assert "exponential_equity" in features
+    assert (feature in features) is enabled
+    other = {"weighted_raw_equity", "weighted_account_equity"} - {feature}
+    assert not (features & other)

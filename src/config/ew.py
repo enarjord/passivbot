@@ -41,7 +41,7 @@ def configured_ew_metrics(config):
     except (TypeError, ValueError) as exc:
         # Preserve the canonical loader diagnostic when discovering EW limit requests.
         raise ValueError(f"optimize.limits malformed or unsupported: {exc}") from exc
-    metrics.extend(entry["metric"] for entry in limits)
+    metrics.extend(entry["metric"] for entry in limits if entry.get("enabled", True))
     return {metric for metric in metrics if is_ew_metric(metric)}
 
 
