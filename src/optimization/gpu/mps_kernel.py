@@ -3224,12 +3224,13 @@ class _MulticoinReplayRunner:
             try:
                 _require_available_held_valuation(scalars.detach().cpu())
             except HslFactHistoryOverflow:
-                self._last_temporal_dispatch = {
-                    "dispatch_count": dispatch_count,
-                    "rejected_at_bar": completed_k - 1,
-                    "threads_per_threadgroup": threads_per_threadgroup,
-                }
-                raise
+                if not getattr(self, "_defer_hsl_overflow", False):
+                    self._last_temporal_dispatch = {
+                        "dispatch_count": dispatch_count,
+                        "rejected_at_bar": completed_k - 1,
+                        "threads_per_threadgroup": threads_per_threadgroup,
+                    }
+                    raise
             now = time.perf_counter()
             if now >= next_progress and completed_k < stop_k:
                 replay_progress.log("progress", completed_k - 1, now - replay_started, kernel_dispatches=dispatch_count)
@@ -3273,11 +3274,14 @@ class _MulticoinReplayRunner:
             try:
                 output = self._run_factual_attempt(params, profile=profile, end_steps=end_steps)
             except HslFactHistoryOverflow:
+                if getattr(self, "_defer_hsl_overflow", False):
+                    raise
                 capacity = getattr(self, "hsl_fact_capacity", 0)
                 if capacity < 1:
                     raise
                 self.interrupt_check()
                 cache_capacity = self._hsl_native_cache_capacity()
+                cache_was_disabled = getattr(self, "dispatch_native_hsl_cache_budget_disabled", False)
                 self.hsl_fact_capacity = capacity * 2
                 cache_disabled = self._disable_native_cache_over_budget()
                 if cache_disabled or cache_capacity != self._hsl_native_cache_capacity():
@@ -3288,6 +3292,22 @@ class _MulticoinReplayRunner:
                     self._replay_states.clear()
                 if self._history_batch_bytes(1) > self.hsl_scratch_budget_bytes:
                     self.hsl_fact_capacity = capacity
+                    self.dispatch_native_hsl_cache_budget_disabled = cache_was_disabled
+                    # No larger retry can reveal failures in other candidates.
+                    # Reconstruct the rejected attempt and let unaffected rows
+                    # finish before reporting terminal capacity exhaustion.
+                    # This diagnostic attempt never publishes its outputs.
+                    if (len(params) > 1 and self._last_temporal_dispatch is not None
+                            and "rejected_at_bar" in self._last_temporal_dispatch):
+                        self._replay_state_bytes = None
+                        self._replay_states.clear()
+                        self._defer_hsl_overflow = True
+                        try:
+                            self._run_factual_attempt(params, profile=profile, end_steps=end_steps)
+                        except HslFactHistoryOverflow:
+                            pass
+                        finally:
+                            self._defer_hsl_overflow = False
                     raise HslFactHistoryOverflow(
                         "GPU HSL factual history overflow exceeds single-candidate scratch budget"
                     ) from None

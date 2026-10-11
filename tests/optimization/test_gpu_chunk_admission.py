@@ -27,11 +27,12 @@ def _dispatch(monkeypatch, markers, device="cuda"):
     calls = []
     def kernel(*args, **kwargs):
         calls.append(kwargs)
-        scalars[:, 9] = torch.tensor(markers)
+        scalars[:, 9] = torch.tensor(markers(len(calls)) if callable(markers) else markers)
     library = SimpleNamespace(**{runner.replay_kernel_name: kernel})
     def run():
         runner._dispatch_replay(library, (), torch.tensor([101, 101]),
                                 batch_size=2, scalars=scalars)
+        return scalars
     return runner, calls, run
 
 
@@ -51,6 +52,31 @@ def test_current_mixed_batch_failure_precedes_early_capacity_retry(monkeypatch, 
         run()
     assert not isinstance(error.value, mps_kernel.HslFactHistoryOverflow)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("fatal", [-2., -3., -4., -5., -7., None])
+def test_terminal_capacity_preserves_later_fatal_errors(monkeypatch, fatal):
+    runner, calls, dispatch = _dispatch(
+        monkeypatch, lambda count: [-6., fatal if fatal is not None and count >= 3 else -1.])
+    runner.hsl_fact_capacity = 1
+    runner._prepare_native_factual_hsl = lambda params: None
+    runner._hsl_native_cache_capacity = lambda: 0
+    runner._disable_native_cache_over_budget = lambda: False
+    runner._history_batch_bytes = lambda count: count * 16 if runner.hsl_fact_capacity == 1 else 2048
+    attempts = []
+    def attempt(*args, **kwargs):
+        attempts.append(runner.hsl_fact_capacity)
+        runner._replay_state_bytes = 16
+        mps_kernel._require_available_held_valuation(dispatch())
+        pytest.fail("rejected diagnostic outputs must not publish")
+    runner._run_factual_attempt = attempt
+    with pytest.raises((RuntimeError, ValueError)) as error:
+        runner.run([{}, {}])
+    assert isinstance(error.value, mps_kernel.HslFactHistoryOverflow) == (fatal is None)
+    assert attempts == [1, 1]
+    assert len(calls) == (51 if fatal is None else 3)
+    assert runner.hsl_fact_capacity == 1
+    assert not runner._defer_hsl_overflow
 
 
 @pytest.mark.parametrize("device,block", [("cuda", 1), ("mps", 2)])
