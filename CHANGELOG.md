@@ -8,6 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
+- Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
+
 - Fix historical candle-resolution seams when retained 1m history begins inside a higher-timeframe bucket. A straddling coarse bucket may now reconstruct the missing pre-boundary minutes when the overlapping exact 1m interval is complete, preserving extrema known to belong to the missing prefix and leaving exact rows unchanged. Genuine internal 1m gaps remain unavailable.
 
 - Reject individual GPU suite candidates with invalid aggregated metrics, matching the CPU optimizer, instead of terminating the entire optimization batch.
