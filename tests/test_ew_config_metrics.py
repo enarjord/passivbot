@@ -61,6 +61,55 @@ def test_ew_objectives_and_limits_require_opt_in(kind):
     assert config["backtest"]["ew_half_life_days"] == 180.5
 
 
+@pytest.mark.parametrize("kind", ["scoring", "limits", "standalone"])
+@pytest.mark.parametrize("interval", [7, 11, 1441, 0, -1, 1.5, True])
+def test_ew_rejects_unsupported_intervals_during_config_preflight(kind, interval):
+    from config import prepare_config
+
+    config = get_template_config()
+    config["backtest"].update(ew_half_life_days=180, candle_interval_minutes=interval)
+    if kind == "scoring":
+        config["optimize"]["scoring"] = ["adg_strategy_eq_ew"]
+    elif kind == "limits":
+        config["optimize"]["limits"] = [
+            {"metric": "adg_ew_btc", "penalize_if": "less_than", "value": 0}
+        ]
+    with pytest.raises(ValueError, match="candle_interval_minutes.*divide a UTC day"):
+        prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("interval", [1, 5, 60, 180, 1440, 5.0])
+def test_ew_accepts_intervals_that_divide_a_utc_day(interval):
+    from config import prepare_config
+
+    config = get_template_config()
+    config["backtest"].update(ew_half_life_days=180, candle_interval_minutes=interval)
+    config["optimize"]["scoring"] = ["adg_strategy_eq_ew"]
+    assert prepare_config(config, verbose=False)["backtest"]["candle_interval_minutes"] == interval
+
+
+def test_non_divisor_interval_remains_supported_when_ew_is_disabled():
+    from config import prepare_config
+
+    config = get_template_config()
+    config["backtest"]["candle_interval_minutes"] = 7
+    assert prepare_config(config, verbose=False)["backtest"]["candle_interval_minutes"] == 7
+
+
+def test_runtime_interval_override_is_rejected_before_payload_preparation(monkeypatch):
+    from backtest import prep_backtest_args
+
+    config = get_template_config()
+    config["backtest"].update(ew_half_life_days=180, candle_interval_minutes=7)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid EW interval reached payload preparation")
+
+    monkeypatch.setattr("config.hsl.engine", forbidden)
+    with pytest.raises(ValueError, match="candle_interval_minutes.*divide a UTC day"):
+        prep_backtest_args(config, {}, "binance", is_runtime_compiled=True)
+
+
 @pytest.mark.parametrize("overrides", [
     {"backtest.ew_half_life_days": 30}, {"backtest": {"ew_half_life_days": 180}},
 ])

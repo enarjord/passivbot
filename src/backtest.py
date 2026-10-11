@@ -2563,11 +2563,13 @@ def prep_backtest_args(
     metrics_only: bool = False,
 ):
     from config.hsl import engine
-    from config.ew import validate_ew_half_life_days
+    from config.ew import validate_ew_candle_interval, validate_ew_half_life_days
 
     ew_half_life_days = validate_ew_half_life_days(
         config.get("backtest", {}).get("ew_half_life_days")
     )
+    if ew_half_life_days is not None:
+        validate_ew_candle_interval(config.get("backtest", {}).get("candle_interval_minutes", 1))
     engine(config)
 
     if not is_runtime_compiled:

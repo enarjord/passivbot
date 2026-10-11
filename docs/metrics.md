@@ -104,6 +104,8 @@ Set `backtest.ew_half_life_days` to a finite number at least `1` to enable these
 metrics. The default `null` disables them. Half-life is measured in calendar days;
 with `180`, a return 180 days older gets half the weight. One global half-life
 applies to every exchange and scenario and cannot be overridden by a scenario.
+When enabled, `backtest.candle_interval_minutes` must be a positive integer
+dividing a UTC day (1,440 minutes); unsupported intervals fail config preflight.
 
 | Curve | Metric names |
 |---|---|

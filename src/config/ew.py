@@ -31,6 +31,22 @@ def validate_ew_half_life_days(value):
     return float(value)
 
 
+def validate_ew_candle_interval(value):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 1
+        or value != int(value)
+        or 1440 % int(value) != 0
+    ):
+        raise ValueError(
+            "backtest.candle_interval_minutes must be a positive integer and "
+            "divide a UTC day when exponential (_ew) analysis is enabled"
+        )
+    return int(value)
+
+
 def configured_ew_metrics(config):
     from .limits import normalize_limit_entries
     from .scoring import extract_objective_specs
@@ -57,6 +73,8 @@ def validate_ew_config(config):
     config["backtest"]["ew_half_life_days"] = half_life
     if half_life is None and configured_ew_metrics(config):
         raise ValueError("Exponential (_ew) scoring and limits require backtest.ew_half_life_days")
+    if half_life is not None:
+        validate_ew_candle_interval(config["backtest"].get("candle_interval_minutes", 1))
     for scenario in config["backtest"].get("scenarios", []):
         if isinstance(scenario, Mapping):
             if "ew_half_life_days" in scenario:

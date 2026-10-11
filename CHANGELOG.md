@@ -14,6 +14,8 @@ since the latest release tag; these features may already be available when insta
   skips legacy nested analysis when objectives and active limits do not request it;
   CUDA also omits its full-history buffers and reduction workspace. EW results
   include availability/sample metadata and half-life/version fitness compatibility.
+  Enabling EW requires a candle interval dividing a UTC day; invalid intervals
+  are rejected before replay.
 
 - Fix historical candle-resolution seams when retained 1m history begins inside a higher-timeframe bucket. A straddling coarse bucket may now reconstruct the missing pre-boundary minutes when the overlapping exact 1m interval is complete, preserving extrema known to belong to the missing prefix and leaving exact rows unchanged. Genuine internal 1m gaps remain unavailable.
 
