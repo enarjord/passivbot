@@ -6126,6 +6126,27 @@ class CandlestickManager:
                         "reaching the requested end"
                     )
                 break
+            # Cursor overlap is intentional on sparse venues, but advancing the
+            # request cursor is not evidence of new data. Stop if the response
+            # tail repeats or regresses instead of walking through the same
+            # sparse page while holding the fetch lock.
+            response_last_ts = int(arr[-1]["ts"])
+            if prev_last_ts is not None and response_last_ts <= prev_last_ts:
+                if raise_on_partial_empty_page and not _requested_end_is_covered():
+                    _raise_terminal_empty_page(
+                        "ccxt OHLCV pagination did not advance the response tail "
+                        "before reaching the requested end"
+                    )
+                self._log(
+                    "debug",
+                    "ccxt_pagination_stalled",
+                    symbol=symbol,
+                    tf=tf_norm,
+                    pages=pages,
+                    last_ts=response_last_ts,
+                    previous_last_ts=prev_last_ts,
+                )
+                break
             # Diagnostics: page ts range and step
             try:
                 first_ts = int(arr[0]["ts"])  # type: ignore[index]

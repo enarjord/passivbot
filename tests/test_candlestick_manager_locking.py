@@ -274,3 +274,39 @@ async def test_fetch_lock_wait_aborts_when_shutdown_requested(tmp_path):
 
     assert checks >= 2
     assert waiter._held_fetch_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_stalled_refresh_preserves_pages_releases_lock_and_ws_can_extend(tmp_path):
+    cm = CandlestickManager(
+        exchange=FakeExchange(), exchange_name="kucoin", cache_dir=str(tmp_path),
+        default_window_candles=5, archive_enabled=False,
+    )
+    minute = 60_000
+    cm._now_ms_callback = lambda: 1000 * minute + 1_000
+    cm._ccxt_page_overlap_candles = 1
+    calls = []
+
+    async def repeated_tail(_symbol, since, _limit, **_kwargs):
+        calls.append(since)
+        assert len(calls) <= 2
+        return [[i * minute, 100, 101, 99, 100, 1] for i in (995, 996, 997)]
+
+    cm._ccxt_fetch_ohlcv_once = repeated_tail
+    symbol = "SPARSE/USDT:USDT"
+    await cm.refresh(symbol)
+    assert len(calls) == 2
+    assert cm._held_fetch_locks == {}
+    assert cm.get_last_final_ts(symbol) == 997 * minute
+    assert 998 * minute not in set(cm._cache[symbol]["ts"])
+
+    # A successor-proven WS row can extend the preserved REST basis after
+    # pagination yields; the missing open tail was never fabricated.
+    assert await cm.ingest_live_ws_ohlcv(
+        symbol, [[998 * minute, 100, 102, 99, 101, 1]], now_ms=999 * minute - 1_000,
+    ) == 0
+    assert await cm.ingest_live_ws_ohlcv(
+        symbol, [[999 * minute, 101, 101, 101, 101, 0]], now_ms=999 * minute + 1_000,
+    ) == 1
+    assert cm.get_last_final_ts(symbol) == 998 * minute
+    assert cm._held_fetch_locks == {}
