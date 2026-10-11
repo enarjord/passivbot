@@ -25,6 +25,10 @@ _HEADER = r'''
 struct float2 {float x,y;float2(float a,float b):x(a),y(b){} float2()=default;};
 using uint=unsigned int;using ulong=unsigned long;
 using std::isfinite;using std::min;using std::max;
+// Keep float shader calls in F32 on both standard-library implementations.
+using std::fmax;using std::fmin;
+static_assert(sizeof(fmax(0.0f,1.0f))==sizeof(float), "fmax must preserve F32");
+static_assert(sizeof(fmin(0.0f,1.0f))==sizeof(float), "fmin must preserve F32");
 template<class T>T clamp(T v,T lo,T hi){return std::max(lo,std::min(v,hi));}
 int reconstruction_visits=0,suffix_hits=0,cache_hits=0,forced_declines=0;
 bool forced_checked=false;
