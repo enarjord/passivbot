@@ -786,6 +786,7 @@ def clean_config(config: dict) -> dict:
     """
     from config.hsl import FIELDS, normalization_template
     from config.migrations.gpu_screening import migrate_gpu_screening
+    from config.migrations.gpu_population import migrate_gpu_population
     from config.migrations.excess_allowance import retire_excess_allowance_mode
 
     source = deepcopy(config or {})
@@ -796,6 +797,8 @@ def clean_config(config: dict) -> dict:
     )
     if isinstance(legacy_gpu, dict) and "successive_halving" in legacy_gpu:
         migrate_gpu_screening(source)
+    if isinstance(legacy_gpu, dict) and "population_size" in legacy_gpu:
+        migrate_gpu_population(source)
     template = normalization_template(get_template_config(), source)
     if "hsl" in source.get("bot", {}):
         portfolio = source["bot"]["hsl"]

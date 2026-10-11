@@ -16,6 +16,9 @@ since the latest release tag; these features may already be available when insta
   CUDA backtest service and CPU-owned search, scenario screening, scoring and persistence.
   Preserve CPU optimization and standalone backtests/plots. Remove obsolete validation,
   drift and screened-seed controls; earlier GPU checkpoints require a fresh run.
+  GPU configs migrate explicit legacy `optimize.gpu.population_size` to the general
+  population setting when it is unset; concrete new settings win with a warning,
+  and invalid legacy values are rejected.
 
 - Native GPU coin and position-side HSL reuse the fresh current-position
   singleton when every selected retained fill history is empty, preserving

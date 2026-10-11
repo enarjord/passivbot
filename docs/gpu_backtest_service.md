@@ -284,7 +284,11 @@ service/device handles or shared-memory names. SIGINT stops admission, drains co
 work and preserves a checkpoint; completed compatible fitness is retained while unfinished
 candidates are rerun on GPU. Checkpoints are replaced atomically at the configured interval
 and at cohort/shutdown boundaries. A crash between a result write and a checkpoint may
-cause some GPU work to be repeated after resume. Perfect replay of scheduling is not required.
+cause some GPU work and result rows to be repeated after resume. Archive/progress counts
+therefore include recorded attempts, rather than guaranteeing unique candidates after a
+hard crash. Native evolution restores the checkpoint's cohort and generation state;
+archive row counts do not determine its generation budget. Perfect replay of scheduling
+is not required, and the result log, Pareto files and checkpoint are not a single transaction.
 An initial zero-result checkpoint can resume before its first completed seed/candidate.
 Version 3 retains compact partial screening evidence separately from fitness
 and distinguishes screening, promoted full evaluation and idle stages. Row-cache loss may

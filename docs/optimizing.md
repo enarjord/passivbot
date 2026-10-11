@@ -182,6 +182,13 @@ results/Pareto members are written as completions arrive. Evolution advances whe
 required complete offspring are collected. Fine-tune anchors and supported optimizer
 runtime overrides use canonical CPU preparation; fixed policies remove ineffective genes.
 
+For GPU-selected configs, the legacy `optimize.gpu.population_size` migrates to
+`optimize.population_size` when the latter is omitted, null or an auto alias. A concrete
+new value wins, with a warning when the legacy field is discarded. Invalid legacy values
+are rejected; positive legacy values retain the former minimum of eight parents. CPU
+backend configs do not use this migration. Save the normalized config to remove the
+obsolete field. NSGA-III can still raise the actual population to fit its reference directions.
+
 #### Execution settings
 
 ```json

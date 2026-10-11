@@ -80,11 +80,19 @@ focused CPU modules. Cohort NSGA-II/III survival still waits for its evaluated
 offspring, while requests, completions and storage proceed within the cohort.
 Steady-state evolution remains a future experiment.
 
-Against development prerequisite `d2804ac79a`, the candidate changes 17 Python
-production files under `src`: 488 lines added and 8,212 removed, a net reduction
-of 7,724. This excludes tests, documentation and Rust shader sources. The bounded
+Against development prerequisite `d2804ac79a`, the candidate changes 19 Python
+production files under `src`: 558 lines added and 8,212 removed, a net reduction
+of 7,654. This excludes tests, documentation and Rust shader sources. The bounded
 HSL cache adds kernel code separately. Counts describe scope and support the
 ownership/state comparison; they establish neither parity nor speed.
+
+Legacy GPU population migration runs before template pruning, including the raw
+config cleaner. Explicit `optimize.gpu.population_size` choices survive under the
+general setting when it is unset; new concrete values win visibly, invalid legacy
+values fail and CPU configs retain their existing policy. The focused migration,
+screening, cleaning, config-helper and documentation suite passes 316 checks with
+the source-matched Rust extension. This Python configuration correction leaves
+the qualified CUDA and Rust implementation unchanged.
 
 The remaining checkpoint contains CPU algorithm/cohort state, complete fitness, separate
 partial scenario-selection evidence, evaluation identity and resume configuration.

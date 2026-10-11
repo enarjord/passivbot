@@ -3792,3 +3792,23 @@ Historical observations do not supersede those requirements or prove current acc
   development integration remain pending. Master integration is separate. The
   [final foundation status](gpu_optimizer_acceptance.md#final-foundation-status)
   is the current gate list; prior dated entries remain historical evidence.
+
+
+### 2026-10-10 — Final review configuration compatibility
+
+- Preserve explicit legacy GPU population choices before canonical template
+  pruning, including the raw cleaner. GPU-selected configurations migrate an
+  unset general population to the old positive value with its minimum of eight;
+  concrete new values win with a warning and invalid legacy values fail visibly.
+  CPU backend policy is unchanged. Regression coverage includes CLI backend
+  override ordering and actual NSGA-II/III population plans without GPU imports
+  or CPU simulation. The source-matched focused configuration/documentation
+  suite passes 316 checks without failures, errors or skips.
+- Clarify the accepted abrupt-crash limitation: resume can repeat GPU work and
+  append duplicate result rows; archive/progress counters record attempts. The
+  checkpoint cohort and generation control native evolution. Result logs,
+  Pareto files and checkpoints do not form one atomic transaction. No extra
+  replay journal or perfect search reproducibility is required.
+- CUDA/Rust execution bytes are unchanged; preserve their original qualification
+  attribution. Current-head independent/automatic review, CI and development
+  integration remain separate delivery gates.
