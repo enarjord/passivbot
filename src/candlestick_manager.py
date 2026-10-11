@@ -359,12 +359,8 @@ def _linear_interpolate(value0: float, value1: float, ratio: float) -> float:
     return float(value0 + (value1 - value0) * ratio)
 
 
-def ohlcv_xm_to_1m(candle: np.void, minutes: int) -> np.ndarray:
-    """Expand one higher-timeframe OHLCV candle into deterministic synthetic 1m candles."""
-    if minutes <= 0:
-        raise ValueError(f"minutes must be > 0, got {minutes}")
-
-    ts = int(candle["ts"])
+def _normalized_coarse_ohlcv(candle: np.void) -> tuple[float, float, float, float, float]:
+    """Use the same finite-value, range and endpoint policy for every expansion."""
     o = float(candle["o"])
     h = float(candle["h"])
     l = float(candle["l"])
@@ -377,6 +373,16 @@ def ohlcv_xm_to_1m(candle: np.void, minutes: int) -> np.ndarray:
         h, l = l, h
     o = min(max(o, l), h)
     c = min(max(c, l), h)
+    return o, h, l, c, bv
+
+
+def ohlcv_xm_to_1m(candle: np.void, minutes: int) -> np.ndarray:
+    """Expand one higher-timeframe OHLCV candle into deterministic synthetic 1m candles."""
+    if minutes <= 0:
+        raise ValueError(f"minutes must be > 0, got {minutes}")
+
+    ts = int(candle["ts"])
+    o, h, l, c, bv = _normalized_coarse_ohlcv(candle)
 
     out = np.zeros(minutes, dtype=CANDLE_DTYPE)
     out["ts"] = np.arange(ts, ts + minutes * ONE_MIN_MS, ONE_MIN_MS, dtype=np.int64)
@@ -457,6 +463,42 @@ def synthesize_1m_from_higher_tf(candles: np.ndarray, tf_minutes: int) -> np.nda
     return np.sort(np.concatenate(expanded), order="ts")
 
 
+def _synthesize_boundary_prefix(
+    candle: np.void, tf_minutes: int, exact_overlap: np.ndarray, known_prefix: np.ndarray
+) -> np.ndarray:
+    """Expand only the unknown prefix of a bucket with a complete exact suffix.
+
+    An extreme outside all finer rows' range must belong to the unknown prefix.
+    Extrema already observed in finer rows have unknown prefix membership and
+    are not moved backward. Their ordering within the prefix remains approximate.
+    """
+    o, h, l, _, bv = _normalized_coarse_ohlcv(candle)
+    known_rows = np.concatenate([known_prefix, exact_overlap])
+    prefix_minutes = (int(exact_overlap[0]["ts"]) - int(candle["ts"])) // ONE_MIN_MS
+    prefix = candle.copy()
+    prefix["o"] = o
+    prefix["c"] = min(max(float(exact_overlap[0]["o"]), l), h)
+    prefix["h"] = max(float(prefix["o"]), float(prefix["c"]))
+    prefix["l"] = min(float(prefix["o"]), float(prefix["c"]))
+    missing_high = h > float(np.max(known_rows["h"]))
+    missing_low = l < float(np.min(known_rows["l"]))
+    if missing_high:
+        prefix["h"] = max(float(prefix["h"]), h)
+    if missing_low:
+        prefix["l"] = min(float(prefix["l"]), l)
+    # Keep the existing proportional volume approximation for coarse history.
+    prefix["bv"] = bv * prefix_minutes / tf_minutes
+    expanded = ohlcv_xm_to_1m(prefix, prefix_minutes)
+    expanded = expanded[~np.isin(expanded["ts"], known_prefix["ts"])]
+    # Finer rows keep precedence, but must not displace an extreme they lack.
+    if expanded.size:
+        if missing_high:
+            expanded["h"][np.argmax(expanded["h"])] = prefix["h"]
+        if missing_low:
+            expanded["l"][np.argmin(expanded["l"])] = prefix["l"]
+    return expanded
+
+
 async def fetch_candles_with_resolution_ladder(
     fetch_candles: Callable[..., Awaitable[np.ndarray]],
     *,
@@ -467,9 +509,12 @@ async def fetch_candles_with_resolution_ladder(
     """Fetch exact 1m candles, then cover only older leading history coarsely.
 
     The first available 1m candle is the precision boundary. Higher-timeframe
-    candles may supply minutes before that boundary only when their full bucket
-    ends there or earlier; they never patch gaps at or after it. Within the
-    older prefix, the finest successful source wins.
+    candles normally supply only complete buckets ending at or before that
+    boundary. One bucket may straddle the boundary when every overlapping
+    exact 1m minute is already present; only its pre-boundary synthetic rows
+    are then eligible. Coarse candles never patch gaps at or after the
+    precision boundary. Within the older prefix, the finest successful source
+    wins.
     """
     start_minute = _floor_minute(start_ts)
     end_minute = _floor_minute(end_ts)
@@ -488,6 +533,7 @@ async def fetch_candles_with_resolution_ladder(
     rows_by_ts: Dict[int, np.void] = {}
     sources_by_ts: Dict[int, str] = {}
     failures: Dict[str, Exception] = {}
+    exact_timestamps: set[int] = set()
     precision_boundary = end_minute + ONE_MIN_MS
 
     for index, (timeframe, tf_minutes) in enumerate(CANDLE_RESOLUTION_LADDER):
@@ -521,12 +567,41 @@ async def fetch_candles_with_resolution_ladder(
             candidates = synthesize_1m_from_higher_tf(
                 fetched[complete_before_boundary], tf_minutes
             )
+            if exact_timestamps:
+                aligned_boundary = (
+                    (precision_boundary + period_ms - 1) // period_ms
+                ) * period_ms
+                overlap_timestamps = range(
+                    precision_boundary, aligned_boundary, ONE_MIN_MS
+                )
+                if (
+                    precision_boundary < aligned_boundary <= end_minute + ONE_MIN_MS
+                    and all(ts in exact_timestamps for ts in overlap_timestamps)
+                ):
+                    exact_overlap = np.array(
+                        [rows_by_ts[ts] for ts in overlap_timestamps], dtype=CANDLE_DTYPE
+                    )
+                    bucket_start = aligned_boundary - period_ms
+                    boundary_rows = fetched[fetched["ts"] == bucket_start]
+                    if boundary_rows.size:
+                        known_prefix = np.array(
+                            [
+                                rows_by_ts[ts]
+                                for ts in range(bucket_start, precision_boundary, ONE_MIN_MS)
+                                if ts in rows_by_ts
+                            ],
+                            dtype=CANDLE_DTYPE,
+                        )
+                        prefix = _synthesize_boundary_prefix(
+                            boundary_rows[0], tf_minutes, exact_overlap, known_prefix
+                        )
+                        candidates = np.concatenate([candidates, prefix])
         if index == 0:
-            exact_timestamps = [
+            exact_timestamps = {
                 int(row["ts"])
                 for row in candidates
                 if start_minute <= int(row["ts"]) <= end_minute
-            ]
+            }
             if exact_timestamps:
                 precision_boundary = min(exact_timestamps)
 
@@ -7466,8 +7541,9 @@ class CandlestickManager:
     ) -> CandleResolutionResult:
         """Return exact recent 1m candles with a coarser historical prefix.
 
-        Higher-timeframe candles are read through the same manager and may only
-        fill complete buckets ending inside the requested old-history prefix.
+        Higher-timeframe candles are read through the same manager and fill the
+        older prefix. A boundary bucket requires a complete exact overlap and
+        is reconstructed only over its unknown prefix.
         Callers remain responsible for requiring an exact recent 1m suffix when
         their decision contract needs one.
         """

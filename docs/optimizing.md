@@ -175,6 +175,17 @@ can differ from CPU float64 results. See the
 [feature and approximation inventory](plans/gpu_optimizer_inventory.md) and
 [acceptance evidence](plans/gpu_optimizer_acceptance.md) for measured limits.
 
+GPU metric eligibility is a policy, not a list of known calculation defects.
+Exclusions can reflect approximation or cost, or favor normalized growth, activity
+and downside-risk signals. Gain shares ADG's smoothed endpoint; ADG adds daily
+normalization. Positive equity-balance divergence has no universally desirable
+optimization direction; raw counts and absolute panic losses favor rates and loss
+percentages, while realized-only growth can reward leaving losses unrealized.
+Excluded metrics remain available to CPU optimization and standalone backtests.
+Enabling one requires supported-strategy/topology parity, alias/scoring/limit
+coverage, explicit tolerances and ranking/constraint evidence. Profile requested
+outputs and reductions separately; eligibility alone does not establish a speedup.
+
 CPU orchestration reuses `optimize.pymoo`, `optimize.population_size` and the existing
 cohort meaning of `optimize.iters`. All deduplicated starting configs and initial parents
 receive complete GPU evaluations. Within each cohort, requests are replenished and full
@@ -907,11 +918,11 @@ over all exchanges before scoring.
 |--------|-------------|
 | `adg`, `adg_w` | Average Daily Gain (smoothed geometric) and its recency-biased counterpart |
 | `mdg`, `mdg_w` | Median Daily Gain and its recency-biased counterpart |
-| `gain` | Final balance gain (end/start ratio) |
+| `gain` | Smoothed terminal equity / starting equity; terminal equity averages the last up to three daily values |
 | `adg_strategy_eq`, `adg_strategy_eq_w` | Collateral-agnostic geometric growth on the synthetic strategy-equity curve |
 | `adg_rolling_hmean_strategy_eq` | Harmonic mean of automatic rolling 30/90/180-day-equivalent strategy-equity growth windows, dailyized and combined in log space. Higher values reward growth that survives many start/end windows; retain terminal ADG alongside it. |
 | `adg_time_integrated_strategy_eq` | Dailyized area under log strategy equity. Higher values reward earlier sustained growth; retain terminal ADG alongside it. |
-| `positive_gain_participation_strategy_eq` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a gain objective. |
+| `positive_gain_participation_strategy_eq` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a growth objective such as `adg_strategy_eq`. |
 | `mdg_strategy_eq`, `mdg_strategy_eq_w` | Median-day version of the same strategy-equity growth family |
 | `*_per_exposure_{long,short}` | Above metrics divided by the configured exposure limit per side |
 

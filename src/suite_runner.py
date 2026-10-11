@@ -27,6 +27,9 @@ from config.metrics import canonicalize_metric_name
 from config.overrides import parse_overrides
 from config.param_paths import require_existing_config_path
 from config.parse import load_raw_config
+from config.scenario_overrides import (
+    normalize_scenario_overrides as _normalize_scenario_overrides,
+)
 from config.shared_bot import canonicalize_shared_bot_side
 from config.reducers import canonicalize_reducer_mapping, reducer_mapping_from_aliases
 from config_transform import ConfigTransformTracker, record_transform
@@ -85,7 +88,6 @@ _SCENARIO_KEYS = frozenset(
         "overrides",
     }
 )
-_ATOMIC_SCENARIO_OVERRIDE_ROOTS = frozenset({"coin_overrides"})
 
 # --------------------------------------------------------------------------- #
 # Data containers
@@ -799,40 +801,6 @@ def build_scenarios(
     if len(components) != len(set(components)):
         raise ValueError("Scenario labels collide as filesystem directory names")
     return scenarios, reducer_cfg
-
-
-def _normalize_scenario_overrides(
-    overrides: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Flatten nested override documents while preserving atomic dynamic mappings."""
-    normalized: Dict[str, Any] = {}
-
-    def visit(mapping: Dict[str, Any], prefix: tuple[str, ...] = ()) -> None:
-        for raw_key, value in mapping.items():
-            if not isinstance(raw_key, str):
-                raise ValueError("Scenario override keys must be strings")
-            key = raw_key.strip()
-            if not key:
-                raise ValueError("Scenario override keys must not be empty")
-            path = (*prefix, key)
-            root = path[0].split(".", 1)[0]
-            if (
-                isinstance(value, dict)
-                and "." not in key
-                and root not in _ATOMIC_SCENARIO_OVERRIDE_ROOTS
-            ):
-                visit(value, path)
-                continue
-            dotted_path = ".".join(path)
-            if dotted_path in normalized:
-                raise ValueError(
-                    f"Scenario override path {dotted_path!r} is defined more than once"
-                )
-            normalized[dotted_path] = deepcopy(value)
-
-    if overrides:
-        visit(overrides)
-    return normalized
 
 
 def collect_suite_coin_sources(

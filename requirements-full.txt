@@ -14,3 +14,4 @@ psutil==5.9.8; python_version < "3.14"
 psutil==7.2.2; python_version >= "3.14"
 requests==2.34.2
 dictdiffer==0.9.0
+packaging>=24.0

@@ -82,14 +82,14 @@ def migrate_entry_ema_spans(config, *, tracker=None):
     # Scenario mappings can mix nested paths, dotted paths, and active-strategy
     # aliases. Resolve leaf collisions before any defaults/overrides are applied.
     from ..param_paths import resolve_dotted_config_path
-    from suite_runner import _normalize_scenario_overrides
+    from ..scenario_overrides import normalize_scenario_overrides
 
     for scenario in config.get("backtest", {}).get("scenarios", []):
         if not isinstance(scenario, dict) or not isinstance(
             scenario.get("overrides"), dict
         ):
             continue
-        overrides = _normalize_scenario_overrides(scenario["overrides"])
+        overrides = normalize_scenario_overrides(scenario["overrides"])
         migrated = {}
         # Canonical keys win independently of input insertion order.
         items = []

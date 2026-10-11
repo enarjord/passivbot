@@ -42,8 +42,14 @@ Requested config dates and detailed dataset coverage in the manifest retain thei
 
 - `gain`: Terminal equity divided by starting equity, where terminal equity is the mean of the
   last up to three daily equity values.
-- `adg`: Average daily gain derived from that smoothed terminal equity (`gain.powf(1 / n_days) - 1`).
+- `adg`: Average daily gain derived from that same smoothed terminal equity
+  (`gain^(1/N) - 1`, where `N` is the number of daily equity values).
 - `adg_w`: Mean of `adg` computed on the trailing 10% slices (full run, last half, last third, …).
+
+For positive gain and equal numbers of daily equity values, gain and ADG give the same ranking.
+GPU screening currently accepts ADG and reserves gain for exact analysis; this is a preference for
+normalized growth, not a separate known GPU gain-calculation defect.
+
 - `adg_rolling_hmean_strategy_eq`: Path-sensitive growth on collateral-agnostic strategy equity.
   For each automatic horizon `h`, it computes every complete rolling growth factor
   `G(t,h) = equity(t) / equity(t-h)`, then calculates
@@ -64,8 +70,8 @@ Requested config dates and detailed dataset coverage in the manifest retain thei
   `p = max(log(equity(t) / equity(t-1)), 0)`. If positive gain is spread equally across `k` of `N`
   daily intervals, the score is `k / N`; concentration in a few unusually large positive days
   lowers it further. The metric deliberately ignores negative returns, leaving their magnitude and
-  duration to Sortino and drawdown objectives, and should be paired with a gain objective so tiny
-  frequent gains cannot win on participation alone.
+  duration to Sortino and drawdown objectives, and should be paired with a growth objective such as
+  `adg_strategy_eq` so tiny frequent gains cannot win on participation alone.
 
 For example, over 240 daily intervals, equal positive gains on all 240 days score `1.0`; equal
 positive gains on 120, 24, or one day score `0.5`, `0.1`, or about `0.0042`. Unequal gains reduce
