@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native GPU HSL skips repeated reconstruction of completed flat episodes while
+  facts, budget and replay window remain unchanged. Cooldown advances with current
+  time; closing fills and changed inputs still receive fresh reconstruction.
+
 - Improve GPU optimizer throughput by rejecting HSL capacity overflow between replay chunks, spreading CUDA temporal candidates across independent blocks, and sharing weighted equity reduction workspace across the replay batch. Preserve HSL decisions and metric formulas.
 
 - Add opt-in exponential recency weighting for ADG, Sharpe, Sortino and Omega on

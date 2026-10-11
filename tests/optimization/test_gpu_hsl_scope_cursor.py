@@ -47,6 +47,8 @@ _BODY = r"""
         float budget=params[po+18], alpha=2.0f/(params[po+19]+1.0f);
         int next_start=start, next_minute=minute;
         float current_upnl=hsl_pair_sum_value(upnl), threshold=params[po+20];
+        float cooldown=params[po+21];
+        bool never=params[po+22]!=0.0f;
 #if CURSOR_GUARD == 1
         budget*=2.0f;
 #elif CURSOR_GUARD == 2
@@ -65,14 +67,23 @@ _BODY = r"""
         threshold=1e-9f;
 #elif CURSOR_GUARD == 9
         cursor.valid=false;
+#elif CURSOR_GUARD == 13
+        cursor.exposed=!cursor.exposed;
+#elif CURSOR_GUARD == 14
+        threshold=.99f;
+#elif CURSOR_GUARD == 15
+        cooldown=100.0f;
+#elif CURSOR_GUARD == 16
+        never=true;
 #endif
         bool advanced=hsl_advance_scope(cursor,next_start,next_minute,current_upnl,
-            budget,alpha,threshold,params[po+21],params[po+22]!=0.0f,result);
+            budget,alpha,threshold,cooldown,never,
+            pairs[0].current_size != 0.0f,result);
         advanced_count+=advanced ? 1 : 0;
-#if CURSOR_GUARD == 0
+#if CURSOR_GUARD == 0 || CURSOR_GUARD >= 14
         HslScopeResult fresh;
         if(!hsl_compose_scope(pairs,count,start,minute,false,params[po+18],params[po+19],
-            params[po+20],params[po+21],params[po+22]!=0.0f,fresh)) {
+            threshold,cooldown,never,fresh)) {
             status[int(b)]=-4;return;
         }
         if(!advanced || fabs(result.raw-fresh.raw)>2e-6f || fabs(result.ema-fresh.ema)>2e-6f
@@ -167,3 +178,61 @@ def test_cursor_does_not_seed_uncertain_history(reference, monkeypatch, kind):
         row["pairs"][0]["position"]["mark"] = 80.0
     _, _, statuses = _run(monkeypatch, [row], 12 if kind == "first_quote" else 9)
     assert statuses.tolist() == [0]
+
+
+def _flat_row(short=False, red=True, never=False):
+    row = _row(short, constant=True)
+    row.update(label="completed flat", budget=100.0, span=1.0, threshold=.25, never=never)
+    pair = row["pairs"][0]
+    sign = -1 if short else 1
+    pair["position"].update(size=0.0, basis=0.0)
+    pair["fills"] = [
+        dict(identity="open", revision=0, timestamp=0, sequence=0,
+             delta=sign, price=100.0, realized=0.0, fee=0.0),
+        dict(identity="close", revision=0, timestamp=1, sequence=1,
+             delta=-sign, price=50.0 if red else 100.0,
+             realized=-50.0 if red else 0.0, fee=0.0),
+    ]
+    return row
+
+
+@pytest.mark.parametrize("short", [False, True])
+@pytest.mark.parametrize("red", [False, True])
+@pytest.mark.parametrize("never", [False, True])
+def test_flat_cursor_preserves_terminal_red_and_cooldown_at_every_minute(
+    reference, monkeypatch, short, red, never
+):
+    row = _flat_row(short, red, never)
+    _, result, statuses = _run(monkeypatch, [row], 0)
+    assert statuses.tolist() == [1 + 2 * 30]
+    assert result[0, 2] == (1 if red and never else 0)
+    assert result[0, 5] == 1
+    monkeypatch.undo()
+    _, expected, status = composer._run([row])
+    np.testing.assert_array_equal(status, 1)
+    np.testing.assert_array_equal(result, expected)
+    composer._check(reference, [row])
+
+
+@pytest.mark.parametrize("guard", [1, 2, 3, 4, 5, 6, 7, 9, 10, 13])
+def test_flat_cursor_rejects_changed_inputs(reference, monkeypatch, guard):
+    _, _, statuses = _run(monkeypatch, [_flat_row()], guard)
+    assert statuses.tolist() == [0 if guard == 10 else 1]
+
+
+def test_flat_cursor_requires_a_retained_genuine_flat(reference, monkeypatch):
+    row = _flat_row()
+    row["pairs"][0]["fills"] = row["pairs"][0]["fills"][:1]
+    _, _, statuses = _run(monkeypatch, [row], 9)
+    assert statuses.tolist() == [0]
+
+
+@pytest.mark.parametrize("guard", [14, 15, 16])
+def test_flat_cursor_rechecks_current_policy_after_prior_cooldown_expiry(
+    reference, monkeypatch, guard
+):
+    row = _flat_row()
+    row["cooldown"] = 0
+    _, result, statuses = _run(monkeypatch, [row], guard)
+    assert statuses.tolist() == [1 + 2 * 30]
+    assert result[0, 2] == (0 if guard == 14 else 1)

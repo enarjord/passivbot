@@ -282,9 +282,9 @@ inline bool replay_factual_hsl(
     }
 #endif
 #if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
-    if (reused_cutoff && exposed && !terminal
+    if (reused_cutoff && !terminal
 #if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
-        && !cache_selected
+        && (!cache_selected || !exposed)
 #endif
     ) {
         HslPairSum upnl;
@@ -303,7 +303,7 @@ inline bool replay_factual_hsl(
         }
         advanced = valid_marks && hsl_advance_scope(h.scope_cursor, first, minute,
             hsl_pair_sum_value(upnl), budget, 2.0f / (span + 1.0f), h.red_threshold,
-            h.cooldown_minutes, h.restart_policy == 2, result);
+            h.cooldown_minutes, h.restart_policy == 2, exposed, result);
     }
 #endif
     if (!advanced) {
