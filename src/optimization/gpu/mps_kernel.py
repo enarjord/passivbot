@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import time
+import logging
 
 import numpy as np
 import torch
@@ -11,7 +12,7 @@ from optimization.gpu.metric_registry import (
     WEIGHTED_ACCOUNT_EQUITY_METRICS,
 )
 from optimization.gpu.weighted_equity import (
-    weighted_equity_from_samples, weighted_equity_history_bytes,
+    weighted_equity_from_samples, weighted_equity_history_bytes, weighted_equity_workspace_bytes,
 )
 
 from optimization.gpu.ema_tail import (
@@ -2772,7 +2773,7 @@ class _MulticoinReplayRunner:
         # fitting. Latch off for this request/attempt before selecting its ABI;
         # changing compiled state size must not oscillate cache admission.
         if (self._hsl_native_cache_capacity()
-                and self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes):
+                and self._history_batch_bytes(1) > self.hsl_scratch_budget_bytes):
             self.dispatch_native_hsl_cache_budget_disabled = True
             return True
         return False
@@ -2827,9 +2828,20 @@ class _MulticoinReplayRunner:
                if self._exact_entry_intervals_enabled() else 0)
         )
 
+    def _history_workspace_bytes(self):
+        return weighted_equity_workspace_bytes(self.n, self.n_days, self.weighted_equity_metrics)
+
+    def _history_batch_bytes(self, batch_size):
+        return batch_size * self._history_bytes_per_candidate() + self._history_workspace_bytes()
+
+    def _history_batch_limit(self):
+        resident = self._history_bytes_per_candidate()
+        available = self.hsl_scratch_budget_bytes - self._history_workspace_bytes()
+        return available // max(1, resident)
+
     def _unstuck_history_buffers(self, batch_size):
         if (
-            batch_size * self._history_bytes_per_candidate()
+            self._history_batch_bytes(batch_size)
             > self.hsl_scratch_budget_bytes
         ):
             raise ValueError("GPU history batch exceeds its scratch budget")
@@ -2848,7 +2860,7 @@ class _MulticoinReplayRunner:
         _, nodes = _hsl_layout(self.hsl_capacity, getattr(self, "hsl_fact_capacity", 0),
                                factual_only=factual_only)
         if (
-            batch_size * self._history_bytes_per_candidate()
+            self._history_batch_bytes(batch_size)
             > self.hsl_scratch_budget_bytes
         ):
             raise ValueError("GPU history batch exceeds its scratch budget")
@@ -2874,7 +2886,7 @@ class _MulticoinReplayRunner:
         return self._hsl_scratch_buffers[key]
 
     def _run_history_batches(self, params, *, profile, end_steps):
-        limit = self.hsl_scratch_budget_bytes // self._history_bytes_per_candidate()
+        limit = self._history_batch_limit()
         if limit < 1:
             raise ValueError("GPU history exceeds the scratch budget")
         if len(params) <= limit:
@@ -2931,7 +2943,7 @@ class _MulticoinReplayRunner:
         if not self._hsl_ema_tail_samples_enabled():
             self._hsl_ema_tail_buffers.clear()
             return None
-        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+        if self._history_batch_bytes(batch_size) > self.hsl_scratch_budget_bytes:
             raise ValueError("GPU HSL EMA tail exceeds its scratch budget")
         if batch_size not in self._hsl_ema_tail_buffers:
             self._hsl_ema_tail_buffers = {
@@ -2946,7 +2958,7 @@ class _MulticoinReplayRunner:
         return samples
 
     def _recovery_sample_buffer(self, batch_size: int):
-        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+        if self._history_batch_bytes(batch_size) > self.hsl_scratch_budget_bytes:
             raise ValueError("GPU history batch exceeds its scratch budget")
         if batch_size not in self._recovery_buffers:
             self._recovery_buffers = {
@@ -2964,7 +2976,7 @@ class _MulticoinReplayRunner:
     def _weighted_equity_sample_buffer(self, batch_size):
         if not self.weighted_equity_cols:
             return None
-        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+        if self._history_batch_bytes(batch_size) > self.hsl_scratch_budget_bytes:
             raise ValueError("GPU weighted equity exceeds its scratch budget")
         if batch_size not in self._weighted_equity_buffers:
             self._weighted_equity_buffers = {
@@ -3015,7 +3027,7 @@ class _MulticoinReplayRunner:
     def _volume_sample_buffer(self, batch_size: int):
         if not self.weighted_volume_enabled:
             return None
-        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+        if self._history_batch_bytes(batch_size) > self.hsl_scratch_budget_bytes:
             raise ValueError("GPU volume history batch exceeds its scratch budget")
         if batch_size not in self._volume_buffers:
             self._volume_buffers = {
@@ -3047,7 +3059,7 @@ class _MulticoinReplayRunner:
             return None, None
         count_cols = MPS_ENTRY_INTERVAL_COUNT_COLS
         if self._exact_entry_intervals_enabled():
-            if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+            if self._history_batch_bytes(batch_size) > self.hsl_scratch_budget_bytes:
                 raise ValueError("native entry intervals exceed the scratch budget")
             count_cols = self.n + 2
             if batch_size * count_cols > np.iinfo(np.int32).max:
@@ -3126,7 +3138,7 @@ class _MulticoinReplayRunner:
         if self._replay_state_bytes < 1:
             raise RuntimeError("GPU replay state has an invalid compiled size")
 
-    def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size):
+    def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
         kernel = getattr(library, self.replay_kernel_name)
         if not self._temporal_replay_enabled():
             dispatch_options = {"threads": (batch_size, 1, 1)}
@@ -3150,7 +3162,7 @@ class _MulticoinReplayRunner:
         )
         if chunk_bars < 1:
             raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
-        if batch_size * self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+        if self._history_batch_bytes(batch_size) > self.hsl_scratch_budget_bytes:
             raise ValueError("GPU replay state batch exceeds its scratch budget")
         state_key = (batch_size, self._replay_state_bytes)
         if state_key not in self._replay_states:
@@ -3172,9 +3184,9 @@ class _MulticoinReplayRunner:
         replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=chunk_bars)
         replay_started = time.perf_counter()
         next_progress = replay_started + 30.0
-        # One SIMD-width group distributes independent, state-heavy replays
-        # across GPU cores instead of packing the batch into a large group.
-        threads_per_threadgroup = min(batch_size, 32)
+        # Serial candidates need independent CUDA blocks to spread across SMs.
+        # Preserve the existing Apple SIMD-width scheduling.
+        threads_per_threadgroup = 1 if self.bars.device.type == "cuda" else min(batch_size, 32)
         begin_k = 1
         while True:
             self.interrupt_check()
@@ -3206,6 +3218,18 @@ class _MulticoinReplayRunner:
                 batch_size, processed_bars, stop_k - 1, dispatch_seconds,
                 eligible=begin_k > 1 and processed_bars == dispatch_bars,
             )
+            # Read compact producer statuses only after the completed chunk.
+            # Fatal inputs/malformed facts still take precedence over capacity
+            # growth across the entire batch; rejected work publishes no output.
+            try:
+                _require_available_held_valuation(scalars.detach().cpu())
+            except HslFactHistoryOverflow:
+                self._last_temporal_dispatch = {
+                    "dispatch_count": dispatch_count,
+                    "rejected_at_bar": completed_k - 1,
+                    "threads_per_threadgroup": threads_per_threadgroup,
+                }
+                raise
             now = time.perf_counter()
             if now >= next_progress and completed_k < stop_k:
                 replay_progress.log("progress", completed_k - 1, now - replay_started, kernel_dispatches=dispatch_count)
@@ -3262,7 +3286,7 @@ class _MulticoinReplayRunner:
                     # the prior ABI size before provisional scalar admission.
                     self._replay_state_bytes = None
                     self._replay_states.clear()
-                if self._history_bytes_per_candidate() > self.hsl_scratch_budget_bytes:
+                if self._history_batch_bytes(1) > self.hsl_scratch_budget_bytes:
                     self.hsl_fact_capacity = capacity
                     raise HslFactHistoryOverflow(
                         "GPU HSL factual history overflow exceeds single-candidate scratch budget"
@@ -3275,6 +3299,10 @@ class _MulticoinReplayRunner:
                 self.hsl_fact_retry_count_total = getattr(self, "hsl_fact_retry_count_total", 0) + 1
                 self.hsl_fact_retry_seconds_total = (getattr(self, "hsl_fact_retry_seconds_total", 0.0)
                                                      + time.perf_counter() - started)
+                logging.info(
+                    "GPU HSL capacity retry | previous=%s capacity=%s rejected_seconds=%.3f",
+                    capacity, self.hsl_fact_capacity, time.perf_counter() - started,
+                )
                 continue
             self.last_hsl_fact_retries = getattr(self, "hsl_fact_retry_count_total", 0) - count_before
             if profile and self.last_hsl_fact_retries:
@@ -3566,7 +3594,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
+        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size, scalars=scalars)
 
     def _use_disabled_hsl_specialization(self, matrix):
         if getattr(self, "hsl_fact_capacity", 0):
@@ -3838,7 +3866,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
+        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size, scalars=scalars)
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
@@ -4098,7 +4126,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
+        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size, scalars=scalars)
 
 
 
@@ -4319,7 +4347,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size)
+        self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size, scalars=scalars)
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,

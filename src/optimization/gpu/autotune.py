@@ -175,6 +175,10 @@ def history_dispatch_ceiling(proxy, ceiling):
     runners = ([single] if single is not None else [fused] if fused is not None
                else list(getattr(proxy, "runners", {}).values()))
     for runner in runners:
+        batch_limit = getattr(runner, "_history_batch_limit", None)
+        if batch_limit is not None:
+            ceiling = min(ceiling, max(1, batch_limit()))
+            continue
         history_size = getattr(runner, "_history_bytes_per_candidate", None)
         history_bytes = history_size() if history_size is not None else 0
         if history_bytes:

@@ -169,3 +169,47 @@ def test_interleaved_resident_curves_are_not_mutated_or_assumed_contiguous():
     torch.testing.assert_close(interleaved, original, rtol=0, atol=0, equal_nan=True)
     for name in expected:
         torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("curve", ["raw_strategy", "account"])
+def test_shared_workspace_matches_wide_reduction_exactly(device, curve, monkeypatch):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    interval = FIXTURE["cases"][0]["interval_ms"]
+    cases = [case for case in FIXTURE["cases"] if case["interval_ms"] == interval]
+    # Exercise heterogeneous endpoints and padding even at a sparse cadence.
+    cases += [{**cases[0], "equities": cases[0]["equities"][:2]}]
+    samples, kwargs = _inputs(cases, device=device, dtype=torch.float32, curve=curve)
+    names = cases[0]["expected_raw"] if curve == "raw_strategy" else cases[0]["expected_account"]["initial_fill"]
+    expected = reducer.weighted_equity_from_samples(
+        samples, requested=names, candidate_batch_size=len(cases), **kwargs)
+    widths = []
+    original = reducer._smoothed_adg
+    def measured(ends, active):
+        widths.append(len(ends))
+        return original(ends, active)
+    monkeypatch.setattr(reducer, "_smoothed_adg", measured)
+    actual = reducer.weighted_equity_from_samples(samples, requested=names, **kwargs)
+    assert len(cases) > 1 and widths and set(widths) == {1}
+    for name in expected:
+        torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0, equal_nan=True)
+
+
+def test_workspace_is_reserved_once_for_wider_resident_batch():
+    n, days = 2_510_281, 1745
+    requested = {"adg_strategy_eq_w", "calmar_ratio_w_usd"}
+    resident = reducer.weighted_equity_history_bytes(n, days, requested)
+    workspace = reducer.weighted_equity_workspace_bytes(n, days, requested)
+    assert resident == n * 8 + len(requested) * 8
+    assert workspace == n * 80 + days * 256
+    assert reducer.weighted_equity_workspace_bytes(n, days, []) == 0
+    assert 16 * resident + workspace < 512 * 1024**2
+
+
+@pytest.mark.parametrize("width", [0, -1, True, 1.5])
+def test_invalid_reduction_width_is_rejected(width):
+    samples, kwargs = _inputs([FIXTURE["cases"][0]], device="cpu", dtype=torch.float32, curve="raw_strategy")
+    with pytest.raises(ValueError, match="batch size"):
+        reducer.weighted_equity_from_samples(samples, requested=["adg_strategy_eq_w"],
+                                            candidate_batch_size=width, **kwargs)
