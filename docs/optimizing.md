@@ -45,6 +45,15 @@ pip install -e ".[full]"
 
 ## Session identity and output names
 
+For exponential recency weighting, set `backtest.ew_half_life_days` (for example,
+`180`) and select a metric such as `adg_strategy_eq_ew`. The setting defaults to
+`null`, and existing objectives retain their behavior. CPU and native CUDA use the
+[same daily-return definition](metrics.md#exponential-recency-weighting).
+Objectives and active limits determine legacy `_w` capture: omitting those metrics
+skips their nested analyses and CUDA history/workspace allocation. Half-life and
+definition version are part of evaluation compatibility; change them only with
+fresh evaluation, using previous candidates as seeds if desired.
+
 Optimizer sessions use the [shared session naming format](backtesting.md#backtest-results)
 under `optimize_results/`. Small suites include their actual coin names and the number of
 prepared scenarios. The deterministic setup fingerprint includes effective settings after CLI

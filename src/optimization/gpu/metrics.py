@@ -10,7 +10,9 @@ from __future__ import annotations
 import math
 
 import torch
+from config.ew import validate_ew_half_life_days
 from optimization.gpu.entry_intervals import ENTRY_INTERVAL_NAMES
+from optimization.gpu.exponential_equity import exponential_equity_metrics
 
 from optimization.gpu.model import GAP_BINS
 
@@ -25,6 +27,7 @@ from optimization.gpu.metric_registry import (
     WEIGHTED_RAW_EQUITY_METRICS,
     WEIGHTED_ACCOUNT_EQUITY_METRICS,
     RAW_STRATEGY_EQUITY_METRICS,
+    EXPONENTIAL_EQUITY_METRICS,
     reject_exact_only_gpu_metric_names,
 )
 
@@ -99,6 +102,7 @@ BTC_ACCOUNT_METRICS = frozenset(_BTC_ACCOUNT_METRICS | _BTC_PER_EXPOSURE_METRICS
 # still emit the normal complete metric set; this list governs only which
 # metrics may guide Metal screening or proxy-side limits.
 _GPU_PROXY_METRIC_CANDIDATES = (
+    *sorted(EXPONENTIAL_EQUITY_METRICS),
     "adg_rolling_hmean_strategy_eq",
     "adg_strategy_eq",
     "adg_strategy_eq_w",
@@ -2083,6 +2087,23 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     day_has_fill = out["day_has_fill"]
     active = _daily_series_masks(out["day_min_eq"])
     requested = set(SUPPORTED_METRICS if needed is None else needed)
+    if needed is None and data.get("ew_half_life_days") is None:
+        requested -= EXPONENTIAL_EQUITY_METRICS
+    exponential_requested = requested & EXPONENTIAL_EQUITY_METRICS
+    exponential_metrics = {}
+    if exponential_requested:
+        if validate_ew_half_life_days(data.get("ew_half_life_days")) is None:
+            raise ValueError("Exponential metrics require backtest.ew_half_life_days")
+        supplied = exponential_requested & set(out)
+        for name in supplied:
+            value = out[name].to(torch.float64)
+            if value.shape != (day_end_eq.shape[0],) or bool(torch.isnan(value).any()):
+                raise RuntimeError(f"EW supplied metric {name} is malformed")
+            exponential_metrics[name] = value
+        missing = exponential_requested - supplied
+        if missing:
+            reduced, _metadata = exponential_equity_metrics(out, run, data, missing)
+            exponential_metrics.update(reduced)
     requested_sources = (
         requested
         | {
@@ -2515,6 +2536,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     if requested & RAW_STRATEGY_EQUITY_METRICS and "raw_strategy_day_end_eq" in out:
         objectives.update(_raw_strategy_equity_metrics(out, requested))
     objectives.update(_btc_account_metrics(out, run, data, requested))
+    objectives.update(exponential_metrics)
     if needed is None:
         return objectives
     return {key: value for key, value in objectives.items() if key in requested}
@@ -2522,7 +2544,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
 
 def _raw_strategy_equity_metrics(out, requested):
     """Reduce factual raw daily closes/minima without a per-step history."""
-    names = set(requested) & RAW_STRATEGY_EQUITY_METRICS
+    names = (set(requested) & RAW_STRATEGY_EQUITY_METRICS) - EXPONENTIAL_EQUITY_METRICS
     if not names:
         return {}
     ends = out["raw_strategy_day_end_eq"].to(torch.float64)

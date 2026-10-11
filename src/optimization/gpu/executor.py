@@ -38,6 +38,7 @@ class ReplayResult:
 
     metrics: Mapping[str, float]
     liquidated: bool
+    metadata: Mapping | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class BacktestResult:
     metrics: dict[str, float]
     # The legacy metric-only adapter does not establish terminal-event provenance.
     liquidated: bool | None = None
+    metadata: Mapping | None = None
 
 
 class BacktestQueueFull(RuntimeError):
@@ -286,9 +288,13 @@ class GpuBacktestService:
         results = []
         for entry, row in zip(batch, rows):
             liquidated = None
+            metadata = None
             if isinstance(row, ReplayResult):
                 if not isinstance(row.liquidated, bool):
                     raise RuntimeError("GPU replay liquidation status must be Boolean")
+                metadata = row.metadata
+                if metadata is not None and not isinstance(metadata, Mapping):
+                    raise RuntimeError("GPU replay metadata must be a mapping")
                 liquidated, row = row.liquidated, row.metrics
             if not isinstance(row, Mapping) or not row:
                 raise RuntimeError("GPU replay must return non-empty metric mappings")
@@ -303,7 +309,8 @@ class GpuBacktestService:
                 # Its interpretation remains the canonical metric/scoring owner's job.
                 metrics[name] = number
             results.append(
-                BacktestResult(entry.request.request_id, entry.request.dataset_id, metrics, liquidated)
+                BacktestResult(entry.request.request_id, entry.request.dataset_id, metrics, liquidated,
+                               deepcopy(metadata))
             )
         return results
 

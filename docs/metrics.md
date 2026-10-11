@@ -98,6 +98,61 @@ intra-day volatility. The PnL variants (`*_pnl`) use realized PnL ratios divided
 balance, which often yields lower variance (and fewer negative days), so the ratios can be higher
 and more stable across collateral caps.
 
+## Exponential recency weighting
+
+Set `backtest.ew_half_life_days` to a finite number at least `1` to enable these
+metrics. The default `null` disables them. Half-life is measured in calendar days;
+with `180`, a return 180 days older gets half the weight. One global half-life
+applies to every exchange and scenario and cannot be overridden by a scenario.
+When enabled, `backtest.candle_interval_minutes` must be a positive integer
+dividing a UTC day (1,440 minutes); unsupported intervals fail config preflight.
+
+| Curve | Metric names |
+|---|---|
+| Collateral-agnostic strategy equity | `adg_strategy_eq_ew`, `sharpe_ratio_strategy_eq_ew`, `sortino_ratio_strategy_eq_ew`, `omega_ratio_strategy_eq_ew` |
+| USD account equity | `adg_ew_usd`, `sharpe_ratio_ew_usd`, `sortino_ratio_ew_usd`, `omega_ratio_ew_usd` |
+| BTC account equity | `adg_ew_btc`, `sharpe_ratio_ew_btc`, `sortino_ratio_ew_btc`, `omega_ratio_ew_btc` |
+
+All twelve objectives default to maximizing. They use complete UTC daily
+end-equity returns, including zero-return and no-fill days. The final candle of
+the preceding day must supply the starting equity, and every candle in the
+return day must be present. Warmup and partial boundary days contribute no
+returns. Saved plot/CSV sampling does not change these calculations.
+
+For returns `r_i`, normalized weights are `p_i = w_i / sum(w)`, where
+`w_i = 2^(-age_days_i / half_life_days)`. The newest admitted return is used as
+the age origin; this is equivalent to weighting from the evaluation end after
+normalization and avoids underflow on older scenarios.
+
+- ADG: `exp(sum(p_i * log(1 + r_i))) - 1`.
+- Sharpe: weighted arithmetic mean divided by weighted population standard deviation.
+- Sortino: weighted arithmetic mean divided by `sqrt(sum(p_i * min(r_i, 0)^2))`.
+- Omega: `sum(p_i * max(r_i, 0)) / sum(p_i * max(-r_i, 0))`.
+
+These ratios are daily and unannualized, with a zero return threshold. Denominators
+are floored at `1e-12`; Sharpe/Sortino are clipped to `[-1000, 1000]` and Omega to
+`[0, 1000]`. A flat curve scores zero. Fewer than two admitted returns,
+liquidation, or any nonpositive equity sample makes the affected metrics
+unavailable. Malformed or nonfinite observations fail analysis. Required metrics
+must be available for every selected exchange and scenario; scoring never
+substitutes another currency or silently averages a surviving subset.
+
+EW metadata records definition version, half-life, observation count, effective
+sample size (`sum(w)^2 / sum(w^2)`), first/last admitted return clocks, and
+availability. It is stored outside numeric scoring statistics: `metrics.ew_metadata`
+for CPU results and `metrics.analysis_metadata` for native GPU optimizer results.
+Unavailable native GPU values use `-inf` so the canonical scorer rejects the
+candidate; the sidecar explains why.
+
+Existing `_w` metrics retain their trailing-window definitions and names, and
+default scoring is unchanged. `_ew` is a separate definition and is never an alias
+for `_w`. CPU and native CUDA optimization support EW. CUDA reduces compact daily
+summaries in float64. When objectives and active limits request no legacy `_w`
+metric, optimization skips its ten-window analyses and CUDA omits the associated
+full-history buffers and reduction workspace. Standalone CPU backtests continue
+to publish their legacy metrics. Changing the half-life or EW definition invalidates
+fitness reuse and requires fresh evaluation.
+
 ## Risk/return ratios
 - `sharpe_ratio`: `adg` divided by the standard deviation of daily min-equity returns.
 - `sortino_ratio`: `adg` divided by downside deviation (only negative daily min-equity returns).

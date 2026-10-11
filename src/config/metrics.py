@@ -2,6 +2,10 @@ from collections.abc import Mapping
 from typing import Any
 
 CURRENCY_METRICS = {
+    "adg_ew",
+    "sharpe_ratio_ew",
+    "sortino_ratio_ew",
+    "omega_ratio_ew",
     "adg",
     "adg_per_exposure_long",
     "adg_per_exposure_short",
@@ -53,6 +57,10 @@ CURRENCY_METRICS = {
 }
 
 SHARED_METRICS = {
+    "adg_strategy_eq_ew",
+    "sharpe_ratio_strategy_eq_ew",
+    "sortino_ratio_strategy_eq_ew",
+    "omega_ratio_strategy_eq_ew",
     "backtest_completion_ratio",
     "positions_held_per_day",
     "positions_held_per_day_w",

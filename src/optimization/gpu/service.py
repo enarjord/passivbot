@@ -25,6 +25,8 @@ from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import proxy_batches
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
+    EXPONENTIAL_EQUITY_METRICS,
+    EXPONENTIAL_BTC_EQUITY_METRICS,
     RAW_STRATEGY_EQUITY_METRICS,
     RAW_STRATEGY_DRAWDOWN_CONSUMERS,
     WEIGHTED_RAW_EQUITY_METRICS,
@@ -691,6 +693,12 @@ def _gpu_proxy_execution_checkpoint_contract(
         contract["backtest"]["equity_hard_stop_loss"] = copy.deepcopy(
             backtest_params["equity_hard_stop_loss"]
         )
+    if backtest_params.get("ew_half_life_days") is not None:
+        from config.ew import EW_DEFINITION_VERSION
+        contract["exponential_weighting"] = {
+            "half_life_days": backtest_params["ew_half_life_days"],
+            "definition_version": EW_DEFINITION_VERSION,
+        }
     if btc_prices is not None:
         btc_values = np.ascontiguousarray(
             np.asarray(btc_prices, dtype=np.float64).reshape(-1)
@@ -975,7 +983,8 @@ def mps_requested_metric_features(
     weighted_capture = weighted_equity_capture_metrics(metrics)
     features = {
         "btc_analysis": any(_metric_uses_btc_analysis(metric) for metric in metrics),
-        "btc_intraday_risk": bool(metrics & BTC_INTRADAY_RISK_METRICS),
+        "btc_intraday_risk": bool(metrics & (BTC_INTRADAY_RISK_METRICS | EXPONENTIAL_BTC_EQUITY_METRICS)),
+        "exponential_equity": bool(metrics & EXPONENTIAL_EQUITY_METRICS),
         "equity_balance_diff": bool(metrics & EQUITY_BALANCE_DIFF_METRICS),
         "entry_interval": bool(
             str(strategy_kind).strip().lower() == "trailing_martingale"
@@ -1000,6 +1009,39 @@ def mps_requested_metric_features(
         ),
     }
     return frozenset(name for name, enabled in features.items() if enabled)
+
+
+def _reduce_exponential_output(output, run, data, needed_metrics):
+    if not set(needed_metrics) & EXPONENTIAL_EQUITY_METRICS:
+        return {}, None
+    from optimization.gpu.exponential_equity import exponential_equity_metrics
+    return exponential_equity_metrics(output, run, data, needed_metrics, relative_timestamps=True)
+
+
+def _exponential_metadata_row(metadata, index):
+    def scalar(value):
+        if isinstance(value, dict):
+            return {key: scalar(item) for key, item in value.items()}
+        if hasattr(value, "detach"):
+            value = value.detach().cpu()
+            return value.item() if value.ndim == 0 else value[index].item()
+        return value
+    result = scalar(metadata)
+    for key in ("first_return_end_ms", "last_return_end_ms"):
+        if result[key] < 0:
+            result[key] = None
+    statuses = ("available", "insufficient_observations", "nonpositive_equity", "liquidated")
+    for curve in result["curves"].values():
+        curve["status"] = statuses[curve["status"]]
+    return result
+
+
+def _exponential_metadata_to_host(metadata):
+    if isinstance(metadata, dict):
+        return {key: _exponential_metadata_to_host(value) for key, value in metadata.items()}
+    if hasattr(metadata, "detach"):
+        return metadata.detach().cpu()
+    return metadata
 
 
 def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
@@ -1779,6 +1821,12 @@ class MpsSingleCoinProxy:
         )
 
         self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        from config.ew import validate_ew_half_life_days
+        half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
+        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
+            raise ValueError("Exponential (_ew) metrics require backtest.ew_half_life_days")
+        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and gpu_device(torch) != "cuda":
+            raise ValueError("Exponential GPU metrics require CUDA; use a CPU backend")
 
         from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
@@ -1791,7 +1839,7 @@ class MpsSingleCoinProxy:
         self.btc_analysis_enabled = any(
             _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
         )
-        self.btc_risk_enabled = bool(self.needed_metrics & BTC_INTRADAY_RISK_METRICS)
+        self.btc_risk_enabled = bool(self.needed_metrics & (BTC_INTRADAY_RISK_METRICS | EXPONENTIAL_BTC_EQUITY_METRICS))
         self.equity_balance_diff_enabled = bool(
             self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
         )
@@ -2065,6 +2113,7 @@ class MpsSingleCoinProxy:
             "ts0": self.data["ts0"],
             "n": self.data["n"],
             "strategy_kind": self.strategy_kind,
+            "ew_half_life_days": config["backtest"].get("ew_half_life_days"),
         }
         if self.btc_analysis_enabled:
             self.metrics_data.update(
@@ -2563,6 +2612,12 @@ class MpsMulticoinProxy:
         )
 
         self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        from config.ew import validate_ew_half_life_days
+        half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
+        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
+            raise ValueError("Exponential (_ew) metrics require backtest.ew_half_life_days")
+        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and gpu_device(torch) != "cuda":
+            raise ValueError("Exponential GPU metrics require CUDA; use a CPU backend")
         # Authoritative chronological reductions currently use CUDA's f64
         # working arithmetic. Retained Metal screening keeps its daily proxy
         # reductions until a separately validated Metal reducer is available.
@@ -2583,7 +2638,7 @@ class MpsMulticoinProxy:
         self.btc_analysis_enabled = any(
             _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
         )
-        self.btc_risk_enabled = bool(self.needed_metrics & BTC_INTRADAY_RISK_METRICS)
+        self.btc_risk_enabled = bool(self.needed_metrics & (BTC_INTRADAY_RISK_METRICS | EXPONENTIAL_BTC_EQUITY_METRICS))
         self.equity_balance_diff_enabled = bool(
             self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
         )
@@ -2932,6 +2987,7 @@ class MpsMulticoinProxy:
             "ts0": self.data["ts0"],
             "n": self.data["n"],
             "strategy_kind": self.strategy_kind,
+            "ew_half_life_days": config["backtest"].get("ew_half_life_days"),
         }
         if self.btc_analysis_enabled:
             self.metrics_data.update(
@@ -3267,6 +3323,7 @@ class MpsMulticoinProxy:
                 profile["timings_seconds"]["candidate_materialization"] += (
                     time.perf_counter() - stage_started
                 )
+            ew_metadata = None
             if fused_runner is not None:
                 fused_parameters = np.concatenate(
                     (parameter_matrices["long"], parameter_matrices["short"]),
@@ -3287,6 +3344,10 @@ class MpsMulticoinProxy:
                 recovery_distribution = _mps_strategy_eq_recovery_distribution(
                     raw_output, self.needed_metrics
                 )
+                ew_metrics, ew_metadata = _reduce_exponential_output(
+                    raw_output, self.run, self.metrics_data, self.needed_metrics
+                )
+                raw_output.update(ew_metrics)
                 if profile is not None:
                     synchronize()
                     profile["timings_seconds"]["metric_reduction"] += (
@@ -3296,7 +3357,7 @@ class MpsMulticoinProxy:
                 output = {
                     key: value.cpu()
                     for key, value in raw_output.items()
-                    if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
+                    if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS | EXPONENTIAL_EQUITY_METRICS
                 }
                 if recovery_distribution is not None:
                     recovery_distribution = recovery_distribution.cpu()
@@ -3322,6 +3383,11 @@ class MpsMulticoinProxy:
                     if len(self.sides) == 1
                     else None
                 )
+                if len(self.sides) == 1:
+                    ew_metrics, ew_metadata = _reduce_exponential_output(
+                        raw_side_outputs[self.sides[0]], self.run, self.metrics_data, self.needed_metrics
+                    )
+                    raw_side_outputs[self.sides[0]].update(ew_metrics)
                 if profile is not None:
                     synchronize()
                     profile["timings_seconds"]["metric_reduction"] += (
@@ -3332,7 +3398,7 @@ class MpsMulticoinProxy:
                     side: {
                         key: value.cpu()
                         for key, value in raw_side_outputs[side].items()
-                        if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
+                        if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS | EXPONENTIAL_EQUITY_METRICS
                     }
                     for side in self.sides
                 }
@@ -3499,7 +3565,16 @@ class MpsMulticoinProxy:
             if include_status:
                 from optimization.gpu.executor import ReplayResult
                 liquidated = (output["liq_step"] >= 0).tolist()
-                results.extend(ReplayResult(row, bool(flag)) for row, flag in zip(rows, liquidated))
+                # Transfer the compact sidecar once per cohort, rather than
+                # copying every candidate's batched metadata for each row.
+                if ew_metadata is not None:
+                    ew_metadata = _exponential_metadata_to_host(ew_metadata)
+                results.extend(
+                    ReplayResult(row, bool(flag),
+                                 {"ew": _exponential_metadata_row(ew_metadata, index)}
+                                 if ew_metadata is not None else None)
+                    for index, (row, flag) in enumerate(zip(rows, liquidated))
+                )
             else:
                 results.extend(rows)
             if profile is not None:

@@ -6,6 +6,7 @@ is explicitly separate from a recordable full evaluation.
 """
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 import math
 
@@ -149,6 +150,7 @@ class CandidateEvaluation:
             if missing:
                 raise ValueError(f"result slot is missing required scoring/limit metrics: {sorted(missing)}")
         self._rows = {}
+        self._metadata = {}
         self._complete = False
 
     @property
@@ -173,6 +175,10 @@ class CandidateEvaluation:
         missing = [name for name in slot.metrics if resolve_metric_value(row, name) is None]
         if missing:
             raise RuntimeError(f"backtest result is missing requested metrics: {missing}")
+        if result.metadata is not None:
+            if not isinstance(result.metadata, Mapping):
+                raise RuntimeError("backtest result metadata must be a mapping")
+            self._metadata[result.request_id] = deepcopy(result.metadata)
         row["liquidated"] = result.liquidated
         self._rows[result.request_id] = row
         if len(self._rows) != len(self._slots):
@@ -181,6 +187,13 @@ class CandidateEvaluation:
         for request_id, slot in self._slots.items():
             analyses.setdefault(slot.scenario, {})[slot.exchange] = self._rows[request_id]
         payload = self.scorer.score(self.vector, analyses)
+        if self._metadata:
+            metadata = {}
+            for request_id, slot in self._slots.items():
+                if request_id in self._metadata:
+                    metadata.setdefault(slot.scenario, {})[slot.exchange] = self._metadata[request_id]
+            payload["metrics"]["analysis_metadata"] = metadata
         self._rows.clear()
+        self._metadata.clear()
         self._complete = True
         return CandidateCompletion(self.candidate_id, self.stage, payload)

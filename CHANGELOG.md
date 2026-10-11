@@ -8,6 +8,15 @@ since the latest release tag; these features may already be available when insta
 
 - Improve GPU optimizer throughput by rejecting HSL capacity overflow between replay chunks, spreading CUDA temporal candidates across independent blocks, and sharing weighted equity reduction workspace across the replay batch. Preserve HSL decisions and metric formulas.
 
+- Add opt-in exponential recency weighting for ADG, Sharpe, Sortino and Omega on
+  strategy, USD and BTC equity, configured by `backtest.ew_half_life_days`.
+  Existing `_w` metrics and default scoring remain unchanged. CPU/CUDA optimization
+  skips legacy nested analysis when objectives and active limits do not request it;
+  CUDA also omits its full-history buffers and reduction workspace. EW results
+  include availability/sample metadata and half-life/version fitness compatibility.
+  Enabling EW requires a candle interval dividing a UTC day; invalid intervals
+  are rejected before replay.
+
 - Fix historical candle-resolution seams when retained 1m history begins inside a higher-timeframe bucket. A straddling coarse bucket may now reconstruct the missing pre-boundary minutes when the overlapping exact 1m interval is complete, preserving extrema known to belong to the missing prefix and leaving exact rows unchanged. Genuine internal 1m gaps remain unavailable.
 
 - Reject individual GPU suite candidates with invalid aggregated metrics, matching the CPU optimizer, instead of terminating the entire optimization batch.

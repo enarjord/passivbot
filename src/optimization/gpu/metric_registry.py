@@ -5,6 +5,15 @@ from __future__ import annotations
 import json
 
 import hjson
+from config.ew import EW_METRICS
+
+EXPONENTIAL_EQUITY_METRICS = EW_METRICS
+EXPONENTIAL_RAW_EQUITY_METRICS = frozenset(
+    name for name in EW_METRICS if name.endswith("_strategy_eq_ew")
+)
+EXPONENTIAL_BTC_EQUITY_METRICS = frozenset(
+    name for name in EW_METRICS if name.endswith("_ew_btc")
+)
 
 # Metric-name groups that toggle opt-in MPS proxy features. Keep this metadata
 # Torch-free so backend preflight and ordinary CPU-only installs can prove the
@@ -21,7 +30,7 @@ RAW_STRATEGY_EQUITY_METRICS = frozenset({
         "calmar_ratio", "sterling_ratio", "expected_shortfall_1pct",
         "adg_rolling_hmean", "adg_time_integrated", "positive_gain_participation",
     )
-})
+}) | EXPONENTIAL_RAW_EQUITY_METRICS
 RAW_STRATEGY_DRAWDOWN_CONSUMERS = RAW_STRATEGY_RISK_METRICS | frozenset({
     "calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq",
 })

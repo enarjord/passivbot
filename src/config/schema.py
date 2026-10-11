@@ -136,6 +136,7 @@ def get_template_config():
                 "compress_cache": True,
                 "dynamic_wel_by_tradability": True,
                 "end_date": "now",
+                "ew_half_life_days": None,
                 "exchanges": ["binance", "bybit"],
                 "filter_by_min_effective_cost": False,
                 "gap_tolerance_ohlcvs_minutes": 120,
