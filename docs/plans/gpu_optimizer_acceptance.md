@@ -2361,8 +2361,9 @@ Persistence is promptly flushed but is not a power-loss transaction guarantee;
 unfinished GPU work may repeat after resume without erasing durable Pareto members.
 
 The [final foundation status](#final-foundation-status) records affected
-qualification, completed scoped search comparisons and still-pending old-pipeline
-and delivery gates.
+qualification, completed scoped search comparisons, the accepted bounded
+old-pipeline baseline and completed development delivery. Master integration
+remains a separate decision.
 Earlier `0ebb723823` results remain attributed to that revision: 74 backend/HSL
 host checks, 29 CUDA CLI/service/lifecycle checks and six CPU-entrypoint checks
 pass without skips. They establish their lifecycle and dependency boundaries,
@@ -2597,5 +2598,7 @@ replace the missing remainder. Independent inspection verifies all 53 stored
 records across both strategies and the matched-bootstrap comparisons. This
 limited baseline is accepted for the initial architecture comparison while the
 overall failed outcome remains visible; it establishes no completed TM search,
-equal-budget search quality or universal speedup. Current-head review, CI and
-development integration remain required.
+equal-budget search quality or universal speedup. The
+[final foundation status](#final-foundation-status) records PR #1960's completed
+current-head review, CI and development integration; master integration remains
+a separate decision.
