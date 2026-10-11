@@ -786,6 +786,7 @@ def clean_config(config: dict) -> dict:
     """
     from config.hsl import FIELDS, normalization_template
     from config.migrations.gpu_screening import migrate_gpu_screening
+    from config.migrations.gpu_population import migrate_gpu_population
     from config.migrations.excess_allowance import retire_excess_allowance_mode
 
     source = deepcopy(config or {})
@@ -796,6 +797,8 @@ def clean_config(config: dict) -> dict:
     )
     if isinstance(legacy_gpu, dict) and "successive_halving" in legacy_gpu:
         migrate_gpu_screening(source)
+    if isinstance(legacy_gpu, dict) and "population_size" in legacy_gpu:
+        migrate_gpu_population(source)
     template = normalization_template(get_template_config(), source)
     if "hsl" in source.get("bot", {}):
         portfolio = source["bot"]["hsl"]
@@ -1500,7 +1503,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "BACKEND",
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
-        "help": "Optimizer backend: deap, pymoo, gpu (screening/CPU validation), or experimental gpu_native (CUDA simulations).",
+        "help": "Optimizer backend: deap, pymoo, or gpu (authoritative NVIDIA/CUDA simulations).",
     },
     "optimize.limits": {
         "visible": ["--limits"],
@@ -2206,10 +2209,7 @@ def add_arguments_recursively(
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
             elif full_name in {
                 "optimize.gpu.batch_size",
-                "optimize.gpu.population_size",
                 "optimize.gpu.max_dispatch_candidate_bars",
-                "optimize.gpu.exact_workers",
-                "optimize.gpu.max_pending_exact",
             }:
                 type_ = _gpu_sizing_cli_value
             elif full_name == "optimize.gpu.screening.scenarios":

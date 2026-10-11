@@ -5,8 +5,8 @@ development. CPU code registers prepared scenarios, submits identified backtest 
 and receives futures containing compact metrics and actual simulator liquidation status.
 Device buffers, packing, replay handles
 and residency stay inside the service. No CPU backtest or evolutionary algorithm runs
-there. An experimental optimizer integration is available below; practical simulation-parity
-acceptance and replacement of the legacy GPU backend remain open.
+there. The experimental GPU optimizer uses this interface; independent numerical and
+resource evidence is recorded below.
 The [development evidence map](plans/gpu_optimizer_acceptance.md) records the ownership,
 incremental-admission and optimizer persistence cases separately from outstanding parity
 and cutover requirements.
@@ -151,8 +151,8 @@ notifications; canonical scoring runs on the CPU poller, outside GPU completion 
 At interruption, stop session admission, close/drain the service, then poll completed work
 and flush the caller's stores. Partially completed candidates remain unfinished and may
 be rerun on GPU. Producer failures stop admission and preserve the original exception.
-These helpers do not integrate the service into the optimizer CLI, persist results or
-define content/precision identities for compatible resume. Their caches are run-local.
+The CPU optimizer integrates these helpers and owns persistence and compatible-resume
+identities. Their execution caches are run-local.
 
 ## Canonical prepared-data binding
 
@@ -173,14 +173,12 @@ The registry owns only its added timestamp segments. Nest the service inside its
 register through `registry.register(service)`, prepare plans with `registry.planner`, then
 drive `NativeEvaluationSession` on the CPU. Close/drain the service before closing the
 registry, and keep the original candle/BTC owner alive through both. Registry cleanup
-attempts every owned window and preserves an earlier caller/preparation failure. This
-data bridge does not add optimizer CLI routing, search or saved-fitness compatibility.
+attempts every owned window and preserves an earlier caller/preparation failure. The data bridge owns neither search nor saved-fitness compatibility.
 
-## Experimental native optimizer
+## GPU optimizer
 
-Select `--optimizer-backend gpu_native` or `optimize.backend: "gpu_native"` on an NVIDIA
-CUDA installation. CPU backends and the existing `gpu` screening/validation backend remain
-available. The native path runs GPU simulations for all fresh candidates, starting configs
+Select `--optimizer-backend gpu` or `optimize.backend: "gpu"` on an NVIDIA
+CUDA installation. CPU backends remain available. The GPU path runs GPU simulations for all fresh candidates, starting configs
 and unfinished resumed candidates; it never creates a CPU simulation pool or uses CPU
 backtests to validate GPU fitness. CPU preparation still uses the canonical runtime compiler.
 
@@ -265,24 +263,38 @@ preference, cooldown and rollback apply. Growth also requires observed request d
 device memory headroom. When growth is blocked, the service can probe a smaller width
 using subsequent submitted work; a slower trial rolls back. This prevents deduplication,
 screening or a bounded producer from indefinitely starving the tuner of evidence or
-smaller-width experiments. The retained screening backend keeps its full-batch evidence
-policy. Tuning submits no extra simulations and never changes precision
+smaller-width experiments. Tuning submits no extra simulations and never changes precision
 or search policy. Measurements are run-local; `auto` and `refresh` currently both start
-fresh. Persistent advisory calibration, richer workload classes, dispatch duration/delay,
-residency budgets and further CPU/evolution cadence experiments remain development work. This policy
-does not claim a globally optimal width or a representative optimizer speedup.
+fresh. Persistent advisory calibration, richer workload classes, residency budgets and
+further CPU/evolution cadence experiments remain development work. This policy does not
+claim a globally optimal width or a representative optimizer speedup.
+
+Native CUDA temporal replay separately adapts history-chunk length from completed command
+durations, targeting one second within existing candle/work/history ceilings. It shrinks
+slow chunks and grows only after repeated fast full chunks; partial tails do not train it.
+The controller resets for each physical replay and submits no extra simulations. Replay
+state survives each boundary, and only complete accepted simulations produce results.
+This internal duration control remains active with `tuning_mode: "off"`; that setting fixes
+batch-width and accumulation policies. CPU result-consumption cadence is also independent.
+One candle or a first command can exceed the duration target, so it is not a preemption or
+worst-case cancellation guarantee.
 
 Native checkpoints contain CPU search state and a partially evaluated cohort, without
 service/device handles or shared-memory names. SIGINT stops admission, drains completed
 work and preserves a checkpoint; completed compatible fitness is retained while unfinished
 candidates are rerun on GPU. Checkpoints are replaced atomically at the configured interval
 and at cohort/shutdown boundaries. A crash between a result write and a checkpoint may
-cause some GPU work to be repeated after resume. Perfect replay of scheduling is not required.
+cause some GPU work and result rows to be repeated after resume. Archive/progress counts
+therefore include recorded attempts, rather than guaranteeing unique candidates after a
+hard crash. Native evolution restores the checkpoint's cohort and generation state;
+archive row counts do not determine its generation budget. Perfect replay of scheduling
+is not required, and the result log, Pareto files and checkpoint are not a single transaction.
 An initial zero-result checkpoint can resume before its first completed seed/candidate.
-Version 2 additionally retains compact partial screening evidence separately from fitness
+Version 3 retains compact partial screening evidence separately from fitness
 and distinguishes screening, promoted full evaluation and idle stages. Row-cache loss may
 repeat GPU work, while already checkpointed selection progress is retained. Earlier
-experimental native checkpoints require a fresh run; saved result configs can supply seeds.
+experimental native and screening/validation checkpoints require a fresh run; saved result
+configs can supply seeds.
 
 Saved native fitness has an explicit CUDA execution/precision identity alongside the
 canonical data, policy, source/dependency and verified Rust identities. It cannot reuse CPU
@@ -298,9 +310,8 @@ cannot restore their anchors automatically; use saved configs as seeds for a fre
 Finite anchor and side-enable choices use registered compatible execution views without
 copying candle histories. Numeric candidate values still travel in compact requests.
 Continuous changes to dataset-owned coin patches remain explicit errors, and candidates
-with both sides disabled remain unsupported by the replay. Representative parity,
-specialized/general kernel equivalence, performance acceptance and adaptive tuning remain
-open; the native backend does not supersede the legacy backend yet.
+with both sides disabled remain unsupported by the replay. Measured parity, specialized/general equivalence and resource limits are recorded in the
+acceptance map. They certify the stated cases rather than every possible trajectory.
 
 ## Execution and cleanup
 
@@ -366,11 +377,12 @@ widths within the fixed dispatch ceiling and observes only completely validated 
 results. Width changes occur between dispatches; FIFO dataset choice, cancellation,
 backpressure and fail-stop producer semantics remain independent of tuning.
 
-The shared-account engine now permits 1..64 selected coins. This facade uses that
-implementation internally; legacy optimizer routing is unchanged. Short synthetic
-one-coin measurements show a substantial throughput disadvantage against the old
-single-coin implementation. Kernel ablation and representative measurements are required
-before selecting the final native optimizer's default execution policy.
+The shared-account engine permits 1..64 selected coins and supplies the authoritative
+`gpu` optimizer backend. Retained directional replay is available only through explicit
+diagnostic tooling. Earlier short synthetic one-coin measurements showed a throughput
+disadvantage against that directional implementation; they do not measure the current
+complete optimizer or establish a universal throughput advantage. Compiler specialization
+and adaptive dispatch select execution policy within the native service.
 
 Shared-account EMA/TM coin HSL uses the current position's last factual fill to
 detect when no fills remain in the inclusive lookback. Held exposure then uses a

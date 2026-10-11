@@ -1,17 +1,19 @@
 # Native GPU optimizer acceptance evidence
 
-This is an evidence map for the [development contract](gpu_optimizer_contract.md),
-not a simulator certification or permission to retire the existing `gpu` backend.
-The replacement remains experimental. Test coverage establishes the stated cases;
-it does not establish every feature combination or production search quality.
-Dated decisions and prior measurements are preserved in the
-[decision and progress log](gpu_optimizer_decision_log.md).
+This evidence map records the [development contract](gpu_optimizer_contract.md),
+its implemented foundation and explicit limitations. The CUDA optimizer remains
+experimental. GPU metrics supply fitness directly; independent CPU comparisons
+run outside optimization. Coverage and numerical decisions apply to the documented
+cases, without certifying every configuration, metric or search trajectory.
+Historical measurements remain below and in the
+[decision and progress log](gpu_optimizer_decision_log.md); the
+[final foundation status](#final-foundation-status) identifies the remaining gates.
 
 ## Ownership and lifecycle foundation
 
 | Requirement | Evidence | Scope and remaining limits |
 | --- | --- | --- |
-| CPU search, GPU execution | `gpu_native_backend.py` uses ask/tell and canonical CPU scoring; `gpu.native`, `executor`, `datasets` and `residency` own execution independently of evolution | The service is reusable outside optimization. EMA/TM multicoin adapters share a private strategy-neutral allocation/retry owner with explicit parameter layouts; public legacy names and preparation helpers remain. |
+| CPU search, GPU execution | `gpu_backend.py` uses ask/tell and canonical CPU scoring; `gpu.native`, `executor`, `datasets` and `residency` own execution independently of evolution | The service is reusable outside optimization. EMA/TM multicoin adapters share a private strategy-neutral allocation/retry owner with explicit parameter layouts; public legacy names and preparation helpers remain. |
 | CPU request preparation isolation | `test_native_preparation_isolation.py` | Fresh processes prepare real candidate requests for both strategies with coin HSL enabled/disabled and unstuck enabled. GPU runtime, replay, Torch/CuPy and legacy benchmark imports are forbidden, as are CPU simulations. This does not replace the CPU optimizer/backtest/plot cutover checks. |
 | CPU optimize/backtest/plot isolation | `test_cpu_entrypoint_isolation.py` | Both strategies run actual CPU backtests and generate analysis/fill/equity/config exports plus PNG plots. DEAP and pymoo each start and resume two real CPU workers with GPU imports forbidden at interpreter startup. Tests keep the platform's default multiprocessing context. |
 | Immutable registered inputs | `test_gpu_datasets.py`, `test_gpu_service_acceptance_cuda.py` | Metadata and request parameters are snapshotted; borrowed views reject writes and source arrays remain unchanged after execution. The original owner must keep shared segments immutable and alive until service shutdown. |
@@ -70,13 +72,33 @@ by the contract; this design does not add a transaction journal or perfect searc
 | Resume state | Proxy evolution, exact-validation progress and pending validation metadata | CPU algorithm/cohort, complete fitness and separate partial screening evidence |
 | Tuning | GPU batch and CPU exact-worker coordination | Service width/accumulation and independent CPU consumption cadence |
 
-The gain is fewer authorities and independent ownership, not a promise of fewer files
-while both backends remain. `gpu_native_backend.py` delegates request preparation,
-collection, checkpoints and canonical scoring to focused CPU modules. CUDA code does
-not select survivors, evaluate limits or update Pareto. Cohort NSGA-II/III survival still
-waits for its evaluated offspring, while service completions, replenishment and storage
-proceed within the cohort. Steady-state evolution is a future experiment, not an initial
-acceptance requirement.
+The maintenance improvement is one simulation authority and a clear request
+boundary. The CUDA service owns replay, residency and bounded scheduling; CPU
+modules own preparation, evolution, limits and durable records. `gpu_backend.py`
+delegates request preparation, collection, checkpoints and canonical scoring to
+focused CPU modules. Cohort NSGA-II/III survival still waits for its evaluated
+offspring, while requests, completions and storage proceed within the cohort.
+Steady-state evolution remains a future experiment.
+
+Against development prerequisite `d2804ac79a`, the candidate changes 19 Python
+production files under `src`: 558 lines added and 8,212 removed, a net reduction
+of 7,654. This excludes tests, documentation and Rust shader sources. The bounded
+HSL cache adds kernel code separately. Counts describe scope and support the
+ownership/state comparison; they establish neither parity nor speed.
+
+Legacy GPU population migration runs before template pruning, including the raw
+config cleaner. Explicit `optimize.gpu.population_size` choices survive under the
+general setting when it is unset; new concrete values win visibly, invalid legacy
+values fail and CPU configs retain their existing policy. The focused migration,
+screening, cleaning, config-helper and documentation suite passes 316 checks with
+the source-matched Rust extension. This Python configuration correction leaves
+the qualified CUDA and Rust implementation unchanged.
+
+The remaining checkpoint contains CPU algorithm/cohort state, complete fitness, separate
+partial scenario-selection evidence, evaluation identity and resume configuration.
+Device handles, residency buffers, capacity hints and execution-tuner state stay outside
+it. Direct diagnostic replay and independent CPU/GPU comparison tooling remain available;
+they do not supply optimizer fitness or recreate its removed validation queue.
 
 One active dataset is an intentional simple residency policy. Retaining more scenarios,
 overlapping transfers or routing several GPUs can be implemented behind the service
@@ -574,6 +596,11 @@ resource/performance acceptance remain open.
 
 ## Raw strategy recovery observations
 
+Historical measurement scope, reconciled 2026-10-10: this section records the
+producer repair and its then-observed curve residuals. The later minimum-remainder
+regression and scoped twenty-day decisions below have their own recipes; they
+do not establish that every earlier residual was reproduced and eliminated.
+
 Rust's strategy equity is starting balance plus factual net realized PnL and
 unrealized PnL. Account liquidation clamping must not replace that curve when
 sampling the six strategy recovery distribution metrics. Shared EMA/TM single-
@@ -609,8 +636,9 @@ non-recovery metrics. In one case recovery p95 moves from 13.425105 to 12.422327
 days against CPU's 12.468854. Quantizing that CPU curve to float32 alone gives
 13.434931 days: strict ordering near flat samples can amplify small rounding.
 Another case retains 90 versus 91 fills and a 3.366703 versus 2.608437-day recovery
-p95. Keep those residuals visible and assess optimizer materiality separately;
-general standalone-tool tolerances are unchanged.
+p95. Keep these historical, recipe-specific residuals visible; the later scoped
+recovery decisions are not a claim that this different aligned-curve fixture was
+fixed. General standalone-tool tolerances are unchanged.
 
 ## Current native approximation inventory
 
@@ -632,10 +660,11 @@ An existing reducer or output field does not establish native support.
 | Recovery, weighted volume and weighted equity | Requested per-step GPU histories feed strict recovery and canonical suffix/daily reducers. Recovery-resolution, weighted-volume and weighted-equity tests isolate input definitions, cutoffs, optional capture and dispatch bounds. | Input-definition repairs do not remove float32 curve/trajectory sensitivity, especially strict recovery ordering near plateaus. Full histories remain on device. |
 | Legacy-only fallbacks | Directional single-coin volume/tail helpers and daily peak-recovery helpers still exist. The native service uses shared replay, requires the observed portfolio tail, and rejects exact-only metric names. | Do not count an unused fallback as accepted native behavior or retain the old optimizer merely to preserve its approximations. |
 
-Per-metric policy and measured feasibility/selection evidence remain required for
-acceptance. The all-supported-metric audit checks presence and finite/sentinel
-handling; its undefined policies are explicitly unassessed. Neither this table nor
-finite output alone closes the numerical gate.
+The [scoped decisions below](#practical-numerical-foundation--scoped-decisions)
+record the numerical foundation accepted for the measured recipes. The
+all-supported-metric audit checks presence and finite/sentinel handling; its
+undefined policies remain explicitly unassessed. Neither this table nor finite
+output alone certifies an arbitrary objective, limit or trading trajectory.
 
 ## Native EMA tail and reporting qualification
 
@@ -670,8 +699,9 @@ Unified long/short reports are exactly zero in both engines. Pside reports retai
 their own signals and a separately observed portfolio tail. These residuals are
 accepted for the stated scope fixtures under the practical F32 contract. The
 machine-readable comparison keeps all six fields policy-unassessed because no
-general per-metric tolerances were supplied. Matched objective/limit consequences
-remain a separate numerical gate; these observations do not certify arbitrary
+general per-metric tolerances were supplied. The completed twenty-day companion
+records matched EMA objective/limit consequences in the scoped decisions below.
+Together these observations accept the stated cases; they do not certify arbitrary
 tight limits, identical trajectories, general speedup or optimizer retirement.
 
 Reproduce the capture and reporting controls with the source-verified extension:
@@ -774,49 +804,131 @@ control establishes state continuity and its measured overhead, not optimizer
 throughput, optimal chunk size or a general elapsed-time guarantee. Duration-based
 dispatch tuning and representative larger-suite resource acceptance remain open.
 
-## Work still required before legacy retirement
+## Practical numerical foundation — scoped decisions
 
-A larger native-suite pilot uses 25 coins, both sides, 11,520 minute bars,
-eight candidates and unified HSL (`gpu-service-benchmark`, seed seven, one-day
-lookback and threshold 0.99). Its isolated width-one reference phase does not
-complete a round after more than 35 minutes and is stopped. No completed-phase
-resource, throughput or parity acceptance follows. The active work also prevents
-shutdown completing within six minutes of an interrupt. The tool cancels queued
-requests but joins its running worker; it does not pass an interrupt callback.
-Production optimization supplies its own callback, while an active CUDA kernel
-still cannot observe that callback until it returns. Keep these caller and kernel
-limits distinct. Profile individual completions, reconstruction/retry costs and
-launch geometry before another long all-width comparison; larger busy-HSL and
-long-interruption acceptance remain open.
+Decision date: 2026-10-10. Accept the following measured discrepancies for the
+initial architectural foundation under the practical F32 contract. This is an
+explicit case-by-case decision, not a blanket error allowance or a certificate
+for all 157 metrics. The standalone comparison policies and strict failures
+remain unchanged. Missing outputs, changed metric populations, unsupported
+requests, incorrect risk semantics and rejected overflow attempts remain defects.
 
-1. Finish the code-backed approximation inventory for the actual native shared-account
-   path. In particular assess requested histogram tails, recovery trajectories, partial-day
-   weighting and HSL observation timing using meaningful samples and canonical limit
-   decisions. A refreshed all-157-metric audit has no missing or non-finite outputs in
-   six long shock cases after the lifecycle, side-equity and weighted-ratio corrections.
-   Finite output is not acceptance. An independent recovery investigation also exposed
-   account-equity sampling where raw strategy equity is required; the corrected
-   producer now passes the liquidation regressions above. Assess its residual numerical
-   differences separately. Long-cooldown/history-
-   expiry duration materiality and histogram/trajectory differences still need assessment.
-   Keep strict measurements visible; justify bounded
-   accepted differences
-   by optimization/risk materiality rather than widening gates to hide failures.
-2. Consolidate representative specialized/general metric and risk evidence for both
-   strategies, sides, one-way/hedged accounts, gaps/delisting and scenario suites.
-   Removed shared-account loss envelopes are resolved behavior, not accepted decimal
-   noise. Legacy directional-only approximations need not become native limitations.
-3. Refresh the [cohort measurements](../gpu_cohort_benchmark.md) after the semantic
-   replacements, and measure larger suite resource use. Distinguish cold compilation,
-   warm useful throughput, completed-work tuning evidence and CPU orchestration cost.
-   Architectural improvement is sufficient initially; a marginal speedup is not mandatory.
-4. Preserve and verify CPU optimize, standalone backtests and plot/export dependency
-   isolation while removing superseded validation workers, drift/checkpoint machinery
-   and obsolete controls. Publish that cutover only after the earlier gates pass.
-5. Reconcile delivered user/AI contracts, complete exact-head automatic review and CI,
-   and audit every completion criterion. Development acceptance does not authorize
-   integration into master.
+### Twenty-day exact-entry cohort and its companions
 
+The exact-entry qualification uses revision `98b43a6a38`, Rust fingerprint
+`4ac908e4912a79d428b48149183001b71f4f56d02a8d9d533deef2e0da3810c8`,
+and Python fingerprint
+`839c29228a17054e40088c143ca29ecf47b1b7682796feca0d834614f56956d4`.
+Its 22-check CUDA-enabled group passes without failures, errors or skips;
+this count includes host reducer checks and actual CUDA replay/service checks.
+Reproduce the cohort with the public `gpu-parity` TM-long fixture: two coins,
+28,800 one-minute bars, seed 43, coin HSL threshold `.002`, EMA span `2.5`,
+one-day lookback, five-minute cooldown, enabled unstuck and shocks
+`(0, 1440, .7)` and `(1, 1800, 1.3)`. Candidate zero is the base; neighbors
+`i=1..7` multiply initial quantity by `.8 + .1*i` and the first entry EMA span
+by `.9 + .04*i`.
+
+All 157 returned native values are identical between cold and warm passes;
+CPU/GPU availability/finite/sentinel status classes agree for all eight candidates.
+That status agreement is not numerical acceptance of 153 fields without default
+policies. Each native pass accepts one eight-candidate replay without retries.
+Five entry values per candidate are returned from device reduction; raw histogram
+counts are not transferred.
+
+| Family | Observed error and selection consequence | Scoped decision and limit |
+| --- | --- | --- |
+| Five normal initial-entry interval metrics | Mean/median/max agree exactly; largest p95/p99 errors are 1.78e-15/3.55e-15 hours. All five rankings and the ADG/drawdown/p99 front agree; GPU-selected optima have zero CPU regret. Base p99 is 22.574666666666637 hours in both engines, replacing the old 23.417333333333296-hour bin estimate. | Accept this corrected population/reducer and cohort. Nine literal CPU-equality ceiling flips are interpolation differences below 1.3e-11 seconds; a 23-hour p99 ceiling agrees for all eight. Zero-gap evidence belongs to component controls, since this cohort contains no zero gaps. Histories above 2**24 bars remain rejected. |
+| Six strategy-equity EMA maxima/tails | Largest maximum error is 1.8762e-8; largest tail error is 1.4867e-7. Short reports are zero. All six individual and ADG-paired fronts/rankings agree, with zero CPU regret at selected optima. | Accept these companion residuals together with the separately qualified EMA/TM unified/pside scope controls. Literal equality ceilings can flip (11 maximum and 13 tail comparisons across portfolio/long fields); tested .02/.1/.5 ceilings agree. Do not infer arbitrary tight-limit equality. |
+| Fill-gap p95 | Native returns 151 minutes; CPU returns 150.10, 150.15 or 151. Maximum overstatement is 54 seconds. ADG+gap front changes from CPU [5,7] to GPU [7]; candidate 5 offers 54 seconds lower p95, while 7 gains 1.0178 basis points/day ADG. | Accept the existing 512-bin upper-edge approximation for this foundation, with resolution explicitly visible. Fixed 1/6/24-hour ceilings agree; a 2.51-hour ceiling admits CPU [0,1,2,5] and no GPU candidates. The 54-second observation is not a universal bound. |
+| Recovery p95/p99 | Largest differences are about 1.000008/1.000005 minutes; maximum recovery agrees exactly. ADG+p95 front changes from [4,6,7] to [2,6,7]; ADG+p99 front remains [4,6,7]. | Accept the measured minute-scale residual for this scenario, without assigning its exact origin to percentile ULPs. A 129.6-minute p95 ceiling changes best feasible ADG from candidate 4 to 2, losing 1.0487 basis points/day; at 130.5 minutes both select 6. Fixed 1/5/20-day ceilings agree. Strict curve crossing and intermediate tradeoffs remain sensitive. |
+
+These are real limit/front consequences, including the recovery example's
+16.53% difference relative to candidate 4's CPU daily growth. Foundation
+acceptance therefore does not promise interchangeable tight duration limits.
+It accepts the measured native simulation and declared approximation, with
+standalone CPU comparison available when such a limit matters. The separate
+minimum-remainder regression accepts its approximately three-minute recovery
+p95 residual under a fixture-local five-minute gate; it does not supply a
+universal recovery allowance. No further broad sweep is required solely to
+turn these scoped decisions into global tolerances.
+
+### F32 order-boundary behavior in a six-day TM fixture
+
+Use the public two-coin, both-side TM fixture with 8,640 minute bars, seed 43,
+coin HSL threshold `.002`, span `2.5`, one-day lookback, five-minute cooldown,
+unstuck and the same shocks at 1440/1800. BTC collateral is zero. For a varying
+BTC reporting numeraire, interpolate the seven anchors
+`[50000, 63000, 71000, 43000, 39000, 56000, 48000]` at `6*i/8639`, then multiply
+by `1 + .025*sin(2*pi*i/360)`. The measurement uses revision `0a71833feb`,
+with the same Rust/Python fingerprints as the exact-entry cohort above.
+
+At bar 1592, CPU sizing balance `1042.3523134359966` and native F32 balance
+`1042.349365234375` straddle the `1042.35` boundary at simulated ask `69.49`.
+The recalculated initial-quantity lower bound `balance * .5 * .005 / 69.49`
+lies on either side of `.0375` and rounds to the nearest `.001` quantity step:
+`.038` versus `.037`. At bar 1747, native basis `115.99400329589844`
+and threshold `.0010000746697187424` yield an F32 recursive short-entry
+target `116.11000061035156`; division by the price step rounds onto tick 11611;
+the same native basis/threshold inputs evaluated at higher precision lie above
+that tick and ceil to 11612, matching the CPU tick. The native ladder fits one
+additional rung. Applying the kernel's ordered F32 scalar arithmetic to these
+inputs reproduces the native position size and basis at both first differences. These explain the discrete decisions;
+they do not isolate every upstream balance rounding contribution or attribute
+all subsequent metric differences to just those two events.
+
+HSL RED/restart transitions agree after applying Rust's input-bar-plus-one
+close-time convention. Zero BTC collateral excludes the reporting numeraire
+as the cause of USD sizing divergence; it does not certify every BTC reducer.
+The final result has 62,235 CPU versus 62,246 native fills (+.017675%), USD ADG
+`.004063052279239976` versus `.004071672151410688` (+.212153% relative), and
+worst-drawdown difference `-1.2817e-6`. The largest relative error among its
+40 requested fields is about .228625% for USD Sortino.
+
+Accept this fixture's demonstrated F32-sensitive order-boundary behavior and
+recorded fitness residuals. Do not require identical long-history fill paths
+or introduce a new general tolerance. Its 36 policy-unassessed fields remain
+unassessed; the two strict ADG/fills-day failures remain visible. This single
+candidate supplies no ranking/feasibility guarantee or recovery/fill-gap evidence.
+A future targeted precision improvement at a discrete boundary requires its
+own correctness and performance evidence.
+
+## Final foundation status
+
+The candidate uses an asynchronous CUDA backtest service and CPU-owned
+preparation, scenario screening, scoring, selection and persistence. CPU
+optimization and standalone backtest/plot/export paths remain available. The
+superseded GPU screening/CPU-validation implementation is removed in the
+candidate; development acceptance still requires the comparison and delivery
+gates below.
+
+| Gate | Evidence and current status |
+| --- | --- |
+| Verified implementation and lifecycle | **Complete for the affected qualification.** At `f629b46811`, 38 CUDA-enabled checks and six CPU-entrypoint checks pass without failures, errors or skips. The host phase initially stops at its first GCC shim compilation failure; the second host check is not executed in that attempt. The test-only successor `1239e7bac0` corrects F32 overload resolution and both GCC host checks pass. Its 960 other source files are identical, so the 44 earlier passes carry explicitly; this is not a fresh 46-check execution. The source-identical Rust extension reuses the verified `3d8581225f` build, with 341 Rust tests passed and default build/check success. |
+| Bounded EMA unified HSL cache | **Complete for the measured fixture:** two alternating B1 cache-OFF/ON pairs at `f629b46811` give a median 3.92259× warm replay ratio, with the numerical and resource scope [below](#bounded-ema-unified-hsl-arithmetic-reuse). |
+| Repeated-seed evolving comparison | **Complete for the documented recipe:** eight equal-budget CPU/native jobs, both strategies and two seeds, with 96 complete stored records each; [timing and limits below](#representative-evolving-search-and-common-reference-fronts). |
+| Common-reference front/limit materiality | **Complete for the documented recipe:** four paired-front comparisons use common CPU metrics, with measured tradeoff differences and the completion-only limit scope [below](#representative-evolving-search-and-common-reference-fronts). |
+| Old screening/CPU-validation baseline | **Complete as a bounded comparison:** EMA completes 40 records; TM reaches the 180-second cap with 13 persisted records. Both eight-seed bootstraps match their CPU references; the overall baseline run remains failed. The [bounded baseline](#old-screeningcpu-validation-baseline) retains the actual timeout and partial scope. |
+| Current-head review, CI and development integration | **Pending.** Master integration remains a separate decision. |
+
+The completed numerical-family decisions, service resource measurements and
+feature/lifecycle controls remain evidence for their recipes. They do not require
+another universal metric sweep. The search comparisons must report preparation
+and compilation separately from warm search, actual stored records/fronts and
+material feasibility or selection differences; identical trajectories are not
+required. The old pipeline comparison is a fixed-cohort bootstrap plus bounded evolution
+baseline, not an old full evolving-search quality study.
+
+A historical pre-temporal native-suite pilot used 25 coins, both sides, 11,520
+minute bars, eight candidates and unified HSL (`gpu-service-benchmark`, seed seven,
+one-day lookback and threshold .99). It stopped without a completed width-one
+round after more than 35 minutes; shutdown did not complete within six minutes
+of interruption. It supplies no completed-phase resource or parity acceptance.
+Later temporal-command controls and completed EMA/TM resource measurements below
+supersede treating that pilot as an unmeasured current resource gate. Its latency
+limitation remains: queued cancellation cannot interrupt an active kernel, and
+command-duration tuning is not a worst-case wall-clock bound. Busy many-coin HSL
+and cold compilation can remain expensive. The service benchmark's cancellation
+path and production optimization's interrupt callback are different callers.
 
 ## Completed HSL history expiry
 
@@ -873,6 +985,11 @@ reported without widening general policy. Same-observation correctness does not
 approve the separate unified reconstruction/selection difference.
 
 ## Unified HSL cohort materiality
+
+Historical pre-factual-reconstruction measurement, reconciled 2026-10-10:
+retain the failed values below as evidence for the replacement, not as a current
+unresolved HSL definition failure. The later factual reconstruction and matched
+cohort sections document the outlier resolution.
 
 The reproducible command in [the cohort guide](../gpu_cohort_benchmark.md) measures
 64 matched candidates: EMA/TM, seeds 7/43, 16 candidates each, two coins and both
@@ -1884,6 +2001,13 @@ independent current-head review and required CI and is integrated into developme
 
 ## Granular larger HSL diagnostics
 
+Historical diagnostics, reconciled 2026-10-10: the four-day recovery/fill
+discrepancy below precedes the minimum-remainder correction documented next.
+That correction matches the 1,020-fill reference and reduces recovery p95 error
+to about three minutes. Timing and interruption observations retain their stated
+source/caller scope; later temporal and completed resource measurements add
+separate evidence.
+
 Isolate the base scenario's first public seed-seven EMA candidate from the larger
 service recipe: 25 coins, both sides, quantity `0.01`, EMA span zero `5.0`, unified
 HSL threshold `0.99`, one-day lookback and the ten service-benchmark metrics.
@@ -2050,6 +2174,19 @@ reports an undersized remainder.
 Genuinely undersized remainders
 still trigger full closes; GPU strategy arithmetic remains unchanged.
 
+The repair's domain is narrower than the ordinary quantity rule. For a positive
+clip, a directly computed remainder at least `min_qty` keeps the clip unchanged.
+An undersized remainder can be repaired only when its deficit is at most
+`4 * f64::EPSILON * max(abs(position), abs(clip), abs(min_qty))`. Each operand
+must be finite and its next larger f64 spacing must be strictly smaller than
+`abs(qty_step)`. Corrected nearest step counts must be finite and no greater than
+`2^53` in magnitude; the position count minus the clip count must meet the minimum
+count. The fused residual corrects rounding in the division before that comparison.
+Failure of any repair condition retains the ordinary full-close decision for an
+undersized remainder. These bounds describe this repair, rather than a new
+configuration restriction or a general quantity tolerance. Keep the correction
+local unless another actual caller needs these same semantics.
+
 The corrected reference produces 1,020 fills and exactly matches GPU fill rate,
 completion ratio and HSL time-in-red. ADG absolute error is approximately
 `2.32e-8`, worst-drawdown error `1.01e-7`, and recovery p95 error `0.0020833`
@@ -2130,9 +2267,27 @@ children, and whole-process CPU time does not isolate orchestration. This comple
 resource cohort leaves representative full-search and remaining numerical,
 lifecycle and retirement gates open.
 
-## Current factual cohort and metric-surface observations
+Before further marginal specialization, profile continuation attempts and successes,
+fresh-reconstruction reasons, reconstructed minute/pair counts and composition cost
+on busy workloads. Distinguish moving lookbacks, changed factual inputs/budgets and
+numerical safeguards; preserve those correctness guards. Instrumented measurements
+must identify their overhead and remain separate from uninstrumented timings.
 
-After the minimum-remainder repair, the native factual cohort recipe compares
+Batch-width tuning currently scores throughput and releases usable metrics only
+after a complete physical batch. Its command-duration controller does not bound
+that result latency. Evaluate a soft completion-duration target within the existing
+width policy, including slow single-candidate cases and cold/warm evidence, before
+claiming responsive automatic tuning. Do not add a separate tuning subsystem or
+interpret zero completed evidence windows as convergence. Representative optimizer
+comparisons remain distinct from fixed-cohort ranking and service throughput.
+
+## Historical factual cohort and metric-surface baseline
+
+This baseline is retained as of 2026-10-10. It follows the minimum-remainder
+repair but predates the exact EMA-tail and initial-entry reducers; its old tail/bin
+errors are not current acceptance failures for those replacements.
+
+The native factual cohort recipe compares
 64 candidates: EMA Anchor and Trailing Martingale, seeds 7 and 43, sixteen
 candidates per case, two coins, both sides and 3,000 minute bars. It requests
 22 metrics, unified HSL at threshold 0.002, span 2.5, one-day lookback and
@@ -2164,8 +2319,10 @@ differences or for other objectives.
 The EMA-tail reducer still averages a partially selected logarithmic bin,
 whereas CPU analysis selects the actual largest samples. Its systematic
 downward bias and changes to selected tail objectives remain an acceptance
-item. Initial-entry and fill-gap percentile bins have separate resolution
-limits; matching streamed means or HSL decisions does not prove these tails.
+item at that measurement. The later exact native EMA-tail and initial-entry
+replacements have separate qualification in the numerical-family table above.
+Legacy diagnostic entry bins and current fill-gap bins retain their distinct
+resolution limits; matching streamed means or HSL decisions does not prove tails.
 No general numerical policy is widened. The two-day cohort lacks a CPU
 weighted exponential-fit result, so that field remains unassessed.
 
@@ -2179,3 +2336,261 @@ differs beyond the strict policy in five cases and fills/day in four;
 drawdown and completion pass all six. The other 153 fields per case remain
 policy-unassessed. Presence, finite values and small headline errors do not
 close per-metric acceptance, selection-materiality or full-search gates.
+
+## Authoritative CUDA optimizer cutover
+
+The existing `gpu` backend uses GPU-only ask/tell execution in the candidate.
+The intermediate backend, CPU validation pools/queues, drift probes, screened-seed
+policy, exact-worker tuner and obsolete calibration state are removed. Canonical
+GPU configuration retains batch width, dispatch work ceiling, tuning mode,
+checkpoint interval and scenario screening. Population and evolution remain
+CPU-owned. GPU checkpoint version 3 rejects pre-cutover fitness. Complete results
+and partial screening evidence remain distinct; effective unsupported collateral
+or strategies fail before device preparation, including suite overrides.
+
+No CPU backtest or fallback supplies GPU optimizer fitness, including seeds and
+resume. Independent parity tools remain available; native CUDA service replay is
+the comparator default and legacy replay is an explicit diagnostic option. CPU
+backtest/plot/export and DEAP/pymoo optimization remain dependency-isolated.
+Persistence is promptly flushed but is not a power-loss transaction guarantee;
+unfinished GPU work may repeat after resume without erasing durable Pareto members.
+
+The [final foundation status](#final-foundation-status) records affected
+qualification, completed scoped search comparisons and still-pending old-pipeline
+and delivery gates.
+Earlier `0ebb723823` results remain attributed to that revision: 74 backend/HSL
+host checks, 29 CUDA CLI/service/lifecycle checks and six CPU-entrypoint checks
+pass without skips. They establish their lifecycle and dependency boundaries,
+not universal numerical parity or search quality.
+
+### Bounded EMA unified HSL arithmetic reuse
+
+Supported CUDA EMA Anchor unified HSL can reuse disposable per-pair factual
+reconstruction and controller summaries. It preserves the full retained episode
+and uses the current budget. Factual ambiguity, unsupported or unproven clipping,
+identity changes, terminal evaluation, cache loss and numerical decision ambiguity
+return to independent fresh composition. Supported rolling-window clipping can
+reuse certified flat-prefix repair; cached arithmetic never retains a risk permission. Physical event
+ownership is invalidated before fresh composition writes logical rows.
+
+One owner is counted per candidate, capped at 64 MiB within the existing 512 MiB
+history/scratch budget alongside compiled temporal state, factual records and
+requested reductions. If optional cache prevents admission or factual growth
+crosses its cap, scalar replay is remeasured and reconsidered without accepting
+rejected attempts. Metal, nonfactual replay, coin/position-side-only or disabled
+HSL and TM defaults do not enable this owner. This creates no public cache setting
+and changes no HSL contract.
+
+At `f629b46811`, the public synthetic EMA Anchor unified-HSL anchored/busy recipe
+uses two coins, long positions, 3,000 minute bars, one-day lookback, 2.5-minute EMA
+span and .99 threshold. Two alternating one-candidate cache-OFF/ON pairs take
+22.78125/5.79747 seconds and 22.79159/5.82062 seconds, a median paired warm replay
+ratio of 3.92259×. Source, loaded extension and prepared input identities agree
+throughout. One fresh CPU preflight is separate; timed replay contains no CPU
+backtests, compilation, profiling or retries. Both variants use one GPU thread per threadgroup
+and B1 admission. Adaptive temporal partitioning naturally differs (30 fresh
+versus 24 cache chunks); this measures the production policy rather than identical
+fixed dispatch shapes.
+
+The 151 non-EMA values and liquidation status agree exactly. All six EMA metrics
+meet the existing combined absolute/relative policy: maximum absolute error is
+4.88217e-9 and maximum tail error is 4.29281e-10. The largest relative error is
+5.83245e-5, above the relative-only 3e-5 threshold, with the absolute term admitting
+that small value. This accepts the stated fixture, without widening tool policy
+or certifying unassessed fields.
+
+The cache owner uses 152,672 bytes. Total accounted history/scratch increases from
+1,240,952 to 1,393,672 bytes, including a further 48 bytes of temporal state. Peak
+Torch-allocated memory increases from 1,194,496 to 1,347,584 bytes; Torch-reserved
+memory is 2 MiB in both variants. These are the measured accounting and Torch
+scopes, not total driver VRAM. First useful warmup takes 77.265 seconds OFF and
+95.634 seconds ON; compilation or disk-load aggregates are 49.752 and 88.030
+seconds. Those intervals overlap startup and retries and must not be summed.
+There is no cold-start speedup claim. Any warm gain belongs to this fixture,
+not every HSL scope or GPU/CPU workload. The unadopted short-EMA experiment is
+not delivered.
+
+F32 order boundaries, 512-bin fill-gap resolution, strict recovery crossings and
+literal equality limits retain their case-scoped numerical decisions. Fields
+without comparison policies remain unassessed. Resource observations apply to
+the measured recipes and sampling methods, not every workload.
+
+
+### Reproducing the anchored/busy warm input
+
+The measured input is derived from the repository's deterministic
+`tools.gpu_parity.fixture_inputs` API as follows; it is not the unchanged default
+fixture. Use the tested revision and a source-matched Rust extension. The helper
+below performs configuration/data preparation only.
+
+```python
+from copy import deepcopy
+import numpy as np
+from config import prepare_config
+from tools.gpu_parity import build_parser, fixture_inputs
+
+args = build_parser().parse_args([
+    "--fixture", "ema_anchor", "--sides", "long", "--coins", "2",
+    "--bars", "3000", "--seed", "43", "--hsl", "unified",
+    "--hsl-red-threshold", ".99", "--hsl-ema-span-minutes", "2.5",
+    "--hsl-lookback-days", "1",
+])
+config, candles, markets, btc, timestamps = fixture_inputs(args)
+config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = .5
+strategy = config["bot"]["long"]["strategy"]["ema_anchor"]
+strategy.update(
+    base_qty_pct=.1, ema_span_0=60., ema_span_1=120., offset=.001,
+    offset_psize_weight=0., offset_volatility_1m_weight=0.,
+    offset_volatility_1h_weight=0., entry_double_down_factor=0.,
+)
+# HLCV order is high, low, close, volume; COIN01 churns throughout.
+candles[:, :, :3] = 100.
+candles[:, :, 3] = 1000.
+candles[:, :, 0] = 105.
+candles[:, :, 1] = 95.
+candles[:, :, 2] = (100. + np.arange(3000) % 2)[:, None]
+config = prepare_config(config, verbose=False, target="canonical", runtime=None)
+ordered_coins = sorted(k for k in markets if k != "__meta__")
+config["backtest"]["coins"] = {"binance": ordered_coins}
+
+# COIN00 uses the held-entry strategy and one controlled initial opening.
+anchor = deepcopy(config["bot"]["long"]["strategy"]["ema_anchor"])
+anchor.update(base_qty_pct=1., offset=.01)
+candles[:, 0, :3] = 100.
+candles[70, 0, 0] = 102.
+candles[70, 0, 1] = 98.
+config["coin_overrides"] = {
+    "COIN00": {"bot": {"long": {"strategy": {"ema_anchor": anchor}}}}
+}
+config["live"]["hedge_mode"] = False
+config["live"]["approved_coins"]["short"] = []
+config = prepare_config(config, verbose=False, target="canonical", runtime=None)
+config["backtest"]["coins"] = {"binance": ordered_coins}
+```
+
+Keep all other fixture configuration, market settings, timestamps and BTC prices
+unchanged. A separate CPU preflight checks genuine early COIN00 entry, continuous
+anchor exposure over bars 1600–2449 (850 bars), no scope-flat or empty-retained
+exposed bars, and frequent COIN01 fills including at least 100 after lookback.
+All HSL trigger/restart counts and time in RED are zero for this recipe.
+
+For CUDA replay, construct `MpsMulticoinProxy` with the arrays above,
+`exchange="binance"`, `batch_size=1`, `factual_hsl=True`,
+`max_dispatch_candidate_bars=500_000_000` and every name in
+`validate_gpu_metric_names(SUPPORTED_METRICS)` (157 at this revision). Set
+`hsl_native_cache_enabled` on the actual proxy runner to OFF or ON before its
+first replay; this is an internal experimental ablation, not public configuration.
+Use `evaluate_results([{}])` to retain the configured candidate.
+
+Use four fresh processes in OFF/ON/ON/OFF order. In each, first run untimed warmup
+and a separate profiled diagnostic, verify their outputs match, then disable
+profiling. Synchronize CUDA before and after one timed warm replay, verifying
+no additional shader compilation/load or factual retry, and the same outputs.
+Compare all 157 metric/status payloads with their documented sentinel handling:
+151 non-EMA values/status must be exact; for each of the six finite EMA values,
+require `abs(actual - reference) <= 2e-6 + 3e-5 * abs(reference)` with the first
+OFF result as reference. This fixture-specific comparison changes no tool policy. Record cache/history bytes and Torch peaks separately from
+startup. This reproduces the comparison method, not a guaranteed device timing;
+CPU preflight does not occur inside the timed GPU replay.
+
+### Representative evolving search and common-reference fronts
+
+At `f629b46811`, both strategies complete CPU legacy and native CUDA NSGA-II
+searches for seeds 7 and 43. The public synthetic recipe has 12 coins, both sides,
+5,760 minute bars/four days, base/even/odd scenarios and six variable strategy
+genes. Each run uses population 32 and three generations: 96 unique, complete
+fitness records, 768 records across eight runs. Paired initial populations,
+effective data/config identities and work budgets match. All records retain finite consumed metrics for three
+scenarios, canonical objectives and complete fitness; all 98
+persisted Pareto members and final checkpoints match their stored evaluations.
+GPU optimization forbids CPU backtest/evaluator/pool paths. Separate common-front
+CPU diagnostics reuse 57 actual CPU-search records and evaluate 21 unseen union
+candidates once, after optimization. They do not supply native fitness.
+
+HSL is disabled in this throughput recipe. The only limit is completion ratio
+at least .99; all records pass. This establishes complete-suite processing,
+not risk-threshold-adjacent feasibility or HSL-on evolving throughput. Qualified
+interruption/resume tests remain separate from these completed searches.
+
+| Pair | CPU/native optimizer seconds | CPU/native later 64 records, seconds | Later CPU/native elapsed ratio |
+| --- | --- | --- | --- |
+| EMA, seed 7 | 11.416 / 23.955 | 5.458 / 13.342 | .40904 |
+| EMA, seed 43 | 14.001 / 24.095 | 7.089 / 13.324 | .53208 |
+| TM, seed 7 | 49.765 / 87.315 | 30.630 / 24.227 | 1.26428 |
+| TM, seed 43 | 51.648 / 42.197 | 32.376 / 24.667 | 1.31252 |
+
+Four CPU workers are faster for EMA here; native TM is about 1.26–1.31 times
+faster in the later-generation segment. Those segments contain no observed shader
+construction. Physical retry counts are unavailable without profiling, so they
+are not described as retry-free kernel timings. Suite preparation takes .26–.32
+seconds. Native shader construction/load takes .146/.151 seconds for EMA,
+45.773 seconds for TM seed 7 and .188 seconds for TM seed 43. These overlapping
+startup intervals are not summed or subtracted to invent a pure kernel benchmark.
+This is a bounded architecture comparison, without universal acceleration or
+identical-trajectory requirements.
+
+| Pair | CPU/native stored front sizes | Common-union nondominated | Native members dominated on common CPU | CPU/native additive-epsilon regret |
+| --- | --- | --- | --- | --- |
+| EMA, seed 7 | 1 / 1 | 1 | 0 | 0 / 0 |
+| EMA, seed 43 | 1 / 1 | 2 | 0 | 2.775689e-4 / 1.026493e-5 |
+| TM, seed 7 | 25 / 29 | 30 | 8 | 2.672427e-5 / 6.385947e-5 |
+| TM, seed 43 | 23 / 17 | 24 | 4 | 2.457968e-4 / 2.000055e-5 |
+
+Regret uses canonical min-directed, unnormalized ADG/drawdown coordinates over
+the paired front union; it is not scalar profitability or a universal quality
+score. EMA seed 7 selects the same candidate. At seed 43, GPU-selected ADG
+.00721205/drawdown 7.80821e-5 and CPU-selected ADG .00693448/drawdown 6.78172e-5
+are different nondominated tradeoffs under common CPU metrics. TM front membership
+changes: eight of 29 and four of 17 native members become dominated on common
+CPU scoring; native regret is larger at seed 7 and smaller at seed 43.
+
+No front feasibility flips occur under the configured completion limit. The
+largest native-front ADG discrepancy is 1.03485e-4, about 1.035 basis points/day;
+the worst TM examples differ by .3982% and .3265% relative to CPU ADG. Maximum
+front drawdown discrepancy is 9.03750e-6, about .09038 basis points absolute.
+These selection consequences are accepted for the initial foundation on this
+recipe under the practical numerical policy, without widening comparator
+thresholds. Saved outcomes do not establish the arithmetic cause of every
+residual. They do not certify arbitrary tight limits, unseen front candidates,
+HSL-on evolution or identical search trajectories. The bounded old-pipeline
+baseline and current-head delivery gates remain separate in the final status.
+
+
+### Old screening/CPU-validation baseline
+
+The old `gpu` pipeline at development prerequisite `d2804ac79a` performs genuine
+F32 GPU screening followed by required Rust CPU validation. For each strategy,
+eight candidate hashes are selected in sorted order from the shared initial
+32-candidate seed-7 population of the final comparison. Inputs use the same public
+12-coin, 5,760-minute, both-side, three-scenario HSL-disabled throughput recipe.
+All 16 matched-bootstrap records agree exactly with their corresponding final
+CPU seed-7 references, including canonical objectives and consumed scenario
+metrics. The subsequent bounded evolution requests 32 normal CPU validations with
+`validate_per_generation=1`. The minimum validation count and original drift
+policy remain enabled; they are not suppressed to obtain a short measurement.
+
+| Old pipeline | Actual completed coverage | Full elapsed scope | First stored result | Shader construction/load |
+| --- | --- | --- | --- | --- |
+| EMA Anchor | 40 records: eight matched seeds plus 32 evolution validations | 146.118 seconds, complete | 72.280 seconds | Two events, 59.311 seconds |
+| Trailing Martingale | 13 persisted records: eight matched seeds plus five evolution validations; 14 CPU submissions | 180.322 seconds, timed out | 132.465 seconds | Two events, 108.108 seconds |
+
+EMA matched-bootstrap completion is 72.718 seconds; its remaining 32 validations
+take 73.358 seconds. TM completes its matched bootstrap by 135.340 seconds and
+stores its last completed evolution record at 170.837 seconds, leaving one
+submitted validation unfinished. Full pipeline time includes
+preparation, startup, shader compilation/cache loading, CPU-worker construction,
+GPU screening, CPU validation and storage. These intervals overlap and are not
+summed or divided by the final 96-record run to claim equal-budget quality or
+speedup. This is fixed-cohort bootstrap plus bounded evolution evidence, not a
+full old optimizer search study. No retry-free or pure-kernel claim is made.
+
+The TM timeout remains a failed terminal outcome: it does not have a completed
+40-record measurement, terminal resource/final-input accounting or successful
+final-checkpoint verification. It does not prove completion of the 32-validation
+drift window. Its 13 saved partial records provide bounded evidence; they do not
+replace the missing remainder. Independent inspection verifies all 53 stored
+records across both strategies and the matched-bootstrap comparisons. This
+limited baseline is accepted for the initial architecture comparison while the
+overall failed outcome remains visible; it establishes no completed TM search,
+equal-budget search quality or universal speedup. Current-head review, CI and
+development integration remain required.

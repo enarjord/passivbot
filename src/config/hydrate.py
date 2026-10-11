@@ -266,9 +266,9 @@ def normalize_optimizer_settings(
         spec.to_config() for spec in extract_objective_specs(result)
     ]
     backend = str(result["optimize"].get("backend", "pymoo") or "pymoo").strip().lower()
-    if backend not in {"deap", "gpu", "gpu_native", "pymoo"}:
+    if backend not in {"deap", "gpu", "pymoo"}:
         raise ValueError(
-            "optimize.backend must be one of ['deap', 'gpu', 'gpu_native', 'pymoo']; "
+            "optimize.backend must be one of ['deap', 'gpu', 'pymoo']; "
             f"got {result['optimize'].get('backend')!r}"
         )
     result["optimize"]["backend"] = backend

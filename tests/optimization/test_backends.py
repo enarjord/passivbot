@@ -14,7 +14,6 @@ from config_utils import (
 )
 from optimization.backends import get_backend_runner
 from optimization.backends import run_gpu_backend
-from optimization.backends import run_gpu_native_backend
 from optimization.backends.deap_backend import (
     DEFAULT_DEAP_POPULATION_SIZE,
     _clone_evaluated_individual,
@@ -71,13 +70,11 @@ def test_format_config_accepts_gpu_backend():
     out = format_config(current, verbose=False)
 
     assert out["optimize"]["backend"] == "gpu"
-    assert out["optimize"]["gpu"]["population_size"] is None
     assert out["optimize"]["gpu"]["batch_size"] is None
     assert out["optimize"]["gpu"]["max_dispatch_candidate_bars"] is None
-    assert out["optimize"]["gpu"]["auto_lean_parallelism"] is True
-    assert out["optimize"]["gpu"]["seed_bootstrap"] == {
-        "max_exact": 128,
-        "mode": "auto",
+    assert set(out["optimize"]["gpu"]) == {
+        "batch_size", "max_dispatch_candidate_bars", "tuning_mode",
+        "checkpoint_interval_seconds", "screening",
     }
 
 
@@ -108,14 +105,14 @@ def test_native_backend_config_and_registry_remain_lazy(monkeypatch):
     import builtins
     original = builtins.__import__
     def guarded(name, *args, **kwargs):
-        if name in {"torch", "cupy", "optimization.backends.gpu_native_backend"}:
+        if name in {"torch", "cupy", "optimization.backends.gpu_backend"}:
             pytest.fail("CPU/config paths must not initialize optional native GPU runtime")
         return original(name, *args, **kwargs)
     monkeypatch.setattr(builtins, "__import__", guarded)
     current = copy.deepcopy(get_template_config())
-    current["optimize"]["backend"] = "GPU_NATIVE"
-    assert format_config(current, verbose=False)["optimize"]["backend"] == "gpu_native"
-    assert get_backend_runner("gpu_native") is run_gpu_native_backend
+    current["optimize"]["backend"] = "GPU"
+    assert format_config(current, verbose=False)["optimize"]["backend"] == "gpu"
+    assert get_backend_runner("gpu") is run_gpu_backend
 
 
 def test_optimizer_backend_cli_explicit_deap_matches_default():

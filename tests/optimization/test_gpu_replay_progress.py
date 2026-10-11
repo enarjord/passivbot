@@ -90,7 +90,7 @@ def test_generation_phase_and_kernel_counts_survive_nested_interruption(caplog):
                     assert work_scope() == "gen=0 phase=seed_proxy"
                     raise KeyboardInterrupt
             assert work_scope() == "gen=7 phase=gpu_proxy"
-    assert work_scope() == "phase=gpu_proxy"
+    assert work_scope() == "phase=gpu_backtest"
     assert len(ticks) == 3
     assert "history_chunk_bars=8192" in caplog.text
     assert "kernel_dispatches=1" in caplog.text and "kernel_dispatches=2" in caplog.text
@@ -108,88 +108,10 @@ def test_optional_progress_callback_failure_does_not_abort_replay(caplog):
     assert "private detail" not in caplog.text
 
 
-def test_generation_eta_is_scoped_bounded_and_unknown_on_overrun():
-    from optimization.progress import GenerationMilestone
-
-    tick = [0.0]
-    estimate = GenerationMilestone(clock=lambda: tick[0])
-    assert estimate.eta() == "unknown"
-    estimate.begin()
-    tick[0] += 100
-    assert estimate.eta() == "unknown"  # no invented first-generation estimate
-    estimate.finish()
-    estimate.begin()
-    tick[0] += 30
-    assert estimate.eta() == "1m10s"
-    tick[0] += 100
-    assert estimate.eta() == "unknown"
-    estimate.finish()
-    assert estimate.eta() == "unknown"  # CPU admission wait isn't a GPU generation
-    for _ in range(8):
-        estimate.begin()
-        tick[0] += 60
-        estimate.finish()
-    assert len(estimate.completed) == 5
-    estimate.begin()
-    tick[0] += 10
-    assert estimate.eta() == "50s"
 
 
-def test_exact_progress_distinguishes_finished_jobs_behind_a_straggler():
-    from optimization.progress import ExactValidationProgress
-
-    class Job:
-        finished = False
-
-        def ready(self):
-            return self.finished
-
-        def get(self):
-            pytest.fail("progress must not consume a result")
-
-    tick = [0.0]
-    progress = ExactValidationProgress(clock=lambda: tick[0])
-    first, second = Job(), Job()
-    progress.submitted(first)
-    progress.submitted(second)
-    second.finished = True
-    tick[0] = 60
-    snapshot = progress.snapshot()
-    assert snapshot["exact_unfinished"] == 1
-    assert snapshot["exact_ready_unrecorded"] == 1
-    assert snapshot["oldest_exact_age"] == "1m00s"
-    assert snapshot["eta_next_exact"] == "unknown"
-    # Completion latency comes from workers, not this late collector's clock.
-    for _ in range(4):
-        sample = Job()
-        progress.submitted(sample)
-        progress.completed(sample, worker_seconds=100, queue_seconds=20)
-    assert progress.snapshot()["eta_next_exact"] == "1m00s"
-    tick[0] = 121
-    assert progress.snapshot()["eta_next_exact"] == "unknown"
-    first.finished = True
-    assert progress.snapshot()["eta_next_exact"] == "0s"
-    progress.completed(first, worker_seconds=100, queue_seconds=0)
-    progress.completed(second, worker_seconds=100, queue_seconds=0)
-    assert progress.snapshot() == {}
 
 
-def test_exact_progress_rejects_invalid_timing_and_keeps_a_bounded_window():
-    from optimization.progress import ExactValidationProgress
-
-    progress = ExactValidationProgress()
-    for work, wait in [(float("nan"), 0), (1, float("inf")), (0, 1), (1, -1)]:
-        result = object()
-        progress.submitted(result)
-        progress.completed(result, worker_seconds=work, queue_seconds=wait)
-    assert not progress.latencies
-    for _ in range(100):
-        result = object()
-        progress.submitted(result)
-        progress.completed(result, worker_seconds=1, queue_seconds=2)
-    assert len(progress.latencies) == 24
-    progress.reset_estimate()
-    assert not progress.latencies
 
 
 def test_phase_elapsed_resets_without_increasing_console_cadence(monkeypatch, caplog):

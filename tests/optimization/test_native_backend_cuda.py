@@ -34,7 +34,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         # Suites share eligibility across sides; zero exposure disables trading.
         coins = list(config["backtest"]["coins"]["binance"])
         config["live"]["approved_coins"] = {side: list(coins) for side in ("long", "short")}
-    config["optimize"].update(backend="gpu_native", population_size=4, iters=8, seed=12)
+    config["optimize"].update(backend="gpu", population_size=4, iters=8, seed=12)
     if generated_seed:
         import session_artifacts
         config["optimize"]["seed"] = None
@@ -189,7 +189,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             signal.raise_signal(signal.SIGINT)
     monkeypatch.setattr(optimize.ResultRecorder, "record", record_and_interrupt)
     if screening and interrupted:
-        from optimization.backends.gpu_native_backend import _Search
+        from optimization.backends.gpu_backend import _Search
         checkpoint = _Search.checkpoint
         def checkpoint_and_interrupt(self, **kwargs):
             nonlocal emitted
@@ -213,7 +213,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     manifest_bytes = (directory / "session.json").read_bytes()
     manifest = json.loads(manifest_bytes)
     assert manifest["seed"] == 12
-    assert manifest["setup"]["config"]["optimize"]["backend"] == "gpu_native"
+    assert manifest["setup"]["config"]["optimize"]["backend"] == "gpu"
     assert manifest["starting_configs"]["count"] == 2
     assert manifest["setup"]["starting_configs"] == manifest["starting_configs"]
     assert "setup-" in directory.name and "run-" in directory.name

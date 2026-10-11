@@ -172,21 +172,17 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
 
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
-    from types import SimpleNamespace
     from copy import deepcopy
 
     torch = pytest.importorskip("torch")
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip("GPU unavailable")
     from suite_runner import SuiteScenario, apply_scenario
-    from optimization.backends.gpu_backend import (
-        _evaluate_gpu_suite_proxies, _GPU_SUITE_METRICS_KEY,
-    )
     from optimization.gpu.service import MpsMulticoinProxy
 
     cfg, candles, mss, btc, ts = _fixture(side, "trailing_martingale", 0.0, 2)
     cfg["live"]["approved_coins"] = {s: ["BTC", "ETH"] for s in ["long", "short"]}
-    cache, scenarios, proxies = {}, [], []
+    cache, proxies = {}, []
     interrupt_check = lambda: None
     for label, buffer in [("zero", 0.0), ("buffered", 0.0015), ("same_buffer", 0.0015)]:
         scenario = SuiteScenario(
@@ -205,31 +201,15 @@ def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
             prepared_data_cache=cache, interrupt_check=interrupt_check,
         )
         proxies.append(proxy)
-        scenarios.append((SimpleNamespace(label=label), [("bybit", proxy)], {}))
     assert proxies[0].data is not proxies[1].data
     assert proxies[1].data is proxies[2].data
     assert proxies[0].suite_batch_key() != proxies[1].suite_batch_key()
     assert proxies[1].suite_batch_key() == proxies[2].suite_batch_key()
 
-    class Suite:
-        @staticmethod
-        def score_scenario_results(results):
-            fills = tuple(result.metrics["stats"]["fills_per_day"]["mean"] for result in results)
-            return dict(objectives=fills, unpenalized_objectives=fills,
-                        constraint_violation=0.0, suite_metrics=fills)
-
-    candidates = [{}, {}]
-    separate = _evaluate_gpu_suite_proxies(
-        Suite(), scenarios, candidates, batch_compatible_scenarios=False,
-    )
-    grouped = _evaluate_gpu_suite_proxies(
-        Suite(), scenarios, candidates, batch_compatible_scenarios=True,
-    )
-    assert grouped == separate
-    for result in grouped:
-        fills = result[_GPU_SUITE_METRICS_KEY]
-        assert fills[0] > 0.0
-        assert fills[1:] == (0.0, 0.0)
+    results = [proxy.evaluate([{}, {}]) for proxy in proxies]
+    assert results[1] == results[2]
+    assert all(row["fills_per_day"] > 0.0 for row in results[0])
+    assert all(row["fills_per_day"] == 0.0 for row in results[1])
     assert cfg["backtest"]["limit_order_fill_buffer_pct"] == 0.0
 
 

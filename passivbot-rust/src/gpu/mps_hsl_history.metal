@@ -58,6 +58,20 @@ inline float hsl_pair_sum_value(thread const HslPairSum& sum) {
     return sum.value + sum.correction;
 }
 
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+// Disposable reconstruction arithmetic. Cache loss always permits a complete
+// independent reconstruction from execution facts.
+struct HslNativePairCursor {
+    HslPairSum inventory;
+    HslPairSum cash;
+    float size;
+    float basis;
+    float scale;
+    int consumed;
+    int has_increase;
+};
+#endif
+
 inline int hsl_pair_slot(thread const HslPairFacts& facts, int logical) {
     return (facts.head + logical) % facts.capacity;
 }
@@ -82,6 +96,9 @@ inline bool hsl_reconstruct_pair(
     thread const HslPairFacts& facts, float current_size, float current_basis,
     bool short_side, float quantity_step, device HslPairEvent* events,
     thread HslPairHistory& history
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+    , thread HslNativePairCursor* cursor = nullptr
+#endif
 ) {
     float direction = short_side ? -1.0f : 1.0f;
     if (facts.capacity < 1 || facts.count < 0 || facts.count > facts.capacity
@@ -145,6 +162,14 @@ inline bool hsl_reconstruct_pair(
     }
     if (current_size == 0.0f && size != 0.0f && facts.count > 0)
         history.flat_correction_minute = hsl_pair_minute(facts, facts.count - 1);
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+    if (cursor != nullptr) {
+        cursor->inventory = inventory; cursor->cash = cash;
+        cursor->size = size; cursor->basis = basis; cursor->scale = scale;
+        cursor->consumed = facts.count;
+        cursor->has_increase = facts.count > 0 && !only_reductions;
+    }
+#endif
     return true;
 }
 

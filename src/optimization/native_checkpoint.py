@@ -9,7 +9,7 @@ from copy import deepcopy
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 
 
-CHECKPOINT_VERSION = 2
+CHECKPOINT_VERSION = 3
 
 
 def checkpoint_config(config, contract):
@@ -21,7 +21,7 @@ def checkpoint_config(config, contract):
 
 
 def validate_checkpoint(state, config):
-    if (not isinstance(state, dict) or state.get("backend") != "gpu_native"
+    if (not isinstance(state, dict) or state.get("backend") != "gpu"
             or state.get("version") != CHECKPOINT_VERSION):
         raise ValueError("GPU native resume requires a compatible native checkpoint")
     if state.get(CONTRACT_KEY) != build_evaluation_contract(config):
@@ -63,7 +63,13 @@ def load_checkpoint(path, config):
     if path is None:
         raise ValueError("GPU native resume requires a checkpoint path")
     with open(path, "rb") as source:
-        return validate_checkpoint(pickle.load(source), config)
+        try:
+            state = pickle.load(source)
+        except (ModuleNotFoundError, AttributeError) as exc:
+            raise ValueError(
+                "GPU checkpoint classes are incompatible; start a fresh run with saved configs as seeds"
+            ) from exc
+        return validate_checkpoint(state, config)
 
 
 def save_checkpoint(path, state):

@@ -79,7 +79,7 @@ def test_runtime_schema_override_is_rejected_before_any_config_mutation(command,
     assert config == original
 
 
-def test_fake_hsl_example_preserves_automatic_exact_sizing():
+def test_fake_hsl_example_preserves_automatic_gpu_sizing():
     import json
     from pathlib import Path
 
@@ -91,8 +91,8 @@ def test_fake_hsl_example_preserves_automatic_exact_sizing():
         example, verbose=False, target="canonical", runtime=None
     )["optimize"]["gpu"]
     canonical = get_template_config()["optimize"]["gpu"]
-    for field in ("exact_workers", "max_pending_exact"):
-        assert policy[field] == effective[field] == canonical[field] is None
+    assert policy["batch_size"] == effective["batch_size"] == canonical["batch_size"] is None
+    assert set(policy) == set(canonical)
 
 
 @pytest.mark.parametrize("command", ["live", "backtest", "optimize"])

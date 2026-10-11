@@ -10,10 +10,13 @@ never calls this tool.
 For repeated cohort throughput, caller-observed completion latency and Pareto
 effects, use the standalone [GPU cohort benchmark](gpu_cohort_benchmark.md).
 
-The existing GPU simulator still has deliberate screening approximations. A passing
-comparison covers the selected inputs, metrics and policies; it does not certify all
-configurations. The development [contract](plans/gpu_optimizer_contract.md) tracks
-the work required before authoritative GPU optimization replaces screening/validation.
+Native GPU replay uses F32 arithmetic and the declared metric approximations. A
+passing comparison covers only the selected inputs, metrics and policies; it does
+not certify all configurations. Retained legacy replay is an explicit diagnostic
+option. Normal GPU optimization consumes native metrics directly and does not
+call this comparator. The development [contract](plans/gpu_optimizer_contract.md)
+tracks scoped evidence and numerical limitations, including
+[bounded EMA unified HSL reuse](plans/gpu_optimizer_acceptance.md#bounded-ema-unified-hsl-arithmetic-reuse).
 
 ## Reproducible fixtures
 
@@ -57,14 +60,14 @@ passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 2 --bars 300
   hard_stop_duration_minutes_max --report expiry.json
 ```
 
-This is an adversarial diagnostic with known reconstruction differences, not a
-passing release fixture. Missing policies remain unassessed; do not infer acceptance
-from the execution completing.
+This is an adversarial diagnostic, not a blanket release gate. Missing policies remain
+unassessed; evaluate current reconstruction and numerical differences case by case,
+without inferring acceptance from execution completing.
 
-`--gpu-engine native` uses the actual `CudaBacktestService` selected by native GPU
-optimization, including its shared-account replay for a single coin. It requires NVIDIA
-CUDA and never falls back to the legacy path. The default `legacy` retains the existing
-single-coin/multicoin replay selection, including supported Apple Metal installations.
+The default `--gpu-engine native` uses the actual `CudaBacktestService` selected by GPU
+optimization, including factual HSL and shared-account replay for a single coin. It requires
+NVIDIA CUDA and never falls back to the legacy path. Explicit `--gpu-engine legacy` retains
+the earlier single-coin/multicoin diagnostic selection, including Apple Metal installations.
 Reports label both the chosen engine and replay family; a one-coin legacy comparison does
 not establish parity of the native shared-account implementation. Neither mode changes
 metric tolerances or calls this comparator during optimization.

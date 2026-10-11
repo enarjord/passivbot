@@ -937,7 +937,7 @@ def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "gpu"
     config["optimize"]["fixed_runtime_overrides"] = {
-        "backtest.btc_collateral_cap": 0.5,
+        "backtest.starting_balance": 1500.0,
     }
     suite_cfg = {
         "enabled": True,
@@ -954,27 +954,19 @@ def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
     calls = []
 
     monkeypatch.setattr(
-        "optimization.backends.gpu_backend.validate_gpu_preparation_scope",
-        lambda actual_config, actual_suite: calls.append((actual_config, actual_suite)),
+        "config.gpu.validate_gpu_backtest_config",
+        lambda actual_config: calls.append(actual_config),
     )
 
     optimize._run_gpu_preparation_preflight(config, suite_cfg)
 
-    assert len(calls) == 1
-    effective_config, effective_suite = calls[0]
+    assert len(calls) == 2
+    effective_config, scenario_config = calls
     assert effective_config is not config
-    assert effective_config["backtest"]["btc_collateral_cap"] == 0.5
-    assert config["backtest"]["btc_collateral_cap"] == 0.0
-    assert effective_suite is not suite_cfg
-    assert effective_suite["scenarios"] == [
-        {
-            "label": "stress",
-            "overrides": {
-                "backtest.starting_balance": 2_000.0,
-                "bot.long.risk.n_positions": 1,
-            },
-        }
-    ]
+    assert effective_config["backtest"]["starting_balance"] == 1500.0
+    assert config["backtest"]["starting_balance"] != 1500.0
+    assert scenario_config["backtest"]["starting_balance"] == 2000.0
+    assert scenario_config["bot"]["long"]["risk"]["n_positions"] == 1
 
 
 def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
@@ -986,7 +978,7 @@ def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
 
     with pytest.raises(
         ValueError,
-        match=r"btc_collateral_cap=0\.0.*got 0\.5.*pymoo",
+        match=r"btc_collateral_cap=0.*CPU",
     ):
         optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
@@ -5527,13 +5519,12 @@ def test_validate_resume_results_allows_empty_gpu_seed_bootstrap_checkpoint(
     checkpoint_path = tmp_path / "checkpoint.pkl"
     checkpoint = {
         optimize.CONTRACT_KEY: optimize.build_evaluation_contract(config),
-        "seed_bootstrap_complete": False,
-        "seed_exact_done": 0,
-        "exact_done": 0,
-        "seed_bootstrap_contract": {"version": 1},
-        "seed_bootstrap_plan": {
-            "effective_mode": "screened",
-            "starting_vectors": [[0.1]],
+        "backend": "gpu", "version": 3, "completed": 0,
+        "screened": 0, "sequence": 0, "phase": "idle",
+        "algorithm": object(),
+        "resume_config": {
+            **{section: deepcopy(config[section]) for section in ("bot", "backtest", "optimize")},
+            optimize.CONTRACT_KEY: optimize.build_evaluation_contract(config),
         },
     }
     with open(checkpoint_path, "wb") as file:
@@ -5559,9 +5550,13 @@ def test_validate_resume_results_rejects_empty_completed_gpu_checkpoint(
     with open(checkpoint_path, "wb") as file:
         pickle.dump(
             {
-                "seed_bootstrap_complete": True,
-                "seed_exact_done": 0,
-                "exact_done": 0,
+                "backend": "gpu", "version": 3, "completed": 1,
+                "screened": 0, "sequence": 1, "phase": "idle", "algorithm": object(),
+                optimize.CONTRACT_KEY: optimize.build_evaluation_contract(config),
+                "resume_config": {
+                    **{section: deepcopy(config[section]) for section in ("bot", "backtest", "optimize")},
+                    optimize.CONTRACT_KEY: optimize.build_evaluation_contract(config),
+                },
             },
             file,
         )
@@ -5697,7 +5692,7 @@ def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Pat
     assert "gpu_seed_bootstrap" not in results[1]["metrics"]
 
 
-@pytest.mark.parametrize("backend", ["gpu", "gpu_native"])
+@pytest.mark.parametrize("backend", ["gpu"])
 def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path, backend):
     checkpoint_path = tmp_path / "checkpoint.pkl"
     anchor_plan = {

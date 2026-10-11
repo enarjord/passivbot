@@ -98,10 +98,9 @@ cashflows and marked UPNL over the factual accounting horizon, independently of 
 enablement or permission. Unified protection does not combine the ordinary long and short
 performance curves. Include actual terminal marks even when account equity is clamped.
 
-The retained GPU screening optimizer validates candidates with CPU Rust backtests. The
-experimental `gpu_native` optimizer uses GPU metrics directly and performs no CPU backtests
-during optimization; independent source-verified parity tooling checks its numerical and
-metric contract before replacement acceptance. Cache loss/rebuild must preserve intent.
+The experimental `gpu` optimizer uses GPU metrics directly and performs no CPU backtests
+during optimization. Independent source-verified parity tooling checks its numerical and
+metric contract when simulator behavior changes. Cache loss/rebuild must preserve intent.
 Performance acceptance compares
 trading traces before timings and includes disabled HSL. Live trials require separate approval;
 offline tests do not establish exchange execution correctness.

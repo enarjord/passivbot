@@ -52,6 +52,11 @@ constant int HSL_SIGNAL_COIN = 2;
 struct HslReplayContext;
 #endif
 struct HslState {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    device int* native_cache_words;
+    int native_cache_scope;
+    bool native_cache_reset;
+#endif
 #if PASSIVBOT_HSL_FACTS_ENABLED > 0
     HslPairRing facts;
 #if PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
@@ -158,6 +163,23 @@ inline bool replay_factual_hsl(
     thread HslState& h, float budget, int minute, bool exposed, bool terminal
 ) {
     thread HslReplayContext& context = *h.replay;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    // Exactly one bounded owner allocation per candidate, shared by both sides.
+    // The cache contains disposable arithmetic, never controller permission.
+    bool cache_selected = h.signal_mode == HSL_SIGNAL_UNIFIED && h.replay_coin < 0;
+    HslNativeCache native_cache;
+    if (cache_selected) {
+        int scopes = context.side_count * (context.coin_count + 1);
+        int candidate = h.native_cache_scope / scopes;
+        int pairs = context.side_count * context.coin_count;
+        int facts = context.coins[0][0].facts.capacity;
+        int words = hsl_native_cache_bytes(pairs, facts) / 4;
+        native_cache = hsl_native_cache_view(h.native_cache_words + candidate * words, pairs, facts);
+        if (h.native_cache_reset || terminal || !exposed) native_cache.header->valid = 0;
+        h.native_cache_reset = false;
+    }
+    bool cache_eligible = cache_selected && exposed && !terminal;
+#endif
     HslPairRing rings[2 * MAX_COINS];
     HslScopePair pairs[2 * MAX_COINS];
     float current_sizes[2 * MAX_COINS], quantity_steps[2 * MAX_COINS], prior_sizes[2 * MAX_COINS];
@@ -199,6 +221,9 @@ inline bool replay_factual_hsl(
     }
     HslScopeResult result;
     if (count == 0) {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+        if (cache_selected) native_cache.header->valid = 0;
+#endif
 #if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
         h.scope_cursor.valid = false;
 #endif
@@ -214,6 +239,9 @@ inline bool replay_factual_hsl(
         for (int p = 0; p < count; ++p)
             empty = empty && hsl_pair_ring_view(rings[p], first).count == 0;
         if (empty) {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+            if (cache_selected) native_cache.header->valid = 0;
+#endif
             for (int p = 0; p < count; ++p) {
                 pairs[p].facts = hsl_pair_ring_view(rings[p], first);
                 if (!hsl_reconstruct_pair(pairs[p].facts, pairs[p].current_size,
@@ -245,8 +273,20 @@ inline bool replay_factual_hsl(
 #endif
     if (cutoff.found) first = max(first, cutoff.minute);
     bool advanced = false;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    if (cache_eligible) {
+        for (int p = 0; p < count; ++p)
+            pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
+        advanced = hsl_native_cache_replay(native_cache, pairs, count, pair_ids,
+            quantity_steps, first, minute, cutoff, budget, h.alpha, h.red_threshold, result);
+    }
+#endif
 #if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
-    if (reused_cutoff && exposed && !terminal) {
+    if (reused_cutoff && exposed && !terminal
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+        && !cache_selected
+#endif
+    ) {
         HslPairSum upnl;
         hsl_pair_sum_reset(upnl, 0.0f);
         bool valid_marks = true;
@@ -267,6 +307,12 @@ inline bool replay_factual_hsl(
     }
 #endif
     if (!advanced) {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+        // The independent composer overwrites the shared event scratch with
+        // logical rows. Retire physical cache ownership before that write,
+        // including a numerical query decline after a complete cache update.
+        if (cache_eligible) native_cache.header->valid = 0;
+#endif
         for (int p = 0; p < count; ++p) {
             pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
             if (!hsl_reconstruct_pair(pairs[p].facts, pairs[p].current_size,
@@ -279,6 +325,13 @@ inline bool replay_factual_hsl(
             , nullptr, 0, &h.scope_cursor
 #endif
         )) return false;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+        // Only the independent original composer supplies fitness after a
+        // decline. Rebuild the disposable cache afterward for the next bar.
+        if (cache_eligible && native_cache.header->valid == 0)
+            hsl_native_cache_initialize(native_cache, pairs, count, pair_ids,
+                quantity_steps, first, minute, cutoff, h.alpha);
+#endif
     }
 #if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
     if (terminal) h.scope_cursor.valid = false;
@@ -545,6 +598,11 @@ inline void bind_hsl(
     int scope, int capacity, int tree_size, int lookback, bool initialize, bool owner,
     int fact_capacity = 0
 ) {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    h.native_cache_words = rows;
+    h.native_cache_scope = scope;
+    if (initialize) h.native_cache_reset = true;
+#endif
 #if PASSIVBOT_HSL_FACTUAL_ONLY
     h.hsl_tree = fact_capacity > 0
         ? trees + scope * hsl_storage_nodes(capacity, tree_size, fact_capacity) : nullptr;
@@ -855,6 +913,9 @@ inline HslState load_hsl(
     int hsl_param_offset
 ) {
     HslState h;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    h.native_cache_words = nullptr; h.native_cache_scope = 0; h.native_cache_reset = true;
+#endif
 #if PASSIVBOT_HSL_FACTS_ENABLED > 0
     h.replay = nullptr; h.replay_side = 0; h.replay_coin = -1;
 #if PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED

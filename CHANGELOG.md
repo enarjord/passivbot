@@ -6,6 +6,20 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native CUDA EMA Anchor unified HSL reuses bounded factual reconstruction and
+  controller summaries across rolling windows, with fresh replay for unsupported
+  or ambiguous inputs. Cache loss preserves risk intent; optional cache storage
+  is capped at 64 MiB per candidate within the existing shared scratch budget.
+  Other HSL scopes and Trailing Martingale retain their current default replay.
+
+- Replace GPU optimizer screening plus CPU validation with an authoritative asynchronous
+  CUDA backtest service and CPU-owned search, scenario screening, scoring and persistence.
+  Preserve CPU optimization and standalone backtests/plots. Remove obsolete validation,
+  drift and screened-seed controls; earlier GPU checkpoints require a fresh run.
+  GPU configs migrate explicit legacy `optimize.gpu.population_size` to the general
+  population setting when it is unset; concrete new settings win with a warning,
+  and invalid legacy values are rejected.
+
 - Native GPU coin and position-side HSL reuse the fresh current-position
   singleton when every selected retained fill history is empty, preserving
   current-budget evaluation and terminal-fill reconstruction.
@@ -14,7 +28,7 @@ since the latest release tag; these features may already be available when insta
   integer bar-gap counts and device percentile reduction instead of logarithmic
   bin edges. Requested histories and reduction scratch are budgeted; only compact
   metrics leave the replay. Histories exceeding the existing float32 bar-index
-  precision bound are rejected. Legacy GPU screening retains its histogram.
+  precision bound are rejected. Legacy diagnostic GPU replay retains its histogram.
 
 - Requested native GPU HSL EMA drawdown tails use eligible per-bar device
   observations instead of logarithmic cutoff-bin averages. Histories stay on

@@ -6,17 +6,16 @@ gates in [the development contract](gpu_optimizer_contract.md).
 
 ## Existing execution and ownership
 
-- Retained legacy [`gpu_backend.py`](../../src/optimization/backends/gpu_backend.py) mixes
-  request preparation, suite scheduling, proxy fitness, evolution, exact-worker pools,
-  drift gates, checkpoints and publication of CPU-evaluated results. NSGA-II receives
-  proxy fitness, while the archive receives CPU-validated records.
+- The starting legacy GPU backend mixed request preparation, suite scheduling, proxy fitness,
+  evolution, exact-worker pools, drift gates and CPU-evaluated result publication. Its
+  replacement is prepared locally; final retirement remains acceptance-gated.
 - [`service.py`](../../src/optimization/gpu/service.py) packs prepared backtest payloads,
   selects replay kernels and reduces compact output to scalar metrics. Its synchronous
   `evaluate(candidates)` methods are the transitional asynchronous-service adapters.
 - [`mps_kernel.py`](../../src/optimization/gpu/mps_kernel.py) owns shader specialization,
   dispatch, mutable replay buffers and temporal chunking. Rust-owned shader sources
   run on CUDA through [`cuda_kernel.py`](../../src/optimization/gpu/cuda_kernel.py).
-- Native [`gpu_native_backend.py`](../../src/optimization/backends/gpu_native_backend.py)
+- Native [`gpu_backend.py`](../../src/optimization/backends/gpu_backend.py)
   owns search and persistence through `NativeCandidatePlanner`, `NativeEvaluationSession`
   and `CanonicalResultScorer`. CPU preparation/scoring does not invoke simulation.
   [`native.py`](../../src/optimization/gpu/native.py) owns resident replay behind prepared
@@ -43,7 +42,7 @@ gates in [the development contract](gpu_optimizer_contract.md).
 The complete name lists remain code-owned in
 [`metrics.py`](../../src/optimization/gpu/metrics.py) and
 [`metric_registry.py`](../../src/optimization/gpu/metric_registry.py). Requested objective
-and limit names must remain explicit. Existing CPU validation emits a broader surface;
+and limit names must remain explicit. Standalone CPU backtests emit a broader surface;
 the replacement must not claim to have computed those additional metrics.
 
 ## Deliberate differences requiring a decision
@@ -58,8 +57,8 @@ the replacement must not claim to have computed those additional metrics.
 | Conservative single-coin minimum-effective-cost filtering | Retained legacy directional shaders use liquidation-floor/all-history-minimum bounds | Native requests use simulated cash/current-price minima through the shared-account engine even for one coin. Keep legacy-only restrictions separate from native acceptance. |
 | Realized-loss allowance | EMA/TM shared-account admission uses effective finite/all fill history and shared generation-time reservations; retained legacy directional single-coin engines remain separate | Shared-account envelopes have been replaced; preserve finalized quantities, expiry and unfilled reservations. Do not attribute legacy-only exclusions to native single-coin requests, which use the shared-account engine. |
 | Rolling fill-PnL history | EMA/TM shared-account auto-unstuck and loss admission; `test_gpu_unstuck_lookback.py`, `test_gpu_realized_loss_lookback.py`, `test_gpu_tm_loss_admission.py` | Both consumers share bounded scratch and preserve expiry/intrabar peaks, including loss-only history. HSL history remains separate. |
-| Portfolio HSL EMA tail | Rust observes each bar's maximum enabled signal scope, then reduces its worst 1%; shared GPU replay now captures the same joint observation | The former max of side tails lost joint timing. A controlled 200-bar case gives 0.9 versus 0.6; bounded histogram and f32 replay materiality remain separate acceptance work. |
-| Bounded logarithmic histogram tails | Fill-gap and drawdown reducers in `metrics.py`; fill-gap percentiles restore same-candle zeros and use 512 bins, independent of 128-bin initial-entry intervals | Short-gap cohorts improve with fixed storage; assess long-gap/overflow and drawdown-tail materiality separately before accepting |
+| Portfolio HSL EMA tail | Rust observes each bar's maximum enabled signal scope, then reduces its worst 1%; requested native GPU replay captures the same joint observation and selects actual samples | The former max of side tails lost joint timing. A controlled 200-bar case gives 0.9 versus 0.6. Native sample selection and scoped float32 materiality are assessed in the [approximation inventory](gpu_optimizer_acceptance.md#current-native-approximation-inventory); legacy histogram reduction remains separate. This does not establish every objective or limit's numerical policy. |
+| Bounded logarithmic histogram tails | Fill-gap percentiles restore same-candle zeros and use 512 bins; requested native TM initial-entry intervals instead use exact integer counts and compact device reduction. Legacy diagnostic entry replay retains 128 bins. Native requested EMA drawdown tails select actual samples. | Keep fill-gap quantization, CPU/GPU curve differences and long-gap/overflow materiality separate from the qualified exact-entry cohort. |
 | Recovery distribution sampling | Requested metrics retain every simulation step and reduce strict time-to-exceed durations on the GPU | Shared EMA/TM recovery observations use raw realized PnL plus UPNL, including terminal losses below account clamping, independently of weighted capture. Strict comparisons remain sensitive to float32 plateaus and small trading differences. Service dispatch budgets include sample and reduction scratch. |
 | Traded-volume normalization and suffixes | Shared EMA/TM replay normalizes actual fill quantities and reduces requested weighted suffixes from GPU per-step contributions | Retained legacy directional single-coin/daily-only helpers still approximate partial days. Assess residual CPU/GPU fill-trajectory differences independently of the volume reducer. |
 | Independent hedged summary reducer | Retained helper `_combine_hedged_multicoin_outputs`; normal dual-side constructors select fused shared-account kernels | Do not accidentally revive this ranking-only fallback during service extraction |

@@ -6,6 +6,10 @@
 #define PASSIVBOT_HSL_FACTS_ENABLED 0
 #endif
 
+#ifndef PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED 0
+#endif
+
 // HSL arithmetic over factual PNL + UPNL samples. No trading state or
 // episode inference lives here. Both Metal and CUDA consume this scalar source.
 // A candidate owns a bounded ring of compact samples and a tree over 64-sample

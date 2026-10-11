@@ -974,13 +974,6 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
 def _canonicalize_resume_optimize(section: dict) -> dict:
     normalized = deepcopy(section)
-    if normalized.get("backend") == "gpu" and isinstance(normalized.get("gpu"), dict):
-        from optimization.backends.gpu_backend import GPU_DEFAULTS
-
-        # These additive options preserve the legacy gates when omitted. Do not
-        # normalize other policy differences or erase explicit non-default values.
-        for key in ("drift_rank_halt", "drift_objective_tolerance"):
-            normalized["gpu"].setdefault(key, GPU_DEFAULTS[key])
     if "scoring" in normalized:
         normalized["scoring"] = [
             spec.to_config() for spec in extract_objective_specs(normalized["scoring"])
@@ -1033,7 +1026,7 @@ def _require_resume_checkpoint(results_dir: str) -> str:
 def _restore_gpu_resume_anchor_plan(config: dict, checkpoint_path: str) -> bool:
     """Restore checkpoint-owned fine-tune anchors before building optimizer shape."""
 
-    if config.get("optimize", {}).get("backend") not in {"gpu", "gpu_native"}:
+    if config.get("optimize", {}).get("backend") != "gpu":
         return False
     try:
         import pickle
@@ -1079,37 +1072,12 @@ def _gpu_checkpoint_allows_empty_results(
 ) -> bool:
     """Permit the durable pre-result checkpoint of a GPU seed bootstrap."""
 
-    if config.get("optimize", {}).get("backend") == "gpu_native":
-        from optimization.native_checkpoint import load_checkpoint
-
-        checkpoint = load_checkpoint(checkpoint_path, config)
-        return checkpoint["completed"] == 0
-    if config.get("optimize", {}).get("backend") != "gpu" or checkpoint_path is None:
+    if config.get("optimize", {}).get("backend") != "gpu":
         return False
-    try:
-        import pickle
+    from optimization.native_checkpoint import load_checkpoint
 
-        with open(checkpoint_path, "rb") as file:
-            checkpoint = pickle.load(file)
-    except Exception:
-        return False
-    plan = checkpoint.get("seed_bootstrap_plan")
-    allowed = bool(
-        not checkpoint.get("seed_bootstrap_complete", True)
-        and int(checkpoint.get("seed_exact_done", -1)) == 0
-        and int(checkpoint.get("exact_done", -1)) == 0
-        and isinstance(checkpoint.get("seed_bootstrap_contract"), dict)
-        and isinstance(plan, dict)
-        and plan.get("starting_vectors")
-        and plan.get("effective_mode") in {"exact", "screened"}
-    )
-
-    if allowed and checkpoint.get(CONTRACT_KEY) != build_evaluation_contract(config):
-        raise ValueError(
-            "GPU checkpoint historical evaluation contract cannot be proven or changed; "
-            "start a fresh run"
-        )
-    return allowed
+    checkpoint = load_checkpoint(checkpoint_path, config)
+    return checkpoint["completed"] == 0
 
 
 def _validate_resume_results(
@@ -1129,7 +1097,7 @@ def _validate_resume_results(
             if resume_state is not None:
                 resume_state["previous_data"] = None
             logging.info(
-                "Resuming GPU seed bootstrap before its first durable exact result"
+                "Resuming GPU seed bootstrap before its first durable GPU result"
             )
             return 0
         raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
@@ -3478,30 +3446,33 @@ def _materialize_suite_run_contract(
 def _run_gpu_preparation_preflight(
     config: Dict[str, Any], suite_cfg: Mapping[str, Any]
 ) -> None:
-    """Validate immutable Apple MPS requirements before loading historical data."""
+    """Validate effective GPU contracts before historical preparation or device imports."""
 
     if str(config.get("optimize", {}).get("backend", "")).strip().lower() != "gpu":
         return
-    from optimization.backends.gpu_backend import (
-        materialize_gpu_preparation_config,
-        validate_gpu_preparation_scope,
-    )
+    from config.gpu import resolve_gpu_screening, validate_gpu_backtest_config
+    from optimization.warmup import _apply_config_overrides
 
-    effective_config = materialize_gpu_preparation_config(config)
-    normalized_suite_cfg = dict(suite_cfg)
-    if bool(normalized_suite_cfg.get("enabled")):
+    effective_config = deepcopy(config)
+    _apply_config_overrides(effective_config, config["optimize"].get("fixed_runtime_overrides", {}))
+    if effective_config["live"]["strategy_kind"] != config["live"]["strategy_kind"]:
+        raise ValueError("fixed_runtime_overrides may not change live.strategy_kind")
+    validate_gpu_backtest_config(effective_config)
+    screening = resolve_gpu_screening(config["optimize"]["gpu"].get("screening"))
+    if suite_cfg.get("enabled"):
         scenarios, _reducer_cfg = build_scenarios(
-            normalized_suite_cfg,
+            dict(suite_cfg),
             base_exchanges=effective_config.get("backtest", {}).get("exchanges"),
         )
-        normalized_suite_cfg["scenarios"] = [
-            {
-                "label": scenario.label,
-                "overrides": dict(scenario.overrides or {}),
-            }
-            for scenario in scenarios
-        ]
-    validate_gpu_preparation_scope(effective_config, normalized_suite_cfg)
+        unknown = set(screening["scenarios"]) - {scenario.label for scenario in scenarios}
+        if unknown:
+            raise ValueError(f"GPU screening.scenarios contains unknown labels: {sorted(unknown)}")
+        for scenario in scenarios:
+            scenario_config = deepcopy(effective_config)
+            _apply_config_overrides(scenario_config, dict(scenario.overrides or {}))
+            validate_gpu_backtest_config(scenario_config)
+    elif screening["scenarios"]:
+        raise ValueError("GPU screening.scenarios requires a scenario suite")
 
 
 def _materialize_resolved_suite_dates(
@@ -3939,7 +3910,7 @@ async def main():
     )
     data_config = build_optimizer_data_config(config)
     allow_internal_nan_gaps = (
-        str(config.get("optimize", {}).get("backend", "")).strip().lower() in {"gpu", "gpu_native"}
+        str(config.get("optimize", {}).get("backend", "")).strip().lower() == "gpu"
     )
     interrupted = False
     failed = False
@@ -4174,7 +4145,7 @@ async def main():
         seed_rngs(config.get("optimize", {}).get("seed"), context="optimizer")
 
         # Shared state used by workers for duplicate detection
-        if config["optimize"]["backend"] == "gpu_native":
+        if config["optimize"]["backend"] == "gpu":
             seen_hashes = {}
             duplicate_counter = {}
         else:
@@ -4245,9 +4216,9 @@ async def main():
             build_config_fn=individual_to_config,
             overrides_fn=optimizer_overrides,
         )
-        if backend_name == "gpu_native":
+        if backend_name == "gpu":
             backend_kwargs["standalone_candle_coins"] = candle_coins_dict
-        if backend_name in {"gpu", "gpu_native"}:
+        if backend_name == "gpu":
             interrupt_latch = OptimizerInterruptLatch()
             backend_kwargs["interrupt_check"] = interrupt_latch.raise_if_requested
             with interrupt_latch:
