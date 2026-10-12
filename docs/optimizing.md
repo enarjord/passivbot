@@ -1029,8 +1029,14 @@ previous dataset and its replay buffers. MPS suites retain their existing shared
   rolling front gate. `drift_probes` must remain below
   `validate_per_generation` so each generation requests proxy-front safety evidence. A partial
   final validation batch scales its reserved probe count down proportionally.
-- Automatic single-coin HSL batches budget active history scratch from current free memory
-  (35%, capped at 2 GiB) while retaining the dispatch work cap and device headroom guard.
+- Automatic single-coin HSL batches size active history scratch from current free memory
+  while retaining the dispatch work cap and device headroom guard. CUDA can grow beyond
+  2 GiB, bounded by the history storage needed by the dispatch ceiling, while retaining
+  the larger of 1 GiB or 20% of total VRAM for metric/output workspaces. If other consumers
+  already leave insufficient headroom, the budget uses the conservative 35%-of-free policy
+  (with room for at least one candidate). Recalculation happens after completed scratch is
+  released: more free VRAM permits larger batches; memory pressure reduces the next replay's
+  capacity. An active replay is never resized. MPS retains its 35%-of-available, 2 GiB cap.
   Completed scenario scratch is released before another scenario and before CPU validation
   waits. Long single-coin Trailing Martingale replays gather bounded temporal timing evidence
   on either or both enabled sides, without extra calibration candidates. Fixed batch sizes

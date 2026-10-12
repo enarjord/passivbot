@@ -473,7 +473,7 @@ class SingleCoinScratchPolicy:
         self.torch = torch
         runner = proxy.runner
         if self.hardware["device"] == "cuda":
-            available = int(torch.cuda.mem_get_info()[0])
+            available, total = map(int, torch.cuda.mem_get_info())
         else:
             from optimization.gpu.exact_autotune import resource_snapshot, psutil
 
@@ -492,14 +492,29 @@ class SingleCoinScratchPolicy:
                     self.warned = True
                 host_available = runner.hsl_scratch_budget_bytes / 0.35
             available = min(host_available, device_available)
-        budget = max(
-            runner._hsl_bytes_per_candidate(), min(2 * 1024**3, int(available * 0.35))
-        )
+        candidate_bytes = runner._hsl_bytes_per_candidate()
+        budget = int(available * 0.35)
+        if self.hardware["device"] == "cuda":
+            # Match the device headroom gate while retaining at least 1 GiB
+            # for metric/output workspaces. When other consumers already leave
+            # less headroom, retain the conservative 35%-of-free policy rather
+            # than forcing a large allocation. Never budget more history than
+            # the current dispatch ceiling can use.
+            reserve = max(1024**3, int(total * 0.2))
+            budget = min(
+                max(budget, available - reserve),
+                proxy.auto_dispatch_ceiling * candidate_bytes,
+            )
+        else:
+            # MPS shares system RAM with exact validators; retain its existing
+            # bound until unified-memory pressure has separate evidence.
+            budget = min(2 * 1024**3, budget)
+        budget = max(candidate_bytes, budget)
         # Never shrink an allocation still owned by an active replay.
         runner.hsl_scratch_budget_bytes = budget
         ceiling = min(
             proxy.auto_dispatch_ceiling,
-            max(1, budget // runner._hsl_bytes_per_candidate()),
+            max(1, budget // candidate_bytes),
         )
         if ceiling < proxy.auto_dispatch_ceiling:
             # Stable memory classes keep ordinary RAM noise from resetting

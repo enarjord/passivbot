@@ -619,7 +619,7 @@ def test_suite_scratch_policy_releases_only_completed_transient_state(
     policy = tune.SingleCoinScratchPolicy({"device": device})
     policy.activate(first)
     assert not events
-    assert first.dispatch_batch_size == 512
+    assert first.dispatch_batch_size == (1024 if device == "cuda" else 512)
     budget = first.runner.hsl_scratch_budget_bytes
     free[0] //= 4
     policy.activate(first)
@@ -668,7 +668,8 @@ def test_scratch_policy_optional_host_hint_failure_preserves_bounded_budget(
     assert caplog.text.count("host memory hint unavailable") == 1
 
 
-def test_scratch_policy_does_not_exceed_dispatch_cap_or_two_gib():
+def test_scratch_policy_does_not_budget_more_than_dispatch_cap():
+    """Free VRAM must not increase work or reserve unusable scratch capacity."""
     runner = SimpleNamespace(
         _hsl_bytes_per_candidate=lambda: 1024, release_replay_scratch=lambda: None
     )
@@ -680,7 +681,7 @@ def test_scratch_policy_does_not_exceed_dispatch_cap_or_two_gib():
         ),
     )
     tune.SingleCoinScratchPolicy({"device": "cuda"}).activate(item)
-    assert runner.hsl_scratch_budget_bytes == 2 * 1024**3
+    assert runner.hsl_scratch_budget_bytes == 17 * 1024
     assert item.dispatch_batch_size == 17
 
 
@@ -724,7 +725,7 @@ def test_scratch_ceiling_change_invalidates_cpu_windows_and_bounds_info(
     proxy = SimpleNamespace(
         _torch=torch,
         auto_dispatch_ceiling=1024,
-        dispatch_batch_size=512,
+        dispatch_batch_size=1024 if device == "cuda" else 512,
         checkpoint_contract={},
         needed_metrics=[],
         batch_tuner=SimpleNamespace(revision=0, controllers={}),
@@ -772,3 +773,94 @@ def test_scratch_ceiling_change_invalidates_cpu_windows_and_bounds_info(
         logging.DEBUG,
         logging.INFO,
     ]
+
+
+@pytest.mark.parametrize("candidate_mib", [1, 2, 8])
+def test_cuda_scratch_grows_and_shrinks_between_completed_replays(candidate_mib):
+    """Adapt to actual free VRAM and history size, retaining live allocations."""
+    gib = 1024**3
+    candidate_bytes = candidate_mib * 1024**2
+    free = [4 * gib]
+    released = []
+    runner = SimpleNamespace(
+        _hsl_bytes_per_candidate=lambda: candidate_bytes,
+        release_replay_scratch=lambda: released.append(True),
+    )
+    item = SimpleNamespace(
+        runner=runner,
+        auto_dispatch_ceiling=8192,
+        batch_tuner=SimpleNamespace(revision=0),
+        _torch=SimpleNamespace(cuda=SimpleNamespace(
+            mem_get_info=lambda: (free[0], 12 * gib), empty_cache=lambda: None,
+        )),
+    )
+    policy = tune.SingleCoinScratchPolicy({"device": "cuda"})
+    policy.activate(item)
+    initial = runner.hsl_scratch_budget_bytes
+    initial_ceiling = item.dispatch_batch_size
+    initial_revision = item.batch_tuner.revision
+    assert initial == max(int(free[0] * 0.35), free[0] - int(12 * gib * 0.2))
+    free[0] = 10 * gib
+    policy.activate(item)
+    assert runner.hsl_scratch_budget_bytes == initial
+    assert not released  # Never resize a live replay.
+    policy.release()
+    policy.activate(item)
+    assert runner.hsl_scratch_budget_bytes == max(int(free[0] * 0.35), free[0] - int(12 * gib * 0.2))
+    assert runner.hsl_scratch_budget_bytes > 2 * gib
+    assert item.dispatch_batch_size > initial_ceiling
+    assert item.batch_tuner.revision == initial_revision + 1
+    free[0] = gib
+    policy.release()
+    policy.activate(item)
+    assert runner.hsl_scratch_budget_bytes == int(free[0] * 0.35)
+    assert item.dispatch_batch_size < initial_ceiling
+    assert item.dispatch_batch_size * candidate_bytes <= runner.hsl_scratch_budget_bytes
+    assert item.batch_tuner.revision == initial_revision + 2
+
+
+def test_mps_scratch_retains_unified_memory_cap(monkeypatch):
+    """Dedicated CUDA VRAM growth must not remove the shared-RAM MPS bound."""
+    from optimization.gpu import exact_autotune
+
+    gib = 1024**3
+    monkeypatch.setattr(exact_autotune, "resource_snapshot", lambda: {"available": 16 * gib})
+    runner = SimpleNamespace(
+        _hsl_bytes_per_candidate=lambda: 1024**2,
+        release_replay_scratch=lambda: None,
+    )
+    item = SimpleNamespace(
+        runner=runner, auto_dispatch_ceiling=8192,
+        _torch=SimpleNamespace(mps=SimpleNamespace(
+            recommended_max_memory=lambda: 32 * gib,
+            driver_allocated_memory=lambda: 0,
+        )),
+    )
+    tune.SingleCoinScratchPolicy({"device": "mps"}).activate(item)
+    assert runner.hsl_scratch_budget_bytes == 2 * gib
+    assert item.dispatch_batch_size == 2048
+
+
+@pytest.mark.parametrize("free_gib,expected_width", [(10, 4096), (5, 1024), (1, 128)])
+def test_cuda_scratch_budget_fits_history_and_retains_device_headroom(free_gib, expected_width):
+    """Use candidate history demand, device reserve and a conservative pressure fallback."""
+    gib = 1024**3
+    candidate_bytes = 1644640
+    runner = SimpleNamespace(
+        _hsl_bytes_per_candidate=lambda: candidate_bytes,
+        release_replay_scratch=lambda: None,
+    )
+    item = SimpleNamespace(
+        runner=runner, auto_dispatch_ceiling=4096,
+        _torch=SimpleNamespace(cuda=SimpleNamespace(
+            mem_get_info=lambda: (free_gib * gib, 12 * gib),
+        )),
+    )
+    tune.SingleCoinScratchPolicy({"device": "cuda"}).activate(item)
+    assert item.dispatch_batch_size == expected_width
+    assert runner.hsl_scratch_budget_bytes <= 4096 * candidate_bytes
+    assert expected_width * candidate_bytes <= runner.hsl_scratch_budget_bytes
+    if free_gib >= 5:
+        assert free_gib * gib - runner.hsl_scratch_budget_bytes >= int(12 * gib * 0.2)
+    else:
+        assert runner.hsl_scratch_budget_bytes == int(free_gib * gib * 0.35)

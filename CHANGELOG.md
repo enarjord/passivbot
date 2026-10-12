@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Let automatic single-coin CUDA HSL batches grow history scratch beyond 2 GiB when free VRAM allows, bounded by dispatch demand and workspace headroom. Preserve active replay allocations, conservative sizing under memory pressure, fixed batches and the MPS shared-memory cap.
+
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
 - Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
