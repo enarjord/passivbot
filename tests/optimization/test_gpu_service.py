@@ -1559,8 +1559,6 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     ),
     [
         ({"hard_stop_time_in_red_pct"}, False, False, False, False),
-        ({"total_wallet_exposure_utilization_rms_long"}, False, False, False, False),
-        ({"total_wallet_exposure_rms_gross"}, False, False, False, False),
         ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False),
         ({"drawdown_worst_strategy_eq_long"}, False, True, False, False),
         ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),

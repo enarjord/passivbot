@@ -219,8 +219,10 @@ SUPPORTED_METRICS = tuple(
 assert not set(SUPPORTED_METRICS) & GPU_EXACT_ONLY_METRICS
 
 
-def validate_gpu_metric_names(metric_names) -> frozenset[str]:
-    """Return canonical proxy metrics, rejecting exact-only names before aliases."""
+def validate_gpu_metric_names(
+    metric_names, *, native_replay: bool = True, device: str | None = None,
+) -> frozenset[str]:
+    """Validate the metric surface and optional replay/device capabilities."""
 
     from config.metrics import canonicalize_metric_name
 
@@ -231,6 +233,12 @@ def validate_gpu_metric_names(metric_names) -> frozenset[str]:
         raise ValueError(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
+        )
+    rms = sorted(canonical & EXPOSURE_RMS_METRICS)
+    if rms and (not native_replay or device not in {None, "cuda"}):
+        raise ValueError(
+            f"Exposure RMS metrics {rms} require native NVIDIA/CUDA replay; "
+            "use native CUDA replay or CPU backtests"
         )
     return canonical
 

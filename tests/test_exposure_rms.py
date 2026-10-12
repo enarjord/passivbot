@@ -206,3 +206,66 @@ def test_native_shader_compiles_rms_only_when_requested(monkeypatch, strategy, e
         assert "#define PASSIVBOT_HSL_FACTUAL_ONLY 1\n" in source
     finally:
         builder.cache_clear()
+
+
+@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("native,device,accepted", [
+    (True, "cuda", True), (True, "mps", False), (False, "cuda", False),
+    (False, "mps", False),
+])
+def test_rms_gpu_capabilities_are_native_cuda_only(name, native, device, accepted):
+    pytest.importorskip("torch")
+    from optimization.gpu.metrics import validate_gpu_metric_names
+    if accepted:
+        assert validate_gpu_metric_names([name], native_replay=native, device=device) == {name}
+    else:
+        with pytest.raises(ValueError, match="require native NVIDIA/CUDA replay"):
+            validate_gpu_metric_names([name], native_replay=native, device=device)
+    assert validate_gpu_metric_names(["adg_strategy_eq"], native_replay=native, device=device) == {"adg_strategy_eq"}
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_legacy_parity_rejects_rms_before_preparing_inputs(monkeypatch, capsys, name):
+    import json
+    pytest.importorskip("torch")
+    from tools import gpu_parity
+    def unexpected(*args, **kwargs):
+        pytest.fail("unsupported metrics must be rejected before input preparation or replay")
+    monkeypatch.setattr(gpu_parity, "fixture_inputs", unexpected)
+    monkeypatch.setattr(gpu_parity, "run_comparison", unexpected)
+    assert gpu_parity.main(["--fixture", "ema_anchor", "--gpu-engine", "legacy", "--metrics", name]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "unsupported"
+    assert report["stage"] == "metric_contract"
+    assert "native NVIDIA/CUDA" in report["error"]["message"]
+
+
+def test_legacy_parity_rejects_rms_limit_before_replay(monkeypatch, capsys):
+    import json
+    pytest.importorskip("torch")
+    from tools import gpu_parity
+    config = get_template_config()
+    config["optimize"]["limits"] = [{"metric": NAMES[2], "penalize_if": "greater_than", "value": 0.5}]
+    monkeypatch.setattr(gpu_parity, "fixture_inputs", lambda *_: (config,))
+    monkeypatch.setattr(gpu_parity, "run_comparison", lambda *_a, **_k: pytest.fail("unsupported limit reached replay"))
+    assert gpu_parity.main(["--fixture", "ema_anchor", "--gpu-engine", "legacy", "--metrics", "adg_strategy_eq"]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "unsupported"
+    assert report["stage"] == "metric_contract"
+
+
+@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("proxy_kind,native,device", [
+    ("single", False, "cuda"), ("multi", False, "cuda"), ("multi", True, "mps"),
+])
+def test_unsupported_rms_service_requests_fail_before_payload_preparation(monkeypatch, name, proxy_kind, native, device):
+    import numpy as np
+    pytest.importorskip("torch")
+    from optimization.gpu import service
+    monkeypatch.setattr(service, "gpu_device", lambda *_: device)
+    proxy = service.MpsSingleCoinProxy if proxy_kind == "single" else service.MpsMulticoinProxy
+    extra = {"factual_hsl": native} if proxy_kind == "multi" else {}
+    with pytest.raises(ValueError, match="require native NVIDIA/CUDA replay"):
+        proxy(config=get_template_config(), hlcvs=np.ones((2, 2, 4)), mss={},
+              btc=np.ones(2), timestamps=np.arange(2) * 60_000, exchange="binance",
+              batch_size=1, needed_metrics=[name], **extra)

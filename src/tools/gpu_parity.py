@@ -377,6 +377,8 @@ def _native_dataset(inputs, exchange, metrics):
 def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostics=False, gpu_engine="native"):
     if gpu_engine not in {"legacy", "native"}:
         raise ValueError("GPU parity engine must be legacy or native")
+    from optimization.gpu.metrics import validate_gpu_metric_names
+    validate_gpu_metric_names(metrics, native_replay=gpu_engine == "native")
     from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension
 
     if "passivbot_rust" not in sys.modules:
@@ -516,7 +518,7 @@ def main(argv=None):
         from utils import to_standard_exchange_name
 
         metrics = list(dict.fromkeys(canonicalize_metric_name(name) for name in args.metrics))
-        validate_gpu_metric_names(metrics)
+        validate_gpu_metric_names(metrics, native_replay=args.gpu_engine == "native")
         stage = "inputs"
         args.exchange = to_standard_exchange_name(args.exchange)
         policies = dict(DEFAULT_TOLERANCES)
@@ -538,7 +540,7 @@ def main(argv=None):
         )
         metrics = list(dict.fromkeys([*metrics, *(check["metric"] for check in checks)]))
         stage = "metric_contract"
-        validate_gpu_metric_names(metrics)
+        validate_gpu_metric_names(metrics, native_replay=args.gpu_engine == "native")
         stage = "simulation"
         with redirect_stdout(sys.stderr):
             report = run_comparison(inputs, args.exchange, metrics, policies, checks,

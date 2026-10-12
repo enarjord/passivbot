@@ -15,7 +15,7 @@ def fixture(*options):
 @pytest.mark.parametrize("selected,engine", [(None, "native"), ("legacy", "legacy"), ("native", "native")])
 def test_cli_selects_the_native_optimizer_service_by_default(monkeypatch, capsys, selected, engine):
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names,
+        validate_gpu_metric_names=lambda names, **_: names,
     ))
     def compared(*_args, **kwargs):
         assert kwargs["gpu_engine"] == engine
@@ -69,7 +69,7 @@ def test_native_service_failure_is_not_replaced_by_legacy_comparison(monkeypatch
         raise RuntimeError("native CUDA unavailable")
     monkeypatch.setattr(native, "NativeBacktestService", unavailable)
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names,
+        validate_gpu_metric_names=lambda names, **_: names,
     ))
     capsys.readouterr()  # Ignore import-time native-extension status text.
     assert gpu_parity.main(["--fixture", "trailing_martingale", "--bars", "128",

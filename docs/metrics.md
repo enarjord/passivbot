@@ -219,7 +219,9 @@ the default objective list is unchanged. Prefer utilization objectives and absol
 diagnostics/limits: scaling inventory and nominal budgets together leaves utilization
 unchanged while increasing absolute exposure. These definitions are implemented by
 Rust CPU backtests and the native NVIDIA/CUDA service, including temporal chunking.
-CUDA compiles RMS state and accumulation only when RMS metrics are requested. Apple Metal support is not implemented on this development branch.
+CUDA compiles RMS state and accumulation only when RMS metrics are requested.
+RMS metrics are rejected before replay on legacy GPU paths and Apple Metal; the
+RMS implementation currently supports native NVIDIA/CUDA only.
 
 - `total_wallet_exposure_max/mean/median`: Stats over recorded wallet exposure values.
 - `volume_pct_per_day_avg`: Average daily traded notional as a percentage of balance at fill time.

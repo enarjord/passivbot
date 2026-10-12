@@ -1822,7 +1822,9 @@ class MpsSingleCoinProxy:
             validate_gpu_metric_names,
         )
 
-        self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        self.needed_metrics = set(validate_gpu_metric_names(
+            needed_metrics, native_replay=False, device=gpu_device(torch),
+        ))
         from config.ew import validate_ew_half_life_days
         half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
         if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
@@ -2613,7 +2615,9 @@ class MpsMulticoinProxy:
             validate_gpu_metric_names,
         )
 
-        self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        self.needed_metrics = set(validate_gpu_metric_names(
+            needed_metrics, native_replay=factual_hsl, device=gpu_device(torch),
+        ))
         from config.ew import validate_ew_half_life_days
         half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
         if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
