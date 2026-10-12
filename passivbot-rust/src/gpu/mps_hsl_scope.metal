@@ -89,6 +89,11 @@ struct HslScopeCursor {
     float latest_flat_ema;
     bool exposed;
     bool valid;
+    // Single-pair history may use a different reconstructed basis/size than
+    // the authoritative endpoint. Retain its arithmetic prefix separately.
+    bool historical_endpoint;
+    float historical_size;
+    float historical_basis;
 };
 
 inline void hsl_scope_signal_reset(thread HslScopeSignal& s, float reference) {
@@ -204,7 +209,7 @@ inline int hsl_scope_pair_sequence(thread const HslScopePair& pair, int logical)
 inline bool hsl_advance_scope(
     thread HslScopeCursor& cursor, int start, int minute, float upnl,
     float budget, float alpha, float threshold, float cooldown, bool never_restart,
-    bool exposed, thread HslScopeResult& result
+    bool exposed, thread HslScopeResult& result, float historical_upnl = NAN
 ) {
     if (!cursor.valid || start != cursor.start || minute != cursor.minute + 1
         || budget != cursor.budget || alpha != cursor.alpha || exposed != cursor.exposed
@@ -231,6 +236,7 @@ inline bool hsl_advance_scope(
         cursor.minute = minute; cursor.point_count = result.point_count;
         return true;
     }
+    if (cursor.historical_endpoint && !isfinite(historical_upnl)) return false;
     HslScopeSignal signal;
     signal.peak = cursor.peak;
     signal.raw = 0.0f;
@@ -244,6 +250,7 @@ inline bool hsl_advance_scope(
     result.action = 0;
     result.flat_minute = result.latest_flat_minute = -1;
     result.point_count = cursor.point_count;
+    HslScopeSignal historical_signal = signal;
     HslScopePoint point;
     point.minute = minute; point.pnl = cursor.pnl; point.upnl = upnl;
     point.exposed = 1; point.flatten = 0;
@@ -253,6 +260,17 @@ inline bool hsl_advance_scope(
     float score = fmin(signal.raw, signal.ema);
     if (fabs(score - threshold) <= 16.0f * 1.1920928955078125e-7f
         * fmax(1.0f, fabs(score))) return false;
+    if (cursor.historical_endpoint) {
+        // The current endpoint remains authoritative for this result. On the
+        // next observation it becomes history, so continue the reconstructed
+        // sample instead of carrying current endpoint rounding into the curve.
+        HslScopeResult historical_result = result;
+        historical_result.point_count = cursor.point_count;
+        point.upnl = historical_upnl;
+        if (!hsl_scope_visit(historical_signal, budget, alpha, threshold, cooldown,
+            never_restart, start, false, point, historical_result, nullptr, 0)) return false;
+        signal = historical_signal;
+    }
     cursor.peak = signal.peak; cursor.ema = signal.ema;
     cursor.minute = minute; cursor.point_count = result.point_count;
     return true;
@@ -315,6 +333,9 @@ inline bool hsl_compose_scope(
     int episode_trace_start = 0;
     int episode_opening = -1;
     float final_pnl = 0.0f;
+    HslScopeSignal historical_signal;
+    bool historical_ready = false;
+    if (cursor != nullptr) cursor->historical_endpoint = false;
     for (int minute = start; minute <= end; ++minute) {
         while (true) {
             int selected = -1, selected_minute = 0, sequence = 0;
@@ -396,6 +417,26 @@ inline bool hsl_compose_scope(
         point.exposed = exposed ? 1 : 0; point.flatten = 0;
         bool reopened = result.point_count > episode_trace_start
             && episode_opening >= 0 && minute >= episode_opening;
+        if (cursor != nullptr && minute == end && pair_count == 1
+            && current_exposed && !estimated && !reconstructed_flat
+            && pairs[0].history.flat_correction_minute < 0 && pairs[0].facts.count > 0) {
+            thread const HslScopePair& pair = pairs[0];
+            int last = pair.facts.count - 1;
+            float size = pair.events[last].after, basis = pair.events[last].basis;
+            if (hsl_pair_minute(pair.facts, last) < end && size > 0.0f
+                && (size != fabs(pair.current_size) || basis != pair.current_basis)) {
+                historical_signal = signal;
+                HslScopePoint historical_point = point;
+                historical_point.upnl = (pair.short_side ? -1.0f : 1.0f)
+                    * size * pair.multiplier
+                    * (hsl_scope_price_at(pair, end, start, end) - basis);
+                HslScopeResult historical_result = result;
+                historical_ready = hsl_scope_visit(historical_signal, budget, alpha,
+                    threshold, cooldown, never_restart, start, reopened,
+                    historical_point, historical_result, nullptr, 0);
+                cursor->historical_size = size; cursor->historical_basis = basis;
+            }
+        }
         if (!hsl_scope_visit(signal, budget, alpha, threshold, cooldown,
             never_restart, start, reopened, point, result, trace, trace_capacity)) return false;
         // A completed flat episode seeds an exact zero signal. With every fill
@@ -422,13 +463,15 @@ inline bool hsl_compose_scope(
             // Today's endpoint becomes a historical sample on the next call.
             // Same-minute fills shift to the causal following price sample, and
             // reconstructed inventory/basis can differ from the actual endpoint.
-            // Continue only when that reinterpretation cannot revise this sample.
+            // Continue only with an unchanged sample or a separately evaluated
+            // single-pair historical prefix. The current result stays factual.
             thread const HslScopePair& pair = pairs[p];
             if (pair.facts.count > 0) {
                 int last = pair.facts.count - 1;
                 stable_prefix = stable_prefix && hsl_pair_minute(pair.facts, last) < end
-                    && pair.events[last].after == fabs(pair.current_size)
-                    && pair.events[last].basis == pair.current_basis;
+                    && ((pair.events[last].after == fabs(pair.current_size)
+                        && pair.events[last].basis == pair.current_basis)
+                        || historical_ready);
             }
             // Until a causal close exists, a later first quote can revise the
             // evaluation-local backfill of earlier marks. Keep that case fresh.
@@ -439,6 +482,7 @@ inline bool hsl_compose_scope(
                 stable_prefix = stable_prefix && available && isfinite(close) && close > 0.0f;
             }
         }
+        if (historical_ready) signal = historical_signal;
         float denominator = budget + signal.peak;
         bool exposed_cursor = current_exposed && !estimated && !reconstructed_flat
             && result.flat_minute < 0 && result.latest_flat_minute < 0
@@ -448,6 +492,7 @@ inline bool hsl_compose_scope(
             && signal.raw == 0.0f && signal.ema == 0.0f;
         cursor->valid = !before_price && complete && stable_prefix && signal.ready
             && (exposed_cursor || flat_cursor);
+        cursor->historical_endpoint = historical_ready;
         cursor->exposed = current_exposed;
         cursor->latest_flat_minute = result.latest_flat_minute;
         cursor->latest_flat_raw = result.latest_flat_raw;

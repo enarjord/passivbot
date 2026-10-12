@@ -389,3 +389,56 @@ def test_flat_continuation_ablation_preserves_full_native_replay(
             assert outputs[0][key] == outputs[1][key]
     # Do not leave an ablation shader in the shared recipe cache.
     library.cache_clear()
+
+
+@pytest.mark.parametrize("strategy,mode,sides", [
+    ("trailing_martingale", "coin", ("long",)),
+    ("trailing_martingale", "pside", ("long",)),
+    ("ema_anchor", "coin", ("short",)),
+    ("trailing_martingale", "unified", ("short",)),
+])
+def test_historical_endpoint_ablation_preserves_full_native_replay(
+    monkeypatch, strategy, mode, sides
+):
+    import optimization.gpu.mps_kernel as kernels
+    import backtest
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("CPU backtest used by native replay")
+    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
+    compile_shader = kernels.compile_shader
+    outputs = []
+    for enabled in (False, True):
+        compiled_historical_sources = []
+        def compile_ablation(source, **kwargs):
+            if "&& pair_count == 1" in source:
+                compiled_historical_sources.append(enabled)
+                if not enabled:
+                    source = source.replace("&& pair_count == 1", "&& false && pair_count == 1", 1)
+            return compile_shader(source, **kwargs)
+
+        monkeypatch.setattr(kernels, "compile_shader", compile_ablation)
+        proxy = make_proxy(mode, strategy, sides, minutes=3000, coin_count=1, factual_hsl=True, chunk=True)
+        runner = proxy.fused_runner or proxy.runners[sides[0]]
+        # Invalidate only this shader recipe so the two attempts truly compile
+        # opposite historical-endpoint variants, retaining existing continuation.
+        library, _ = runner._library_cache_call()
+        library.cache_clear()
+        _, output = raw(proxy, [{}, {"long_hsl_red_threshold": 1e-6,
+                                   "short_hsl_red_threshold": 1e-6,
+                                   "hsl_red_threshold": 1e-6}])
+        outputs.append(output)
+        assert compiled_historical_sources and set(compiled_historical_sources) == {enabled}
+        _, repeated = raw(proxy, [{}, {"long_hsl_red_threshold": 1e-6,
+                                     "short_hsl_red_threshold": 1e-6,
+                                     "hsl_red_threshold": 1e-6}])
+        compare(output, repeated)
+    assert outputs[0]["fill_count"].sum().item() > 0
+    for key in outputs[0]:
+        if isinstance(outputs[0][key], torch.Tensor):
+            torch.testing.assert_close(outputs[0][key], outputs[1][key],
+                                       rtol=0, atol=0, equal_nan=True)
+        else:
+            assert outputs[0][key] == outputs[1][key]
+    # Do not leave an ablation shader in the shared recipe cache.
+    library.cache_clear()

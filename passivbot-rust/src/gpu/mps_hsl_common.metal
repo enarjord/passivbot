@@ -301,9 +301,16 @@ inline bool replay_factual_hsl(
             valid_marks = valid_marks && isfinite(value);
             hsl_pair_sum_add(upnl, value);
         }
+        float historical_upnl = NAN;
+        if (count == 1 && h.scope_cursor.valid && h.scope_cursor.historical_endpoint) {
+            thread const HslScopePair& pair = pairs[0];
+            historical_upnl = (pair.short_side ? -1.0f : 1.0f)
+                * h.scope_cursor.historical_size * pair.multiplier
+                * (pair.current_mark - h.scope_cursor.historical_basis);
+        }
         advanced = valid_marks && hsl_advance_scope(h.scope_cursor, first, minute,
             hsl_pair_sum_value(upnl), budget, 2.0f / (span + 1.0f), h.red_threshold,
-            h.cooldown_minutes, h.restart_policy == 2, exposed, result);
+            h.cooldown_minutes, h.restart_policy == 2, exposed, result, historical_upnl);
     }
 #endif
     if (!advanced) {
