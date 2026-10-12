@@ -15,10 +15,14 @@ import pytest
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
                                                                     screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
-                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False, sides="both", hsl_tail=False):
+                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False, sides="both", hsl_tail=False, device="cuda"):
+
     torch = pytest.importorskip("torch")
-    if not torch.cuda.is_available():
+    if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA device required")
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("Apple Metal device required")
+    engine = "metal_native" if device == "mps" else "cuda_native"
     import backtest
     import optimize
     import optimize_suite
@@ -172,7 +176,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             with open(self.results_file.name, "rb") as source:
                 stored = list(msgpack.Unpacker(source, raw=False, strict_map_key=False))
             assert len(stored) == 1
-            assert stored[0][CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
+            assert stored[0][CONTRACT_KEY]["execution"]["engine"] == engine
             if recovery:
                 assert 0 <= stored[0]["metrics"]["unpenalized_objectives"][1] <= len(candles) / 1440
             if hsl_tail:
@@ -180,7 +184,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
                 assert math.isfinite(tail) and tail >= 0
             members = list(Path(self.store.pareto_dir).glob("*.json"))
             assert members
-            assert json.loads(members[0].read_text())[CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
+            assert json.loads(members[0].read_text())[CONTRACT_KEY]["execution"]["engine"] == engine
             first_record_persisted = True
         # With screening, interrupt after the initial full generation so the
         # on-disk checkpoint exercises a partially completed screening stage.
@@ -227,7 +231,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         state = pickle.load(source)
     assert state["completed"] == len(records())
     assert state["phase"] == (("screening" if screening else "seeds") if interrupted else "idle")
-    assert state[CONTRACT_KEY]["execution"]["engine"] == "cuda_native"
+    assert state[CONTRACT_KEY]["execution"]["engine"] == engine
     assert list(directory.rglob("*.json"))  # Pareto members were written promptly.
     if anchors:
         assert len(state["anchor_plan"]["anchors"]) == 2

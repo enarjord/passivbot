@@ -39,6 +39,8 @@ def exponential_equity_metrics(out, run, data, requested, *, relative_timestamps
         raise RuntimeError("EW daily equity must be a nonempty batch-by-day tensor")
     batch, days = day_end.shape
     device = day_end.device
+    dtype = torch.float32 if device.type == "mps" else torch.float64
+    tiny = torch.finfo(dtype).tiny if device.type == "mps" else 1e-300
     candle_count = int(data["n"])
     expected_days = (origin + (candle_count - 1) * interval) // DAY_MS - origin // DAY_MS + 1
     if candle_count < 1 or days != expected_days:
@@ -48,25 +50,32 @@ def exponential_equity_metrics(out, run, data, requested, *, relative_timestamps
         value = out[name]
         if value.shape != day_end.shape or value.device != device:
             raise RuntimeError(f"EW daily output {name} has inconsistent shape/device")
-        return value.to(torch.float64)
+        return value.to(dtype)
 
     def clock(name):
         value = out[name]
         if value.shape != (batch,) or value.device != device:
             raise RuntimeError(f"EW observation clock {name} has inconsistent shape/device")
-        value = value.to(torch.float64)
+        if device.type == "mps" and not relative_timestamps:
+            raise ValueError("Metal EW requires relative observation clocks")
+        value = value.to(dtype)
         # Native f32 relative clocks can round at long spans. Recover candle
         # indices before adding the UTC origin, just as the replay decoder does.
         relative = value if relative_timestamps else value - origin
-        rounded = torch.round(relative / interval).to(torch.float64) * interval
+        rounded = torch.round(relative / interval).to(dtype) * interval
         if not relative_timestamps and bool((torch.isfinite(relative) & (torch.abs(relative - rounded) > 1e-3)).any()):
             raise RuntimeError("EW absolute observation clock is off the candle grid")
+        if device.type == "mps":
+            steps = torch.round(torch.where(torch.isfinite(relative), relative, 0) / interval)
+            return steps.to(torch.int64) * interval + origin
         return rounded + origin
 
     first = clock("first_eq_ts")
     last = clock("last_eq_ts")
-    has_clock = torch.isfinite(first) & torch.isfinite(last)
-    if bool((torch.isfinite(first) != torch.isfinite(last)).any()):
+    first_valid = torch.isfinite(out["first_eq_ts"])
+    last_valid = torch.isfinite(out["last_eq_ts"])
+    has_clock = first_valid & last_valid
+    if bool((first_valid != last_valid).any()):
         raise RuntimeError("EW first/last observation clocks disagree")
     if bool((has_clock & ((first < origin) | (last < first))).any()):
         raise RuntimeError("EW observation clock is outside the candle grid")
@@ -96,11 +105,11 @@ def exponential_equity_metrics(out, run, data, requested, *, relative_timestamps
     else:
         latest = torch.zeros(batch, device=device, dtype=torch.int64)
         earliest = torch.full((batch,), evaluation_end, device=device, dtype=torch.int64)
-    ages = (latest[:, None] - return_ends[None, :]).to(torch.float64) / DAY_MS
+    ages = (latest[:, None] - return_ends[None, :]).to(dtype) / DAY_MS
     weights = torch.where(returns_mask, torch.exp2(-ages / half_life), torch.zeros_like(ages))
     sums = weights.sum(dim=1)
-    probabilities = weights / sums.clamp(min=1e-300)[:, None]
-    ess = sums.square() / weights.square().sum(dim=1).clamp(min=1e-300)
+    probabilities = weights / sums.clamp(min=tiny)[:, None]
+    ess = sums.square() / weights.square().sum(dim=1).clamp(min=tiny)
     metadata = {
         "definition_version": EW_DEFINITION_VERSION,
         "half_life_days": half_life,

@@ -192,14 +192,14 @@ def test_disabled_half_life_rejects_explicit_ew_request():
 
 
 @pytest.mark.parametrize("proxy_name", ["MpsSingleCoinProxy", "MpsMulticoinProxy"])
-def test_exponential_proxy_rejects_unsupported_metal_before_allocating(monkeypatch, proxy_name):
+def test_exponential_metal_still_requires_configured_half_life(monkeypatch, proxy_name):
     from config.schema import get_template_config
     from optimization.gpu import service
 
     monkeypatch.setattr(service, "gpu_device", lambda *_args: "mps")
     config = get_template_config()
-    config["backtest"]["ew_half_life_days"] = 180.5
-    with pytest.raises(ValueError, match="Exponential GPU metrics require CUDA"):
+    config["backtest"]["ew_half_life_days"] = None
+    with pytest.raises(ValueError, match="require backtest.ew_half_life_days"):
         getattr(service, proxy_name)(config=config, hlcvs=None, mss={}, btc=None,
                                     timestamps=None, exchange="binance", batch_size=1,
                                     needed_metrics={"adg_strategy_eq_ew"})
@@ -327,3 +327,16 @@ def test_seeded_daily_reduction_matches_current_rust(interval_minutes, half_life
         for key in ("observation_count", "first_return_end_ms", "last_return_end_ms"):
             assert metadata[key].item() == reference["metadata"][key]
         assert metadata["effective_sample_size"].item() == pytest.approx(reference["metadata"]["effective_sample_size"], abs=1e-13)
+
+
+def test_legacy_directional_proxy_retains_metal_ew_guard(monkeypatch):
+    from config.schema import get_template_config
+    from optimization.gpu import service
+
+    monkeypatch.setattr(service, "gpu_device", lambda *_args: "mps")
+    config = get_template_config()
+    config["backtest"]["ew_half_life_days"] = 180.5
+    with pytest.raises(ValueError, match="Exponential GPU metrics require CUDA"):
+        service.MpsSingleCoinProxy(config=config, hlcvs=None, mss={}, btc=None,
+                                   timestamps=None, exchange="binance", batch_size=1,
+                                   needed_metrics={"adg_strategy_eq_ew"})

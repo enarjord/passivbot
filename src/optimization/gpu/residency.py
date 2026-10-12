@@ -1,4 +1,4 @@
-"""Run-local, disk-backed market packing with one active CUDA dataset."""
+"""Run-local, disk-backed market packing with one active GPU dataset."""
 
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -28,21 +28,25 @@ def spill_array_file(path, shape, dtype):
         expected_end = handle.tell() + int(np.prod(shape)) * dtype.itemsize
         yield handle
         if handle.tell() != expected_end:
-            raise ValueError(f"Incomplete CUDA preparation array: {path.name}")
+            raise ValueError(f"Incomplete GPU preparation array: {path.name}")
 
 
 _current = ContextVar("cuda_suite_residency", default=None)
 
 
-def current_cuda_residency():
+def current_gpu_residency():
     return _current.get()
+
+
+def current_cuda_residency():
+    return current_gpu_residency()
 
 
 def _cleanup_after_failure(cleanup, *args, **kwargs):
     try:
         cleanup(*args, **kwargs)
     except BaseException:
-        logging.exception("CUDA suite cleanup failed while handling an earlier exception")
+        logging.exception("GPU suite cleanup failed while handling an earlier exception")
 
 
 def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None):
@@ -62,6 +66,17 @@ def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None):
 
 
 class CudaSuiteResidency:
+    device = "cuda"
+
+    @staticmethod
+    def _device_api(torch):
+        return torch.cuda
+
+    def _check_memory(self, torch, invariant_bytes):
+        if self._working_set is None:
+            self._working_set = int(torch.cuda.mem_get_info()[0])
+        check_cuda_invariant_memory(torch, invariant_bytes, working_set=self._working_set)
+
     def __init__(self):
         self._directory = None
         self._entries = {}
@@ -72,7 +87,7 @@ class CudaSuiteResidency:
 
     def _spill_directory(self):
         if self._directory is None:
-            self._directory = TemporaryDirectory(prefix="passivbot-cuda-suite-")
+            self._directory = TemporaryDirectory(prefix="passivbot-gpu-suite-")
         return Path(self._directory.name)
 
     def prepare_coin_subset(self, values, indices):
@@ -127,14 +142,14 @@ class CudaSuiteResidency:
             return
         entry = self._active
         try:
-            torch.cuda.synchronize()
+            self._device_api(torch).synchronize()
         finally:
             self._clear_runners(entry)
             # Keep dictionary identity for compatible suite grouping.
             entry["data"].update(entry["files"])
             self._active = None
             self._active_owner = None
-            torch.cuda.empty_cache()
+            self._device_api(torch).empty_cache()
 
     def activate(self, proxy):
         import torch
@@ -144,16 +159,12 @@ class CudaSuiteResidency:
             self._release(torch)
             # CUDA driver/kernel workspace can remain resident after tensors are
             # released. It belongs to the reserved 55%, not a shrinking budget.
-            if self._working_set is None:
-                self._working_set = int(torch.cuda.mem_get_info()[0])
-            check_cuda_invariant_memory(
-                torch, entry["data"]["invariant_bytes"], working_set=self._working_set,
-            )
+            self._check_memory(torch, entry["data"]["invariant_bytes"])
             self._active = entry
             try:
                 for name, path in entry["files"].items():
                     array = np.load(path, mmap_mode="c", allow_pickle=False)
-                    entry["data"][name] = torch.as_tensor(array, device="cuda").contiguous()
+                    entry["data"][name] = torch.as_tensor(array, device=self.device).contiguous()
                     del array
             except BaseException:
                 _cleanup_after_failure(self._release, torch)
@@ -162,11 +173,11 @@ class CudaSuiteResidency:
             # Incompatible proxies and screening representatives can share the
             # market entry. Keep its tensors, but retain only one owner's scratch.
             try:
-                torch.cuda.synchronize()
+                self._device_api(torch).synchronize()
             finally:
                 self._clear_runners(entry)
                 self._active_owner = None
-                torch.cuda.empty_cache()
+                self._device_api(torch).empty_cache()
         if not proxy.runners and proxy.fused_runner is None:
             try:
                 proxy._create_runners()
@@ -213,3 +224,41 @@ def cuda_suite_residency_scope(func):
         with cuda_residency_scope():
             return func(*args, **kwargs)
     return scoped
+
+
+class MetalSuiteResidency(CudaSuiteResidency):
+    """One active dataset/scratch owner inside Metal's recommended working set."""
+
+    device = "mps"
+
+    @staticmethod
+    def _device_api(torch):
+        return torch.mps
+
+    def _check_memory(self, torch, invariant_bytes):
+        total = int(torch.mps.recommended_max_memory())
+        free = max(0, total - int(torch.mps.driver_allocated_memory()))
+        if self._working_set is None:
+            self._working_set = free
+        if invariant_bytes > min(int(self._working_set * 0.45), free):
+            raise MemoryError(
+                "Metal invariant tensors exceed the available recommended working set "
+                "or its 45% invariant safety budget"
+            )
+
+
+@contextmanager
+def metal_residency_scope():
+    """Keep Metal preparation, replay and cleanup on the owning worker."""
+    residency = MetalSuiteResidency()
+    token = _current.set(residency)
+    try:
+        try:
+            yield residency
+        except BaseException:
+            _cleanup_after_failure(residency.close)
+            raise
+        else:
+            residency.close()
+    finally:
+        _current.reset(token)

@@ -1,6 +1,6 @@
-# Prepared CUDA backtest service
+# Prepared native GPU backtest service
 
-`optimization.gpu.native.CudaBacktestService` is an internal execution interface under
+`optimization.gpu.native.NativeBacktestService` is an internal execution interface under
 development. CPU code registers prepared scenarios, submits identified backtest requests
 and receives futures containing compact metrics and actual simulator liquidation status.
 Device buffers, packing, replay handles
@@ -13,6 +13,12 @@ and cutover requirements.
 
 The offline [service suite benchmark](gpu_service_benchmark.md) measures latency,
 resource use and completed default tuning windows independently of optimization.
+
+The service chooses Metal/MPS on supported Apple Silicon Macs and CUDA elsewhere.
+`CudaBacktestService` remains an explicit CUDA-only qualification entry point.
+Both devices keep one active dataset and one replay scratch owner, spill immutable
+packing to run-local disk and restore it on scenario changes. Metal bounds invariants
+against the remaining recommended working set and reserves driver/allocator headroom.
 
 ## Input ownership
 
@@ -178,7 +184,7 @@ attempts every owned window and preserves an earlier caller/preparation failure.
 ## GPU optimizer
 
 Select `--optimizer-backend gpu` or `optimize.backend: "gpu"` on an NVIDIA
-CUDA installation. CPU backends remain available. The GPU path runs GPU simulations for all fresh candidates, starting configs
+CUDA or Apple Silicon Metal installation. CPU backends remain available. The GPU path runs GPU simulations for all fresh candidates, starting configs
 and unfinished resumed candidates; it never creates a CPU simulation pool or uses CPU
 backtests to validate GPU fitness. CPU preparation still uses the canonical runtime compiler.
 
@@ -296,10 +302,13 @@ repeat GPU work, while already checkpointed selection progress is retained. Earl
 experimental native and screening/validation checkpoints require a fresh run; saved result
 configs can supply seeds.
 
-Saved native fitness has an explicit CUDA execution/precision identity alongside the
+Saved native fitness has an explicit device execution/precision identity alongside the
 canonical data, policy, source/dependency and verified Rust identities. It cannot reuse CPU
 or old GPU proxy/validation fitness. The current replay uses f32 state, integer tick boundary
-encodings and f64 host preparation/metric work. Changes to that contract require fresh
+encodings and f64 host preparation/metric work. Metal additionally uses f32 EW moments
+and resident weighted-history reduction into compact daily summaries for f64 host analysis.
+Full weighted histories never transfer to the CPU. CUDA/Metal fitness and checkpoints
+are distinct. Changes to that contract require fresh
 evaluation; the existing strict config resume checks also remain in force.
 
 Native checkpoints retain fine-tune anchor definitions and restore them before optimizer
@@ -315,15 +324,16 @@ acceptance map. They certify the stated cases rather than every possible traject
 
 ## Execution and cleanup
 
-The first accepted request creates one CUDA residency context on its owning worker.
+The first accepted request creates one device residency context on its owning worker.
 Dataset attachment, subset preparation, replay construction, evaluation and cleanup
 belong to that worker. Unused registrations and an unused service do not initialize GPU
 dependencies. Repeated requests reuse their replay and compatible immutable packing.
 
-The current policy keeps one active dataset's tensors and one replay's scratch on CUDA.
+The current policy keeps one active dataset's tensors and one replay's scratch on the GPU.
 Other packed inputs and reusable coin subsets live in run-local disk files. Scenario
 switches evict device buffers while keeping reusable immutable packing. Initial invariant
-inputs must fit the existing 45% free-VRAM budget; scratch and other allocations can
+inputs must fit the existing 45% free-VRAM (CUDA) or remaining recommended working-set
+(Metal) budget; scratch and other allocations can
 still fail and propagate. This is a bounded device-residency foundation, not a complete
 host/disk admission budget or adaptive multi-device scheduler.
 
@@ -337,7 +347,7 @@ metrics and account exposure normalization keep their original source. Native
 single-coin requests use this shared path; legacy directional single-coin screening
 retains its existing reducer. CUDA validation does not establish Metal acceptance.
 
-Shared CUDA replay captures factual raw strategy and account equity separately when
+Shared native replay captures factual raw strategy and account equity separately when
 weighted ADG, MDG, Sharpe, Sortino, Omega, Calmar or Sterling metrics require them.
 Account weighted ADG/MDG per exposure use the account curve before normalization;
 explicit `*_strategy_eq_w` names use the raw curve. Each suffix reconstructs its
@@ -346,12 +356,13 @@ peaks, while account ratios reset their peak at each suffix. Account eligibility
 uses actual fill counts. Liquidation preserves the raw terminal mark separately
 from clamped account equity.
 
-These requested-only f32 histories remain on the execution device and reduce with
-f64 arithmetic before history sub-batches combine. Only compact metrics reach the
-caller. Admission accounts for history storage and reduction working space; raw
+These requested-only f32 histories remain on the execution device. CUDA reduces with
+f64 arithmetic; Metal reduces suffix daily summaries on-device and analyzes those
+compact summaries with f64 host arithmetic before history sub-batches combine.
+Only compact metrics reach the caller. Admission accounts for history storage and reduction working space; raw
 and account capture each compile away when unused. Existing recovery-history
-semantics stay separate. This path currently requires CUDA: retained Metal replay
-and legacy directional single-coin screening still use their existing reducers.
+semantics stay separate. Legacy directional single-coin screening still uses its
+existing reducer.
 Other weighted metric families have separate parity and implementation requirements.
 
 Admission bounds queued plus running work. The oldest waiting request chooses the next

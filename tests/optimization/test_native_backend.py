@@ -90,7 +90,7 @@ def guard_cpu(monkeypatch):
     monkeypatch.setattr(optimize.Evaluator, "evaluate", forbidden)
     monkeypatch.setattr(optimize.multiprocessing, "Pool", forbidden)
     monkeypatch.setattr(optimize.multiprocessing, "Manager", forbidden)
-    monkeypatch.setattr(native, "CudaBacktestService", FakeService)
+    monkeypatch.setattr(native, "NativeBacktestService", FakeService)
     FakeService.rows = []
     FakeService.failure = None
 
@@ -128,7 +128,7 @@ def test_native_ask_tell_evolution_records_results_and_resumes_without_cpu(monke
         result = execute(base, recorder, checkpoint)
         assert result == dict(pool=None, pool_terminated=False)
         assert len(records) == 8
-        assert all(row[CONTRACT_KEY]["execution"]["engine"] == "cuda_native" for row in records)
+        assert all(row[CONTRACT_KEY]["execution"]["engine"] == build_evaluation_contract(base.config)["execution"]["engine"] for row in records)
         assert all(row["metrics"]["constraint_violation"] == 0 for row in records)
         state = load_checkpoint(checkpoint, base.config)
         assert state["phase"] == "idle" and state["population"] is None
@@ -171,7 +171,7 @@ def test_native_effective_unsupported_config_is_rejected_before_service(monkeypa
     import optimization.gpu.native as native
     def forbidden_service(**_kwargs):
         pytest.fail("unsupported effective config must fail before device service construction")
-    monkeypatch.setattr(native, "CudaBacktestService", forbidden_service)
+    monkeypatch.setattr(native, "NativeBacktestService", forbidden_service)
     with managed_arrays() as manager:
         base = inputs(manager)
         base.config["backtest"]["btc_collateral_cap"] = 0.0
@@ -273,7 +273,7 @@ def test_cpu_pipeline_starts_gpu_and_records_before_preparing_full_window(monkey
             future = super().submit(request)
             submitted.append(future)
             return future
-    monkeypatch.setattr(native, "CudaBacktestService", ObservedService)
+    monkeypatch.setattr(native, "NativeBacktestService", ObservedService)
     original = NativeCandidatePlanner.prepare
     prepared, records = [], []
     failure = ValueError("candidate preparation failed after GPU work started")

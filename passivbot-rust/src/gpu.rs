@@ -687,6 +687,18 @@ mod tests {
     }
 
     #[test]
+    fn multicoin_temporal_kernel_buffers_use_untyped_state_transport() {
+        for source in [mps_ema_anchor_multicoin_source(), mps_trailing_martingale_multicoin_source()] {
+            for kernel in source.split("kernel void ").skip(1) {
+                let signature = kernel.split('{').next().unwrap();
+                assert!(!signature.contains("ReplayState* replay_states"));
+            }
+            assert_eq!(source.matches("device char* replay_state_bytes,").count(), 3);
+            assert!(source.contains("reinterpret_cast<device "));
+        }
+    }
+
+    #[test]
     fn ema_anchor_mps_source_exposes_expected_kernel_contract() {
         let source = mps_ema_anchor_source();
         assert_shared_hsl_contract(source);

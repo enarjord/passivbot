@@ -37,8 +37,8 @@ search/storage and device cases from accepted numerical, resource and performanc
 
 ## Scope and feature matrix
 
-NVIDIA/CUDA is the first delivery target. Apple Metal, cloud deployment, persistent
-device workers, and intracandidate cooperative parallelism are subsequent work or
+NVIDIA/CUDA is the first delivery target. Apple Metal now has an experimental
+native service extension; cloud deployment, persistent device workers, and intracandidate cooperative parallelism are subsequent work or
 optional experiments, not initial completion requirements. Multi-GPU routing must fit
 behind the service boundary without exposing hardware to the evolutionary algorithm;
 initial acceptance requires one device, not a multi-GPU hardware demonstration.
@@ -94,7 +94,7 @@ the owning worker; repeated requests reuse it, and shutdown exits all entered co
 on that worker. Registration and unused/cancelled datasets do not initialize device state.
 Preconstructed replay registration remains a temporary compatibility path.
 
-The [prepared CUDA facade](../gpu_backtest_service.md) registers `PreparedGpuDataset`
+The [prepared native GPU facade](../gpu_backtest_service.md) registers `PreparedGpuDataset`
 metadata and borrows shared arrays with explicit source-column identities. It owns lazy
 worker-side attachment, packing reuse, compatible subset caching and a one-active-dataset/
 scratch residency policy. Caller-owned shared segments remain immutable/live until

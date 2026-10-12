@@ -1,6 +1,7 @@
 """Machine-independent fixed simulation inputs used to validate saved fitness."""
 
 from copy import deepcopy
+import platform
 
 from config.overrides import parse_overrides
 from config.param_paths import resolve_optimizer_key_path
@@ -145,10 +146,12 @@ def build_evaluation_contract(config: dict) -> dict:
         # Authoritative GPU fitness must never inherit CPU/proxy-validation
         # compatibility. Source and dependency identities above include the
         # replay shader, CUDA lowering and host metric implementation.
+        metal = platform.system() == "Darwin" and platform.machine() == "arm64"
         contract["execution"] = {
-            "engine": "cuda_native",
+            "engine": "metal_native" if metal else "cuda_native",
             "version": 2,
-            "precision": "f32_replay_integer_tick_boundaries_f64_host",
+            "precision": ("f32_replay_integer_tick_boundaries_f32_ew_f64_compact_host"
+                          if metal else "f32_replay_integer_tick_boundaries_f64_host"),
         }
     return contract
 

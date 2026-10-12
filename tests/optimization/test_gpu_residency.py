@@ -101,7 +101,7 @@ def test_backend_failure_survives_cleanup_error(runtime, error, caplog):
     with pytest.raises(error) as caught:
         run()
     assert caught.value is failure
-    assert "CUDA suite cleanup failed" in caplog.text
+    assert "GPU suite cleanup failed" in caplog.text
     assert "cleanup synchronization failed" in caplog.text
     assert current_cuda_residency() is None
     assert not Path(directories[0]).exists()
@@ -185,7 +185,7 @@ def test_activation_failure_survives_cleanup_error(runtime, stage, caplog):
         with pytest.raises(ValueError) as caught:
             manager.activate(owner)
         assert caught.value is failure
-        assert "CUDA suite cleanup failed" in caplog.text
+        assert "GPU suite cleanup failed" in caplog.text
         assert manager._active is None
         assert manager._active_owner is None
         assert owner.runners == {}

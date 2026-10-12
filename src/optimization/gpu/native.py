@@ -1,4 +1,4 @@
-"""CUDA execution facade; dataset buffers and replay handles stay on the worker.
+"""Native GPU execution facade; dataset buffers and replay handles stay on the worker.
 
 The native worker selects factual HSL replay from effective request policies.
 Transport ownership alone does not establish general numerical acceptance; the
@@ -13,13 +13,15 @@ from optimization.gpu.datasets import PreparedGpuDataset
 from optimization.gpu.executor import GpuBacktestService
 
 
-class CudaBacktestService:
+class NativeBacktestService:
     """Register prepared scenarios and exchange requests/futures, without device handles.
 
     One active dataset and one replay's scratch are resident at a time. Packed immutable
     inputs are cached on disk, including shared scenario subsets, while compatible
     scenarios reuse packing. Future residency/device routing belongs behind this API.
     """
+
+    _required_device = None
 
     def __init__(self, *, batch_size=64, max_pending=1024, max_batch_delay=None,
                  max_dispatch_candidate_bars=500_000_000, interrupt_check=None,
@@ -57,10 +59,15 @@ class CudaBacktestService:
 
     @staticmethod
     def _headroom():
-        # Queried on the CUDA owner, only before a growth trial. Producer errors
+        # Queried on the GPU owner, only before a growth trial. Producer errors
         # propagate; tuning never reruns a failed simulation or substitutes CPU work.
         import torch
-        free, total = torch.cuda.mem_get_info()
+        from optimization.gpu.runtime import gpu_device
+        if gpu_device(torch) == "mps":
+            total = torch.mps.recommended_max_memory()
+            free = total - torch.mps.driver_allocated_memory()
+        else:
+            free, total = torch.cuda.mem_get_info()
         return free >= max(256 * 1024**2, total * 0.2)
 
     @staticmethod
@@ -74,12 +81,14 @@ class CudaBacktestService:
     @contextmanager
     def _worker_scope(self):
         from optimization.gpu.runtime import gpu_device
-        from optimization.gpu.residency import cuda_residency_scope
+        from optimization.gpu.residency import cuda_residency_scope, metal_residency_scope
 
-        if gpu_device() != "cuda":
+        device = gpu_device()
+        if self._required_device is not None and device != self._required_device:
             raise RuntimeError("CUDA backtest service requires an NVIDIA CUDA device")
+        scope = metal_residency_scope if device == "mps" else cuda_residency_scope
         try:
-            with cuda_residency_scope() as residency:
+            with scope() as residency:
                 self._residency = residency
                 yield
         finally:
@@ -149,3 +158,9 @@ class CudaBacktestService:
 
     def __exit__(self, exc_type, exc, traceback):
         self.close(cancel_pending=exc_type is not None)
+
+
+class CudaBacktestService(NativeBacktestService):
+    """CUDA-only entry point retained for explicit device qualification."""
+
+    _required_device = "cuda"

@@ -6513,11 +6513,16 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
     device int2* unstuck_pnl_indices,
 #endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
-    device TrailingMartingaleMulticoinFusedReplayState* replay_states,
+    device char* replay_state_bytes,
     constant int* replay_range,
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device TrailingMartingaleMulticoinFusedReplayState* replay_states = reinterpret_cast<device TrailingMartingaleMulticoinFusedReplayState*>(replay_state_bytes);
+#endif
     passivbot_trailing_martingale_multicoin_fused_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
@@ -7606,11 +7611,16 @@ kernel void passivbot_trailing_martingale_multicoin(
     device int2* unstuck_pnl_indices,
 #endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
-    device TrailingMartingaleMulticoinReplayState* replay_states,
+    device char* replay_state_bytes,
     constant int* replay_range,
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device TrailingMartingaleMulticoinReplayState* replay_states = reinterpret_cast<device TrailingMartingaleMulticoinReplayState*>(replay_state_bytes);
+#endif
 #ifdef PASSIVBOT_MULTICOIN_SHORT_SIDE
     const bool short_side = PASSIVBOT_MULTICOIN_SHORT_SIDE != 0;
 #else
@@ -7702,11 +7712,16 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     device int2* unstuck_pnl_indices,
 #endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
-    device TrailingMartingaleMulticoinReplayState* replay_states,
+    device char* replay_state_bytes,
     constant int* replay_range,
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device TrailingMartingaleMulticoinReplayState* replay_states = reinterpret_cast<device TrailingMartingaleMulticoinReplayState*>(replay_state_bytes);
+#endif
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
