@@ -1559,6 +1559,8 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     ),
     [
         ({"hard_stop_time_in_red_pct"}, False, False, False, False),
+        ({"total_wallet_exposure_utilization_rms_long"}, False, False, False, False),
+        ({"total_wallet_exposure_rms_gross"}, False, False, False, False),
         ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False),
         ({"drawdown_worst_strategy_eq_long"}, False, True, False, False),
         ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),
@@ -1760,6 +1762,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     )
 
     assert isinstance(proxy.fused_runner, FakeFusedRunner)
+    from config.metrics import EXPOSURE_RMS_METRICS
+    assert constructed["kwargs"]["exposure_rms_enabled"] == bool(
+        needed_metrics & EXPOSURE_RMS_METRICS
+    )
     assert built_data_kwargs["include_hourly_ranges"] is True
     assert constructed["run"].interval_ms == interval_minutes * 60_000
     assert proxy.runners == {}

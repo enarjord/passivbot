@@ -88,3 +88,24 @@ def test_cuda_compensated_rms_trace_matches_encoded_reference_and_resume(cuda, s
     assert cuda.equal(output, whole)
     library.rms_trace(payload, saved, output, 0, 0, threads=1)
     assert cuda.isnan(output).all()
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "short", "both"])
+def test_native_cuda_omits_unrequested_rms_without_changing_existing_metrics(cuda, strategy, sides):
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from tools.gpu_parity import _native_dataset
+    inputs = fixture_inputs(strategy, sides, "ordinary")
+    existing = ("fills_per_day", "adg_strategy_eq", "backtest_completion_ratio")
+    results = []
+    for metrics in (existing, (*existing, *NAMES)):
+        with _native_dataset(inputs, "binance", metrics) as dataset:
+            with CudaBacktestService(batch_size=1, tuning_mode="off",
+                                     max_dispatch_candidate_bars=1024) as service:
+                service.register_dataset("optional", dataset)
+                result = service.submit(BacktestRequest("optional", "optional", {})).result()
+                results.append(result.metrics)
+    assert not set(NAMES) & results[0].keys()
+    assert set(NAMES) <= results[1].keys()
+    assert results[0] == {name: results[1][name] for name in results[0]}

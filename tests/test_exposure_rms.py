@@ -153,7 +153,10 @@ def test_native_scalar_transport_preserves_legacy_tail_and_optional_columns(fuse
     gaps = torch.zeros((1, 512))
     decode = _decode_multicoin_fused_outputs if fused else _decode_outputs
     legacy = decode(daily, scalars[:, :-7], gaps)
-    native = decode(daily, scalars, gaps, native_factual_hsl=True)
+    native = decode(daily, scalars, gaps, native_factual_hsl=True, exposure_rms_enabled=True)
+    native_without_rms = decode(daily, scalars[:, :-7], gaps, native_factual_hsl=True)
+    assert not EXPOSURE_RMS_METRICS & native_without_rms.keys()
+    assert native_without_rms["hsl_drawdown_ema_max_portfolio"].item() == scalars[0, 17].item()
     for key in legacy:
         assert torch.equal(native[key], legacy[key]), key
     assert [native[name].item() for name in NAMES] == list(range(columns, columns + 7))
@@ -186,3 +189,20 @@ def test_canonical_config_accepts_utilization_objectives_and_absolute_limits():
         (name, "min") for name in objectives
     ]
     assert prepared["optimize"]["limits"] == config["optimize"]["limits"]
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_native_shader_compiles_rms_only_when_requested(monkeypatch, strategy, enabled):
+    pytest.importorskip("torch")
+    from optimization.gpu import mps_kernel
+    builder = getattr(mps_kernel, f"_{strategy}_multicoin_shader_library")
+    monkeypatch.setattr(mps_kernel, "gpu_device", lambda *_: "cuda")
+    monkeypatch.setattr(mps_kernel, "compile_shader", lambda source, **_: source)
+    builder.cache_clear()
+    try:
+        source = builder(hsl_factual_only=True, exposure_rms_enabled=enabled)
+        assert f"#define PASSIVBOT_EXPOSURE_RMS_ENABLED {int(enabled)}\n" in source
+        assert "#define PASSIVBOT_HSL_FACTUAL_ONLY 1\n" in source
+    finally:
+        builder.cache_clear()

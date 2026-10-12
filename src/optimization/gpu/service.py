@@ -3065,6 +3065,9 @@ class MpsMulticoinProxy:
         )
         common_runner_kwargs["interrupt_check"] = self.interrupt_check
         common_runner_kwargs["factual_hsl"] = factual_hsl
+        common_runner_kwargs["exposure_rms_enabled"] = bool(
+            self.needed_metrics & EXPOSURE_RMS_METRICS
+        )
         common_runner_kwargs["compact_recovery_output"] = bool(
             factual_hsl and common_runner_kwargs["recovery_distribution_enabled"]
         )
