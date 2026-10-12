@@ -21,6 +21,7 @@ import sys
 import time
 
 from optimization.gpu.parity import MetricTolerance, compare_limits, compare_metrics
+from config.metrics import EXPOSURE_RMS_METRICS
 
 
 DEFAULT_METRICS = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day")
@@ -34,6 +35,7 @@ STRESS_OPTIONS = ("hsl_red_threshold", "hsl_ema_span_minutes", "hsl_cooldown_min
                   "hsl_lookback_days", "price_shocks")
 # Provisional measurement gates for selected definitions, not a release certificate.
 DEFAULT_TOLERANCES = {
+    **{name: MetricTolerance(1e-5, 1e-4) for name in EXPOSURE_RMS_METRICS},
     "adg_strategy_eq": MetricTolerance(1e-7, 1e-4),
     "drawdown_worst_strategy_eq": MetricTolerance(1e-5, 1e-4),
     "fills_per_day": MetricTolerance(1e-6, 1e-5),
@@ -375,6 +377,8 @@ def _native_dataset(inputs, exchange, metrics):
 def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostics=False, gpu_engine="native"):
     if gpu_engine not in {"legacy", "native"}:
         raise ValueError("GPU parity engine must be legacy or native")
+    from optimization.gpu.metrics import validate_gpu_metric_names
+    validate_gpu_metric_names(metrics, native_replay=gpu_engine == "native")
     from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension
 
     if "passivbot_rust" not in sys.modules:
@@ -514,7 +518,7 @@ def main(argv=None):
         from utils import to_standard_exchange_name
 
         metrics = list(dict.fromkeys(canonicalize_metric_name(name) for name in args.metrics))
-        validate_gpu_metric_names(metrics)
+        validate_gpu_metric_names(metrics, native_replay=args.gpu_engine == "native")
         stage = "inputs"
         args.exchange = to_standard_exchange_name(args.exchange)
         policies = dict(DEFAULT_TOLERANCES)
@@ -536,7 +540,7 @@ def main(argv=None):
         )
         metrics = list(dict.fromkeys([*metrics, *(check["metric"] for check in checks)]))
         stage = "metric_contract"
-        validate_gpu_metric_names(metrics)
+        validate_gpu_metric_names(metrics, native_replay=args.gpu_engine == "native")
         stage = "simulation"
         with redirect_stdout(sys.stderr):
             report = run_comparison(inputs, args.exchange, metrics, policies, checks,

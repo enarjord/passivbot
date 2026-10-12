@@ -1,5 +1,6 @@
 mod analysis;
 mod backtest;
+mod exposure_rms;
 mod closes;
 mod coin_selection;
 mod constants;

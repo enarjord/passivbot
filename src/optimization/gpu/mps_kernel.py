@@ -1176,6 +1176,7 @@ def _ema_anchor_multicoin_shader_library(
     side: str | None = None,
     temporal_chunking: bool = False,
     hsl_native_cache_capacity: int = 0,
+    exposure_rms_enabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1190,6 +1191,7 @@ def _ema_anchor_multicoin_shader_library(
     source = (
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
+        f"#define PASSIVBOT_EXPOSURE_RMS_ENABLED {int(exposure_rms_enabled)}\n"
         f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     )
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
@@ -1260,6 +1262,7 @@ def _trailing_martingale_multicoin_shader_library(
     unstuck_enabled: bool = True,
     side: str | None = None,
     hsl_native_cache_capacity: int = 0,
+    exposure_rms_enabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1283,6 +1286,7 @@ def _trailing_martingale_multicoin_shader_library(
     source = (
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
+        f"#define PASSIVBOT_EXPOSURE_RMS_ENABLED {int(exposure_rms_enabled)}\n"
         f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     )
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
@@ -1486,7 +1490,14 @@ def _require_available_held_valuation(scalars):
         raise HslFactHistoryOverflow("GPU HSL factual history overflow")
 
 
-def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_factual_hsl=False) -> dict:
+def _decode_outputs(
+    daily, scalars, gaps, *, btc_risk_enabled=False,
+    native_factual_hsl=False, exposure_rms_enabled=False,
+) -> dict:
+    # Requested native RMS metrics append seven moments after the legacy scalar tail.
+    rms_scalars = scalars[:, -7:] if exposure_rms_enabled else None
+    if exposure_rms_enabled:
+        scalars = scalars[:, :-7]
     _require_available_held_valuation(scalars)
     active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
 
@@ -1595,6 +1606,14 @@ def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_fact
             scalars, 64, reserved_columns=3
         ),
     }
+    if exposure_rms_enabled:
+        for i, name in enumerate((
+            "total_wallet_exposure_rms_long", "total_wallet_exposure_rms_short",
+            "total_wallet_exposure_rms_gross", "total_wallet_exposure_utilization_rms_long",
+            "total_wallet_exposure_utilization_rms_short", "position_exposure_utilization_rms_long",
+            "position_exposure_utilization_rms_short",
+        )):
+            output[name] = rms_scalars[:, i]
     if native_factual_hsl:
         # Column 17 is unused by legacy shared replay. Native reporting owns a
         # distinct portfolio maximum, since unified side signals are zero.
@@ -1604,9 +1623,15 @@ def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_fact
     return output
 
 
-def _decode_multicoin_fused_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_factual_hsl=False) -> dict:
+def _decode_multicoin_fused_outputs(
+    daily, scalars, gaps, *, btc_risk_enabled=False,
+    native_factual_hsl=False, exposure_rms_enabled=False,
+) -> dict:
     output = _decode_outputs(daily, scalars, gaps, btc_risk_enabled=btc_risk_enabled,
-                             native_factual_hsl=native_factual_hsl)
+                             native_factual_hsl=native_factual_hsl,
+                             exposure_rms_enabled=exposure_rms_enabled)
+    if exposure_rms_enabled:
+        scalars = scalars[:, :-7]
     long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
     output.update(
         {
@@ -2406,6 +2431,7 @@ class _MulticoinReplayRunner:
         unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
+        exposure_rms_enabled: bool = False,
         interrupt_check=None,
     ):
         if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
@@ -2421,6 +2447,9 @@ class _MulticoinReplayRunner:
             )
         self.side = side
         self.native_factual_hsl = bool(factual_hsl)
+        self.exposure_rms_enabled = bool(exposure_rms_enabled)
+        if self.exposure_rms_enabled and not self.native_factual_hsl:
+            raise ValueError("Exposure RMS GPU metrics require native CUDA replay")
         self.interrupt_check = interrupt_check or (lambda: None)
         self.collect_coin_fill_counts = bool(collect_coin_fill_counts)
         self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
@@ -2469,6 +2498,8 @@ class _MulticoinReplayRunner:
                 if fused
                 else MPS_MULTICOIN_BASE_SCALAR_COLS
             )
+        if self.exposure_rms_enabled:
+            self.scalar_cols += 7
         self.run_config = run
         interval_minutes = float(run.interval_ms) / 60_000.0
         if (
@@ -2935,7 +2966,8 @@ class _MulticoinReplayRunner:
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
-                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False),
+                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False))
 
     def _hsl_ema_tail_sample_buffer(self, batch_size):
         if not self._hsl_ema_tail_samples_enabled():
@@ -3658,6 +3690,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             self._compiled_side(),
             self._temporal_replay_enabled(),
             self._hsl_native_cache_capacity(),
+            getattr(self, "exposure_rms_enabled", False),
         )
 
 
@@ -3708,6 +3741,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
+        exposure_rms_enabled: bool = False,
         interrupt_check=None,
     ):
         super().__init__(
@@ -3741,6 +3775,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
+            exposure_rms_enabled=exposure_rms_enabled,
             interrupt_check=interrupt_check,
         )
         if short_coin_overrides is None:
@@ -3889,7 +3924,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
-                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False),
+                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False))
 
 
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
@@ -3994,6 +4030,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
+        exposure_rms_enabled: bool = False,
         interrupt_check=None,
     ):
         self.loss_gate_enabled = _encode_max_realized_loss_pct(max_realized_loss_pct) < 1.0
@@ -4029,6 +4066,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
+            exposure_rms_enabled=exposure_rms_enabled,
             interrupt_check=interrupt_check,
         )
 
@@ -4083,6 +4121,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "dispatch_unstuck_enabled", True),
             self._compiled_side(),
             self._hsl_native_cache_capacity(),
+            getattr(self, "exposure_rms_enabled", False),
         )
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -4193,6 +4232,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
+        exposure_rms_enabled: bool = False,
         interrupt_check=None,
     ):
         super().__init__(
@@ -4226,6 +4266,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
+            exposure_rms_enabled=exposure_rms_enabled,
             interrupt_check=interrupt_check,
         )
         if short_coin_overrides is None:
@@ -4370,7 +4411,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
-                             native_factual_hsl=getattr(self, "native_factual_hsl", False))
+                             native_factual_hsl=getattr(self, "native_factual_hsl", False),
+                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False))
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):

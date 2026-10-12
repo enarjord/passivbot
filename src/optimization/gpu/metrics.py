@@ -11,6 +11,7 @@ import math
 
 import torch
 from config.ew import validate_ew_half_life_days
+from config.metrics import EXPOSURE_RMS_METRICS
 from optimization.gpu.entry_intervals import ENTRY_INTERVAL_NAMES
 from optimization.gpu.exponential_equity import exponential_equity_metrics
 
@@ -192,6 +193,13 @@ _GPU_PROXY_METRIC_CANDIDATES = (
     "strategy_eq_underwater_pct_mean",
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
+    "total_wallet_exposure_rms_long",
+    "total_wallet_exposure_rms_short",
+    "total_wallet_exposure_rms_gross",
+    "total_wallet_exposure_utilization_rms_long",
+    "total_wallet_exposure_utilization_rms_short",
+    "position_exposure_utilization_rms_long",
+    "position_exposure_utilization_rms_short",
     "volume_pct_per_day_avg",
     "volume_pct_per_day_avg_w",
     *_USD_STRATEGY_EQ_ALIASES,
@@ -211,8 +219,10 @@ SUPPORTED_METRICS = tuple(
 assert not set(SUPPORTED_METRICS) & GPU_EXACT_ONLY_METRICS
 
 
-def validate_gpu_metric_names(metric_names) -> frozenset[str]:
-    """Return canonical proxy metrics, rejecting exact-only names before aliases."""
+def validate_gpu_metric_names(
+    metric_names, *, native_replay: bool = True, device: str | None = None,
+) -> frozenset[str]:
+    """Validate the metric surface and optional replay/device capabilities."""
 
     from config.metrics import canonicalize_metric_name
 
@@ -223,6 +233,12 @@ def validate_gpu_metric_names(metric_names) -> frozenset[str]:
         raise ValueError(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
+        )
+    rms = sorted(canonical & EXPOSURE_RMS_METRICS)
+    if rms and (not native_replay or device not in {None, "cuda"}):
+        raise ValueError(
+            f"Exposure RMS metrics {rms} require native NVIDIA/CUDA replay; "
+            "use native CUDA replay or CPU backtests"
         )
     return canonical
 
@@ -2466,7 +2482,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
                 if name in requested
             }
         )
-    for name in ("total_wallet_exposure_max", "total_wallet_exposure_mean"):
+    for name in ("total_wallet_exposure_max", "total_wallet_exposure_mean", *EXPOSURE_RMS_METRICS):
         if name in requested:
             objectives[name] = out[name].to(torch.float64)
     exposure_ratio_denominators = {

@@ -12,6 +12,7 @@ from optimization.gpu.replay_progress import replay_scope
 
 import numpy as np
 
+from config.metrics import EXPOSURE_RMS_METRICS
 from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.parameters import (
     _single_coin_exposure_params, _position_exposure_enforcer_params,
@@ -90,6 +91,7 @@ def _noop_interrupt_check():
 
 
 CORE_OUTPUT_KEYS = {
+    *EXPOSURE_RMS_METRICS,
     "entry_interval_native_metrics",
     "hsl_drawdown_ema_max_portfolio",
     "hsl_drawdown_ema_mean_worst_1pct_portfolio",
@@ -1820,7 +1822,9 @@ class MpsSingleCoinProxy:
             validate_gpu_metric_names,
         )
 
-        self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        self.needed_metrics = set(validate_gpu_metric_names(
+            needed_metrics, native_replay=False, device=gpu_device(torch),
+        ))
         from config.ew import validate_ew_half_life_days
         half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
         if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
@@ -2611,7 +2615,9 @@ class MpsMulticoinProxy:
             validate_gpu_metric_names,
         )
 
-        self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        self.needed_metrics = set(validate_gpu_metric_names(
+            needed_metrics, native_replay=factual_hsl, device=gpu_device(torch),
+        ))
         from config.ew import validate_ew_half_life_days
         half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
         if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
@@ -3060,6 +3066,9 @@ class MpsMulticoinProxy:
         )
         common_runner_kwargs["interrupt_check"] = self.interrupt_check
         common_runner_kwargs["factual_hsl"] = factual_hsl
+        common_runner_kwargs["exposure_rms_enabled"] = bool(
+            self.needed_metrics & EXPOSURE_RMS_METRICS
+        )
         common_runner_kwargs["compact_recovery_output"] = bool(
             factual_hsl and common_runner_kwargs["recovery_distribution_enabled"]
         )

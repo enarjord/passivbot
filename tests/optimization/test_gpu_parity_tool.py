@@ -65,7 +65,7 @@ def test_shocked_fixture_rejects_final_gpu_encoding_before_simulation(monkeypatc
     import sys
     from types import SimpleNamespace
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names))
+        validate_gpu_metric_names=lambda names, **_: names))
     def forbidden(*a, **kw):
         pytest.fail("invalid candles must not execute either CPU or GPU backtests")
     monkeypatch.setattr(gpu_parity, "run_comparison", forbidden)
@@ -94,7 +94,7 @@ def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypat
     from types import SimpleNamespace
 
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names,
+        validate_gpu_metric_names=lambda names, **_: names,
     ))
     def comparison(inputs, *a, **kw):
         assert inputs[0]["bot"]["hsl"]["red_threshold"] == .002
@@ -204,7 +204,7 @@ def test_main_passes_canonical_prepared_exchange_to_simulation(monkeypatch, caps
     import sys
     paths, _config, _markets, _candles = _prepared_fixture_files(tmp_path, exchange="binanceusdm")
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names,
+        validate_gpu_metric_names=lambda names, **_: names,
     ))
     def compared(inputs, exchange, *_args, **_kwargs):
         assert exchange == "binance"
@@ -302,7 +302,7 @@ def test_main_rejects_prepared_identity_errors_before_simulation(monkeypatch, ca
         markets["COIN01"]["exchange"] = "bybit"
         paths[1].write_text(json.dumps(markets))
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names,
+        validate_gpu_metric_names=lambda names, **_: names,
     ))
     def forbidden(*_args, **_kwargs):
         pytest.fail("input identity errors must not run either simulator")
@@ -400,7 +400,7 @@ def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys, tmp_
     import sys
     # Exercise the CLI error boundary without installing an optional GPU runtime.
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names,
+        validate_gpu_metric_names=lambda names, **_: names,
     ))
     def failed(*_args, **_kwargs):
         raise RuntimeError("device launch failed")
@@ -424,7 +424,7 @@ def test_main_rejects_boolean_policy_before_simulation(monkeypatch, capsys, tmp_
     from types import SimpleNamespace
     import sys
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names,
+        validate_gpu_metric_names=lambda names, **_: names,
     ))
     def simulation_forbidden(*_args, **_kwargs):
         pytest.fail("invalid numeric policy must not start a comparison")
@@ -454,7 +454,7 @@ def test_main_uses_prepared_reducer_and_preserves_stdout_when_save_fails(monkeyp
     import sys
     from optimization.gpu.parity import compare_limits
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
-        validate_gpu_metric_names=lambda names: names,
+        validate_gpu_metric_names=lambda names, **_: names,
     ))
     original = gpu_parity.fixture_inputs
 

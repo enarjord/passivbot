@@ -1327,6 +1327,8 @@ fn run_backtest_core<'py>(
             )
             .0
         };
+        backtest.exposure_rms.apply(&mut analysis_usd);
+        backtest.exposure_rms.apply(&mut analysis_btc);
         analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
         analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;

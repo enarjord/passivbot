@@ -12,6 +12,11 @@ since the latest release tag; these features may already be available when insta
 
 - Accelerate CPU HSL backtests by trimming unused flat price prefixes and reusing reconstructed rolling histories, proven GREEN prefixes and settled RED/flat scopes. Invalidate on changed fills, positions, settings, budget or lookback boundaries, and retain shared-controller reference fallback for unsupported or numerically ambiguous cases.
 
+- Add candle-level long/short portfolio and budget-weighted position utilization RMS
+  objectives, plus absolute long/short/gross exposure RMS diagnostics and optimizer
+  limits, on Rust CPU and native NVIDIA/CUDA backtests. Nominal budgets exclude
+  excess allowance; default objectives remain unchanged.
+
 - Accelerate fresh native GPU HSL reconstruction by retaining selected inventory and next-fill coordinates within each scope replay, preserving fill ordering and current-position evaluation.
 
 - Accelerate native GPU HSL replay for single-pair exposed episodes whose reconstructed history differs from the current position, while preserving current-endpoint evaluation and fresh-replay fallbacks.

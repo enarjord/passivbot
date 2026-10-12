@@ -13,6 +13,10 @@ using namespace metal;
 #define PASSIVBOT_TM_LOSS_GATE_DISABLED 0
 #endif
 
+#ifndef PASSIVBOT_EXPOSURE_RMS_ENABLED
+#define PASSIVBOT_EXPOSURE_RMS_ENABLED 0
+#endif
+
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 64;
 constant int OVERRIDE_COLS = 49;
@@ -29,17 +33,17 @@ constant int DAILY_COLS = 12 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVB
 constant int DAILY_COLS = 9 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-constant int SCALAR_COLS = 68;
-constant int FUSED_SCALAR_COLS = 73;
+constant int SCALAR_COLS = 68 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
+constant int FUSED_SCALAR_COLS = 73 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
 #elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-constant int SCALAR_COLS = 66;
-constant int FUSED_SCALAR_COLS = 71;
+constant int SCALAR_COLS = 66 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
+constant int FUSED_SCALAR_COLS = 71 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
 #elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-constant int SCALAR_COLS = 64;
-constant int FUSED_SCALAR_COLS = 69;
+constant int SCALAR_COLS = 64 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
+constant int FUSED_SCALAR_COLS = 69 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
 #else
-constant int SCALAR_COLS = 62;
-constant int FUSED_SCALAR_COLS = 67;
+constant int SCALAR_COLS = 62 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
+constant int FUSED_SCALAR_COLS = 67 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
 #endif
 constant int GAP_BINS = 512;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -5145,6 +5149,9 @@ struct TrailingMartingaleMulticoinReplayState {
     float total_wallet_exposure_max;
     float total_wallet_exposure_mean;
     float total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    ExposureRmsState exposure_rms;
+#endif
     float first_fill_k;
     float last_fill_k;
     float gap_max_min;
@@ -5379,6 +5386,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    ExposureRmsState exposure_rms = init_exposure_rms();
+#endif
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float gap_max_min = 0.0f;
@@ -5441,6 +5451,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         total_wallet_exposure_max = replay_states[b].common.total_wallet_exposure_max;
         total_wallet_exposure_mean = replay_states[b].common.total_wallet_exposure_mean;
         total_wallet_exposure_samples = replay_states[b].common.total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        exposure_rms = replay_states[b].common.exposure_rms;
+#endif
         first_fill_k = replay_states[b].common.first_fill_k;
         last_fill_k = replay_states[b].common.last_fill_k;
         gap_max_min = replay_states[b].common.gap_max_min;
@@ -5691,6 +5704,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             && short_side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started
             || long_can_generate || short_can_generate;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        if (alive && !post_fill_balance_depleted && past_activation_guard) {
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, long_coin_overrides,
+                k, C, long_effective_n_positions, false, long_config.twel, 24);
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, short_coin_overrides,
+                k, C, short_effective_n_positions, true, short_config.twel, 24);
+        }
+#endif
 
         // Observe current HSL before its consumers construct the next orders.
 #if !PASSIVBOT_HSL_DISABLED
@@ -5904,6 +5925,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         float long_unrealized = 0.0f;
         float short_unrealized = 0.0f;
         float net_position_cost = 0.0f;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        float rms_exposure[2] = {0.0f, 0.0f};
+        float rms_position[2] = {0.0f, 0.0f};
+#endif
         for (int c = 0; c < C; ++c) {
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
@@ -5916,6 +5941,12 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 && isfinite(close);
             float c_mult = coin_settings[coin_offset + 4];
             if (long_side.psize[c] > 0.0f) {
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                const float e = long_side.psize[c] * long_side.pprice[c] * c_mult / account.balance;
+                rms_exposure[0] += e;
+                rms_position[0] += exposure_rms_position_moment(e,
+                    exposure_rms.base_wel[0 * MAX_COINS + c], long_config.twel);
+#endif
                 net_position_cost += long_side.psize[c]
                     * long_side.pprice[c] * c_mult;
                 if (mark_valid) {
@@ -5924,6 +5955,12 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 }
             }
             if (short_side.psize[c] > 0.0f) {
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                const float e = short_side.psize[c] * short_side.pprice[c] * c_mult / account.balance;
+                rms_exposure[1] += e;
+                rms_position[1] += exposure_rms_position_moment(e,
+                    exposure_rms.base_wel[1 * MAX_COINS + c], short_config.twel);
+#endif
                 net_position_cost -= short_side.psize[c]
                     * short_side.pprice[c] * c_mult;
                 if (mark_valid) {
@@ -6104,6 +6141,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             day_touched = true;
             if (!liquidated) {
                 float twe_abs = fabs(net_position_cost / account.balance);
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                record_exposure_rms(exposure_rms, rms_exposure[0], rms_exposure[1],
+                    rms_position[0], rms_position[1], long_config.twel, short_config.twel);
+#endif
                 total_wallet_exposure_samples += 1.0f;
                 total_wallet_exposure_mean += (
                     twe_abs - total_wallet_exposure_mean
@@ -6159,6 +6200,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         replay_states[b].common.total_wallet_exposure_max = total_wallet_exposure_max;
         replay_states[b].common.total_wallet_exposure_mean = total_wallet_exposure_mean;
         replay_states[b].common.total_wallet_exposure_samples = total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        replay_states[b].common.exposure_rms = exposure_rms;
+#endif
         replay_states[b].common.first_fill_k = first_fill_k;
         replay_states[b].common.last_fill_k = last_fill_k;
         replay_states[b].common.gap_max_min = gap_max_min;
@@ -6332,12 +6376,15 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = fills.held_count;
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 3] =
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 3] =
         hsl_drawdown_ema_mean_worst_1pct(portfolio_hsl_ema_tail);
 #endif
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 2] = fills.held_sum_sq_min *
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 2] = fills.held_sum_sq_min *
         (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 1] = gap_sum_squared_hours;
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 1] = gap_sum_squared_hours;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    finish_exposure_rms(exposure_rms, scalars, scalar_offset + FUSED_SCALAR_COLS - 7);
+#endif
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k
@@ -6683,6 +6730,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    ExposureRmsState exposure_rms = init_exposure_rms();
+#endif
     thread float& held_max_min = fills.held_max_min;
     thread float& held_sum_min = fills.held_sum_min;
     thread float& held_sum_sq_min = fills.held_sum_sq_min;
@@ -6746,6 +6796,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         total_wallet_exposure_max = replay_states[b].total_wallet_exposure_max;
         total_wallet_exposure_mean = replay_states[b].total_wallet_exposure_mean;
         total_wallet_exposure_samples = replay_states[b].total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        exposure_rms = replay_states[b].exposure_rms;
+#endif
         first_fill_k = replay_states[b].first_fill_k;
         last_fill_k = replay_states[b].last_fill_k;
         gap_max_min = replay_states[b].gap_max_min;
@@ -6906,6 +6959,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         const bool can_generate = alive && effective_n_positions > 0
             && max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started || can_generate;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        if (alive && !post_fill_balance_depleted && past_activation_guard)
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, coin_overrides,
+                k, C, effective_n_positions, short_side, twel, 24);
+#endif
         // Refresh HSL after fills, before forager selection and next orders.
 #if !PASSIVBOT_HSL_DISABLED
         const bool hsl_ema_eligible = hsl.enabled && !hsl.halted;
@@ -7056,6 +7114,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
         float unrealized = 0.0f;
         float position_cost = 0.0f;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        float rms_exposure[2] = {0.0f, 0.0f};
+        float rms_position[2] = {0.0f, 0.0f};
+#endif
         for (int c = 0; c < C; ++c) {
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
@@ -7064,6 +7126,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 && k <= int(coin_settings[coin_offset + 7])
                 && isfinite(close);
             if (psize[c] > 0.0f) {
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                const float e = psize[c] * pprice[c] * coin_settings[coin_offset + 4] / balance;
+                rms_exposure[int(short_side)] += e;
+                rms_position[int(short_side)] += exposure_rms_position_moment(e,
+                    exposure_rms.base_wel[int(short_side) * MAX_COINS + c], twel);
+#endif
                 position_cost += psize[c] * pprice[c]
                     * coin_settings[coin_offset + 4];
                 if (mark_valid) {
@@ -7220,6 +7288,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             day_touched = true;
             if (!liquidated) {
                 float twe_abs = position_cost / balance;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                record_exposure_rms(exposure_rms, rms_exposure[0], rms_exposure[1],
+                    rms_position[0], rms_position[1], short_side ? 0.0f : twel, short_side ? twel : 0.0f);
+#endif
                 total_wallet_exposure_samples += 1.0f;
                 total_wallet_exposure_mean += (
                     twe_abs - total_wallet_exposure_mean
@@ -7272,6 +7344,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         replay_states[b].total_wallet_exposure_max = total_wallet_exposure_max;
         replay_states[b].total_wallet_exposure_mean = total_wallet_exposure_mean;
         replay_states[b].total_wallet_exposure_samples = total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        replay_states[b].exposure_rms = exposure_rms;
+#endif
         replay_states[b].first_fill_k = first_fill_k;
         replay_states[b].last_fill_k = last_fill_k;
         replay_states[b].gap_max_min = gap_max_min;
@@ -7408,12 +7483,15 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    scalars[scalar_offset + SCALAR_COLS - 3] =
+    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 3] =
         hsl_drawdown_ema_mean_worst_1pct(side.hsl_portfolio_ema_tail);
 #endif
-    scalars[scalar_offset + SCALAR_COLS - 2] = held_sum_sq_min *
+    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 2] = held_sum_sq_min *
         (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
-    scalars[scalar_offset + SCALAR_COLS - 1] = gap_sum_squared_hours;
+    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 1] = gap_sum_squared_hours;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    finish_exposure_rms(exposure_rms, scalars, scalar_offset + SCALAR_COLS - 7);
+#endif
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k

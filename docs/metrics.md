@@ -182,6 +182,47 @@ statistics remain zero for a slice without fills. Short runs average the availab
 - `hard_stop_restarts_per_year`: `hard_stop_restarts / n_days * 365.25`.
 
 ## Exposure, volume, and timing
+
+The RMS exposure family uses every recorded nonterminal candle after analysis
+activation, including flat and HSL cooldown candles. Warmup and the terminal
+liquidation candle are excluded. There is no daily maximum, smoothing, threshold,
+clipping, or padding after termination. Values are dimensionless and shared between
+USD/BTC analyses, with no currency or `_w` variants. A valid all-flat history is
+zero; an empty history is undefined and cannot supply an optimizer objective or limit.
+
+For coin `i`, side `s`, candle `t`, define `e[i,s,t]` as absolute position quantity
+times average entry price times contract multiplier divided by actual, unrounded
+USD wallet balance (excluding unrealized PnL). Let `E[s,t] = sum_i(e[i,s,t])`, `L[s]`
+be nominal total wallet exposure limit, and `w[i,s,t]` be the current runtime base
+wallet exposure limit for that coin/side. These budgets include allocation changes
+and coin overrides, exclude excess allowance, and retain the runtime budget of a
+held nontradable coin. Neither approved-coin count nor final configuration substitutes
+for the runtime budget.
+
+| Metric | Definition | Intended use |
+|---|---|---|
+| `total_wallet_exposure_utilization_rms_long/short` | `sqrt(mean_t((E[s,t]/L[s])^2))` | Minimize portfolio utilization |
+| `position_exposure_utilization_rms_long/short` | `sqrt(mean_t(sum_i(e[i,s,t]^2/(L[s]*w[i,s,t]))))` | Minimize budget-weighted position utilization |
+| `total_wallet_exposure_rms_long/short` | `sqrt(mean_t(E[s,t]^2))` | Absolute exposure diagnostic or limit |
+| `total_wallet_exposure_rms_gross` | `sqrt(mean_t((E[long,t]+E[short,t])^2))` | Gross exposure diagnostic or limit |
+
+Position weighting is `w/L` inside the square root; weights are not renormalized
+over occupied positions or the coin universe. Equal budgets `w=L/K` reduce this to
+`sqrt(mean_t(sum_i(utilization[i,t]^2)/K))`. Flat inventory contributes zero without
+dividing by a disabled budget. Positive exposure with an invalid nominal limit or
+coin budget makes the affected utilization metric undefined; it is never silently
+clamped or omitted. Long and short exposures are nonnegative, and gross exposure
+sums both sides before squaring, so hedges do not cancel.
+
+All seven names support optimizer scoring and limits with default goal `min`;
+the default objective list is unchanged. Prefer utilization objectives and absolute
+diagnostics/limits: scaling inventory and nominal budgets together leaves utilization
+unchanged while increasing absolute exposure. These definitions are implemented by
+Rust CPU backtests and the native NVIDIA/CUDA service, including temporal chunking.
+CUDA compiles RMS state and accumulation only when RMS metrics are requested.
+RMS metrics are rejected before replay on legacy GPU paths and Apple Metal; the
+RMS implementation currently supports native NVIDIA/CUDA only.
+
 - `total_wallet_exposure_max/mean/median`: Stats over recorded wallet exposure values.
 - `volume_pct_per_day_avg`: Average daily traded notional as a percentage of balance at fill time.
 - `positions_held_per_day`: Average number of positions opened per day.

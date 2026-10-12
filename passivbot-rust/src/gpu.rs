@@ -905,7 +905,7 @@ mod tests {
             source
                 .matches("!post_fill_balance_depleted && past_activation_guard")
                 .count(),
-            2
+            4
         );
         assert!(source.contains("EmaMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));
@@ -1406,7 +1406,7 @@ mod tests {
             source
                 .matches("!post_fill_balance_depleted && past_activation_guard")
                 .count(),
-            2
+            4
         );
         assert!(source.contains("load_hsl(params, po, 48)"));
         assert!(source.contains("write_one_side_hsl_outputs("));

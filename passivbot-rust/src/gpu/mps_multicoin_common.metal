@@ -626,3 +626,74 @@ inline bool held_positions_have_missing_prices(
     }
     return false;
 }
+
+// Compact candle-level moments used by the native CUDA result contract.
+#ifndef PASSIVBOT_EXPOSURE_RMS_ENABLED
+#define PASSIVBOT_EXPOSURE_RMS_ENABLED 0
+#endif
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+struct ExposureRmsState {
+    float sum[7];
+    float correction[7];
+    uint samples;
+    float base_wel[2 * MAX_COINS];
+};
+inline ExposureRmsState init_exposure_rms() {
+    ExposureRmsState state;
+    state.samples = 0;
+    for (int i = 0; i < 7; ++i) { state.sum[i] = 0.0f; state.correction[i] = 0.0f; }
+    for (int i = 0; i < 2 * MAX_COINS; ++i) state.base_wel[i] = 0.0f;
+    return state;
+}
+inline void update_exposure_rms_budgets(
+    thread ExposureRmsState& state, constant float* bars,
+    constant float* settings, constant float* overrides,
+    int k, int coins, int slots, bool short_side, float twel, int wel_col
+) {
+    for (int c = 0; c < coins; ++c) {
+        const int offset = c * COIN_COLS;
+        const float authored = coin_override_or(overrides, c, wel_col, -1.0f);
+        // Runtime WEL updates follow tradability, independently of selection,
+        // minimum cost, HSL, and whether a next entry order was generated.
+        if (k >= int(settings[offset + 8]) && k <= int(settings[offset + 7])
+            && finite_positive(bars[(k * coins + c) * 4 + 2]) && authored != 0.0f) {
+            state.base_wel[int(short_side) * MAX_COINS + c] = authored >= 0.0f
+                ? authored : (slots > 0 ? twel / float(slots) : 0.0f);
+        }
+    }
+}
+inline float exposure_rms_position_moment(float e, float wel, float limit) {
+    if (e == 0.0f) return 0.0f;
+    return finite_positive(e) && finite_positive(wel) && finite_positive(limit)
+        ? e * (e / wel) / limit : NAN;
+}
+inline float exposure_rms_ratio(float exposure, float limit) {
+    if (exposure == 0.0f) return 0.0f;
+    return finite_positive(exposure) && finite_positive(limit) ? exposure / limit : NAN;
+}
+inline void record_exposure_rms(thread ExposureRmsState& state,
+    float long_exposure, float short_exposure, float long_moment, float short_moment,
+    float long_limit, float short_limit
+) {
+    const float long_ratio = exposure_rms_ratio(long_exposure, long_limit);
+    const float short_ratio = exposure_rms_ratio(short_exposure, short_limit);
+    const float gross = long_exposure + short_exposure;
+    const float values[7] = {long_exposure * long_exposure, short_exposure * short_exposure,
+        gross * gross, long_ratio * long_ratio, short_ratio * short_ratio,
+        long_moment, short_moment};
+    ++state.samples;
+    for (int i = 0; i < 7; ++i) {
+        // Compensated sums prevent long float32 histories losing small samples.
+        const float y = values[i] - state.correction[i];
+        const float next = state.sum[i] + y;
+        state.correction[i] = (next - state.sum[i]) - y;
+        state.sum[i] = next;
+    }
+}
+inline void finish_exposure_rms(thread const ExposureRmsState& state,
+    device float* scalars, int offset
+) {
+    for (int i = 0; i < 7; ++i)
+        scalars[offset + i] = state.samples > 0 ? sqrt(state.sum[i] / float(state.samples)) : NAN;
+}
+#endif
