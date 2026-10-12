@@ -529,6 +529,7 @@ class ProxyRun:
     liquidation_threshold: float
     first_valid_idx: int
     last_valid_idx: int
+    requested_end_ts_ms: int | None = None
 
 
 def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):

@@ -1493,6 +1493,7 @@ def _require_available_held_valuation(scalars):
 def _decode_outputs(
     daily, scalars, gaps, *, btc_risk_enabled=False,
     native_factual_hsl=False, exposure_rms_enabled=False,
+    interval_ms=60_000,
 ) -> dict:
     # Requested native RMS metrics append seven moments after the legacy scalar tail.
     rms_scalars = scalars[:, -7:] if exposure_rms_enabled else None
@@ -1615,6 +1616,10 @@ def _decode_outputs(
         )):
             output[name] = rms_scalars[:, i]
     if native_factual_hsl:
+        # Native shaders transport the candle index before f32 millisecond
+        # multiplication loses precision. Keep legacy timestamp consumers intact.
+        output["last_eq_step"] = scalars[:, 8].to(torch.int64)
+        output["last_eq_ts"] = timestamp_column(8) * float(interval_ms)
         # Column 17 is unused by legacy shared replay. Native reporting owns a
         # distinct portfolio maximum, since unified side signals are zero.
         output["hsl_drawdown_ema_max_portfolio"] = scalars[:, 17]
@@ -1626,10 +1631,11 @@ def _decode_outputs(
 def _decode_multicoin_fused_outputs(
     daily, scalars, gaps, *, btc_risk_enabled=False,
     native_factual_hsl=False, exposure_rms_enabled=False,
+    interval_ms=60_000,
 ) -> dict:
     output = _decode_outputs(daily, scalars, gaps, btc_risk_enabled=btc_risk_enabled,
                              native_factual_hsl=native_factual_hsl,
-                             exposure_rms_enabled=exposure_rms_enabled)
+                             exposure_rms_enabled=exposure_rms_enabled, interval_ms=interval_ms)
     if exposure_rms_enabled:
         scalars = scalars[:, :-7]
     long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
@@ -2447,6 +2453,8 @@ class _MulticoinReplayRunner:
             )
         self.side = side
         self.native_factual_hsl = bool(factual_hsl)
+        if self.native_factual_hsl and int(data["n"]) > 2**24:
+            raise ValueError("Native GPU replay exceeds exact candle-index capacity")
         self.exposure_rms_enabled = bool(exposure_rms_enabled)
         if self.exposure_rms_enabled and not self.native_factual_hsl:
             raise ValueError("Exposure RMS GPU metrics require native CUDA replay")
@@ -2967,7 +2975,8 @@ class _MulticoinReplayRunner:
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
                              native_factual_hsl=getattr(self, "native_factual_hsl", False),
-                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False))
+                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False),
+                             interval_ms=self.run_config.interval_ms)
 
     def _hsl_ema_tail_sample_buffer(self, batch_size):
         if not self._hsl_ema_tail_samples_enabled():
@@ -3925,7 +3934,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
                              native_factual_hsl=getattr(self, "native_factual_hsl", False),
-                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False))
+                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False),
+                             interval_ms=self.run_config.interval_ms)
 
 
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
@@ -4412,7 +4422,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_multicoin_fused_outputs(daily, scalars, gaps, btc_risk_enabled=self.btc_risk_enabled,
                              native_factual_hsl=getattr(self, "native_factual_hsl", False),
-                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False))
+                             exposure_rms_enabled=getattr(self, "exposure_rms_enabled", False),
+                             interval_ms=self.run_config.interval_ms)
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
