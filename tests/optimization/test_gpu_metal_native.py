@@ -98,6 +98,7 @@ def test_metal_factual_hsl_matches_full_dispatch_through_policy_transitions(monk
     sides = ("long", "short")
     proxy = make_proxy(mode, strategy, sides, minutes=256, factual_hsl=True)
     runner = proxy.fused_runner or proxy.runners[sides[0]]
+    assert runner.mps_coin_capacity == 2
     runner.max_dispatch_candidate_bars = None
     _, full = raw(proxy, [{}])
     full = {key: value.clone() if isinstance(value, torch.Tensor) else value

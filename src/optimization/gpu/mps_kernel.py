@@ -2559,7 +2559,7 @@ class _MulticoinReplayRunner:
         if (
             self.hsl_capacity
             and self.bars.device.type == "mps"
-            and self.specialize_metal_coin_capacity
+            and (self.specialize_metal_coin_capacity or self.native_factual_hsl)
         ):
             if not 1 <= self.n_coins <= MPS_MULTICOIN_MAX_COINS:
                 raise ValueError("Metal coin count exceeds the multicoin shader limit")
@@ -3513,8 +3513,6 @@ class _MulticoinReplayRunner:
 
 class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
     """EMA Anchor parameter layout, packing and kernel dispatch."""
-
-    specialize_metal_coin_capacity = True
 
     # Metal and other HSL scopes compile disposable unified arithmetic out.
     hsl_native_cache_enabled = True
