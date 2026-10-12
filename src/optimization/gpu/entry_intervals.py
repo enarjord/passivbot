@@ -38,17 +38,28 @@ def entry_intervals_from_counts(counts, interval_ms):
     cumulative = counts[:, 1:].cumsum(dim=1, dtype=torch.int64)
     if bool((cumulative[:, -1] != total).any()):
         raise RuntimeError("native entry interval histogram count disagrees with total")
-    ranks = (total - 1).clamp(min=0).to(torch.float64)[:, None] * torch.tensor(
-        [.5, .95, .99], dtype=torch.float64, device=counts.device,
-    )
-    lower, upper = ranks.floor().to(torch.int64), ranks.ceil().to(torch.int64)
+    dtype = torch.float32 if counts.device.type == "mps" else torch.float64
+    if counts.device.type == "mps":
+        numerator = (total - 1).clamp(min=0)[:, None] * torch.tensor(
+            [50, 95, 99], dtype=torch.int64, device=counts.device,
+        )
+        lower = numerator // 100
+        remainder = numerator % 100
+        upper = lower + (remainder > 0).to(torch.int64)
+        fraction = remainder.to(dtype) / 100
+    else:
+        ranks = (total - 1).clamp(min=0).to(dtype)[:, None] * torch.tensor(
+            [.5, .95, .99], dtype=dtype, device=counts.device,
+        )
+        lower, upper = ranks.floor().to(torch.int64), ranks.ceil().to(torch.int64)
+        fraction = ranks - lower.to(dtype)
     queries = torch.cat((lower + 1, upper + 1, total[:, None]), dim=1)
     indices = torch.searchsorted(cumulative, queries).clamp(max=cumulative.shape[1] - 1)
-    lo, hi = indices[:, :3].double(), indices[:, 3:6].double()
-    quantiles = lo + (hi - lo) * (ranks - lower.double())
+    lo, hi = indices[:, :3].to(dtype), indices[:, 3:6].to(dtype)
+    quantiles = lo + (hi - lo) * fraction
     # Sum of gaps from their CDF avoids an additional candidate-by-bar product.
     sum_steps = (cumulative.shape[1] - 1) * total - cumulative[:, :-1].sum(dim=1)
-    mean = sum_steps.double() / total.clamp(min=1).double()
-    metrics = torch.cat((mean[:, None], quantiles, indices[:, -1:].double()), dim=1)
+    mean = sum_steps.to(dtype) / total.clamp(min=1).to(dtype)
+    metrics = torch.cat((mean[:, None], quantiles, indices[:, -1:].to(dtype)), dim=1)
     metrics *= interval_ms / 3_600_000.0
     return torch.where(total[:, None] > 0, metrics, 0.0)

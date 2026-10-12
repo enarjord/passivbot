@@ -47,10 +47,10 @@ pip install -e ".[full]"
 
 For exponential recency weighting, set `backtest.ew_half_life_days` (for example,
 `180`) and select a metric such as `adg_strategy_eq_ew`. The setting defaults to
-`null`, and existing objectives retain their behavior. CPU and native CUDA use the
+`null`, and existing objectives retain their behavior. CPU and native GPU use the
 [same daily-return definition](metrics.md#exponential-recency-weighting).
 Objectives and active limits determine legacy `_w` capture: omitting those metrics
-skips their nested analyses and CUDA history/workspace allocation. Half-life and
+skips their nested analyses and GPU history/workspace allocation. Half-life and
 definition version are part of evaluation compatibility; change them only with
 fresh evaluation, using previous candidates as seeds if desired.
 
@@ -133,7 +133,7 @@ Passivbot supports these optimizer backends:
   - Uses pymoo. This is now the default optimizer backend.
   - The default pymoo algorithm mode is `auto`: Passivbot uses `nsga2` when optimizing `3` or fewer objectives, and `nsga3` when optimizing more than `3`.
 - `optimize.backend: gpu`
-  - Uses authoritative NVIDIA/CUDA simulations with CPU-owned pymoo ask/tell evolution,
+  - Uses native NVIDIA/CUDA or Apple Metal simulations with CPU-owned pymoo ask/tell evolution,
     scenario selection, scoring, limits and result processing. This backend remains
     experimental; see [the service contract](gpu_backtest_service.md#gpu-optimizer).
 
@@ -154,7 +154,8 @@ Example:
 
 <a id="apple-mps-gpu-backend-experimental"></a>
 
-GPU optimization requires NVIDIA CUDA on Linux or WSL2 and the optional runtime:
+GPU optimization supports NVIDIA CUDA on Linux/WSL2 or Apple Silicon Metal on macOS.
+Install the matching optional runtime. For NVIDIA:
 
 ```bash
 python3 -m pip install -e ".[full,gpu-cuda]"
@@ -164,8 +165,23 @@ passivbot optimize configs/examples/ema_anchor.json --optimizer-backend gpu
 
 A compatible NVIDIA driver is required. In WSL2 install that driver on Windows;
 a system-wide CUDA toolkit is unnecessary. CPU optimization (`pymoo` or `deap`) and
-standalone CPU backtests/plots remain available without GPU dependencies. Apple Metal
-optimizer support is deferred; existing low-level replay tools remain development tools.
+standalone CPU backtests/plots remain available without GPU dependencies.
+
+For Apple Silicon on macOS:
+
+```bash
+python3 -m pip install -e ".[full,gpu-mps]"
+python3 -c "import torch; print(torch.backends.mps.is_available())"
+passivbot optimize configs/examples/ema_anchor.json --optimizer-backend gpu
+```
+
+The service selects Metal automatically on supported Macs. Both EMA Anchor and
+Trailing Martingale use the native shared-account replay, including long/short,
+suites and HSL. Metal uses float32 replay/EW arithmetic, integer UTC clocks and
+float64 host analysis of compact daily summaries; full replay histories remain
+on the device. Saved fitness records a distinct Metal precision identity, so
+CUDA and Metal checkpoints are not interchangeable. This backend is experimental;
+fixture parity does not certify every long-history trading path.
 
 The CPU prepares canonical configs, immutable scenarios and compact candidate requests.
 One asynchronous service owns GPU packing, compilation, residency, scheduling, simulation
@@ -453,11 +469,10 @@ Trade-offs:
 
 - Intra-interval fill ordering is lost (fills occur only at the aggregated bar boundaries).
 - Metrics are still time-correct because analysis uses timestamps rather than bar indices.
-- Native CUDA optimization supports aggregated candles with HSL disabled. Enabled HSL requires
+- Native GPU optimization supports aggregated candles with HSL disabled. Enabled HSL requires
   one-minute candles. Minute-denominated strategy/Forager EMA spans and elapsed-time cooldowns
   retain their time meaning. GPU results supply fitness directly; compare interval-sensitive
-  metrics separately with the [standalone parity tool](gpu_parity.md). Apple Metal optimization
-  is deferred.
+  metrics separately with the [standalone parity tool](gpu_parity.md).
 
 ### Fine-Tuning Specific Parameters
 

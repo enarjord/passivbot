@@ -2434,8 +2434,6 @@ class _MulticoinReplayRunner:
         self.weighted_equity_metrics = frozenset(weighted_equity_metrics)
         if self.weighted_equity_metrics - WEIGHTED_EQUITY_METRICS:
             raise ValueError("unsupported resident weighted equity metrics")
-        if self.weighted_equity_metrics and gpu_device(torch) != "cuda":
-            raise ValueError("resident weighted equity capture currently requires CUDA")
         self.weighted_raw_equity_enabled = bool(
             self.weighted_equity_metrics & WEIGHTED_RAW_EQUITY_METRICS
         )
@@ -2993,8 +2991,9 @@ class _MulticoinReplayRunner:
         if not self.weighted_equity_cols:
             return {}
         interval = self.run_config.interval_ms
-        first = output["first_eq_ts"].to(torch.float64)
-        last = output["last_eq_ts"].to(torch.float64)
+        dtype = torch.float32 if samples.device.type == "mps" else torch.float64
+        first = output["first_eq_ts"].to(dtype)
+        last = output["last_eq_ts"].to(dtype)
         observed = torch.isfinite(first)
         if bool((observed != torch.isfinite(last)).any()):
             raise RuntimeError("GPU weighted equity observation clocks disagree")
@@ -3003,7 +3002,7 @@ class _MulticoinReplayRunner:
         first_step = torch.round(torch.where(observed, first, 0) / interval)
         last_step = torch.round(torch.where(observed, last, 0) / interval)
         counts = torch.where(observed, last_step - first_step + 1, 0).to(torch.long)
-        timestamps = first_step * interval + self.run_config.first_ts_ms
+        timestamps = first_step.to(torch.int64) * interval + self.run_config.first_ts_ms
         kwargs = dict(
             first_timestamps_ms=timestamps, sample_counts=counts,
             interval_ms=interval, n_days=self.n_days,
@@ -3515,6 +3514,8 @@ class _MulticoinReplayRunner:
 class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
     """EMA Anchor parameter layout, packing and kernel dispatch."""
 
+    specialize_metal_coin_capacity = True
+
     # Metal and other HSL scopes compile disposable unified arithmetic out.
     hsl_native_cache_enabled = True
 
@@ -3556,7 +3557,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
 
     def _temporal_replay_enabled(self):
         return (self.max_dispatch_candidate_bars is not None
-                and self.native_factual_hsl and self.bars.device.type == "cuda")
+                and self.native_factual_hsl)
 
     def _dispatch(
         self,

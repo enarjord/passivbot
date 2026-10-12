@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Support experimental native GPU optimization on Apple Silicon through Metal/MPS,
+  including both strategies, suites, HSL, weighted and exponential equity metrics,
+  bounded dataset residency, interruption and device-specific checkpoint identity.
+
 - Accelerate fresh native GPU HSL reconstruction by retaining selected inventory and next-fill coordinates within each scope replay, preserving fill ordering and current-position evaluation.
 
 - Accelerate native GPU HSL replay for single-pair exposed episodes whose reconstructed history differs from the current position, while preserving current-endpoint evaluation and fresh-replay fallbacks.

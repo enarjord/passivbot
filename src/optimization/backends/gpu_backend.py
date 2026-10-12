@@ -195,7 +195,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 configs_to_individuals_streaming=None, optimization_shape=None,
                 checkpoint_path=None, resume=False, interrupt_check=no_interrupt_requested,
                 standalone_candle_coins=None, **_cpu_only_arguments):
-    from optimization.gpu.native import CudaBacktestService
+    from optimization.gpu.native import NativeBacktestService
     from optimization.gpu.autotune import is_auto
 
     base = getattr(evaluator_for_pool, "base", evaluator_for_pool)
@@ -250,7 +250,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 [(binding.scenario, binding.dataset.exchange) for binding in registry.bindings
                  if binding.scenario in labels], "screening",
             )
-        service = CudaBacktestService(batch_size=batch_size,
+        service = NativeBacktestService(batch_size=batch_size,
                                      max_dispatch_candidate_bars=dispatch_budget,
                                      interrupt_check=interrupt_check, tuning_mode=gpu.get("tuning_mode", "auto"))
         session = NativeEvaluationSession(service, registry.scorer,

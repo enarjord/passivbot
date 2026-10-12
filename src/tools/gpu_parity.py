@@ -64,7 +64,7 @@ def build_parser():
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--diagnostics", action="store_true", help="Include bounded fill/state summaries")
     parser.add_argument("--gpu-engine", choices=("legacy", "native"), default="native",
-                        help="GPU replay path: native CUDA optimizer service (default) or legacy diagnostic selection")
+                        help="GPU replay path: native CUDA/Metal optimizer service (default) or legacy diagnostic selection")
     return parser
 
 
@@ -437,10 +437,10 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
                 runner.run = original
 
     if gpu_engine == "native":
-        from optimization.gpu.native import CudaBacktestService
+        from optimization.gpu.native import NativeBacktestService
 
         with _native_dataset(inputs, exchange, metrics) as dataset:
-            with CudaBacktestService(batch_size=1, tuning_mode="off") as service:
+            with NativeBacktestService(batch_size=1, tuning_mode="off") as service:
                 service.register_dataset(identity, dataset)
                 started = time.perf_counter()
                 result = service.submit(BacktestRequest(identity, identity, {})).result()

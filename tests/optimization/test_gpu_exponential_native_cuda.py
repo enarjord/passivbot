@@ -9,7 +9,7 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="NVIDIA CU
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-def test_native_ew_only_omits_legacy_history_and_nested_analysis(monkeypatch, strategy):
+def test_native_ew_only_omits_legacy_history_and_nested_analysis(monkeypatch, strategy, service_class=None):
     import backtest
     from config.ew import EW_METRICS
     from optimization.gpu import metrics, mps_kernel, weighted_equity
@@ -20,6 +20,7 @@ def test_native_ew_only_omits_legacy_history_and_nested_analysis(monkeypatch, st
     from tools.gpu_parity import build_parser, fixture_inputs, _native_dataset
 
     verify_loaded_runtime_extension()
+    service_class = service_class or CudaBacktestService
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", "2",
         "--bars", "5760", "--seed", "209",
@@ -80,7 +81,7 @@ def test_native_ew_only_omits_legacy_history_and_nested_analysis(monkeypatch, st
         phase["legacy"] = legacy
         requested = EW_METRICS | legacy_names if legacy else EW_METRICS
         with _native_dataset(inputs, "binance", tuple(sorted(requested))) as dataset:
-            with CudaBacktestService(batch_size=2, max_pending=2, max_batch_delay=.05) as service:
+            with service_class(batch_size=2, max_pending=2, max_batch_delay=.05) as service:
                 service.register_dataset("ew-ablation", dataset)
                 futures = [service.submit(BacktestRequest(str(i), "ew-ablation", {})) for i in range(2)]
                 # Native variants compile lazily; permit one bounded cold

@@ -3548,9 +3548,9 @@ def test_fill_pnl_lookback_matches_rust_bar_contract(days, interval, expected):
 @pytest.mark.parametrize("device,factual,expected", [
     ("cuda", True, (True, 64, 128)),
     ("cuda", False, (False, 64, 11520)),
-    ("mps", True, (False, 64, 11520)),
+    ("mps", True, (True, 64, 128)),
 ])
-def test_native_plan_has_cuda_interrupt_boundaries(strategy, device, factual, expected):
+def test_native_plan_has_interrupt_boundaries_on_both_devices(strategy, device, factual, expected):
     if strategy == "trailing_martingale" and device == "cuda" and expected[0] is False:
         expected = (True, 64, 8192)
     assert _mps_multicoin_dispatch_plan(

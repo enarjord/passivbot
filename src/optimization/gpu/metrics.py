@@ -906,7 +906,7 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
 
     if "entry_interval_native_metrics" in out:
         values = out["entry_interval_native_metrics"]
-        if (values.dtype != torch.float64 or values.shape != (len(zeros), len(ENTRY_INTERVAL_NAMES))
+        if (values.dtype not in (torch.float32, torch.float64) or values.shape != (len(zeros), len(ENTRY_INTERVAL_NAMES))
                 or not bool(torch.isfinite(values).all()) or bool((values < 0).any())):
             raise RuntimeError("native entry interval compact metrics are malformed")
         return {name: values[:, column] for column, name in enumerate(ENTRY_INTERVAL_NAMES)}
