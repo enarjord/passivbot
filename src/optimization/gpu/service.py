@@ -1825,6 +1825,8 @@ class MpsSingleCoinProxy:
         half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
         if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
             raise ValueError("Exponential (_ew) metrics require backtest.ew_half_life_days")
+        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and gpu_device(torch) != "cuda":
+            raise ValueError("Exponential GPU metrics require CUDA; use a CPU backend")
 
         from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
