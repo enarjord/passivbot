@@ -956,6 +956,12 @@ async def prepare_master_datasets(
 
     async def _prepare_dataset(config, exchange):
         kwargs = {"allow_internal_nan_gaps": True} if allow_internal_nan_gaps else {}
+        if config["backtest"].get("organillo_csv") is not None:
+            # Masters serve scenarios with different schedules and date windows.
+            # Apply each schedule after slicing, rather than pruning a shared master.
+            config = deepcopy(config)
+            config["backtest"]["organillo_csv"] = None
+            config["backtest"]["organillo_sha256"] = None
         return await prepare_hlcvs_mss(config, exchange, **kwargs)
 
     dataset_windows = _derive_dataset_windows(
@@ -1384,6 +1390,16 @@ def apply_scenario(
         backtest_section["coin_sources"] = resolved_sources
 
     apply_scenario_overrides(cfg, scenario.overrides, tracker)
+
+    if cfg["backtest"].get("organillo_csv") is not None:
+        from organillo import freeze_config, period_coins
+        freeze_config(cfg)
+        candidates = period_coins(cfg, master_coins)
+        filtered_coins = [coin for coin in filtered_coins if coin in candidates]
+        if not filtered_coins:
+            raise ValueError(f"Organillo scenario {scenario.label} has no usable coin identities")
+        for exchange in scenario_exchanges:
+            cfg["backtest"]["coins"][exchange] = list(filtered_coins)
 
     if tracker.summary() and not quiet:
         details = tracker.merge_details({"scenario": scenario.label})

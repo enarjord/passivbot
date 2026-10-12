@@ -524,7 +524,7 @@ inline void prepare_coin_hsl_budgets(
 inline bool passes_multicoin_min_effective_cost(
     bool enabled, float balance, float wel,
     float initial_qty_pct, float price,
-    constant float* coin_settings, int coin_offset
+    constant float* coin_settings ORGANILLO_ARGS, int coin_offset
 ) {
     if (!enabled) return true;
     if (!finite_positive(price)) return false;
@@ -539,7 +539,7 @@ inline bool passes_multicoin_min_effective_cost(
 }
 
 inline float clamped_market_price(
-    constant float* bars, constant float* coin_settings,
+    constant float* bars, constant float* coin_settings ORGANILLO_ARGS,
     int k, int coin, int coin_count
 ) {
     int coin_offset = coin * COIN_COLS;
@@ -610,7 +610,7 @@ inline int joint_hsl_report_tier(
 inline bool held_positions_have_missing_prices(
     thread const float* psize,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {

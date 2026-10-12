@@ -41,11 +41,14 @@ class PreparedGpuDataset:
     timestamp_range: tuple[int, int]
     coin_indices: tuple[int, ...]
     candle_coins: tuple[str, ...]
+    eligibility: SharedArraySpec | None
+    eligibility_rows: SharedArraySpec | None
     config_json: str = field(repr=False)
     markets_json: str = field(repr=False)
 
     def __init__(self, *, config, markets, hlcvs, btc, timestamps, candle_coins, exchange, metrics,
-                 time_range=None, coin_indices=None, timestamp_range=None):
+                 time_range=None, coin_indices=None, timestamp_range=None,
+                 eligibility=None, eligibility_rows=None):
         specs = []
         for name, spec in (("hlcvs", hlcvs), ("btc", btc), ("timestamps", timestamps)):
             if not isinstance(spec, SharedArraySpec) or not spec.name:
@@ -99,9 +102,26 @@ class PreparedGpuDataset:
         metrics = tuple(dict.fromkeys(metrics))
         if not metrics or any(not isinstance(name, str) or not name for name in metrics):
             raise ValueError("requested metrics must be nonempty strings")
+        if (eligibility is None) != (eligibility_rows is None):
+            raise ValueError("Organillo eligibility and row mapping must be supplied together")
+        if config["backtest"].get("organillo_csv") is not None and eligibility is None:
+            raise ValueError("Organillo requires prepared eligibility buffers")
+        if eligibility is not None:
+            if config["backtest"].get("organillo_csv") is None:
+                raise ValueError("Organillo prepared buffers require backtest.organillo_csv")
+            digest = config["backtest"].get("organillo_sha256")
+            if not isinstance(digest, str) or len(digest) != 64:
+                raise ValueError("Organillo requires a validated SHA-256 for prepared GPU eligibility")
+            if (not isinstance(eligibility, SharedArraySpec) or not isinstance(eligibility_rows, SharedArraySpec)
+                    or np.dtype(eligibility.dtype) != np.uint8 or len(eligibility.shape) != 2
+                    or eligibility.shape[1] != len(indices) or eligibility.shape[0] < 1
+                    or np.dtype(eligibility_rows.dtype) != np.int32
+                    or eligibility_rows.shape != (timestamp_span[1] - timestamp_span[0],)):
+                raise ValueError("Organillo buffers must match selected coin columns and candle rows")
         values = dict(hlcvs=hlcvs, btc=btc, timestamps=timestamps, exchange=exchange,
                       metrics=metrics, time_range=span, timestamp_range=timestamp_span,
                       coin_indices=indices, candle_coins=candle_coins,
+                       eligibility=eligibility, eligibility_rows=eligibility_rows,
                       config_json=json.dumps(config, allow_nan=False),
                       markets_json=json.dumps(markets, allow_nan=False))
         for name, value in values.items():
@@ -119,11 +139,33 @@ class PreparedGpuDataset:
                 arrays.append(array[slice(*span)])
             yield arrays
 
+    @contextmanager
+    def attach_selection(self):
+        if self.eligibility is None:
+            yield None
+            return
+        from organillo import Selection, validate_buffers
+        with ExitStack() as resources:
+            values = resources.enter_context(_borrow_array(self.eligibility))
+            rows = resources.enter_context(_borrow_array(self.eligibility_rows))
+            validate_buffers(values, rows, self.time_range[1] - self.time_range[0], len(self.coin_indices))
+            values.flags.writeable = rows.flags.writeable = False
+            yield Selection(values, rows, json.loads(self.config_json)["backtest"].get("organillo_sha256"))
+
     def with_config(self, config):
         """Prepare another execution view over the same immutable source arrays."""
+        updated = config["backtest"]
+        if self.eligibility is not None:
+            original = json.loads(self.config_json)["backtest"]
+            if (updated.get("organillo_csv") is None
+                    or original.get("organillo_sha256") != updated.get("organillo_sha256")):
+                raise ValueError("changing an Organillo schedule requires a newly prepared dataset")
+        elif updated.get("organillo_csv") is not None:
+            raise ValueError("changing an Organillo schedule requires a newly prepared dataset")
         return PreparedGpuDataset(
             config=config, markets=json.loads(self.markets_json), exchange=self.exchange,
             hlcvs=self.hlcvs, btc=self.btc, timestamps=self.timestamps,
             candle_coins=self.candle_coins, coin_indices=self.coin_indices,
             time_range=self.time_range, timestamp_range=self.timestamp_range, metrics=self.metrics,
+            eligibility=self.eligibility, eligibility_rows=self.eligibility_rows,
         )

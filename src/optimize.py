@@ -1698,6 +1698,12 @@ class Evaluator:
                         btc_spec
                     )
 
+        self.selection_specs = {}
+        if config["backtest"].get("organillo_csv") is not None and shared_array_manager is not None:
+            from organillo import share_selection
+            for exchange in self.exchanges:
+                self.selection_specs[exchange] = share_selection(config,
+                    config["backtest"]["coins"][exchange], self.timestamps[exchange], shared_array_manager)
         self.config = config
         logging.debug("Evaluator initialization complete.")
         logging.info("Evaluator ready | exchanges=%d", len(self.exchanges))
@@ -1714,6 +1720,13 @@ class Evaluator:
         self.scoring_weights = default_scoring_weights()
 
         self.build_limit_checks()
+
+    def prepared_selection(self, exchange):
+        specs = self.selection_specs.get(exchange)
+        if specs is None:
+            return None
+        from organillo import borrow_selection
+        return borrow_selection(specs, self._attachments.setdefault("organillo", {}))
 
     def _ensure_attached(self, exchange: str) -> None:
         if exchange not in self.shared_hlcvs_np:
@@ -1913,6 +1926,7 @@ class Evaluator:
                 self.shared_btc_np[exchange],
                 self.timestamps.get(exchange),
                 metrics_only=True,
+                selection=self.prepared_selection(exchange) if self.selection_specs else None,
                 skip_btc_analysis=skip_btc_analysis,
                 calculate_legacy_w=needs_legacy_weighted_analysis(required_metrics),
             )
@@ -2138,6 +2152,16 @@ class SuiteEvaluator:
         self.base = base_evaluator
         self.contexts = scenario_contexts
         self.reducer_cfg = reducer_cfg
+        if base_evaluator.shared_array_manager is not None and any(
+            ctx.config["backtest"].get("organillo_csv") is not None for ctx in self.contexts
+        ):
+            from organillo import share_selection
+            for ctx in self.contexts:
+                if ctx.config["backtest"].get("organillo_csv") is not None:
+                    ctx.selection_specs = {ex: share_selection(ctx.config,
+                        ctx.config["backtest"]["coins"][ex], ctx.timestamps[ex],
+                        base_evaluator.shared_array_manager) for ex in ctx.exchanges}
+
         objective_scenario = self.base.config["optimize"].get("objective_scenario")
         self.objective_scenario = (
             str(objective_scenario).strip() if objective_scenario is not None else None
@@ -2550,6 +2574,11 @@ class SuiteEvaluator:
                 )
 
                 phase_start = _profile_start(profile_enabled)
+                selection = None
+                if (getattr(ctx, "selection_specs", None) or {}).get(exchange) is not None:
+                    from organillo import borrow_selection
+                    selection = borrow_selection(ctx.selection_specs[exchange],
+                        ctx.attachments.setdefault("organillo", {}))
                 payload = build_backtest_payload(
                     hlcvs_data,
                     ctx.msss[exchange],
@@ -2559,6 +2588,7 @@ class SuiteEvaluator:
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                     metrics_only=True,
+                    selection=selection,
                     skip_btc_analysis=skip_btc_analysis,
                     calculate_legacy_w=needs_legacy_weighted_analysis(
                         self.required_metrics_for_scenario(ctx.label)
@@ -3966,6 +3996,9 @@ async def main():
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
+    if config["backtest"].get("organillo_csv") is not None:
+        from organillo import freeze_config
+        freeze_config(config)
     data_config = build_optimizer_data_config(config)
     allow_internal_nan_gaps = (
         str(config.get("optimize", {}).get("backend", "")).strip().lower() == "gpu"

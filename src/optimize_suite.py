@@ -69,6 +69,7 @@ class ScenarioEvalContext:
     coin_slice_indices: Optional[Dict[str, List[int]]] = None  # per-exchange coin indices
     # Actual source-column identities, including full masters on lazy paths.
     candle_coins: Optional[Dict[str, tuple[str, ...]]] = None
+    selection_specs: Optional[Dict[str, tuple]] = None
 
 
 @simulation_data_scope
@@ -290,6 +291,11 @@ async def prepare_suite_contexts(
         # Freeze the resolved patch in both candidate evaluation and resume evidence.
         # Reapplying raw file references would discard preparation's resolved values.
         scenario_overrides = deepcopy(scenario.overrides) if scenario.overrides else {}
+        if scenario_config["backtest"].get("organillo_csv") is not None:
+            # Freeze preparation's source rather than clearing its hash again
+            # when the scenario overrides are applied to each candidate.
+            scenario_overrides["backtest.organillo_csv"] = scenario_config["backtest"]["organillo_csv"]
+            scenario_overrides["backtest.organillo_sha256"] = scenario_config["backtest"]["organillo_sha256"]
         coin_keys = [
             key for key in scenario_overrides
             if key == "coin_overrides" or key.startswith("coin_overrides.")

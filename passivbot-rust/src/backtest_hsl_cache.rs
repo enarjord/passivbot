@@ -344,7 +344,7 @@ impl GreenWindow {
     }
 }
 
-impl Backtest<'_> {
+impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
     pub(super) fn rolling_hsl_window(
         &self,
         snapshot: &crate::hsl_snapshot::Input,
@@ -430,7 +430,7 @@ impl Trace {
     }
 }
 
-impl Backtest<'_> {
+impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
     /// Find the flat prefix immediately before the only episode that can
     /// authorize current panic/cooldown. Simulator executions are globally ordered
     /// and carry the authoritative post-fill position, so no episode inference is

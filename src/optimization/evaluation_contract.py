@@ -135,6 +135,11 @@ def build_evaluation_contract(config: dict) -> dict:
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }
+    if effective.get("backtest", {}).get("organillo_csv") is not None:
+        digest = effective["backtest"].get("organillo_sha256")
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError("Organillo requires a validated SHA-256 before saving evaluation fitness")
+        contract["organillo"] = {"sha256": digest, "contract": 1}
     half_life = effective.get("backtest", {}).get("ew_half_life_days")
     if half_life is not None:
         from config.ew import EW_DEFINITION_VERSION

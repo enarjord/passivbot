@@ -62,6 +62,7 @@ def build_parser():
     parser.add_argument("--filter-by-min-effective-cost", action="store_true", default=None)
     parser.add_argument("--metrics", nargs="+", default=list(DEFAULT_METRICS))
     parser.add_argument("--tolerances", help="JSON per-metric absolute/relative/sentinel policy")
+    parser.add_argument("--organillo-csv", help="Optional external daily UTC eligibility CSV")
     parser.add_argument("--report", help="Save a standard-JSON report here")
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--diagnostics", action="store_true", help="Include bounded fill/state summaries")
@@ -359,10 +360,18 @@ def _native_dataset(inputs, exchange, metrics):
             spec = arrays.create_from(value)[0]
             specs.append(spec)
             resources.callback(arrays.cleanup, [spec])
+        selection_specs = {}
+        if config["backtest"].get("organillo_csv") is not None:
+            from organillo import prepare_selection
+            selection = prepare_selection(config, config["backtest"]["coins"][exchange], timestamps)
+            for name, value in (("eligibility", selection.values), ("eligibility_rows", selection.rows)):
+                spec = arrays.create_from(value)[0]
+                resources.callback(arrays.cleanup, [spec])
+                selection_specs[name] = spec
         yield PreparedGpuDataset(
             config=config, markets=markets, exchange=exchange,
             hlcvs=specs[0], btc=specs[1], timestamps=specs[2],
-            candle_coins=config["backtest"]["coins"][exchange], metrics=metrics,
+            candle_coins=config["backtest"]["coins"][exchange], metrics=metrics, **selection_specs,
         )
     except BaseException:
         try:
@@ -375,6 +384,8 @@ def _native_dataset(inputs, exchange, metrics):
 
 
 def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostics=False, gpu_engine="native"):
+    if gpu_engine == "legacy" and inputs[0]["backtest"].get("organillo_csv") is not None:
+        raise ValueError("Organillo parity requires the native shared-account GPU engine")
     if gpu_engine not in {"legacy", "native"}:
         raise ValueError("GPU parity engine must be legacy or native")
     from optimization.gpu.metrics import validate_gpu_metric_names
@@ -531,6 +542,11 @@ def main(argv=None):
             fixture_recipe.update(fixture=args.fixture, exchange=args.exchange)
         inputs = fixture_inputs(args) if args.fixture else prepared_inputs(args)
         config = inputs[0]
+        if args.organillo_csv is not None:
+            config["backtest"]["organillo_csv"] = args.organillo_csv
+        if config["backtest"].get("organillo_csv") is not None:
+            from organillo import freeze_config
+            freeze_config(config)
         weights = default_scoring_weights()
         weights.update({spec.metric: -1.0 if spec.goal == "max" else 1.0
                         for spec in extract_objective_specs(config)})

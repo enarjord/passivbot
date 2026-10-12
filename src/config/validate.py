@@ -35,6 +35,11 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
                 "config.optimize.fixed_runtime_overrides keys must be dotted strings"
             )
         resolved = require_existing_config_path(config, dotted_path)
+        if resolved in (("backtest", "organillo_csv"), ("backtest", "organillo_sha256")):
+            raise ValueError(
+                "Organillo is a prepared dataset input; configure backtest.organillo_csv "
+                "or a scenario override before preparation, rather than optimize.fixed_runtime_overrides"
+            )
         prior = resolved_sources.get(resolved)
         if prior is not None:
             raise ValueError(

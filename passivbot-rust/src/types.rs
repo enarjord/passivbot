@@ -1,6 +1,6 @@
 use core::str::FromStr;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use numpy::{PyArray1, PyArray3, PyUntypedArrayMethods};
+use numpy::{PyArray1, PyArray2, PyArray3, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::{Py, PyResult, Python};
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,8 @@ pub struct HlcvsBundle {
     pub btc_usd: Py<PyArray1<f64>>,
     pub timestamps: Py<PyArray1<i64>>,
     pub meta: HlcvsMeta,
+    pub eligibility: Option<Py<PyArray2<u8>>>,
+    pub eligibility_rows: Option<Py<PyArray1<i32>>>,
 }
 
 impl HlcvsBundle {
@@ -188,6 +190,30 @@ impl HlcvsBundle {
             )));
         }
 
+        match (&self.eligibility, &self.eligibility_rows) {
+            (None, None) => (),
+            (Some(values), Some(rows)) => {
+                let values = values.bind(py).readonly();
+                let rows = rows.bind(py).readonly();
+                let a = values.as_array();
+                let r = rows.as_array();
+                if a.nrows() == 0
+                    || a.ncols() != n_coins
+                    || a.iter().any(|&x| x > 1)
+                    || r.len() != n_timesteps
+                    || r.iter().any(|&x| x < 0 || x as usize >= a.nrows())
+                {
+                    return Err(PyValueError::new_err(
+                        "invalid Organillo binary eligibility/row mapping",
+                    ));
+                }
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "Organillo eligibility and row mapping must be supplied together",
+                ))
+            }
+        }
         Ok(())
     }
 }

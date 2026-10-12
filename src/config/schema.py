@@ -135,6 +135,8 @@ def get_template_config():
                 "coin_sources": {},
                 "compress_cache": True,
                 "dynamic_wel_by_tradability": True,
+                "organillo_csv": None,
+                "organillo_sha256": None,
                 "end_date": "now",
                 "ew_half_life_days": None,
                 "exchanges": ["binance", "bybit"],

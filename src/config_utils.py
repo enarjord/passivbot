@@ -1681,6 +1681,8 @@ CLI_HELP_OVERRIDES = {
         "max tradable coin count seen so far; n uses fixed live-style "
         "n_positions."
     ),
+    "backtest.organillo_csv": "Optional daily UTC date/coin 0/1 eligibility CSV; null disables Organillo.",
+    "backtest.organillo_sha256": "Pinned Organillo input hash; leave null for a new input.",
     "backtest.filter_by_min_effective_cost": (
         "Skip coins whose projected initial entry is below the exchange "
         "effective min cost. y improves live parity; n allows oversized "

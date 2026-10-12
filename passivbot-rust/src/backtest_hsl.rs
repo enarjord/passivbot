@@ -12,7 +12,7 @@ pub(super) struct Inputs {
     pub reasons: BTreeSet<String>,
 }
 
-impl Backtest<'_> {
+impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
     /// Observe the simulator after all fills in bar `k`. Candle timestamps name
     /// bar opens; valuation is available at the bar end, just as in the live
     /// candle projector. Fill timestamps and simulator execution order are kept.

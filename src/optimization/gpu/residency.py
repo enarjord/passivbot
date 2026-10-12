@@ -146,6 +146,7 @@ class CudaSuiteResidency:
         finally:
             self._clear_runners(entry)
             # Keep dictionary identity for compatible suite grouping.
+            entry["data"].pop("organillo_buffers", None)
             entry["data"].update(entry["files"])
             self._active = None
             self._active_owner = None
