@@ -177,19 +177,19 @@ inline bool hsl_pair_fill_precedes_price(int fill, int price, int end, bool befo
     return fill < price || (fill == price && (before || price == end));
 }
 
-inline bool hsl_sample_pair(
-    thread const HslPairHistory& history, device const HslPairEvent* events,
-    int consumed, int count, int minute, int end, bool before_price,
-    float current_size, float current_basis, float mark, float historical_price,
+// Sample inventory already selected by a forward factual walk. The state is
+// evaluation-local; the current endpoint and flat correction remain authoritative.
+inline bool hsl_sample_pair_state(
+    thread const HslPairHistory& history, float size, float basis, float realized,
+    int minute, int end, bool before_price, float current_size,
+    float current_basis, float mark, float historical_price,
     float multiplier, bool short_side, thread HslPairSample& sample
 ) {
-    if (consumed < 0 || consumed > count || !isfinite(mark) || mark <= 0.0f
-        || !isfinite(historical_price) || historical_price <= 0.0f
-        || !isfinite(multiplier) || multiplier <= 0.0f) return false;
+    if (!isfinite(mark) || mark <= 0.0f || !isfinite(historical_price)
+        || historical_price <= 0.0f || !isfinite(multiplier) || multiplier <= 0.0f)
+        return false;
     float direction = short_side ? -1.0f : 1.0f;
-    float size = consumed > 0 ? events[consumed - 1].after : fabs(history.opening_size);
-    float basis = consumed > 0 ? events[consumed - 1].basis : history.opening_basis;
-    sample.realized = consumed > 0 ? events[consumed - 1].realized : 0.0f;
+    sample.realized = realized;
     if (minute == end || (history.flat_correction_minute >= 0
             && hsl_pair_fill_precedes_price(history.flat_correction_minute, minute, end, before_price))) {
         size = fabs(current_size);
@@ -200,6 +200,21 @@ inline bool hsl_sample_pair(
     sample.basis = basis;
     sample.upnl = size == 0.0f ? 0.0f : direction * size * multiplier * (price - basis);
     return isfinite(sample.upnl);
+}
+
+inline bool hsl_sample_pair(
+    thread const HslPairHistory& history, device const HslPairEvent* events,
+    int consumed, int count, int minute, int end, bool before_price,
+    float current_size, float current_basis, float mark, float historical_price,
+    float multiplier, bool short_side, thread HslPairSample& sample
+) {
+    if (consumed < 0 || consumed > count) return false;
+    float size = consumed > 0 ? events[consumed - 1].after : fabs(history.opening_size);
+    float basis = consumed > 0 ? events[consumed - 1].basis : history.opening_basis;
+    float realized = consumed > 0 ? events[consumed - 1].realized : 0.0f;
+    return hsl_sample_pair_state(history, size, basis, realized, minute, end,
+        before_price, current_size, current_basis, mark, historical_price,
+        multiplier, short_side, sample);
 }
 
 // One record is one globally consecutive same-pair/direction/time run. Actual

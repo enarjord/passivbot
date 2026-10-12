@@ -293,3 +293,38 @@ def test_compact_flat_tail_preserves_endpoint_expiry_and_observation_count(refer
                                      budget=100., span=span, threshold=.1, cooldown=cooldown,
                                      never=never, trace=False))
     _check(reference, rows)
+
+
+@pytest.mark.parametrize("short", [False, True])
+@pytest.mark.parametrize("before", [False, True])
+def test_forward_inventory_walk_with_estimated_opening_and_same_minute_reentry(
+    reference, short, before
+):
+    """Clipped openings and ordered close/reentry facts preserve every sample."""
+    sign = -1 if short else 1
+    tape = [
+        (30, -.25, 97., -.75 * sign),
+        (50, .5, 102., 0.),
+        (70, -1.25, 96., -6. * sign),
+        (70, .75, 105., 0.),
+        (70, .25, 115., 0.),
+    ]
+    rows = []
+    for start in (20, 30, 31, 51):
+        for trace in (True, False):
+            rows.append(dict(
+                label=f"estimated start={start},short={short},before={before},trace={trace}",
+                start=start, end=90, before=before, budget=1000., span=7.5,
+                threshold=.002, cooldown=12, never=False, trace=trace,
+                pairs=[dict(symbol="held", position=dict(
+                    size=sign, basis=107.5, mark=99., multiplier=1.,
+                    quantity_step=.25, inverse=False, pside="short" if short else "long"),
+                    fills=[dict(identity=str(i), revision=0, timestamp=t, sequence=i,
+                                delta=sign*q, price=p, realized=g, fee=-.0125)
+                           for i, (t, q, p, g) in enumerate(tape)],
+                    prices={str(t):100.+(t % 17)*.125 for t in range(91)})],
+            ))
+    # Trace and compact execution use the same independent Rust reference.
+    # Run separately because their output buffer shapes intentionally differ.
+    for trace in (True, False):
+        _check(reference, [r for r in rows if r["trace"] == trace])
