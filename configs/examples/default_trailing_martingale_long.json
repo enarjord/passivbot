@@ -10,6 +10,7 @@
         "compress_cache": true,
         "dynamic_wel_by_tradability": true,
         "end_date": "now",
+        "ew_half_life_days": null,
         "exchanges": ["binance", "bybit"],
         "filter_by_min_effective_cost": false,
         "gap_tolerance_ohlcvs_minutes": 120,

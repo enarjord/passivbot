@@ -215,8 +215,7 @@ summary, emits `runtime.started`, and includes the same identity in `bot.started
 monitor manifests, and monitor snapshots.
 
 The identity binds a run id and start timestamp to the Passivbot version, Python
-Git commit and tracked-dirty state, canonical config SHA-256 (excluding the top-level
-`_transform_log` loader audit trail), embedded Rust
+Git commit and tracked-dirty state, canonical config SHA-256, embedded Rust
 source fingerprint, Rust crate version, and SHA-256 of the extension actually
 loaded by Python. It must not include raw config, commands, absolute paths,
 credentials, or exchange payloads. Manifest and event publication failures are

@@ -15,7 +15,7 @@ constant int SCALAR_COLS = 68;
 #else
 constant int SCALAR_COLS = 66;
 #endif
-constant int GAP_BINS = 128;
+constant int GAP_BINS = 512;
 constant int SIDE_PARAMS = 40;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
@@ -1202,7 +1202,7 @@ inline void passivbot_single_coin_impl(
     const bool market_orders_allowed = settings[19] > 0.5f;
     const float market_order_near_touch_threshold = fmax(settings[20], 0.0f);
     const int pnl_lookback_bars = max(sizes[5], 0);
-    const float log_bin_scale = 127.0f / log(4000001.0f);
+    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     const int po = int(b) * P;
     const int seed_k = clamp(first_valid, 0, T - 1);
@@ -1276,6 +1276,7 @@ inline void passivbot_single_coin_impl(
     float account_recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
+    float hsl_report_end_k = -1.0f;
     bool eq_started = false;
 #if PASSIVBOT_BTC_RISK_ENABLED
     BtcRiskState btc_risk = init_btc_risk_state();
@@ -1633,6 +1634,18 @@ inline void passivbot_single_coin_impl(
             short_side.entry_qty = 0.0f;
         }
 
+        // Rust checks liquidation after ordinary fills, before forced delisting.
+        // Capture that boundary before a forced close adds a fill to this bar.
+        const bool ordinary_fill = long_close_fill || long_entry_fill
+            || short_close_fill || short_entry_fill;
+        const float ordinary_fill_equity = balance
+            + (long_side.psize > 0.0f
+                ? long_side.psize * c_mult * (close - long_side.pprice) : 0.0f)
+            + (short_side.psize > 0.0f
+                ? short_side.psize * c_mult * (short_side.pprice - close) : 0.0f);
+        const bool hsl_report_at_fill_boundary = eq_started
+            && (balance <= 0.0f || (ordinary_fill && ordinary_fill_equity <= liq_floor));
+
         // Exact Rust generates this candle's bundles first, then force-closes and
         // clears both bundles.  Closing here and suppressing only that dead order
         // generation is equivalent while retaining `gen` for equity/HSL sampling.
@@ -1722,7 +1735,7 @@ inline void passivbot_single_coin_impl(
             if (last_fill_k >= 0.0f) {
                 float gap = kf - last_fill_k;
                 int bin = clamp(
-                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, 127
+                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, GAP_BINS - 1
                 );
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
                 const float gap_hours = gap * interval_ms / 3600000.0f;
@@ -2098,7 +2111,7 @@ inline void passivbot_single_coin_impl(
                 liq_day = di;
             }
             if (hsl_update_valid && (long_hsl.enabled || short_hsl.enabled)) {
-                int hsl_tier = max(long_hsl.tier, short_hsl.tier);
+                int hsl_tier = max(hsl_report_tier(long_hsl), hsl_report_tier(short_hsl));
                 hsl_tier_samples_total += 1.0f;
 
 
@@ -2113,6 +2126,7 @@ inline void passivbot_single_coin_impl(
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = kf;
             last_eq_k = kf;
+            hsl_report_end_k = kf + (hsl_report_at_fill_boundary ? 0.0f : 1.0f);
             if (any_fill) {
                 int active_fill_day = elapsed_fill_day_bucket(
                     kf, first_eq_k, interval_ms
@@ -2265,16 +2279,22 @@ inline void passivbot_single_coin_impl(
     HslState short_report = short_hsl;
     finish_hsl_panic_loss(long_report);
     finish_hsl_panic_loss(short_report);
-    float long_terminal_count = long_hsl.halted
-        && long_hsl.current_halt_start_k >= 0.0f && last_eq_k >= 0.0f
+    // Keep the actual accounting boundary: an ordinary-fill liquidation stops
+    // at fill time; forced-delisting liquidation reaches the bar-close sample.
+    float report_end_k = hsl_report_end_k >= 0.0f
+        ? fmax(hsl_report_end_k,
+            float(max(long_hsl.hsl.last_observed, short_hsl.hsl.last_observed)))
+        : -1.0f;
+    float long_terminal_count = (long_hsl.red_active_now || long_hsl.halted)
+        && long_hsl.current_halt_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
-    float short_terminal_count = short_hsl.halted
-        && short_hsl.current_halt_start_k >= 0.0f && last_eq_k >= 0.0f
+    float short_terminal_count = (short_hsl.red_active_now || short_hsl.halted)
+        && short_hsl.current_halt_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
     float long_terminal_duration = long_terminal_count > 0.0f
-        ? fmax(last_eq_k - long_hsl.current_halt_start_k, 0.0f) : 0.0f;
+        ? fmax(report_end_k - long_hsl.current_halt_start_k, 0.0f) : 0.0f;
     float short_terminal_duration = short_terminal_count > 0.0f
-        ? fmax(last_eq_k - short_hsl.current_halt_start_k, 0.0f) : 0.0f;
+        ? fmax(report_end_k - short_hsl.current_halt_start_k, 0.0f) : 0.0f;
     float terminal_count = long_terminal_count + short_terminal_count;
     scalars[so + 18] = long_hsl.enabled ? 1.0f : 0.0f;
     scalars[so + 19] = short_hsl.enabled ? 1.0f : 0.0f;
@@ -2297,10 +2317,15 @@ inline void passivbot_single_coin_impl(
         + short_hsl.trigger_drawdown_sum;
     scalars[so + 30] = long_hsl.trigger_drawdown_count
         + short_hsl.trigger_drawdown_count;
-    scalars[so + 31] = long_hsl.flatten_time_sum_steps
-        + short_hsl.flatten_time_sum_steps;
-    scalars[so + 32] = long_hsl.flatten_time_count
-        + short_hsl.flatten_time_count;
+    float long_open_exit = long_hsl.current_red_start_k >= 0.0f && report_end_k >= 0.0f
+        ? 1.0f : 0.0f;
+    float short_open_exit = short_hsl.current_red_start_k >= 0.0f && report_end_k >= 0.0f
+        ? 1.0f : 0.0f;
+    scalars[so + 31] = long_hsl.flatten_time_sum_steps + short_hsl.flatten_time_sum_steps
+        + (long_open_exit > 0.0f ? fmax(report_end_k - long_hsl.current_red_start_k, 0.0f) : 0.0f)
+        + (short_open_exit > 0.0f ? fmax(report_end_k - short_hsl.current_red_start_k, 0.0f) : 0.0f);
+    scalars[so + 32] = long_hsl.flatten_time_count + short_hsl.flatten_time_count
+        + long_open_exit + short_open_exit;
     scalars[so + 33] = long_hsl.restart_retrigger_count
         + short_hsl.restart_retrigger_count;
     float panic_drawdown_count = long_report.panic_loss_drawdown_count

@@ -101,7 +101,7 @@ def test_backend_failure_survives_cleanup_error(runtime, error, caplog):
     with pytest.raises(error) as caught:
         run()
     assert caught.value is failure
-    assert "CUDA suite cleanup failed" in caplog.text
+    assert "GPU suite cleanup failed" in caplog.text
     assert "cleanup synchronization failed" in caplog.text
     assert current_cuda_residency() is None
     assert not Path(directories[0]).exists()
@@ -185,7 +185,7 @@ def test_activation_failure_survives_cleanup_error(runtime, stage, caplog):
         with pytest.raises(ValueError) as caught:
             manager.activate(owner)
         assert caught.value is failure
-        assert "CUDA suite cleanup failed" in caplog.text
+        assert "GPU suite cleanup failed" in caplog.text
         assert manager._active is None
         assert manager._active_owner is None
         assert owner.runners == {}
@@ -431,3 +431,120 @@ def test_late_chunk_tick_failure_removes_all_partial_market_files(runtime, monke
         assert list(Path(manager._directory.name).iterdir()) == []
     finally:
         manager.close()
+
+
+@pytest.mark.parametrize("runner_key", ["long", "fused"])
+@pytest.mark.parametrize("eviction", ["dataset", "owner"])
+@pytest.mark.parametrize("automatic", [False, True])
+def test_factual_capacity_survives_production_residency_eviction(runtime, runner_key, eviction, automatic):
+    import weakref
+    from optimization.gpu.service import MpsMulticoinProxy
+
+    # Device transport and runner computation are fakes; residency and replay
+    # construction/estimate retention are the actual production implementations.
+    class Runner:
+        native_factual_hsl = True
+        hsl_scratch_budget_bytes = 70000
+        bars = SimpleNamespace(device=SimpleNamespace(type="cuda"))
+        def __init__(self, *args, **kwargs):
+            self.hsl_fact_capacity = self.hsl_fact_capacity_learned = 256
+        def _history_bytes_per_candidate(self):
+            return self.hsl_fact_capacity * 16
+        def _history_batch_bytes(self, count):
+            return count * self._history_bytes_per_candidate()
+    manager = CudaSuiteResidency()
+    torch, _uploads = runtime
+    free = [8 * 1024**3]
+    torch.cuda.mem_get_info = lambda: (free[0], 10 * 1024**3)
+    estimates = {}
+    def owner(key, hints):
+        stub = proxy(manager, key, 1)
+        result = object.__new__(MpsMulticoinProxy)
+        result.data = stub.data
+        result.run = None
+        result.runners = {}
+        result.fused_runner = None
+        result._factual_capacity_hints = hints
+        result._automatic_scratch_budget = automatic
+        result._torch = torch
+        result.sides = ["long"]
+        result.shared_account_fused = runner_key == "fused"
+        result._runner_specs = {runner_key: (Runner, {})}
+        manager.register(result)
+        return result
+    def runner(owner):
+        return owner.fused_runner or owner.runners[runner_key]
+    try:
+        first = owner("a", estimates)
+        other = owner("b" if eviction == "dataset" else "a", {})
+        manager.activate(first)
+        learned = runner(first)
+        initial_budget = learned.hsl_scratch_budget_bytes
+        free[0] = 1024**3
+        manager.activate(first)
+        # Memory pressure never resizes a still-active owner.
+        assert runner(first).hsl_scratch_budget_bytes == initial_budget
+        learned.hsl_fact_capacity = learned.hsl_fact_capacity_learned = 4096
+        first._remember_factual_capacities()
+        # An HSL-off dispatch must retain the learned estimate rather than zero.
+        learned.hsl_fact_capacity = 0
+        first._remember_factual_capacities()
+        old = weakref.ref(learned)
+        del learned
+        assert estimates == {runner_key: 4096}
+        manager.activate(other)
+        assert old() is None
+        assert not first.runners and first.fused_runner is None
+        manager.activate(first)
+        assert runner(first).hsl_fact_capacity == 4096
+        assert runner(first).hsl_fact_capacity_learned == 4096
+        if automatic:
+            assert runner(first).hsl_scratch_budget_bytes == int(free[0] * .35)
+            assert runner(first).hsl_scratch_budget_bytes < initial_budget
+        else:
+            assert runner(first).hsl_scratch_budget_bytes == initial_budget
+        assert not other.runners and other.fused_runner is None
+        assert estimates == {runner_key: 4096}
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("hint", [False, 0, -1, 4096.0, 8192])
+def test_capacity_restore_rejects_malformed_or_over_budget_estimates(hint):
+    from optimization.gpu.service import MpsMulticoinProxy
+    class Runner:
+        native_factual_hsl = True
+        hsl_fact_capacity_learned = 256
+        hsl_scratch_budget_bytes = 70000
+        def __init__(self, *args, **kwargs):
+            pass
+        def _history_bytes_per_candidate(self):
+            return self.hsl_fact_capacity * 16
+        def _history_batch_bytes(self, count):
+            return count * self._history_bytes_per_candidate()
+    owner = object.__new__(MpsMulticoinProxy)
+    owner.run = owner.data = None
+    owner._factual_capacity_hints = {"long": hint}
+    owner._automatic_scratch_budget = False
+    with pytest.raises(ValueError, match="Invalid learned|exceeds scratch budget"):
+        owner._construct_runner("long", Runner, {})
+
+
+def test_capacity_restore_includes_shared_metric_workspace():
+    from optimization.gpu.service import MpsMulticoinProxy
+    class Runner:
+        native_factual_hsl = True
+        hsl_fact_capacity_learned = 256
+        hsl_scratch_budget_bytes = 70000
+        def __init__(self, *args, **kwargs):
+            pass
+        def _history_bytes_per_candidate(self):
+            return self.hsl_fact_capacity * 16
+        def _history_batch_bytes(self, count):
+            return count * self._history_bytes_per_candidate() + 8192
+    owner = object.__new__(MpsMulticoinProxy)
+    owner.run = owner.data = None
+    owner._factual_capacity_hints = {"long": 4096}
+    owner._automatic_scratch_budget = False
+    with pytest.raises(ValueError, match="exceeds scratch budget"):
+        owner._construct_runner("long", Runner, {})

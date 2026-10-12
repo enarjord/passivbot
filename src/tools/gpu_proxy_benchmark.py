@@ -9,6 +9,13 @@ import time
 
 import numpy as np
 
+from tools.synthetic_backtest_data import synthetic_hlcvs as _synthetic_hlcvs
+
+from optimization.gpu.metric_registry import (
+    RAW_STRATEGY_DRAWDOWN_CONSUMERS, RAW_STRATEGY_EQUITY_METRICS,
+    weighted_equity_capture_metrics,
+)
+
 from optimization.gpu.runtime import gpu_device
 from optimization.gpu.model import (
     adaptive_params,
@@ -187,25 +194,6 @@ def _parameter_matrix(
         column = keys.index(key)
         matrix[:, column] *= rng.uniform(0.75, 1.25, size=candidates)
     return np.ascontiguousarray(matrix)
-
-
-def _synthetic_hlcvs(bars: int, coins: int, seed: int):
-    rng = np.random.default_rng(seed)
-    steps = np.arange(bars, dtype=np.float64)
-    values = np.empty((bars, coins, 4), dtype=np.float64)
-    for coin in range(coins):
-        phase = coin * 0.73
-        trend = steps * (0.0004 + coin * 0.00002)
-        wave = np.sin(steps / (37.0 + coin * 3.0) + phase) * (1.5 + coin * 0.1)
-        noise = rng.normal(0.0, 0.03, size=bars).cumsum()
-        close = 100.0 + coin * 15.0 + trend + wave + noise
-        spread = 0.15 + np.abs(np.sin(steps / 19.0 + phase)) * 0.2
-        values[:, coin, 0] = close + spread
-        values[:, coin, 1] = close - spread
-        values[:, coin, 2] = close
-        values[:, coin, 3] = 100.0 + coin * 10.0
-    timestamps = 1_700_000_000_000 + steps.astype(np.int64) * 60_000
-    return values, timestamps
 
 
 def _fixture_sha256(*arrays) -> str:
@@ -419,6 +407,11 @@ def _build_case(
         runs[0],
         data,
         side="long",
+        raw_strategy_risk_enabled=bool(set(needed_metrics) & RAW_STRATEGY_DRAWDOWN_CONSUMERS),
+        raw_strategy_growth_enabled=bool(set(needed_metrics) & RAW_STRATEGY_EQUITY_METRICS),
+        weighted_equity_metrics=(
+            weighted_equity_capture_metrics(needed_metrics) if gpu_device() == "cuda" else ()
+        ),
         coin_overrides=overrides,
         **(
             {"max_dispatch_candidate_bars": MAX_DISPATCH_CANDIDATE_BARS}
@@ -428,6 +421,7 @@ def _build_case(
     )
     matrix = _parameter_matrix(param_keys, candidates, seed)
     proxy = MpsMulticoinProxy.__new__(MpsMulticoinProxy)
+    proxy.weighted_equity_metrics = tuple(sorted(runner.weighted_equity_metrics))
     proxy.hsl_signal_mode = "coin"
 
     proxy.batch_size = candidates

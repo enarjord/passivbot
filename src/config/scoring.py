@@ -19,6 +19,14 @@ class ScenarioSelection(Enum):
 
 
 DEFAULT_OBJECTIVE_GOALS = {
+    "adg_ew": "max",
+    "sharpe_ratio_ew": "max",
+    "sortino_ratio_ew": "max",
+    "omega_ratio_ew": "max",
+    "adg_strategy_eq_ew": "max",
+    "sharpe_ratio_strategy_eq_ew": "max",
+    "sortino_ratio_strategy_eq_ew": "max",
+    "omega_ratio_strategy_eq_ew": "max",
     "n_days": "max",
     "positions_held_per_day": "min",
     "positions_held_per_day_w": "min",
@@ -164,6 +172,13 @@ DEFAULT_OBJECTIVE_GOALS = {
     "exposure_mean_ratio_w": "max",
     "total_wallet_exposure_max": "min",
     "total_wallet_exposure_mean": "min",
+    "total_wallet_exposure_rms_long": "min",
+    "total_wallet_exposure_rms_short": "min",
+    "total_wallet_exposure_rms_gross": "min",
+    "total_wallet_exposure_utilization_rms_long": "min",
+    "total_wallet_exposure_utilization_rms_short": "min",
+    "position_exposure_utilization_rms_long": "min",
+    "position_exposure_utilization_rms_short": "min",
     "total_wallet_exposure_median": "min",
     "volume_pct_per_day_avg": "max",
     "volume_pct_per_day_avg_w": "max",

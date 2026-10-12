@@ -62,7 +62,8 @@ A package version, schema roundtrip or GREEN observation alone does not qualify 
 Use fixed synthetic candles, identical policy, identical outputs and a source-verified release
 build. Measure HSL enabled and disabled; compact and detailed reporting; CPU simulation and
 GPU screening. Compare full replay with incremental caches and replay after cache loss.
-GPU float32 is approximate screening; exact Rust validation remains authoritative.
+GPU optimization uses authoritative float32 simulations without runtime CPU validation.
+Run independent source-verified GPU/CPU parity checks when simulation behavior changes.
 
 Reproducible probes live in `tests/hsl_backtest_benchmark.py`,
 `tests/hsl_gpu_benchmark.py`, and `tests/hsl_live_benchmark.py`.

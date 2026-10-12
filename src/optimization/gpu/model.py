@@ -7,9 +7,8 @@ from pathlib import Path
 import numpy as np
 
 from config.validate import validate_limit_order_fill_buffer_pct
-from optimization.gpu.runtime import gpu_device
 
-GAP_BINS = 128
+GAP_BINS = 512
 GAP_MAX_MINUTES = 4_000_000.0
 MPS_MULTICOIN_MAX_COINS = 64
 # Bound both temporal launch duration and per-candidate replay-state allocation.
@@ -18,6 +17,7 @@ MPS_TM_SINGLE_COIN_CHUNK_CANDIDATES = 1024
 MPS_TM_MULTICOIN_CHUNK_BARS = 8192
 MPS_TM_MULTICOIN_CHUNK_CANDIDATES = 512
 CUDA_TM_MULTICOIN_CHUNK_CANDIDATES = 1024
+CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS = 128
 MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS = 2_097_152
 HSL_SIGNAL_MODES = {"unified", "pside", "coin"}
 
@@ -833,6 +833,8 @@ def build_mps_data(
     runtime.
     """
 
+    from optimization.gpu.runtime import gpu_device
+
     try:
         import torch
     except (
@@ -1024,6 +1026,8 @@ def build_mps_multicoin_data(
     integer ticks, avoiding the most consequential float32 boundary collapse.
     """
 
+    from optimization.gpu.runtime import gpu_device
+
     try:
         import torch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
@@ -1040,9 +1044,9 @@ def build_mps_multicoin_data(
             f"got {values.shape}"
         )
     candle_count, coin_count, _channels = values.shape
-    if not 2 <= coin_count <= MPS_MULTICOIN_MAX_COINS:
+    if not 1 <= coin_count <= MPS_MULTICOIN_MAX_COINS:
         raise ValueError(
-            "MPS multicoin proxy supports 2.."
+            "MPS multicoin proxy supports 1.."
             f"{MPS_MULTICOIN_MAX_COINS} coins; got {coin_count}"
         )
     if len(runs) != coin_count or len(markets) != coin_count:

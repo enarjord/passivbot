@@ -92,6 +92,7 @@ from config.shared_bot import (
 )
 from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 from config.metrics import resolve_metric_value
+from config.ew import is_ew_metric, needs_legacy_weighted_analysis
 from config.scoring import (
     ObjectiveSpec,
     default_scoring_weights,
@@ -177,7 +178,12 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
     tools = algorithms = None
 import math
 import fcntl
-from optimizer_overrides import optimizer_overrides, validate_optimizer_overrides
+from optimizer_overrides import (
+    optimizer_overrides,
+    validate_optimizer_overrides,
+    unstuck_ema_spans_coupled,
+    materialize_coupled_scenario_spans,
+)
 from opt_utils import (
     deep_updated,
     generate_incremental_diff,
@@ -208,6 +214,7 @@ from suite_runner import (
 from metrics_schema import (
     MetricAggregationError,
     build_scenario_metrics,
+    validate_required_ew_metrics,
     flatten_metric_stats,
 )
 from optimization.bounds import (
@@ -836,6 +843,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     # Released configurations without this setting used strict crossing at zero.
     old_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
     new_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
+    old_bt.setdefault("ew_half_life_days", None)
+    new_bt.setdefault("ew_half_life_days", None)
     old_opt = _canonicalize_resume_optimize(entry.get("optimize") or {})
     new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
@@ -852,6 +861,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "coins",
         "coin_sources",
         "dynamic_wel_by_tradability",
+        "ew_half_life_days",
         "end_date",
         "exchanges",
         "filter_by_min_effective_cost",
@@ -879,6 +889,16 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         # scenario list is the source of truth for per-scenario coins.
         if old_bt_compare.get("coins") is None:
             new_bt_compare.pop("coins", None)
+        if unstuck_ema_spans_coupled(entry) and unstuck_ema_spans_coupled(config):
+            # Saved suites contain explicit candidate-dependent spans for plain
+            # backtest replay. Compare incoming recipes after materializing them
+            # against this saved candidate, not against the current seed values.
+            # All other scenario inputs remain in the comparison, and corrupted
+            # stored spans still fail because only the incoming view is rebuilt.
+            expected = deepcopy(entry)
+            expected["backtest"]["scenarios"] = deepcopy(new_bt.get("scenarios", []))
+            materialize_coupled_scenario_spans(expected)
+            new_bt_compare["scenarios"] = expected["backtest"]["scenarios"]
     _append_resume_section_mismatches(
         mismatches, "backtest", old_bt_compare, new_bt_compare
     )
@@ -959,13 +979,6 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
 def _canonicalize_resume_optimize(section: dict) -> dict:
     normalized = deepcopy(section)
-    if normalized.get("backend") == "gpu" and isinstance(normalized.get("gpu"), dict):
-        from optimization.backends.gpu_backend import GPU_DEFAULTS
-
-        # These additive options preserve the legacy gates when omitted. Do not
-        # normalize other policy differences or erase explicit non-default values.
-        for key in ("drift_rank_halt", "drift_objective_tolerance"):
-            normalized["gpu"].setdefault(key, GPU_DEFAULTS[key])
     if "scoring" in normalized:
         normalized["scoring"] = [
             spec.to_config() for spec in extract_objective_specs(normalized["scoring"])
@@ -1064,32 +1077,12 @@ def _gpu_checkpoint_allows_empty_results(
 ) -> bool:
     """Permit the durable pre-result checkpoint of a GPU seed bootstrap."""
 
-    if config.get("optimize", {}).get("backend") != "gpu" or checkpoint_path is None:
+    if config.get("optimize", {}).get("backend") != "gpu":
         return False
-    try:
-        import pickle
+    from optimization.native_checkpoint import load_checkpoint
 
-        with open(checkpoint_path, "rb") as file:
-            checkpoint = pickle.load(file)
-    except Exception:
-        return False
-    plan = checkpoint.get("seed_bootstrap_plan")
-    allowed = bool(
-        not checkpoint.get("seed_bootstrap_complete", True)
-        and int(checkpoint.get("seed_exact_done", -1)) == 0
-        and int(checkpoint.get("exact_done", -1)) == 0
-        and isinstance(checkpoint.get("seed_bootstrap_contract"), dict)
-        and isinstance(plan, dict)
-        and plan.get("starting_vectors")
-        and plan.get("effective_mode") in {"exact", "screened"}
-    )
-
-    if allowed and checkpoint.get(CONTRACT_KEY) != build_evaluation_contract(config):
-        raise ValueError(
-            "GPU checkpoint historical evaluation contract cannot be proven or changed; "
-            "start a fresh run"
-        )
-    return allowed
+    checkpoint = load_checkpoint(checkpoint_path, config)
+    return checkpoint["completed"] == 0
 
 
 def _validate_resume_results(
@@ -1109,7 +1102,7 @@ def _validate_resume_results(
             if resume_state is not None:
                 resume_state["previous_data"] = None
             logging.info(
-                "Resuming GPU seed bootstrap before its first durable exact result"
+                "Resuming GPU seed bootstrap before its first durable GPU result"
             )
             return 0
         raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
@@ -1899,6 +1892,10 @@ class Evaluator:
                         )
             else:
                 self.seen_hashes[individual_hash] = None
+        required_metrics = [
+            *(spec.metric for spec in self.scoring_specs),
+            *(check["metric"] for check in self.limit_checks),
+        ]
         analyses = {}
         liquidated = False
         skip_btc_analysis = _optimizer_can_skip_btc_analysis(
@@ -1917,6 +1914,7 @@ class Evaluator:
                 self.timestamps.get(exchange),
                 metrics_only=True,
                 skip_btc_analysis=skip_btc_analysis,
+                calculate_legacy_w=needs_legacy_weighted_analysis(required_metrics),
             )
             try:
                 fills, equities_array, analysis = execute_backtest(payload, config)
@@ -1953,6 +1951,7 @@ class Evaluator:
             del fills
             del equities_array
         try:
+            validate_required_ew_metrics(analyses, required_metrics)
             scenario_metrics = build_scenario_metrics(analyses)
             aggregate_stats = scenario_metrics.get("stats", {})
             flat_stats = flatten_metric_stats(aggregate_stats)
@@ -2077,7 +2076,11 @@ class Evaluator:
         for idx, spec in enumerate(self.scoring_specs):
             if objective_values is None:
                 val = resolve_metric_value(analyses_combined, f"{spec.metric}_mean")
-                if val is None and spec.metric.endswith(("_usd", "_btc")):
+                if (
+                    val is None
+                    and spec.metric.endswith(("_usd", "_btc"))
+                    and not is_ew_metric(spec.metric)
+                ):
                     val = resolve_metric_value(
                         analyses_combined,
                         f"{spec.metric.rsplit('_', 1)[0]}_mean",
@@ -2325,11 +2328,44 @@ class SuiteEvaluator:
 
         return self.build_scenario_candidate_config(config, ctx)
 
+    def required_metrics_for_scenario(self, label):
+        return [
+            *(
+                spec.metric
+                for spec, basis in zip(self.base.scoring_specs, self.objective_bases)
+                if basis.scenario is None or basis.scenario == label
+            ),
+            *(
+                check["metric"]
+                for check in self.base.limit_checks
+                if check.get("scenario") is None or check["scenario"] == label
+            ),
+        ]
+
     def score_scenario_results(
         self, scenario_results: List[ScenarioResult]
     ) -> Dict[str, Any]:
         """Apply the canonical suite reducers, objectives, and limits to scenario stats."""
 
+        result_labels = {result.scenario.label for result in scenario_results}
+        for ctx in getattr(self, "contexts", []):
+            if ctx.label not in result_labels and any(
+                is_ew_metric(metric)
+                for metric in self.required_metrics_for_scenario(ctx.label)
+            ):
+                raise MetricAggregationError(
+                    f"required EW scenario {ctx.label!r} is absent from evaluation"
+                )
+        for result in scenario_results:
+            stats = result.metrics.get("stats", {})
+            validate_required_ew_metrics(
+                {
+                    result.scenario.label: {
+                        metric: values.get("mean") for metric, values in stats.items()
+                    }
+                },
+                self.required_metrics_for_scenario(result.scenario.label),
+            )
         reduce_started = time.perf_counter()
         reduced_summary = reduce_metrics(scenario_results, self.reducer_cfg)
         reduce_metrics_ms = (time.perf_counter() - reduce_started) * 1000.0
@@ -2368,7 +2404,11 @@ class SuiteEvaluator:
                 source_stats = reduced_stats_flat
                 reducer = basis.reducer or "mean"
             value = resolve_metric_value(source_stats, f"{spec.metric}_{reducer}")
-            if value is None and spec.metric.endswith(("_usd", "_btc")):
+            if (
+                value is None
+                and spec.metric.endswith(("_usd", "_btc"))
+                and not is_ew_metric(spec.metric)
+            ):
                 value = resolve_metric_value(
                     source_stats,
                     f"{spec.metric.rsplit('_', 1)[0]}_{reducer}",
@@ -2520,6 +2560,9 @@ class SuiteEvaluator:
                     coin_indices=coin_indices,
                     metrics_only=True,
                     skip_btc_analysis=skip_btc_analysis,
+                    calculate_legacy_w=needs_legacy_weighted_analysis(
+                        self.required_metrics_for_scenario(ctx.label)
+                    ),
                     runtime_config=runtime_config,
                     execution_settings=execution_settings,
                 )
@@ -2582,6 +2625,9 @@ class SuiteEvaluator:
 
             phase_start = _profile_start(profile_enabled)
             try:
+                validate_required_ew_metrics(
+                    analyses, self.required_metrics_for_scenario(ctx.label)
+                )
                 combined_metrics = combine(analyses)
             except MetricAggregationError as exc:
                 error = f"{exc.__class__.__name__}: {exc}"
@@ -3458,30 +3504,33 @@ def _materialize_suite_run_contract(
 def _run_gpu_preparation_preflight(
     config: Dict[str, Any], suite_cfg: Mapping[str, Any]
 ) -> None:
-    """Validate immutable Apple MPS requirements before loading historical data."""
+    """Validate effective GPU contracts before historical preparation or device imports."""
 
     if str(config.get("optimize", {}).get("backend", "")).strip().lower() != "gpu":
         return
-    from optimization.backends.gpu_backend import (
-        materialize_gpu_preparation_config,
-        validate_gpu_preparation_scope,
-    )
+    from config.gpu import resolve_gpu_screening, validate_gpu_backtest_config
+    from optimization.warmup import _apply_config_overrides
 
-    effective_config = materialize_gpu_preparation_config(config)
-    normalized_suite_cfg = dict(suite_cfg)
-    if bool(normalized_suite_cfg.get("enabled")):
+    effective_config = deepcopy(config)
+    _apply_config_overrides(effective_config, config["optimize"].get("fixed_runtime_overrides", {}))
+    if effective_config["live"]["strategy_kind"] != config["live"]["strategy_kind"]:
+        raise ValueError("fixed_runtime_overrides may not change live.strategy_kind")
+    validate_gpu_backtest_config(effective_config)
+    screening = resolve_gpu_screening(config["optimize"]["gpu"].get("screening"))
+    if suite_cfg.get("enabled"):
         scenarios, _reducer_cfg = build_scenarios(
-            normalized_suite_cfg,
+            dict(suite_cfg),
             base_exchanges=effective_config.get("backtest", {}).get("exchanges"),
         )
-        normalized_suite_cfg["scenarios"] = [
-            {
-                "label": scenario.label,
-                "overrides": dict(scenario.overrides or {}),
-            }
-            for scenario in scenarios
-        ]
-    validate_gpu_preparation_scope(effective_config, normalized_suite_cfg)
+        unknown = set(screening["scenarios"]) - {scenario.label for scenario in scenarios}
+        if unknown:
+            raise ValueError(f"GPU screening.scenarios contains unknown labels: {sorted(unknown)}")
+        for scenario in scenarios:
+            scenario_config = deepcopy(effective_config)
+            _apply_config_overrides(scenario_config, dict(scenario.overrides or {}))
+            validate_gpu_backtest_config(scenario_config)
+    elif screening["scenarios"]:
+        raise ValueError("GPU screening.scenarios requires a scenario suite")
 
 
 def _materialize_resolved_suite_dates(
@@ -3934,6 +3983,7 @@ async def main():
         btc_usd_specs = {}
         msss = {}
         timestamps_dict = {}
+        candle_coins_dict = {}
         config["backtest"]["coins"] = {}
         reducer_cfg: Dict[str, Any] = {"default": "mean"}
         scenario_contexts: List[ScenarioEvalContext] = []
@@ -4041,6 +4091,7 @@ async def main():
                     array_manager=array_manager,
                     preserve_internal_nan_gaps=allow_internal_nan_gaps,
                 )
+                candle_coins_dict[exchange] = tuple(coins)
                 exchange_preference = defaultdict(list)
                 for coin in coins:
                     exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -4058,7 +4109,7 @@ async def main():
                     for exchange in backtest_exchanges
                 }
                 for exchange, task in tasks.items():
-                    _register_exchange_data(
+                    source_coins, _mss = _register_exchange_data(
                         exchange,
                         await task,
                         config,
@@ -4069,6 +4120,7 @@ async def main():
                         array_manager=array_manager,
                         preserve_internal_nan_gaps=allow_internal_nan_gaps,
                     )
+                    candle_coins_dict[exchange] = tuple(source_coins)
         config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
             config=config,
             hlcvs_specs=hlcvs_specs,
@@ -4151,9 +4203,13 @@ async def main():
         seed_rngs(config.get("optimize", {}).get("seed"), context="optimizer")
 
         # Shared state used by workers for duplicate detection
-        manager = multiprocessing.Manager()
-        seen_hashes = manager.dict()
-        duplicate_counter = manager.dict()
+        if config["optimize"]["backend"] == "gpu":
+            seen_hashes = {}
+            duplicate_counter = {}
+        else:
+            manager = multiprocessing.Manager()
+            seen_hashes = manager.dict()
+            duplicate_counter = manager.dict()
         duplicate_counter["total"] = 0
         duplicate_counter["resolved"] = 0
         duplicate_counter["reused"] = 0
@@ -4218,6 +4274,8 @@ async def main():
             build_config_fn=individual_to_config,
             overrides_fn=optimizer_overrides,
         )
+        if backend_name == "gpu":
+            backend_kwargs["standalone_candle_coins"] = candle_coins_dict
         if backend_name == "gpu":
             interrupt_latch = OptimizerInterruptLatch()
             backend_kwargs["interrupt_check"] = interrupt_latch.raise_if_requested

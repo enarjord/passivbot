@@ -1215,7 +1215,10 @@ def apply_scenario_overrides(config, overrides, tracker=None):
     if tracker is None:
         tracker = ConfigTransformTracker()
     if overrides:
+        from config.ew import reject_ew_scenario_overrides
         from config.hsl import validate_override_paths
+
+        reject_ew_scenario_overrides(overrides)
 
         validate_override_paths(config, overrides)
         for dotted_path, value in overrides.items():

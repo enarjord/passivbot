@@ -12,16 +12,32 @@ from optimization.gpu.replay_progress import replay_scope
 
 import numpy as np
 
+from config.metrics import EXPOSURE_RMS_METRICS
 from config.shared_bot import flatten_shared_bot_side
+from optimization.gpu.parameters import (
+    _single_coin_exposure_params, _position_exposure_enforcer_params,
+    _total_exposure_enforcer_params, _unstuck_params, _hsl_params,
+    prepare_candidate_parameters,
+)
+from optimization.gpu.coin_parameters import build_coin_override_parameters
 from config.validate import validate_limit_order_fill_buffer_pct
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.autotune import proxy_batches
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
+    EXPONENTIAL_EQUITY_METRICS,
+    EXPONENTIAL_BTC_EQUITY_METRICS,
+    RAW_STRATEGY_EQUITY_METRICS,
+    RAW_STRATEGY_DRAWDOWN_CONSUMERS,
+    WEIGHTED_RAW_EQUITY_METRICS,
+    WEIGHTED_ACCOUNT_EQUITY_METRICS,
+    WEIGHTED_EQUITY_METRICS,
+    weighted_equity_capture_metrics,
     ENTRY_INTERVAL_METRICS,
     EQUITY_BALANCE_DIFF_METRICS,
     HARD_STOP_PROXY_METRICS,
+    HARD_STOP_LIFECYCLE_METRICS,
 )
 from optimization.gpu.model import (
     adaptive_params,
@@ -32,9 +48,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
-    EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
-    EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
@@ -49,12 +63,11 @@ from optimization.gpu.model import (
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATES,
     CUDA_TM_MULTICOIN_CHUNK_CANDIDATES,
+    CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
@@ -67,15 +80,26 @@ from optimization.gpu.model import (
     UNSTUCK_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
-    encode_hsl_panic_order_type,
-    encode_tm_retracement_base_pct,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
     validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
 
+def _noop_interrupt_check():
+    return None
+
+
 CORE_OUTPUT_KEYS = {
+    *EXPOSURE_RMS_METRICS,
+    "entry_interval_native_metrics",
+    "hsl_drawdown_ema_max_portfolio",
+    "hsl_drawdown_ema_mean_worst_1pct_portfolio",
+    *WEIGHTED_EQUITY_METRICS,
+    "raw_strategy_day_max_dd",
+    "raw_strategy_day_end_eq",
+    "raw_strategy_day_min_eq",
+    "volume_pct_per_day_avg_w",
     "btc_day_end_eq",
     "btc_day_min_eq",
     "btc_day_max_dd",
@@ -234,6 +258,9 @@ def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
         "strategy_eq_recovery_distribution": any(
             bool(getattr(runner, "recovery_distribution_enabled", False))
             for runner in runners
+        ),
+        "weighted_volume": any(
+            bool(getattr(runner, "weighted_volume_enabled", False)) for runner in runners
         ),
         "hsl_ema_tail": any(
             bool(getattr(runner, "hsl_ema_tail_enabled", False)) for runner in runners
@@ -401,7 +428,13 @@ def _add_gpu_runner_profile(
                     "max_dispatch_seconds",
                     "replay_state_bytes_per_candidate",
                     "threads_per_threadgroup",
+                    "adaptive_temporal_chunks",
+                    "adaptive_chunk_adjustments",
+                    "dispatch_duration_target_seconds",
+                    "temporal_chunk_bars_min",
+                    "temporal_chunk_bars_max",
                 )
+                if key in runner_profile
             }
         )
     timings = profile["timings_seconds"]
@@ -662,6 +695,12 @@ def _gpu_proxy_execution_checkpoint_contract(
         contract["backtest"]["equity_hard_stop_loss"] = copy.deepcopy(
             backtest_params["equity_hard_stop_loss"]
         )
+    if backtest_params.get("ew_half_life_days") is not None:
+        from config.ew import EW_DEFINITION_VERSION
+        contract["exponential_weighting"] = {
+            "half_life_days": backtest_params["ew_half_life_days"],
+            "definition_version": EW_DEFINITION_VERSION,
+        }
     if btc_prices is not None:
         btc_values = np.ascontiguousarray(
             np.asarray(btc_prices, dtype=np.float64).reshape(-1)
@@ -768,19 +807,23 @@ def _mps_multicoin_dispatch_plan(
     n_sides: int,
     max_candidate_bars: int,
     device: str = "mps",
+    factual_hsl: bool = False,
 ) -> tuple[bool, int, int]:
-    temporal_chunking = (
+    native_replay = factual_hsl and device in {"cuda", "mps"} and strategy_kind in {
+        "ema_anchor", "trailing_martingale",
+    }
+    temporal_chunking = native_replay or (
         strategy_kind == "trailing_martingale"
-        and n_sides == 1
         and n_bars > MPS_TM_MULTICOIN_CHUNK_BARS
-        and n_bars
-        * n_coins
-        * min(requested_batch_size, MPS_TM_MULTICOIN_CHUNK_CANDIDATES)
-        > max_candidate_bars
+        and (device == "cuda" or (
+            n_sides == 1 and n_bars * n_coins
+            * min(requested_batch_size, MPS_TM_MULTICOIN_CHUNK_CANDIDATES)
+            > max_candidate_bars
+        ))
     )
-    # Keep the temporal activation threshold and Apple allocation cap stable.
-    # CUDA can spread more candidates across SMs; shorter history chunks retain
-    # the same per-dispatch work envelope while bounding additional state.
+    # CUDA long-history TM replays need interrupt boundaries even when their
+    # batch is below the work cap. Both sides share the same candidate state.
+    # Retain the Apple work threshold and device-specific allocation ceilings.
     chunk_candidates = (
         CUDA_TM_MULTICOIN_CHUNK_CANDIDATES
         if device == "cuda"
@@ -794,9 +837,9 @@ def _mps_multicoin_dispatch_plan(
     dispatch_history = (
         min(
             n_bars,
-            MPS_TM_MULTICOIN_CHUNK_BARS,
+            CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS if native_replay else MPS_TM_MULTICOIN_CHUNK_BARS,
             MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // dispatch_candidates,
-            max(1, max_candidate_bars // n_coins),
+            max(1, max_candidate_bars // (n_coins * n_sides)),
         )
         if temporal_chunking
         else n_bars
@@ -939,9 +982,11 @@ def mps_requested_metric_features(
     """Name opt-in MPS metric paths required by a proxy metric surface."""
 
     metrics = set(needed_metrics)
+    weighted_capture = weighted_equity_capture_metrics(metrics)
     features = {
         "btc_analysis": any(_metric_uses_btc_analysis(metric) for metric in metrics),
-        "btc_intraday_risk": bool(metrics & BTC_INTRADAY_RISK_METRICS),
+        "btc_intraday_risk": bool(metrics & (BTC_INTRADAY_RISK_METRICS | EXPONENTIAL_BTC_EQUITY_METRICS)),
+        "exponential_equity": bool(metrics & EXPONENTIAL_EQUITY_METRICS),
         "equity_balance_diff": bool(metrics & EQUITY_BALANCE_DIFF_METRICS),
         "entry_interval": bool(
             str(strategy_kind).strip().lower() == "trailing_martingale"
@@ -950,6 +995,11 @@ def mps_requested_metric_features(
         "strategy_eq_recovery_distribution": bool(
             metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
         ),
+        "weighted_volume": "volume_pct_per_day_avg_w" in metrics,
+        "raw_strategy_risk": bool(metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS),
+        "raw_strategy_growth": bool(metrics & RAW_STRATEGY_EQUITY_METRICS),
+        "weighted_raw_equity": bool(weighted_capture & WEIGHTED_RAW_EQUITY_METRICS),
+        "weighted_account_equity": bool(weighted_capture & WEIGHTED_ACCOUNT_EQUITY_METRICS),
         "hsl_ema_tail": bool(metrics & _HSL_EMA_TAIL_METRICS),
         "hsl_raw_drawdown": bool(
             metrics & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
@@ -963,11 +1013,58 @@ def mps_requested_metric_features(
     return frozenset(name for name, enabled in features.items() if enabled)
 
 
+def _reduce_exponential_output(output, run, data, needed_metrics):
+    if not set(needed_metrics) & EXPONENTIAL_EQUITY_METRICS:
+        return {}, None
+    from optimization.gpu.exponential_equity import exponential_equity_metrics
+    return exponential_equity_metrics(output, run, data, needed_metrics, relative_timestamps=True)
+
+
+def _exponential_metadata_row(metadata, index):
+    def scalar(value):
+        if isinstance(value, dict):
+            return {key: scalar(item) for key, item in value.items()}
+        if hasattr(value, "detach"):
+            value = value.detach().cpu()
+            return value.item() if value.ndim == 0 else value[index].item()
+        return value
+    result = scalar(metadata)
+    for key in ("first_return_end_ms", "last_return_end_ms"):
+        if result[key] < 0:
+            result[key] = None
+    statuses = ("available", "insufficient_observations", "nonpositive_equity", "liquidated")
+    for curve in result["curves"].values():
+        curve["status"] = statuses[curve["status"]]
+    return result
+
+
+def _exponential_metadata_to_host(metadata):
+    if isinstance(metadata, dict):
+        return {key: _exponential_metadata_to_host(value) for key, value in metadata.items()}
+    if hasattr(metadata, "detach"):
+        return metadata.detach().cpu()
+    return metadata
+
+
 def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
     """Run the opt-in recovery postprocessor before proxy outputs leave MPS."""
 
     if not set(needed_metrics) & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS:
         return None
+    if "strategy_eq_recovery_distribution" in output:
+        from optimization.gpu.mps_kernel import MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS, torch
+
+        if {"strategy_eq_recovery_samples", "strategy_eq_recovery_sample_interval_days"} & output.keys():
+            raise RuntimeError("Ambiguous GPU recovery output")
+        stats = output["strategy_eq_recovery_distribution"]
+        bounds = output.get("last_eq_ts")
+        if (not isinstance(stats, torch.Tensor) or not isinstance(bounds, torch.Tensor)
+            or stats.device.type not in {"cuda", "mps"} or stats.device != bounds.device
+            or stats.dtype != torch.float32 or stats.ndim != 2
+            or bounds.shape != (stats.shape[0],)
+            or stats.shape[1] != MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS):
+            raise RuntimeError("Invalid compact GPU recovery output")
+        return stats
     required = {
         "strategy_eq_recovery_samples",
         "strategy_eq_recovery_sample_interval_days",
@@ -1087,87 +1184,6 @@ def _candidate_position_slot_outputs(
             np.asarray(values, dtype=np.float64)
         )
     return outputs
-
-
-def _single_coin_exposure_params(
-    risk: dict, *, side: str, scale_hsl_budget: bool = False
-) -> dict[str, float]:
-    return {
-        "we_excess_allowance_pct": float(
-            risk.get("we_excess_allowance_pct", 0.0) or 0.0
-        ),
-        "hsl_scale_budget_with_excess_allowance": float(scale_hsl_budget),
-        "twel_entry_gate_enabled": float(
-            bool(risk.get("total_exposure_entry_gate_enabled", True))
-        ),
-        "twel_enforcer_threshold": float(
-            risk.get("total_exposure_enforcer_threshold", 1.0) or 0.0
-        ),
-    }
-
-
-def _position_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, float]:
-    enabled = bool(
-        risk.get(
-            "position_exposure_enforcer_enabled",
-            risk.get("risk_wel_enforcer_enabled", False),
-        )
-    )
-    threshold = float(
-        risk.get(
-            "position_exposure_enforcer_threshold",
-            risk.get("risk_wel_enforcer_threshold", 0.0),
-        )
-        or 0.0
-    )
-    if enabled and (not np.isfinite(threshold) or threshold <= 0.0):
-        raise ValueError(
-            "MPS proxy requires a finite positive "
-            f"bot.{side}.risk.position_exposure_enforcer_threshold when the "
-            "position exposure enforcer is enabled"
-        )
-    return {
-        "wel_enforcer_enabled": float(enabled),
-        "wel_enforcer_threshold": threshold,
-    }
-
-
-def _total_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, float]:
-    policy = (
-        str(risk.get("total_exposure_enforcer_policy", "reduce_overweight"))
-        .strip()
-        .lower()
-    )
-    if policy not in {"reduce_overweight", "reduce_portfolio"}:
-        raise ValueError(
-            "MPS proxy requires "
-            f"bot.{side}.risk.total_exposure_enforcer_policy to be "
-            f"reduce_overweight or reduce_portfolio, got {policy!r}"
-        )
-    return {
-        "twel_enforcer_enabled": float(
-            bool(risk.get("total_exposure_enforcer_enabled", False))
-        ),
-        "twel_enforcer_reduce_portfolio": float(policy == "reduce_portfolio"),
-    }
-
-
-def _unstuck_params(bot: dict) -> dict[str, float]:
-    return {
-        "unstuck_enabled": float(bool(bot["unstuck_enabled"])),
-        "unstuck_ema_gating_enabled": float(bool(bot["unstuck_ema_gating_enabled"])),
-        "unstuck_close_pct": float(bot["unstuck_close_pct"]),
-        "unstuck_ema_dist": float(bot["unstuck_ema_dist"]),
-        "unstuck_loss_allowance_pct": float(bot["unstuck_loss_allowance_pct"]),
-        "unstuck_threshold": float(bot["unstuck_threshold"]),
-        **{key: float(bot[key]) for key in UNSTUCK_EMA_PARAM_KEYS},
-    }
-
-
-def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
-    from optimization.gpu.hsl import pack_params
-
-    return pack_params(bot, signal_mode)
 
 
 def _require_supported_multicoin_valid_tails(
@@ -1806,7 +1822,15 @@ class MpsSingleCoinProxy:
             validate_gpu_metric_names,
         )
 
-        self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        self.needed_metrics = set(validate_gpu_metric_names(
+            needed_metrics, native_replay=False, device=gpu_device(torch),
+        ))
+        from config.ew import validate_ew_half_life_days
+        half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
+        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
+            raise ValueError("Exponential (_ew) metrics require backtest.ew_half_life_days")
+        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and gpu_device(torch) != "cuda":
+            raise ValueError("Exponential GPU metrics require CUDA; use a CPU backend")
 
         from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
@@ -1819,7 +1843,7 @@ class MpsSingleCoinProxy:
         self.btc_analysis_enabled = any(
             _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
         )
-        self.btc_risk_enabled = bool(self.needed_metrics & BTC_INTRADAY_RISK_METRICS)
+        self.btc_risk_enabled = bool(self.needed_metrics & (BTC_INTRADAY_RISK_METRICS | EXPONENTIAL_BTC_EQUITY_METRICS))
         self.equity_balance_diff_enabled = bool(
             self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
         )
@@ -2093,6 +2117,7 @@ class MpsSingleCoinProxy:
             "ts0": self.data["ts0"],
             "n": self.data["n"],
             "strategy_kind": self.strategy_kind,
+            "ew_half_life_days": config["backtest"].get("ew_half_life_days"),
         }
         if self.btc_analysis_enabled:
             self.metrics_data.update(
@@ -2201,9 +2226,6 @@ class MpsSingleCoinProxy:
         *,
         end_step: int | None = None,
     ) -> list[dict]:
-        scratch_policy = getattr(self, "scratch_policy", None)
-        if scratch_policy is not None and candidates:
-            scratch_policy.activate(self)
         results: list[dict] = []
         torch = self._torch
         full_candle_count = max(
@@ -2255,7 +2277,7 @@ class MpsSingleCoinProxy:
         progress = _new_gpu_dispatch_progress(
             len(candidates),
             dispatch_batch_size,
-            adaptive=getattr(self, "batch_tuner", None) is not None,
+            adaptive=False,
         )
         for start, chunk in proxy_batches(
             self, candidates, dispatch_batch_size, end_step=effective_end_step
@@ -2320,6 +2342,10 @@ class MpsSingleCoinProxy:
                     interval_ms=int(self.run.interval_ms),
                     effective_start_step=0,
                     effective_end_step=effective_end_step,
+                )
+            if self.needed_metrics & HARD_STOP_LIFECYCLE_METRICS:
+                output["hsl_unified_scope"] = torch.from_numpy(
+                    parameter_matrix[:, self.param_keys.index("hsl_signal_mode")] == 0
                 )
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
@@ -2389,322 +2415,6 @@ class MpsSingleCoinProxy:
 MpsEmaAnchorProxy = MpsSingleCoinProxy
 
 
-def _pack_multicoin_hsl_overrides(
-    matrix: np.ndarray,
-    *,
-    row: int,
-    start_column: int,
-    side_patch: dict,
-    effective_bot: dict,
-) -> None:
-    hsl_patch = side_patch.get("hsl", {}) or {}
-    if not hsl_patch:
-        return
-    packed = _hsl_params(effective_bot, signal_mode="coin")
-    missing = object()
-    for offset, (key, path) in enumerate(HSL_COIN_OVERRIDE_PATHS):
-        value = hsl_patch
-        for part in path:
-            value = value.get(part, missing) if isinstance(value, dict) else missing
-            if value is missing:
-                break
-        if value is missing:
-            continue
-        if key == "hsl_panic_market":
-            encoded = encode_hsl_panic_order_type(
-                value,
-                field_name="coin override hsl.panic_close_order_type",
-            )
-        else:
-            encoded = float(packed[key])
-        matrix[row, start_column + offset] = encoded
-
-
-def _build_multicoin_ema_coin_overrides(
-    *,
-    config: dict,
-    mss: dict,
-    exchange: str,
-    coins: list[str],
-    payload,
-    side: str,
-    resolve_override=None,
-) -> tuple[np.ndarray, dict]:
-    """Pack exact-last static coin overrides for the Metal EMA proxy."""
-
-    if resolve_override is None:
-        from backtest import _get_backtest_coin_override
-
-        resolve_override = _get_backtest_coin_override
-
-    matrix = np.full(
-        (len(coins), EMA_ANCHOR_COIN_OVERRIDE_COLS),
-        np.nan,
-        dtype=np.float32,
-    )
-    exact_overrides = []
-    for coin_index, coin in enumerate(coins):
-        patch = resolve_override(config, mss, exchange, coin) or {}
-        exact_overrides.append(copy.deepcopy(patch))
-        side_patch = patch.get("bot", {}).get(side, {})
-        strategy_patch = side_patch.get("strategy", {}).get("ema_anchor", {}) or {}
-        effective_strategy = payload.strategy_params_list[coin_index][side]
-        from optimization.gpu.hsl import project_bot
-
-        effective_bot = project_bot(payload, coin_index, side, config)
-        for column, key in enumerate(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS):
-            if key in strategy_patch:
-                matrix[coin_index, column] = float(effective_strategy[key])
-        cooldown_patch = side_patch.get("entry_cooldown", {}) or {}
-        encoded = adaptive_params(effective_bot)
-        paths = (
-            ("min_duration_minutes",),
-            ("max_duration_minutes",),
-            ("weights_minutes", "exposure_ratio"),
-            ("weights_minutes", "adverse_directionality"),
-        )
-        for offset, (key, path) in enumerate(zip(ADAPTIVE_OVERRIDE_KEYS, paths)):
-            patch_value = cooldown_patch
-            for leaf in path:
-                if not isinstance(patch_value, dict) or leaf not in patch_value:
-                    break
-                patch_value = patch_value[leaf]
-            else:
-                matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START + offset] = (
-                    encoded[key]
-                )
-        risk_patch = side_patch.get("risk", {}) or {}
-        if "base_duration_minutes" in (side_patch.get("entry_cooldown", {}) or {}):
-            matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN] = float(
-                effective_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0
-            )
-        # Exact payload construction keeps per-side universe eligibility in
-        # entry_eligible and uses a zero WEL sentinel for an ineligible coin.
-        # Preserve that sentinel even when no explicit coin override exists so
-        # fused long/short proxies may screen different side universes.
-        if not bool(effective_bot.get("entry_eligible", True)) or (
-            "wallet_exposure_limit" in side_patch
-        ):
-            matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] = float(
-                effective_bot["wallet_exposure_limit"]
-            )
-        if "we_excess_allowance_pct" in risk_patch:
-            matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN] = float(
-                effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
-            )
-        unstuck_patch = side_patch.get("unstuck", {}) or {}
-        for offset, (patch_key, bot_key) in enumerate(
-            (
-                ("enabled", "unstuck_enabled"),
-                ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
-                ("close_pct", "unstuck_close_pct"),
-                ("ema_dist", "unstuck_ema_dist"),
-                ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
-                ("threshold", "unstuck_threshold"),
-            ),
-            start=EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
-        ):
-            if patch_key in unstuck_patch:
-                matrix[coin_index, offset] = float(effective_bot[bot_key])
-        for offset, key in enumerate(UNSTUCK_EMA_PARAM_KEYS):
-            column = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + offset
-            strategy_key = key.removeprefix("unstuck_")
-            if unstuck_ema_spans_coupled(config):
-                # Inherited spans stay NaN so each candidate supplies its own
-                # strategy value; only actual strategy coin pins remain static.
-                matrix[coin_index, column] = matrix[
-                    coin_index,
-                    EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(strategy_key),
-                ]
-            elif strategy_key in unstuck_patch:
-                matrix[coin_index, column] = float(effective_bot[key])
-        _pack_multicoin_hsl_overrides(
-            matrix,
-            row=coin_index,
-            start_column=EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
-            side_patch=side_patch,
-            effective_bot=effective_bot,
-        )
-        if bool(effective_bot.get("is_forced_active", False)):
-            matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN] = 1.0
-    contract = {
-        "exchange": exchange,
-        "coins": coins,
-        "side": side,
-        "exact_overrides": exact_overrides,
-        "values": [
-            [None if not np.isfinite(value) else float(value) for value in row]
-            for row in matrix
-        ],
-    }
-    return matrix, contract
-
-
-def _build_multicoin_tm_coin_overrides(
-    *,
-    config: dict,
-    mss: dict,
-    exchange: str,
-    coins: list[str],
-    payload,
-    side: str,
-    resolve_override=None,
-) -> tuple[np.ndarray, dict]:
-    """Pack exact-last static coin overrides for the Metal TM proxy."""
-
-    if resolve_override is None:
-        from backtest import _get_backtest_coin_override
-
-        resolve_override = _get_backtest_coin_override
-
-    matrix = np.full(
-        (len(coins), TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
-        np.nan,
-        dtype=np.float32,
-    )
-    exact_overrides = []
-    missing = object()
-    for coin_index, coin in enumerate(coins):
-        patch = resolve_override(config, mss, exchange, coin) or {}
-        exact_overrides.append(copy.deepcopy(patch))
-        side_patch = patch.get("bot", {}).get(side, {})
-        strategy_patch = (
-            side_patch.get("strategy", {}).get("trailing_martingale", {}) or {}
-        )
-        effective_strategy = flatten_trailing_martingale_params(
-            payload.strategy_params_list[coin_index][side],
-            payload.bot_params_list[coin_index][side],
-        )
-        from optimization.gpu.hsl import project_bot
-
-        effective_bot = project_bot(payload, coin_index, side, config)
-        for column, (key, path) in enumerate(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS):
-            value = strategy_patch
-            for part in path:
-                value = value.get(part, missing) if isinstance(value, dict) else missing
-                if value is missing:
-                    break
-            if value is not missing:
-                effective_value = float(effective_strategy[key])
-                matrix[coin_index, column] = (
-                    encode_tm_retracement_base_pct(effective_value)
-                    if key
-                    in {
-                        "entry_retracement_base_pct",
-                        "close_retracement_base_pct",
-                    }
-                    else effective_value
-                )
-        entry_patch = strategy_patch.get("entry", {}) or {}
-        if "ema_gate_mode" in entry_patch:
-            matrix[
-                coin_index,
-                TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
-            ] = float(effective_strategy["gate_initial"])
-            matrix[
-                coin_index,
-                TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
-            ] = float(effective_strategy["gate_reentry"])
-        cooldown_patch = side_patch.get("entry_cooldown", {}) or {}
-        encoded = adaptive_params(effective_bot)
-        paths = (
-            ("min_duration_minutes",),
-            ("max_duration_minutes",),
-            ("weights_minutes", "exposure_ratio"),
-            ("weights_minutes", "adverse_directionality"),
-        )
-        for offset, (key, path) in enumerate(zip(ADAPTIVE_OVERRIDE_KEYS, paths)):
-            patch_value = cooldown_patch
-            for leaf in path:
-                if not isinstance(patch_value, dict) or leaf not in patch_value:
-                    break
-                patch_value = patch_value[leaf]
-            else:
-                matrix[
-                    coin_index,
-                    TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START + offset,
-                ] = encoded[key]
-        risk_patch = side_patch.get("risk", {}) or {}
-        if "base_duration_minutes" in (side_patch.get("entry_cooldown", {}) or {}):
-            matrix[
-                coin_index,
-                TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
-            ] = float(effective_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0)
-        if not bool(effective_bot.get("entry_eligible", True)) or (
-            "wallet_exposure_limit" in side_patch
-        ):
-            matrix[
-                coin_index,
-                TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
-            ] = float(effective_bot["wallet_exposure_limit"])
-        if "we_excess_allowance_pct" in risk_patch:
-            matrix[
-                coin_index,
-                TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
-            ] = float(effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0)
-        if "position_exposure_enforcer_enabled" in risk_patch:
-            matrix[
-                coin_index,
-                TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN,
-            ] = float(bool(effective_bot.get("risk_wel_enforcer_enabled", False)))
-        if "position_exposure_enforcer_threshold" in risk_patch:
-            matrix[
-                coin_index,
-                TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN,
-            ] = float(effective_bot.get("risk_wel_enforcer_threshold", 0.0) or 0.0)
-        unstuck_patch = side_patch.get("unstuck", {}) or {}
-        for offset, (patch_key, bot_key) in enumerate(
-            (
-                ("enabled", "unstuck_enabled"),
-                ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
-                ("close_pct", "unstuck_close_pct"),
-                ("ema_dist", "unstuck_ema_dist"),
-                ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
-                ("threshold", "unstuck_threshold"),
-            ),
-            start=TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
-        ):
-            if patch_key in unstuck_patch:
-                matrix[coin_index, offset] = float(effective_bot[bot_key])
-        for offset, key in enumerate(UNSTUCK_EMA_PARAM_KEYS):
-            column = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + offset
-            strategy_key = key.removeprefix("unstuck_")
-            if unstuck_ema_spans_coupled(config):
-                # Inherited spans stay NaN so each candidate supplies its own
-                # strategy value; only actual strategy coin pins remain static.
-                matrix[coin_index, column] = matrix[
-                    coin_index,
-                    TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS.index(
-                        (strategy_key, ("entry", strategy_key))
-                    ),
-                ]
-            elif strategy_key in unstuck_patch:
-                matrix[coin_index, column] = float(effective_bot[key])
-        _pack_multicoin_hsl_overrides(
-            matrix,
-            row=coin_index,
-            start_column=TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
-            side_patch=side_patch,
-            effective_bot=effective_bot,
-        )
-        if bool(effective_bot.get("is_forced_active", False)):
-            matrix[
-                coin_index,
-                TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
-            ] = 1.0
-    contract = {
-        "exchange": exchange,
-        "coins": coins,
-        "side": side,
-        "exact_overrides": exact_overrides,
-        "values": [
-            [None if not np.isfinite(value) else float(value) for value in row]
-            for row in matrix
-        ],
-    }
-    return matrix, contract
-
-
 def _build_single_coin_override_params(
     *,
     config: dict,
@@ -2717,15 +2427,13 @@ def _build_single_coin_override_params(
 ) -> tuple[dict[str, float], dict]:
     """Map the shared exact-last override ABI onto one directional row."""
 
+    if strategy_kind not in {"ema_anchor", "trailing_martingale"}:
+        raise ValueError(f"unsupported single-coin strategy {strategy_kind!r}")
+    matrix, contract = build_coin_override_parameters(
+        strategy_kind=strategy_kind, config=config, mss=mss,
+        exchange=exchange, coins=[coin], payload=payload, side=side,
+    )
     if strategy_kind == "ema_anchor":
-        matrix, contract = _build_multicoin_ema_coin_overrides(
-            config=config,
-            mss=mss,
-            exchange=exchange,
-            coins=[coin],
-            payload=payload,
-            side=side,
-        )
         columns = {
             key: column
             for column, key in enumerate(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS)
@@ -2744,15 +2452,7 @@ def _build_single_coin_override_params(
         unstuck_ema_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
         unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         hsl_start = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
-    elif strategy_kind == "trailing_martingale":
-        matrix, contract = _build_multicoin_tm_coin_overrides(
-            config=config,
-            mss=mss,
-            exchange=exchange,
-            coins=[coin],
-            payload=payload,
-            side=side,
-        )
+    else:
         columns = {
             key: column
             for column, (key, _path) in enumerate(
@@ -2783,8 +2483,6 @@ def _build_single_coin_override_params(
         unstuck_ema_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
         unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
-    else:
-        raise ValueError(f"unsupported single-coin strategy {strategy_kind!r}")
 
     columns.update(
         {key: unstuck_start + offset for offset, key in enumerate(UNSTUCK_PARAM_KEYS)}
@@ -2859,8 +2557,8 @@ def _prepared_multicoin_data(
             data["invariant_bytes"] / 2**30,
         )
         return data
-    from optimization.gpu.residency import current_cuda_residency
-    residency = current_cuda_residency()
+    from optimization.gpu.residency import current_gpu_residency
+    residency = current_gpu_residency()
     def build(spill_dir=None):
         kwargs = {"spill_dir": spill_dir} if spill_dir is not None else {}
         return build_mps_multicoin_data(
@@ -2869,7 +2567,7 @@ def _prepared_multicoin_data(
         )
     data = (
         residency.prepare(key, build)
-        if residency is not None and cache is not None and gpu_device() == "cuda"
+        if residency is not None and cache is not None
         else build()
     )
     if cache is not None:
@@ -2894,7 +2592,12 @@ class MpsMulticoinProxy:
         interrupt_check=None,
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
         prepared_data_cache: dict | None = None,
+        factual_hsl: bool = False,
+        factual_capacity_hints: dict | None = None,
+        automatic_scratch_budget: bool = False,
     ):
+        from config.gpu import validate_gpu_backtest_config
+        validate_gpu_backtest_config(config)
         try:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
@@ -2913,7 +2616,18 @@ class MpsMulticoinProxy:
             validate_gpu_metric_names,
         )
 
-        self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+        self.needed_metrics = set(validate_gpu_metric_names(
+            needed_metrics, native_replay=factual_hsl, device=gpu_device(torch),
+        ))
+        from config.ew import validate_ew_half_life_days
+        half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
+        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
+            raise ValueError("Exponential (_ew) metrics require backtest.ew_half_life_days")
+        # Capture factual suffix histories on either device. Metal reductions
+        # use f32; compact host scoring retains f64 arithmetic.
+        self.weighted_equity_metrics = tuple(sorted(
+            weighted_equity_capture_metrics(self.needed_metrics)
+        ))
 
         from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
@@ -2928,14 +2642,14 @@ class MpsMulticoinProxy:
         self.btc_analysis_enabled = any(
             _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
         )
-        self.btc_risk_enabled = bool(self.needed_metrics & BTC_INTRADAY_RISK_METRICS)
+        self.btc_risk_enabled = bool(self.needed_metrics & (BTC_INTRADAY_RISK_METRICS | EXPONENTIAL_BTC_EQUITY_METRICS))
         self.equity_balance_diff_enabled = bool(
             self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
         )
         btc_values = np.ascontiguousarray(np.asarray(btc, dtype=np.float64).reshape(-1))
         self.batch_size = max(1, int(batch_size))
         self.max_dispatch_candidate_bars = int(max_dispatch_candidate_bars)
-        self.interrupt_check = interrupt_check or (lambda: None)
+        self.interrupt_check = interrupt_check or _noop_interrupt_check
         self.profile_enabled = os.environ.get(
             "PASSIVBOT_GPU_PROFILE", ""
         ).strip().lower() in {"1", "true", "yes", "y"}
@@ -2947,9 +2661,9 @@ class MpsMulticoinProxy:
                 "expected multicoin HLCVs with three dimensions, " f"got {values.shape}"
             )
         coin_count = int(values.shape[1])
-        if not (2 <= coin_count <= MPS_MULTICOIN_MAX_COINS):
+        if not (1 <= coin_count <= MPS_MULTICOIN_MAX_COINS):
             raise ValueError(
-                f"MPS multicoin proxy supports 2..{MPS_MULTICOIN_MAX_COINS} coins; "
+                f"MPS multicoin proxy supports 1..{MPS_MULTICOIN_MAX_COINS} coins; "
                 f"got {coin_count}"
             )
         self.strategy_kind = (
@@ -2964,6 +2678,7 @@ class MpsMulticoinProxy:
             self.strategy_kind == "trailing_martingale"
             and self.needed_metrics & ENTRY_INTERVAL_METRICS
         )
+        self.native_factual_hsl = bool(factual_hsl)
         self.param_keys = (
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
             if self.strategy_kind == "trailing_martingale"
@@ -2984,6 +2699,7 @@ class MpsMulticoinProxy:
                 n_sides=len(enabled_sides),
                 max_candidate_bars=self.max_dispatch_candidate_bars,
                 device=gpu_device(torch),
+                factual_hsl=factual_hsl,
             )
         )
         if self.temporal_chunking:
@@ -3117,75 +2833,13 @@ class MpsMulticoinProxy:
             for side in ("long", "short")
         }
         self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
-        self.base_params = {}
+        base_parameters = prepare_candidate_parameters(config, mss, exchange)
+        self.base_params = {
+            side: {key: base_parameters[f"{side}_{key}"] for key in self.param_keys}
+            for side in self.sides
+        }
         for side in self.sides:
             first_bot = projected[0][side]
-            first_strategy = dict(payload.strategy_params_list[0][side])
-            if self.strategy_kind == "trailing_martingale":
-                first_strategy = flatten_trailing_martingale_params(
-                    first_strategy, first_bot
-                )
-            weights = first_bot.get("forager_score_weights", {}) or {}
-            first_strategy.update(
-                {
-                    "entry_cooldown_minutes": float(
-                        first_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0
-                    ),
-                    "total_wallet_exposure_limit": float(
-                        first_bot["total_wallet_exposure_limit"]
-                    ),
-                    "forager_volume_ema_span_1m": float(
-                        first_bot.get("filter_volume_ema_span_1m", 0.0) or 0.0
-                    ),
-                    "forager_volatility_ema_span_1m": float(
-                        first_bot.get("filter_volatility_ema_span_1m", 0.0) or 0.0
-                    ),
-                    "forager_volume_drop_pct": float(
-                        first_bot.get("filter_volume_drop_pct", 0.0) or 0.0
-                    ),
-                    "forager_score_weights_volume": float(weights.get("volume", 0.0)),
-                    "forager_score_weights_ema_readiness": float(
-                        weights.get("ema_readiness", 0.0)
-                    ),
-                    "forager_score_weights_volatility": float(
-                        weights.get("volatility", 0.0)
-                    ),
-                    "n_positions": float(first_bot["n_positions"]),
-                }
-            )
-            first_strategy.update(
-                _single_coin_exposure_params(
-                    config["bot"][side].get("risk", {}), side=side,
-                    scale_hsl_budget=config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"],
-                )
-            )
-            if self.strategy_kind == "trailing_martingale":
-                first_strategy.update(
-                    _position_exposure_enforcer_params(
-                        config["bot"][side].get("risk", {}), side=side
-                    )
-                )
-            if self.strategy_kind in {"ema_anchor", "trailing_martingale"}:
-                first_strategy.update(
-                    _total_exposure_enforcer_params(
-                        config["bot"][side].get("risk", {}), side=side
-                    )
-                )
-            base_bot = flatten_shared_bot_side(config["bot"][side])
-            first_strategy.update(_unstuck_params(base_bot))
-            hsl_bot = project_bot(payload, 0, side, config, base=True)
-            first_strategy.update(_hsl_params(hsl_bot, signal_mode=signal_mode))
-            first_strategy.update(adaptive_params(base_bot))
-            missing = [
-                key for key in self.param_keys if key not in first_strategy
-            ]
-            if missing:
-                raise ValueError(
-                    f"MPS multicoin {self.strategy_kind} {side} payload is "
-                    f"missing parameters: {missing}"
-                )
-            self.base_params[side] = first_strategy
-
             for coin in range(1, coin_count):
                 bot = payload.bot_params_list[coin][side]
                 if any(
@@ -3219,24 +2873,10 @@ class MpsMulticoinProxy:
         per_side_coin_overrides = {}
         per_side_override_contracts = {}
         for side in self.sides:
-            if self.strategy_kind == "ema_anchor":
-                overrides, contract = _build_multicoin_ema_coin_overrides(
-                    config=config,
-                    mss=mss,
-                    exchange=exchange,
-                    coins=coins,
-                    payload=payload,
-                    side=side,
-                )
-            else:
-                overrides, contract = _build_multicoin_tm_coin_overrides(
-                    config=config,
-                    mss=mss,
-                    exchange=exchange,
-                    coins=coins,
-                    payload=payload,
-                    side=side,
-                )
+            overrides, contract = build_coin_override_parameters(
+                strategy_kind=self.strategy_kind, config=config, mss=mss,
+                exchange=exchange, coins=coins, payload=payload, side=side,
+            )
             per_side_coin_overrides[side] = overrides
             per_side_override_contracts[side] = contract
         if len(self.sides) == 1:
@@ -3344,13 +2984,14 @@ class MpsMulticoinProxy:
             cache=prepared_data_cache,
             limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
         )
-        from optimization.gpu.residency import current_cuda_residency
-        residency = current_cuda_residency()
+        from optimization.gpu.residency import current_gpu_residency
+        residency = current_gpu_residency()
         self._cuda_residency = residency if residency is not None and residency.owns(self.data) else None
         self.metrics_data = {
             "ts0": self.data["ts0"],
             "n": self.data["n"],
             "strategy_kind": self.strategy_kind,
+            "ew_half_life_days": config["backtest"].get("ew_half_life_days"),
         }
         if self.btc_analysis_enabled:
             self.metrics_data.update(
@@ -3365,6 +3006,10 @@ class MpsMulticoinProxy:
         self.runners = {}
         self.fused_runner = None
         self._runner_specs = {}
+        # Small service-owned estimates outlive residency eviction. This mapping
+        # contains integers only, never runners, tensors or checkpoint state.
+        self._factual_capacity_hints = factual_capacity_hints
+        self._automatic_scratch_budget = automatic_scratch_budget
         common_runner_kwargs = {
             "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
             "max_realized_loss_pct": float(
@@ -3395,6 +3040,14 @@ class MpsMulticoinProxy:
             "recovery_distribution_enabled": bool(
                 self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
+            "weighted_volume_enabled": "volume_pct_per_day_avg_w" in self.needed_metrics,
+            "raw_strategy_risk_enabled": bool(
+                self.needed_metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS
+            ),
+            "raw_strategy_growth_enabled": bool(
+                self.needed_metrics & RAW_STRATEGY_EQUITY_METRICS
+            ),
+            "weighted_equity_metrics": self.weighted_equity_metrics,
             "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
             "btc_prices": (
                 btc_values
@@ -3405,18 +3058,27 @@ class MpsMulticoinProxy:
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
         }
-        if self.strategy_kind == "trailing_martingale":
-            # The payload includes effective per-coin flags after overrides.
-            # Numeric unstuck genes may vary, so retain history whenever an
-            # enabled side/coin can consume it, even if its base allowance is zero.
-            unstuck_enabled = any(
-                bool(item[side]["unstuck_enabled"])
-                for item in projected
-                for side in self.sides
-            )
-            common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
-                _fill_pnl_lookback_bars(backtest_params) if unstuck_enabled else 0
-            )
+        # Auto-unstuck and realized-loss admission share one bounded fill-PnL
+        # window. Preserve it even if a tunable unstuck allowance is initially
+        # zero. Both shared-account strategies consume the same effective peak.
+        unstuck_enabled = any(
+            bool(item[side]["unstuck_enabled"])
+            for item in projected
+            for side in self.sides
+        )
+        common_runner_kwargs["interrupt_check"] = self.interrupt_check
+        common_runner_kwargs["factual_hsl"] = factual_hsl
+        common_runner_kwargs["exposure_rms_enabled"] = bool(
+            self.needed_metrics & EXPOSURE_RMS_METRICS
+        )
+        common_runner_kwargs["compact_recovery_output"] = bool(
+            factual_hsl and common_runner_kwargs["recovery_distribution_enabled"]
+        )
+        loss_gate_enabled = common_runner_kwargs["max_realized_loss_pct"] < 1.0
+        common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
+            _fill_pnl_lookback_bars(backtest_params)
+            if unstuck_enabled or loss_gate_enabled else 0
+        )
         common_runner_kwargs.update(
             pnl_lookback_bars=_hsl_lookback_bars(
                 backtest_params, hsl_enabled=bool(hsl_enabled_sides)
@@ -3450,9 +3112,12 @@ class MpsMulticoinProxy:
                 hedge_mode=bool(backtest_params["hedge_mode"]),
                 **common_runner_kwargs,
             )
+            if self.temporal_chunking:
+                fused_kwargs["max_dispatch_candidate_bars"] = self.max_dispatch_candidate_bars
+                fused_kwargs["interrupt_check"] = self.interrupt_check
             self._runner_specs["fused"] = (fused_runner_cls, fused_kwargs)
             if self._cuda_residency is None:
-                self.fused_runner = fused_runner_cls(self.run, self.data, **fused_kwargs)
+                self.fused_runner = self._construct_runner("fused", fused_runner_cls, fused_kwargs)
         else:
             runner_cls = (
                 MpsTrailingMartingaleMulticoinRunner
@@ -3480,17 +3145,47 @@ class MpsMulticoinProxy:
                     runner_kwargs["interrupt_check"] = self.interrupt_check
                 self._runner_specs[side] = (runner_cls, runner_kwargs)
                 if self._cuda_residency is None:
-                    self.runners[side] = runner_cls(self.run, self.data, **runner_kwargs)
+                    self.runners[side] = self._construct_runner(side, runner_cls, runner_kwargs)
         if self._cuda_residency is not None:
             self._cuda_residency.register(self)
 
     def _create_runners(self):
         for side, (runner_cls, kwargs) in self._runner_specs.items():
-            runner = runner_cls(self.run, self.data, **kwargs)
+            runner = self._construct_runner(side, runner_cls, kwargs)
             if side == "fused":
                 self.fused_runner = runner
             else:
                 self.runners[side] = runner
+
+    def _construct_runner(self, key, runner_cls, kwargs):
+        runner = runner_cls(self.run, self.data, **kwargs)
+        if self._factual_capacity_hints is not None and runner.native_factual_hsl:
+            capacity = self._factual_capacity_hints.get(key, runner.hsl_fact_capacity_learned)
+            if type(capacity) is not int or capacity < 1:
+                raise ValueError("Invalid learned GPU HSL factual capacity")
+            capacity = max(capacity, runner.hsl_fact_capacity_learned)
+            runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = capacity
+        if (self._automatic_scratch_budget and runner.bars.device.type == "cuda"):
+            from optimization.gpu.autotune import cuda_history_budget
+
+            free, total = map(int, self._torch.cuda.mem_get_info())
+            runner.hsl_scratch_budget_bytes = cuda_history_budget(
+                runner, free, total,
+                owners=1 if self.shared_account_fused else len(self.sides),
+            )
+        if (self._factual_capacity_hints is not None and runner.native_factual_hsl
+                and runner._history_batch_bytes(1) > runner.hsl_scratch_budget_bytes):
+            raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
+        return runner
+
+    def _remember_factual_capacities(self):
+        if self._factual_capacity_hints is None:
+            return
+        owners = ([("fused", self.fused_runner)] if self.fused_runner is not None
+                  else self.runners.items())
+        for key, runner in owners:
+            if runner.native_factual_hsl:
+                self._factual_capacity_hints[key] = runner.hsl_fact_capacity_learned
 
     def _parameter_matrix(
         self, candidates: list[dict], side: str | None = None
@@ -3587,7 +3282,14 @@ class MpsMulticoinProxy:
         return result
 
     def evaluate(self, candidates: list[dict]) -> list[dict]:
-        results: list[dict] = []
+        return self._evaluate(candidates, include_status=False)
+
+    def evaluate_results(self, candidates: list[dict]):
+        """Preserve actual simulator terminal status for authoritative consumers."""
+        return self._evaluate(candidates, include_status=True)
+
+    def _evaluate(self, candidates: list[dict], *, include_status: bool):
+        results = []
         torch = self._torch
         if getattr(self, "_cuda_residency", None) is not None:
             if not candidates:
@@ -3621,7 +3323,7 @@ class MpsMulticoinProxy:
         progress = _new_gpu_dispatch_progress(
             len(candidates),
             dispatch_batch_size,
-            adaptive=getattr(self, "batch_tuner", None) is not None,
+            adaptive=False,
         )
         for start, chunk in proxy_batches(self, candidates, dispatch_batch_size):
             chunk_profile_started = (
@@ -3638,6 +3340,7 @@ class MpsMulticoinProxy:
                 profile["timings_seconds"]["candidate_materialization"] += (
                     time.perf_counter() - stage_started
                 )
+            ew_metadata = None
             if fused_runner is not None:
                 fused_parameters = np.concatenate(
                     (parameter_matrices["long"], parameter_matrices["short"]),
@@ -3658,6 +3361,10 @@ class MpsMulticoinProxy:
                 recovery_distribution = _mps_strategy_eq_recovery_distribution(
                     raw_output, self.needed_metrics
                 )
+                ew_metrics, ew_metadata = _reduce_exponential_output(
+                    raw_output, self.run, self.metrics_data, self.needed_metrics
+                )
+                raw_output.update(ew_metrics)
                 if profile is not None:
                     synchronize()
                     profile["timings_seconds"]["metric_reduction"] += (
@@ -3667,7 +3374,7 @@ class MpsMulticoinProxy:
                 output = {
                     key: value.cpu()
                     for key, value in raw_output.items()
-                    if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
+                    if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS | EXPONENTIAL_EQUITY_METRICS
                 }
                 if recovery_distribution is not None:
                     recovery_distribution = recovery_distribution.cpu()
@@ -3693,6 +3400,11 @@ class MpsMulticoinProxy:
                     if len(self.sides) == 1
                     else None
                 )
+                if len(self.sides) == 1:
+                    ew_metrics, ew_metadata = _reduce_exponential_output(
+                        raw_side_outputs[self.sides[0]], self.run, self.metrics_data, self.needed_metrics
+                    )
+                    raw_side_outputs[self.sides[0]].update(ew_metrics)
                 if profile is not None:
                     synchronize()
                     profile["timings_seconds"]["metric_reduction"] += (
@@ -3703,7 +3415,7 @@ class MpsMulticoinProxy:
                     side: {
                         key: value.cpu()
                         for key, value in raw_side_outputs[side].items()
-                        if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
+                        if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS | EXPONENTIAL_EQUITY_METRICS
                     }
                     for side in self.sides
                 }
@@ -3783,6 +3495,12 @@ class MpsMulticoinProxy:
                 ]
             if recovery_distribution is not None:
                 output["strategy_eq_recovery_distribution"] = recovery_distribution
+            if self.needed_metrics & HARD_STOP_LIFECYCLE_METRICS:
+                output["hsl_unified_scope"] = torch.from_numpy(
+                    parameter_matrices[self.sides[0]][
+                        :, self.param_keys.index("hsl_signal_mode")
+                    ] == 0
+                )
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",
@@ -3812,6 +3530,35 @@ class MpsMulticoinProxy:
                         torch=torch,
                     )
                 )
+            if (
+                self.needed_metrics & RAW_STRATEGY_DRAWDOWN_CONSUMERS
+                and "raw_strategy_day_max_dd" not in output
+            ):
+                raise RuntimeError("GPU raw strategy-risk summary is missing")
+            if self.needed_metrics & RAW_STRATEGY_EQUITY_METRICS and not {
+                "raw_strategy_day_end_eq", "raw_strategy_day_min_eq"
+            }.issubset(output):
+                raise RuntimeError("GPU raw strategy-equity daily summaries are missing")
+            if (getattr(self, "native_factual_hsl", False)
+                    and any(name.startswith("drawdown_worst_ema_strategy_eq") for name in self.needed_metrics)
+                    and "hsl_drawdown_ema_max_portfolio" not in output):
+                raise RuntimeError("native HSL EMA maximum requires its observed portfolio payload")
+            if (getattr(self, "native_factual_hsl", False)
+                    and self.strategy_kind == "trailing_martingale"
+                    and self.needed_metrics & ENTRY_INTERVAL_METRICS
+                    and "entry_interval_native_metrics" not in output):
+                raise RuntimeError("native entry intervals require compact exact metrics")
+            if (
+                "drawdown_worst_mean_1pct_ema_strategy_eq" in self.needed_metrics
+                and (fused_runner is not None or len(self.sides) == 1)
+                and "hsl_drawdown_ema_mean_worst_1pct_portfolio" not in output
+            ):
+                raise RuntimeError("GPU portfolio HSL EMA-tail summary is missing")
+            missing_weighted = set(self.weighted_equity_metrics) - set(output)
+            if missing_weighted:
+                raise RuntimeError(
+                    "GPU weighted equity summary is missing: " + ", ".join(sorted(missing_weighted))
+                )
             objectives = self._compute_objectives(
                 output, self.run, self.metrics_data, needed=self.needed_metrics
             )
@@ -3828,10 +3575,25 @@ class MpsMulticoinProxy:
             arrays = {
                 name: value.detach().cpu().numpy() for name, value in objectives.items()
             }
-            results.extend(
+            rows = [
                 {name: float(values[index]) for name, values in arrays.items()}
                 for index in range(len(chunk))
-            )
+            ]
+            if include_status:
+                from optimization.gpu.executor import ReplayResult
+                liquidated = (output["liq_step"] >= 0).tolist()
+                # Transfer the compact sidecar once per cohort, rather than
+                # copying every candidate's batched metadata for each row.
+                if ew_metadata is not None:
+                    ew_metadata = _exponential_metadata_to_host(ew_metadata)
+                results.extend(
+                    ReplayResult(row, bool(flag),
+                                 {"ew": _exponential_metadata_row(ew_metadata, index)}
+                                 if ew_metadata is not None else None)
+                    for index, (row, flag) in enumerate(zip(rows, liquidated))
+                )
+            else:
+                results.extend(rows)
             if profile is not None:
                 profile["timings_seconds"]["result_materialization"] += (
                     time.perf_counter() - stage_started

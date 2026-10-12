@@ -1,10 +1,25 @@
-// Shared Apple Metal HSL screening controller.
-//
-// Exact Rust backtests remain authoritative. Strategy kernels provide scoped
-// realized and unrealized PnL; this module owns the common proxy lifecycle.
+// Shared GPU HSL adapters and reporting. Strategy kernels provide simulator
+// facts. The opt-in native reconstruction keeps factual history and disposable
+// event scratch resident; ordinary result payloads contain compact metrics.
+
+#ifndef PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+#define PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED 1
+#endif
+
+#ifndef PASSIVBOT_HSL_INCREMENTAL_ENABLED
+#define PASSIVBOT_HSL_INCREMENTAL_ENABLED PASSIVBOT_HSL_FACTUAL_ONLY
+#endif
+
+#ifndef PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED
+#define PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED PASSIVBOT_HSL_FACTUAL_ONLY
+#endif
 
 #ifndef PASSIVBOT_HSL_EMA_TAIL_ENABLED
 #define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0
+#endif
+
+#ifndef PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+#define PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTS_ENABLED > 0)
 #endif
 
 #ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
@@ -13,6 +28,14 @@
 
 #ifndef PASSIVBOT_HSL_RAW_TAIL_ENABLED
 #define PASSIVBOT_HSL_RAW_TAIL_ENABLED 0
+#endif
+
+#ifndef PASSIVBOT_HSL_RAW_TAIL_CAPACITY
+#define PASSIVBOT_HSL_RAW_TAIL_CAPACITY 1
+#endif
+
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED && PASSIVBOT_HSL_RAW_TAIL_CAPACITY < 1
+#error Raw drawdown tail capacity must be positive
 #endif
 
 #ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
@@ -25,11 +48,34 @@ constant int HSL_SIGNAL_UNIFIED = 0;
 constant int HSL_SIGNAL_PSIDE = 1;
 constant int HSL_SIGNAL_COIN = 2;
 
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+struct HslReplayContext;
+#endif
 struct HslState {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    device int* native_cache_words;
+    int native_cache_scope;
+    bool native_cache_reset;
+#endif
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslPairRing facts;
+#if PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    HslScopeCutoffCache cutoff_cache;
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED
+    HslScopeCursor scope_cursor;
+#endif
+#endif
+    device HslPairEvent* fact_events;
+    thread HslReplayContext* replay;
+    int replay_side;
+    int replay_coin;
+#endif
     HslController hsl;
     device HslNode* hsl_tree;
+#if !PASSIVBOT_HSL_FACTUAL_ONLY
     device int* hsl_times;
     device float* hsl_realized;
+#endif
     int hsl_lookback;
     bool hsl_owner;
     bool hsl_valid;
@@ -78,6 +124,235 @@ struct HslState {
 #endif
 };
 
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+struct HslReplayContext {
+    thread HslState* coins[2];
+    bool short_side[2];
+    int side_count;
+    int coin_count;
+    int coin_columns;
+    constant float* bars;
+    constant float* settings;
+    bool enabled;
+};
+
+inline HslReplayContext hsl_replay_context(
+    constant float* bars, constant float* settings, int coin_count, int coin_columns,
+    bool enabled
+) {
+    HslReplayContext context;
+    context.side_count = 0; context.coin_count = coin_count;
+    context.coin_columns = coin_columns; context.bars = bars; context.settings = settings;
+    context.enabled = enabled;
+    return context;
+}
+
+inline void attach_hsl_replay_side(
+    thread HslReplayContext& context, thread HslState& aggregate,
+    thread HslState* coins, int side, bool short_side
+) {
+    context.coins[side] = coins; context.short_side[side] = short_side;
+    context.side_count = max(context.side_count, side + 1);
+    aggregate.replay = &context; aggregate.replay_side = side; aggregate.replay_coin = -1;
+    for (int c = 0; c < context.coin_count; ++c) {
+        coins[c].replay = &context; coins[c].replay_side = side; coins[c].replay_coin = c;
+    }
+}
+
+inline bool replay_factual_hsl(
+    thread HslState& h, float budget, int minute, bool exposed, bool terminal
+) {
+    thread HslReplayContext& context = *h.replay;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    // Exactly one bounded owner allocation per candidate, shared by both sides.
+    // The cache contains disposable arithmetic, never controller permission.
+    bool cache_selected = h.signal_mode == HSL_SIGNAL_UNIFIED && h.replay_coin < 0;
+    HslNativeCache native_cache;
+    if (cache_selected) {
+        int scopes = context.side_count * (context.coin_count + 1);
+        int candidate = h.native_cache_scope / scopes;
+        int pairs = context.side_count * context.coin_count;
+        int facts = context.coins[0][0].facts.capacity;
+        int words = hsl_native_cache_bytes(pairs, facts) / 4;
+        native_cache = hsl_native_cache_view(h.native_cache_words + candidate * words, pairs, facts);
+        if (h.native_cache_reset || terminal || !exposed) native_cache.header->valid = 0;
+        h.native_cache_reset = false;
+    }
+    bool cache_eligible = cache_selected && exposed && !terminal;
+#endif
+    HslPairRing rings[2 * MAX_COINS];
+    HslScopePair pairs[2 * MAX_COINS];
+    float current_sizes[2 * MAX_COINS], quantity_steps[2 * MAX_COINS], prior_sizes[2 * MAX_COINS];
+    int cursors[2 * MAX_COINS], pair_ids[2 * MAX_COINS];
+    int count = 0;
+    int first = max(minute - h.hsl_lookback, 0);
+    for (int s = 0; s < context.side_count; ++s) {
+        if (h.signal_mode != HSL_SIGNAL_UNIFIED && s != h.replay_side) continue;
+        for (int c = 0; c < context.coin_count; ++c) {
+            if (h.replay_coin >= 0 && (s != h.replay_side || c != h.replay_coin)) continue;
+            thread HslState& source = context.coins[s][c];
+            if (!source.facts.enabled || source.facts.state->failure != 0) return false;
+            HslPairFacts view = hsl_pair_ring_view(source.facts, first);
+            // Observed flat, without any retained activity, has no valuation
+            // contribution. It does not require an invented quote or multiplier.
+            if (source.facts.state->current_size == 0.0f && view.count == 0) continue;
+            if (count >= 2 * MAX_COINS) return false;
+            rings[count] = source.facts;
+            pair_ids[count] = s * MAX_COINS + c;
+            current_sizes[count] = source.facts.state->current_size;
+            quantity_steps[count] = context.settings[c * context.coin_columns];
+            thread HslScopePair& pair = pairs[count];
+            pair.events = source.fact_events;
+            pair.current_size = current_sizes[count];
+            pair.current_basis = source.facts.state->current_basis;
+            pair.multiplier = context.settings[c * context.coin_columns + 4];
+            pair.short_side = context.short_side[s];
+            pair.sequences = reinterpret_cast<device const int*>(source.facts.records) + 6;
+            pair.sequence_stride = 8;
+            pair.prices = nullptr; pair.price_stride = 1;
+            pair.candles = context.bars + c * 4 + 2;
+            pair.candle_stride = context.coin_count * 4;
+            pair.candle_first = int(context.settings[c * context.coin_columns + 6]);
+            pair.candle_last = int(context.settings[c * context.coin_columns + 7]);
+            pair.fallback_price = view.count > 0 ? hsl_pair_fact(view, view.count - 1).price : 0.0f;
+            pair.current_mark = hsl_scope_price_at(pair, minute, first, minute);
+            ++count;
+        }
+    }
+    HslScopeResult result;
+    if (count == 0) {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+        if (cache_selected) native_cache.header->valid = 0;
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+        h.scope_cursor.valid = false;
+#endif
+        h.hsl.raw = h.hsl.ema = 0.0f; h.hsl.action = 0; h.hsl.flat_minute = -1;
+        return !exposed;
+    }
+    const float span = 2.0f / h.alpha - 1.0f;
+#if PASSIVBOT_HSL_EMPTY_SCOPE_ENABLED
+    // Scope selection above already excludes unrelated coins and sides. The
+    // same current-position singleton applies to every empty selected scope.
+    if (exposed && !terminal) {
+        bool empty = true;
+        for (int p = 0; p < count; ++p)
+            empty = empty && hsl_pair_ring_view(rings[p], first).count == 0;
+        if (empty) {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+            if (cache_selected) native_cache.header->valid = 0;
+#endif
+            for (int p = 0; p < count; ++p) {
+                pairs[p].facts = hsl_pair_ring_view(rings[p], first);
+                if (!hsl_reconstruct_pair(pairs[p].facts, pairs[p].current_size,
+                    pairs[p].current_basis, pairs[p].short_side, quantity_steps[p],
+                    pairs[p].events, pairs[p].history)) return false;
+            }
+            if (hsl_compose_empty_native_scope(pairs, count, first, minute,
+                budget, span, h.red_threshold, h.cooldown_minutes,
+                h.restart_policy == 2, result)) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+                h.scope_cursor.valid = false;
+#endif
+                h.hsl.raw = result.raw; h.hsl.ema = result.ema;
+                h.hsl.action = result.action; h.hsl.flat_minute = result.flat_minute;
+                h.hsl.last_observed = minute; h.hsl.exposed = exposed;
+                return true;
+            }
+        }
+    }
+#endif
+    HslScopeCutoff cutoff;
+#if PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    bool reused_cutoff;
+    if (!hsl_scope_history_cutoff_cached(rings, current_sizes, quantity_steps,
+        pair_ids, count, cursors, prior_sizes, h.cutoff_cache, cutoff, reused_cutoff)) return false;
+#else
+    if (!hsl_scope_history_cutoff(rings, current_sizes, quantity_steps, count,
+        cursors, prior_sizes, cutoff)) return false;
+#endif
+    if (cutoff.found) first = max(first, cutoff.minute);
+    bool advanced = false;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    if (cache_eligible) {
+        for (int p = 0; p < count; ++p)
+            pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
+        advanced = hsl_native_cache_replay(native_cache, pairs, count, pair_ids,
+            quantity_steps, first, minute, cutoff, budget, h.alpha, h.red_threshold, result);
+    }
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    if (reused_cutoff && !terminal
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+        && (!cache_selected || !exposed)
+#endif
+    ) {
+        HslPairSum upnl;
+        hsl_pair_sum_reset(upnl, 0.0f);
+        bool valid_marks = true;
+        for (int p = 0; p < count; ++p) {
+            thread const HslScopePair& pair = pairs[p];
+            valid_marks = valid_marks && isfinite(pair.current_mark) && pair.current_mark > 0.0f
+                && isfinite(pair.multiplier) && pair.multiplier > 0.0f;
+            float direction = pair.short_side ? -1.0f : 1.0f;
+            float value = pair.current_size == 0.0f ? 0.0f
+                : direction * fabs(pair.current_size) * pair.multiplier
+                    * (pair.current_mark - pair.current_basis);
+            valid_marks = valid_marks && isfinite(value);
+            hsl_pair_sum_add(upnl, value);
+        }
+        float historical_upnl = NAN;
+        if (count == 1 && h.scope_cursor.valid && h.scope_cursor.historical_endpoint) {
+            thread const HslScopePair& pair = pairs[0];
+            historical_upnl = (pair.short_side ? -1.0f : 1.0f)
+                * h.scope_cursor.historical_size * pair.multiplier
+                * (pair.current_mark - h.scope_cursor.historical_basis);
+        }
+        advanced = valid_marks && hsl_advance_scope(h.scope_cursor, first, minute,
+            hsl_pair_sum_value(upnl), budget, 2.0f / (span + 1.0f), h.red_threshold,
+            h.cooldown_minutes, h.restart_policy == 2, exposed, result, historical_upnl);
+    }
+#endif
+    if (!advanced) {
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+        // The independent composer overwrites the shared event scratch with
+        // logical rows. Retire physical cache ownership before that write,
+        // including a numerical query decline after a complete cache update.
+        if (cache_eligible) native_cache.header->valid = 0;
+#endif
+        for (int p = 0; p < count; ++p) {
+            pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
+            if (!hsl_reconstruct_pair(pairs[p].facts, pairs[p].current_size,
+                pairs[p].current_basis, pairs[p].short_side, quantity_steps[p],
+                pairs[p].events, pairs[p].history)) return false;
+        }
+        if (!hsl_compose_scope(pairs, count, first, minute, false, budget,
+            span, h.red_threshold, h.cooldown_minutes, h.restart_policy == 2, result
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+            , nullptr, 0, &h.scope_cursor
+#endif
+        )) return false;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+        // Only the independent original composer supplies fitness after a
+        // decline. Rebuild the disposable cache afterward for the next bar.
+        if (cache_eligible && native_cache.header->valid == 0)
+            hsl_native_cache_initialize(native_cache, pairs, count, pair_ids,
+                quantity_steps, first, minute, cutoff, h.alpha);
+#endif
+    }
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    if (terminal) h.scope_cursor.valid = false;
+#endif
+    h.hsl.raw = terminal && result.latest_flat_minute == minute
+        ? result.latest_flat_raw : result.raw;
+    h.hsl.ema = terminal && result.latest_flat_minute == minute
+        ? result.latest_flat_ema : result.ema;
+    h.hsl.action = result.action; h.hsl.flat_minute = result.flat_minute;
+    h.hsl.last_observed = minute; h.hsl.exposed = exposed;
+    return true;
+}
+#endif
+
 
 
 
@@ -93,9 +368,9 @@ struct HslStrategyEquityStats {
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
     int current_drawdown_day;
     float current_day_drawdown_worst;
-    float completed_day_count;
-    float daily_drawdown_counts[HSL_EMA_TAIL_BINS];
-    float daily_drawdown_sums[HSL_EMA_TAIL_BINS];
+    int completed_day_count;
+    int daily_tail_count;
+    float daily_drawdown_top[PASSIVBOT_HSL_RAW_TAIL_CAPACITY];
 #endif
 };
 
@@ -112,23 +387,12 @@ inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
     stats.current_drawdown_day = -1;
     stats.current_day_drawdown_worst = 0.0f;
-    stats.completed_day_count = 0.0f;
-    for (int i = 0; i < HSL_EMA_TAIL_BINS; ++i) {
-        stats.daily_drawdown_counts[i] = 0.0f;
-        stats.daily_drawdown_sums[i] = 0.0f;
-    }
+    stats.completed_day_count = 0;
+    stats.daily_tail_count = 0;
+    for (int i = 0; i < PASSIVBOT_HSL_RAW_TAIL_CAPACITY; ++i)
+        stats.daily_drawdown_top[i] = 0.0f;
 #endif
     return stats;
-}
-
-inline int hsl_drawdown_tail_bin(float value) {
-    // Cover fourteen octaves over [2^-14, 1) so low-drawdown Pareto members
-    // remain rankable without increasing thread-local state. Edge bins retain
-    // smaller values and overflow respectively. Actual sums are not clamped,
-    // so values outside the covered range keep their magnitude.
-    float scaled = (log2(fmax(value, 0.00006103515625f)) + 14.0f)
-        * 2.2857142857142856f;
-    return clamp(int(floor(scaled)), 0, HSL_EMA_TAIL_BINS - 1);
 }
 
 inline void flush_hsl_strategy_equity_daily_drawdown(
@@ -136,10 +400,20 @@ inline void flush_hsl_strategy_equity_daily_drawdown(
 ) {
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
     if (stats.current_drawdown_day < 0) return;
-    int bin = hsl_drawdown_tail_bin(stats.current_day_drawdown_worst);
-    stats.completed_day_count += 1.0f;
-    stats.daily_drawdown_counts[bin] += 1.0f;
-    stats.daily_drawdown_sums[bin] += stats.current_day_drawdown_worst;
+    stats.completed_day_count += 1;
+    // The registered timeline bounds floor(observed days / 100). Keep only
+    // that many largest daily maxima, with no approximate cutoff-bin mean.
+    const float value = stats.current_day_drawdown_worst;
+    if (stats.daily_tail_count == PASSIVBOT_HSL_RAW_TAIL_CAPACITY
+        && value <= stats.daily_drawdown_top[PASSIVBOT_HSL_RAW_TAIL_CAPACITY - 1])
+        return;
+    int position = min(stats.daily_tail_count, PASSIVBOT_HSL_RAW_TAIL_CAPACITY - 1);
+    while (position > 0 && value > stats.daily_drawdown_top[position - 1]) {
+        stats.daily_drawdown_top[position] = stats.daily_drawdown_top[position - 1];
+        --position;
+    }
+    stats.daily_drawdown_top[position] = value;
+    stats.daily_tail_count = min(stats.daily_tail_count + 1, PASSIVBOT_HSL_RAW_TAIL_CAPACITY);
 #endif
 }
 
@@ -204,23 +478,29 @@ inline float hsl_strategy_equity_drawdown_mean_worst_1pct(
     thread HslStrategyEquityStats& stats
 ) {
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-    float sample_count = stats.completed_day_count
-        + (stats.current_drawdown_day >= 0 ? 1.0f : 0.0f);
-    if (!(sample_count > 0.0f)) return 0.0f;
-    float worst_n = fmax(floor(sample_count * 0.01f), 1.0f);
-    float remaining = worst_n;
+    int sample_count = stats.completed_day_count
+        + (stats.current_drawdown_day >= 0 ? 1 : 0);
+    if (sample_count <= 0) return 0.0f;
+    int worst_n = max(sample_count / 100, 1);
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    if (worst_n == 1) return stats.drawdown_max;
+#endif
+    // An undersized direct shader invocation cannot supply a valid tail.
+    // Prepared runners specialize capacity from the complete input horizon.
+    if (worst_n > PASSIVBOT_HSL_RAW_TAIL_CAPACITY) return NAN;
+    int stored = 0;
+    bool current = stats.current_drawdown_day >= 0;
     float total = 0.0f;
-    int current_bin = stats.current_drawdown_day >= 0
-        ? hsl_drawdown_tail_bin(stats.current_day_drawdown_worst) : -1;
-    for (int i = HSL_EMA_TAIL_BINS - 1; i >= 0 && remaining > 0.0f; --i) {
-        float count = stats.daily_drawdown_counts[i]
-            + (i == current_bin ? 1.0f : 0.0f);
-        if (!(count > 0.0f)) continue;
-        float sum = stats.daily_drawdown_sums[i]
-            + (i == current_bin ? stats.current_day_drawdown_worst : 0.0f);
-        float take = fmin(count, remaining);
-        total += sum * (take / count);
-        remaining -= take;
+    // Merge the unflushed current day without mutating the retained state:
+    // repeated metric queries and temporal replay snapshots remain identical.
+    for (int i = 0; i < worst_n; ++i) {
+        if (current && (stored >= stats.daily_tail_count
+            || stats.current_day_drawdown_worst >= stats.daily_drawdown_top[stored])) {
+            total += stats.current_day_drawdown_worst;
+            current = false;
+        } else {
+            total += stats.daily_drawdown_top[stored++];
+        }
     }
     return total / worst_n;
 #else
@@ -238,15 +518,14 @@ inline float hsl_strategy_equity_recovery_max_steps(
     );
 }
 
-// Exact Rust sorts every retained drawdown-EMA sample before averaging the
-// largest floor(1%) (at least one). Keeping that unbounded series per Metal
-// thread would make large optimizer populations impractical. The proxy uses a
-// deterministic log histogram with exact per-bin sums/counts; only the partial
-// cutoff bin is approximated. Exact validations and drift gates remain
-// authoritative. The preprocessor removes this state and work unless one of
-// the tail metrics is requested.
+// Native factual replay captures requested observations in bounded device
+// storage and reduces the actual largest floor(1%) after an accepted replay.
+// The legacy observation replay retains its approximate log histogram. Neither
+// path changes the controller's signal or clock. Unrequested work is compiled out.
 struct HslDrawdownEmaTailStats {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    float last_sample;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
     float sample_count;
     float counts[HSL_EMA_TAIL_BINS];
     float sums[HSL_EMA_TAIL_BINS];
@@ -257,7 +536,9 @@ struct HslDrawdownEmaTailStats {
 
 inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats() {
     HslDrawdownEmaTailStats stats;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    stats.last_sample = NAN;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
     stats.sample_count = 0.0f;
     for (int i = 0; i < HSL_EMA_TAIL_BINS; ++i) {
         stats.counts[i] = 0.0f;
@@ -270,7 +551,10 @@ inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats() {
 }
 
 inline int hsl_drawdown_ema_tail_bin(float value) {
-    return hsl_drawdown_tail_bin(value);
+    // EMA tails retain their existing histogram independently of raw daily tails.
+    float scaled = (log2(fmax(value, 0.00006103515625f)) + 14.0f)
+        * 2.2857142857142856f;
+    return clamp(int(floor(scaled)), 0, HSL_EMA_TAIL_BINS - 1);
 }
 
 inline void update_hsl_drawdown_ema_tail_stats(
@@ -280,17 +564,25 @@ inline void update_hsl_drawdown_ema_tail_stats(
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     if (!isfinite(drawdown_ema)) return;
     float value = fabs(drawdown_ema);
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    stats.last_sample = value;
+#else
     int bin = hsl_drawdown_ema_tail_bin(value);
     stats.sample_count += 1.0f;
     stats.counts[bin] += 1.0f;
     stats.sums[bin] += value;
+#endif
 #endif
 }
 
 inline float hsl_drawdown_ema_mean_worst_1pct(
     thread HslDrawdownEmaTailStats& stats
 ) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    // A successful native result must replace this sentinel with the device
+    // reduction. An unreduced observational placeholder is never valid fitness.
+    return NAN;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED && !PASSIVBOT_HSL_FACTUAL_ONLY
     if (!(stats.sample_count > 0.0f)) return 0.0f;
     float worst_n = fmax(floor(stats.sample_count * 0.01f), 1.0f);
     float remaining = worst_n;
@@ -310,13 +602,39 @@ inline float hsl_drawdown_ema_mean_worst_1pct(
 
 inline void bind_hsl(
     thread HslState& h, device HslNode* trees, device int* rows,
-    int scope, int capacity, int tree_size, int lookback, bool initialize, bool owner
+    int scope, int capacity, int tree_size, int lookback, bool initialize, bool owner,
+    int fact_capacity = 0
 ) {
-    h.hsl_tree = trees + scope * hsl_storage_nodes(capacity, tree_size);
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    h.native_cache_words = rows;
+    h.native_cache_scope = scope;
+    if (initialize) h.native_cache_reset = true;
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    h.hsl_tree = fact_capacity > 0
+        ? trees + scope * hsl_storage_nodes(capacity, tree_size, fact_capacity) : nullptr;
+#else
+    h.hsl_tree = trees + scope * hsl_storage_nodes(capacity, tree_size, fact_capacity);
     h.hsl_times = rows + scope * capacity * 2;
     h.hsl_realized = reinterpret_cast<device float*>(h.hsl_times + capacity);
+#endif
     h.hsl_lookback = lookback;
     h.hsl_owner = owner;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    const int fact_offset = 0;
+#else
+    const int fact_offset = 2 * tree_size + (capacity + 3) / 4;
+#endif
+    h.facts.state = reinterpret_cast<device HslPairRingState*>(h.hsl_tree + fact_offset);
+    h.facts.records = reinterpret_cast<device HslPairRecord*>(h.hsl_tree + fact_offset + 2);
+    h.fact_events = reinterpret_cast<device HslPairEvent*>(h.facts.records + fact_capacity);
+    h.facts.capacity = fact_capacity;
+    // Preserve the opening boundary used before the next bar's fills.
+    h.facts.lookback = lookback + 1;
+    h.facts.enabled = h.enabled;
+    if (initialize) hsl_pair_ring_reset(h.facts);
+#endif
     if (initialize) {
         h.hsl = hsl_controller_init(
             h.hsl_tree, capacity, tree_size, 2.0f / h.alpha - 1.0f);
@@ -328,26 +646,48 @@ inline void bind_hsl(
 inline void bind_hsl_multicoin_hsl(
     thread HslState& aggregate, thread HslState* coins,
     device HslNode* trees, device int* rows, int scope_base, int coin_count,
-    bool initialize, bool owner
+    bool initialize, bool owner, int fact_capacity = 0
 ) {
     bind_hsl(aggregate, trees, rows, scope_base,
         PASSIVBOT_HSL_CAPACITY, PASSIVBOT_HSL_TREE_SIZE,
-        PASSIVBOT_HSL_LOOKBACK, initialize, owner);
+        PASSIVBOT_HSL_LOOKBACK, initialize, owner, fact_capacity);
     for (int c = 0; c < coin_count; ++c) {
         bind_hsl(coins[c], trees, rows, scope_base + 1 + c,
             PASSIVBOT_HSL_CAPACITY, PASSIVBOT_HSL_TREE_SIZE,
-            PASSIVBOT_HSL_LOOKBACK, initialize, true);
+            PASSIVBOT_HSL_LOOKBACK, initialize, true, fact_capacity);
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        coins[c].facts.enabled = coins[c].enabled
+            || (aggregate.enabled && aggregate.signal_mode != HSL_SIGNAL_COIN);
+#endif
     }
 }
 
 inline bool valid_hsl_multicoin_hsl(
     thread HslState& aggregate, thread HslState* coins, int coin_count
 ) {
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    for (int c = 0; c < coin_count; ++c)
+        if (coins[c].facts.enabled && coins[c].facts.state->failure != 0) return false;
+#endif
     if (aggregate.signal_mode != HSL_SIGNAL_COIN)
         return !aggregate.enabled || aggregate.hsl_valid;
     for (int c = 0; c < coin_count; ++c)
         if (coins[c].enabled && !coins[c].hsl_valid) return false;
     return true;
+}
+
+inline float hsl_multicoin_failure_status(
+    thread HslState& aggregate, thread HslState* coins, int coin_count
+) {
+    float status = -4.0f;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    for (int c = 0; c < coin_count; ++c) {
+        if (!coins[c].facts.enabled) continue;
+        if (coins[c].facts.state->failure == 1) status = fmin(status, -6.0f);
+        if (coins[c].facts.state->failure == 2) status = -7.0f;
+    }
+#endif
+    return status;
 }
 
 #endif
@@ -381,18 +721,62 @@ inline void finish_hsl_panic_loss(thread HslState& h) {
 #endif
 }
 
+// Observational lifecycle: current RED starts reporting before a terminal fill.
+// These counters never grant trading permission or retain a panic commitment.
+inline void begin_hsl_report(thread HslState& h, int minute, float score) {
+    h.triggers += 1.0f;
+    h.current_red_start_k = float(minute);
+    if (h.current_halt_start_k < 0.0f) h.current_halt_start_k = float(minute);
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    h.trigger_drawdown_sum += score;
+    h.trigger_drawdown_count += 1.0f;
+    // A restart contributes at most one following retrigger, per scope.
+    if (h.last_restart_k >= 0.0f) {
+        h.restart_retrigger_count += 1.0f;
+        h.last_restart_k = -1.0f;
+    }
+#endif
+}
+
+inline void restart_hsl_report(thread HslState& h, int minute) {
+    h.restarts += 1.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float duration = fmax(float(minute) - h.current_halt_start_k, 0.0f);
+    h.halt_duration_sum_steps += duration;
+    h.halt_duration_max_steps = fmax(h.halt_duration_max_steps, duration);
+    h.halt_duration_count += 1.0f;
+    h.last_restart_k = float(minute);
+#endif
+    h.current_halt_start_k = -1.0f;
+    h.current_red_start_k = -1.0f;
+}
+
 inline void observe_hsl(
     thread HslState& h, float balance, float realized, float upnl,
     bool exposed, int minute, bool terminal
 ) {
     if (!h.enabled || !h.hsl_valid) return;
     int prior = h.hsl.action;
+    const float budget = balance / (h.signal_mode == HSL_SIGNAL_COIN ? h.slot_count : 1.0f)
+        * (h.signal_mode == HSL_SIGNAL_COIN ? h.budget_multiplier : 1.0f);
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    if (h.replay != nullptr && h.replay->enabled) {
+        h.hsl_valid = replay_factual_hsl(h, budget, minute, exposed, terminal);
+    } else
+#endif
+    {
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // An enabled native policy requires a bound factual context. Never fall
+    // back to the bypassed observation evaluator or absent window buffers.
+    h.hsl_valid = false;
+#else
     h.hsl_valid = hsl_observe(h.hsl, h.hsl_tree,
         h.hsl_times, h.hsl_realized, minute, h.hsl_lookback,
-        balance / (h.signal_mode == HSL_SIGNAL_COIN ? h.slot_count : 1.0f)
-            * (h.signal_mode == HSL_SIGNAL_COIN ? h.budget_multiplier : 1.0f),
+        budget,
         realized, upnl, exposed, terminal, h.red_threshold,
         h.cooldown_minutes, h.restart_policy == 2);
+#endif
+    }
     if (!h.hsl_valid) return;
     h.sampled_drawdown_raw = h.hsl.raw;
     h.drawdown_ema = h.hsl.ema;
@@ -400,34 +784,134 @@ inline void observe_hsl(
     if (terminal || (prior == 3 && !h.red_active_now)) finish_hsl_panic_loss(h);
     h.tier = h.red_active_now ? 3 : 0;
     h.halted = h.hsl.action == 1;
-    if (h.red_active_now && prior != 3) h.current_red_start_k = float(minute);
-    if (terminal && fmin(h.hsl.raw, h.hsl.ema) > h.red_threshold) {
-        h.triggers += 1.0f;
-        if (h.halted) h.current_halt_start_k = float(minute);
+    bool reporting_red = prior != 0;
+    // Renewed exposure ends the preceding terminal cooldown before the new
+    // episode is assessed, even when the new exposure is immediately RED.
+    if (prior == 1 && (exposed || terminal)) {
+        restart_hsl_report(h, minute);
+        reporting_red = false;
+    }
+    float score = fmin(h.hsl.raw, h.hsl.ema);
+    bool terminal_red = terminal && score > h.red_threshold;
+    if ((h.hsl.action != 0 || terminal_red) && !reporting_red) {
+        begin_hsl_report(h, minute, score);
+        reporting_red = true;
+    }
+    if (terminal_red) {
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-        h.trigger_drawdown_sum += fmin(h.hsl.raw, h.hsl.ema);
-        h.trigger_drawdown_count += 1.0f;
         if (h.current_red_start_k >= 0.0f) {
             h.flatten_time_sum_steps += fmax(float(minute) - h.current_red_start_k, 0.0f);
             h.flatten_time_count += 1.0f;
         }
 #endif
+        h.current_red_start_k = -1.0f;
     }
-    if (prior == 1 && !h.halted) {
-        h.restarts += 1.0f;
-#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
-        float duration = fmax(float(minute) - h.current_halt_start_k, 0.0f);
-        h.halt_duration_sum_steps += duration;
-        h.halt_duration_max_steps = fmax(h.halt_duration_max_steps, duration);
-        h.halt_duration_count += 1.0f;
-        h.last_restart_k = float(minute);
-#endif
-        h.current_halt_start_k = -1.0f;
-    }
-    if (!h.red_active_now) h.current_red_start_k = -1.0f;
+    // GREEN permits restart without requiring a flat panic exit. A terminal
+    // RED with zero cooldown can trigger, flatten and restart at one timestamp.
+    if (h.hsl.action == 0 && reporting_red) restart_hsl_report(h, minute);
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.drawdown_ema_max = fmax(h.drawdown_ema_max, h.drawdown_ema);
 #endif
+}
+
+// Reporting marks the controller RED while panic or a terminal cooldown blocks
+// ordinary trading. Keep this separate from the current panic signal's tier.
+inline int hsl_report_tier(thread const HslState& h) {
+    return h.enabled && (h.red_active_now || h.halted) ? 3 : 0;
+}
+
+inline bool hsl_mark_terminal_observation_eligible(
+    float balance, float equity, float liquidation_floor, bool at_fill_boundary
+) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Rust evaluates and reports the last bar-close signal on a mark-driven
+    // liquidation. A liquidating fill has no fresh bar signal to repeat.
+    // This admits observation only; liquidation still prevents further fills.
+    return isfinite(balance) && balance > 0.0f && isfinite(equity)
+        && equity <= liquidation_floor && !at_fill_boundary;
+#else
+    return false;
+#endif
+}
+
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
+// The public portfolio EMA series observes the maximum current signal on each
+// bar. Reducing each side's tail first would discard their joint time ordering.
+inline float observed_multicoin_hsl_ema(
+    thread const HslState& aggregate, thread const HslState* coins,
+    int coin_count, int effective_n_positions
+) {
+    if (effective_n_positions <= 0) return 0.0f;
+    if (aggregate.signal_mode != HSL_SIGNAL_COIN) {
+        return aggregate.enabled ? fabs(aggregate.drawdown_ema) : 0.0f;
+    }
+    float value = 0.0f;
+    for (int c = 0; c < coin_count; ++c) {
+        if (coins[c].enabled) value = fmax(value, fabs(coins[c].drawdown_ema));
+    }
+    return value;
+}
+#endif
+
+// Reporting runs after forced closes and never advances the trading controller.
+// A negative tier means this side has no enabled reporting scope.
+inline int record_multicoin_hsl_report(
+    thread HslState& aggregate, thread HslState* coins, int coin_count,
+    int effective_n_positions, bool ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    , thread float& report_ema_max
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    , thread HslDrawdownEmaTailStats& ema_tail
+#endif
+) {
+    bool enabled = aggregate.enabled;
+    int tier = hsl_report_tier(aggregate);
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    // Reset the current bar before recording its scope observation.
+    ema_tail.last_sample = NAN;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
+    float drawdown_ema = fabs(aggregate.drawdown_ema);
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Unified has one portfolio controller, not a controller for each side.
+    // The portfolio observation below retains its signal; side reports are zero.
+    if (aggregate.signal_mode == HSL_SIGNAL_UNIFIED || !aggregate.enabled
+            || effective_n_positions <= 0) drawdown_ema = 0.0f;
+#endif
+#endif
+    if (aggregate.signal_mode == HSL_SIGNAL_COIN) {
+        enabled = false;
+        tier = 0;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
+        drawdown_ema = 0.0f;
+#endif
+        if (effective_n_positions > 0) {
+            for (int c = 0; c < coin_count; ++c) {
+                enabled = enabled || coins[c].enabled;
+                tier = max(tier, hsl_report_tier(coins[c]));
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED || (PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED)
+                if (coins[c].enabled)
+                    drawdown_ema = fmax(drawdown_ema, fabs(coins[c].drawdown_ema));
+#endif
+            }
+        }
+        ema_eligible = enabled;
+    }
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Rust records each bar's enabled scope signal, including cooldown bars.
+    // Permission to generate orders is not the EMA reporting clock.
+    ema_eligible = true;
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    report_ema_max = fmax(report_ema_max, drawdown_ema);
+#endif
+    if (ema_eligible) {
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+        update_hsl_drawdown_ema_tail_stats(ema_tail, drawdown_ema);
+#endif
+    }
+    return enabled ? tier : -1;
 }
 
 inline HslState load_hsl(
@@ -436,6 +920,18 @@ inline HslState load_hsl(
     int hsl_param_offset
 ) {
     HslState h;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    h.native_cache_words = nullptr; h.native_cache_scope = 0; h.native_cache_reset = true;
+#endif
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    h.replay = nullptr; h.replay_side = 0; h.replay_coin = -1;
+#if PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    hsl_scope_cutoff_cache_reset(h.cutoff_cache);
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED
+    h.scope_cursor.valid = false;
+#endif
+#endif
+#endif
     int ho = po + hsl_param_offset;
     h.enabled = params[ho + 0] > 0.5f;
     h.red_threshold = params[ho + 1];
@@ -558,6 +1054,43 @@ inline void update_hsl(
 ) {
     observe_hsl(h, balance, realized_pnl, unrealized_pnl,
         has_position, int(kf) + 1, false);
+}
+
+// No retained fill proves only the current coin position. Rust reconstructs a
+// fresh estimated opening at each observation, not exposure across old marks.
+// The adapter supplies the last factual fill from the existing position state;
+// the point-tape controller and aggregate reconstructions retain their contract.
+inline void update_coin_hsl(
+    thread HslState& h, float balance, float realized_pnl, float unrealized_pnl,
+    bool has_position, float last_fill_k, int k
+) {
+    const int minute = k + 1;
+#if !PASSIVBOT_HSL_FACTUAL_ONLY
+    bool factual = false;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    factual = h.replay != nullptr && h.replay->enabled;
+#endif
+    if (h.enabled && h.hsl_valid && h.signal_mode == HSL_SIGNAL_COIN
+        && !factual
+        && has_position && isfinite(last_fill_k) && last_fill_k >= 0.0f
+        && last_fill_k < float(minute - h.hsl_lookback)) {
+        thread HslController& controller = h.hsl;
+        controller.window.head = controller.window.count = 0;
+        controller.window.last_minute = -1;
+        controller.window.block_prefix = hsl_empty_node();
+        controller.origin = realized_pnl;
+        // Seed the current entry-loss reference, even when UPNL is negative.
+        // A one-point curve otherwise has zero drawdown against its own peak.
+        controller.episode_seed = minute - h.hsl_lookback - 1;
+        controller.completed = false;
+        controller.completed_entry_reference = -INFINITY;
+        controller.completed_reference_minute = -1;
+        controller.scalar_ready = false;
+        controller.exposed = true;
+    }
+#endif
+    observe_hsl(h, balance, realized_pnl, unrealized_pnl,
+        has_position, minute, false);
 }
 
 // A real closing fill samples its final fee-inclusive drawdown before an ordinary
@@ -704,6 +1237,49 @@ inline void record_hsl_panic_fill(
 #endif
 }
 
+// CPU reporting assigns elapsed time to the preceding observation's RED state.
+// An initial observation and a terminal state have no extra duration of their own.
+struct HslTimeObservation {
+    float observed_steps;
+    float red_steps;
+    float last_step;
+    bool was_red;
+};
+
+inline HslTimeObservation init_hsl_time_observation() {
+    HslTimeObservation observation;
+    observation.observed_steps = 0.0f;
+    observation.red_steps = 0.0f;
+    observation.last_step = -1.0f;
+    observation.was_red = false;
+    return observation;
+}
+
+// A terminal accounting boundary advances time without inventing a fresh tier.
+inline void advance_hsl_time_observation(
+    thread HslTimeObservation& observation, float step
+) {
+    if (observation.last_step >= 0.0f) {
+        const float elapsed = fmax(step - observation.last_step, 0.0f);
+        observation.observed_steps += elapsed;
+        if (observation.was_red) observation.red_steps += elapsed;
+    }
+    observation.last_step = fmax(observation.last_step, step);
+}
+
+inline void record_hsl_time_observation(
+    thread HslTimeObservation& observation, float step, int tier
+) {
+    advance_hsl_time_observation(observation, step);
+    observation.was_red = tier == 3;
+}
+
+// Convert the relative reporting clock to controller minute coordinates.
+// Normal observations are bar closes; terminal fills retain their earlier time.
+inline float hsl_report_end_step(thread const HslTimeObservation& observation) {
+    return observation.last_step >= 0.0f ? observation.last_step + 1.0f : -1.0f;
+}
+
 // Keep every HSL scalar reduction in one contract. Existing one-side kernels
 // and future fused dual-side kernels therefore share identical sum/max/count
 // and conditional-min semantics.
@@ -776,7 +1352,7 @@ inline void accumulate_hsl_output(
     thread HslOutputAggregate& output,
     thread HslState& h,
     bool short_side,
-    float last_equity_k
+    float report_end_k
 ) {
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     // Include a censored unfinished panic segment in the final report.
@@ -800,11 +1376,11 @@ inline void accumulate_hsl_output(
     );
     output.panic_loss_drawdown_count += report.panic_loss_drawdown_count;
     if (!h.enabled) return;
-    float terminal_count = h.halted
-        && h.current_halt_start_k >= 0.0f && last_equity_k >= 0.0f
+    float terminal_count = (h.red_active_now || h.halted)
+        && h.current_halt_start_k >= 0.0f && report_end_k >= 0.0f
         ? 1.0f : 0.0f;
     float terminal_duration = terminal_count > 0.0f
-        ? fmax(last_equity_k - h.current_halt_start_k, 0.0f) : 0.0f;
+        ? fmax(report_end_k - h.current_halt_start_k, 0.0f) : 0.0f;
     if (short_side) {
         output.enabled_short = 1.0f;
         output.triggers_short += h.triggers;
@@ -828,15 +1404,18 @@ inline void accumulate_hsl_output(
     output.duration_count += h.halt_duration_count + terminal_count;
     output.trigger_drawdown_sum += h.trigger_drawdown_sum;
     output.trigger_drawdown_count += h.trigger_drawdown_count;
-    output.flatten_time_sum += h.flatten_time_sum_steps;
-    output.flatten_time_count += h.flatten_time_count;
+    float open_exit_count = h.current_red_start_k >= 0.0f && report_end_k >= 0.0f
+        ? 1.0f : 0.0f;
+    output.flatten_time_sum += h.flatten_time_sum_steps + (open_exit_count > 0.0f
+        ? fmax(report_end_k - h.current_red_start_k, 0.0f) : 0.0f);
+    output.flatten_time_count += h.flatten_time_count + open_exit_count;
     output.restart_retrigger_count += h.restart_retrigger_count;
     output.halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
 #else
     (void)output;
     (void)h;
     (void)short_side;
-    (void)last_equity_k;
+    (void)report_end_k;
 #endif
 }
 
@@ -877,14 +1456,14 @@ inline void write_one_side_hsl_outputs(
     bool short_side,
     float tier_samples_total,
     float tier_samples_red,
-    float last_equity_k,
+    float report_end_k,
     device float* scalars,
     int scalar_offset
 ) {
     HslOutputAggregate output = init_hsl_output_aggregate(
         tier_samples_total, tier_samples_red
     );
-    accumulate_hsl_output(output, h, short_side, last_equity_k);
+    accumulate_hsl_output(output, h, short_side, report_end_k);
     write_hsl_output_aggregate(output, scalars, scalar_offset);
 }
 
@@ -894,7 +1473,7 @@ inline void write_one_side_coin_hsl_outputs(
     bool short_side,
     float tier_samples_total,
     float tier_samples_red,
-    float last_equity_k,
+    float report_end_k,
     device float* scalars,
     int scalar_offset
 ) {
@@ -903,7 +1482,7 @@ inline void write_one_side_coin_hsl_outputs(
     );
     for (int c = 0; c < controller_count; ++c) {
         accumulate_hsl_output(
-            output, controllers[c], short_side, last_equity_k
+            output, controllers[c], short_side, report_end_k
         );
     }
     write_hsl_output_aggregate(output, scalars, scalar_offset);
@@ -914,15 +1493,15 @@ inline void write_dual_side_hsl_outputs(
     thread HslState& short_hsl,
     float tier_samples_total,
     float tier_samples_red,
-    float last_equity_k,
+    float report_end_k,
     device float* scalars,
     int scalar_offset
 ) {
     HslOutputAggregate output = init_hsl_output_aggregate(
         tier_samples_total, tier_samples_red
     );
-    accumulate_hsl_output(output, long_hsl, false, last_equity_k);
-    accumulate_hsl_output(output, short_hsl, true, last_equity_k);
+    accumulate_hsl_output(output, long_hsl, false, report_end_k);
+    accumulate_hsl_output(output, short_hsl, true, report_end_k);
     write_hsl_output_aggregate(output, scalars, scalar_offset);
 }
 
@@ -932,7 +1511,7 @@ inline void write_dual_side_coin_hsl_outputs(
     int controller_count,
     float tier_samples_total,
     float tier_samples_red,
-    float last_equity_k,
+    float report_end_k,
     device float* scalars,
     int scalar_offset
 ) {
@@ -940,8 +1519,8 @@ inline void write_dual_side_coin_hsl_outputs(
         tier_samples_total, tier_samples_red
     );
     for (int c = 0; c < controller_count; ++c) {
-        accumulate_hsl_output(output, long_controllers[c], false, last_equity_k);
-        accumulate_hsl_output(output, short_controllers[c], true, last_equity_k);
+        accumulate_hsl_output(output, long_controllers[c], false, report_end_k);
+        accumulate_hsl_output(output, short_controllers[c], true, report_end_k);
     }
     write_hsl_output_aggregate(output, scalars, scalar_offset);
 }

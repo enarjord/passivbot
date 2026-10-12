@@ -6,11 +6,37 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Let automatic single-coin CUDA HSL batches grow history scratch beyond 2 GiB when free VRAM allows, bounded by dispatch demand and workspace headroom. Preserve active replay allocations, conservative sizing under memory pressure, fixed batches and the MPS shared-memory cap.
+- Size automatic native CUDA replay history and shared metric workspace from available VRAM after market tensors are loaded. Preserve device headroom, dispatch limits, fixed-width execution and Metal budgets.
 
-- Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
+- Support experimental native GPU optimization on Apple Silicon through Metal/MPS,
+  including both strategies, suites, HSL, weighted and exponential equity metrics,
+  bounded dataset residency, interruption and device-specific checkpoint identity.
 
-- Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
+- Accelerate CPU HSL backtests by trimming unused flat price prefixes and reusing reconstructed rolling histories, proven GREEN prefixes and settled RED/flat scopes. Invalidate on changed fills, positions, settings, budget or lookback boundaries, and retain shared-controller reference fallback for unsupported or numerically ambiguous cases.
+
+- Add candle-level long/short portfolio and budget-weighted position utilization RMS
+  objectives, plus absolute long/short/gross exposure RMS diagnostics and optimizer
+  limits, on Rust CPU and native NVIDIA/CUDA backtests. Nominal budgets exclude
+  excess allowance; default objectives remain unchanged.
+
+- Accelerate fresh native GPU HSL reconstruction by retaining selected inventory and next-fill coordinates within each scope replay, preserving fill ordering and current-position evaluation.
+
+- Accelerate native GPU HSL replay for single-pair exposed episodes whose reconstructed history differs from the current position, while preserving current-endpoint evaluation and fresh-replay fallbacks.
+
+- Native GPU HSL skips repeated reconstruction of completed flat episodes while
+  facts, budget and replay window remain unchanged. Cooldown advances with current
+  time; closing fills and changed inputs still receive fresh reconstruction.
+
+- Improve GPU optimizer throughput by rejecting HSL capacity overflow between replay chunks, spreading CUDA temporal candidates across independent blocks, and sharing weighted equity reduction workspace across the replay batch. Preserve HSL decisions and metric formulas.
+
+- Add opt-in exponential recency weighting for ADG, Sharpe, Sortino and Omega on
+  strategy, USD and BTC equity, configured by `backtest.ew_half_life_days`.
+  Existing `_w` metrics and default scoring remain unchanged. CPU/CUDA optimization
+  skips legacy nested analysis when objectives and active limits do not request it;
+  CUDA also omits its full-history buffers and reduction workspace. EW results
+  include availability/sample metadata and half-life/version fitness compatibility.
+  Enabling EW requires a candle interval dividing a UTC day; invalid intervals
+  are rejected before replay.
 
 - Fix historical candle-resolution seams when retained 1m history begins inside a higher-timeframe bucket. A straddling coarse bucket may now reconstruct the missing pre-boundary minutes when the overlapping exact 1m interval is complete, preserving extrema known to belong to the missing prefix and leaving exact rows unchanged. Genuine internal 1m gaps remain unavailable.
 
@@ -20,6 +46,277 @@ since the latest release tag; these features may already be available when insta
   migrations no longer import backtest/optimizer runtimes. Declare the optimizer
   fingerprinting dependency in full installs.
 
+- Native CUDA EMA Anchor unified HSL reuses bounded factual reconstruction and
+  controller summaries across rolling windows, with fresh replay for unsupported
+  or ambiguous inputs. Cache loss preserves risk intent; optional cache storage
+  is capped at 64 MiB per candidate within the existing shared scratch budget.
+  Other HSL scopes and Trailing Martingale retain their current default replay.
+
+- Replace GPU optimizer screening plus CPU validation with an authoritative asynchronous
+  CUDA backtest service and CPU-owned search, scenario screening, scoring and persistence.
+  Preserve CPU optimization and standalone backtests/plots. Remove obsolete validation,
+  drift and screened-seed controls; earlier GPU checkpoints require a fresh run.
+  GPU configs migrate explicit legacy `optimize.gpu.population_size` to the general
+  population setting when it is unset; concrete new settings win with a warning,
+  and invalid legacy values are rejected.
+
+- Native GPU coin and position-side HSL reuse the fresh current-position
+  singleton when every selected retained fill history is empty, preserving
+  current-budget evaluation and terminal-fill reconstruction.
+
+- Native GPU Trailing Martingale initial-entry interval metrics use exact
+  integer bar-gap counts and device percentile reduction instead of logarithmic
+  bin edges. Requested histories and reduction scratch are budgeted; only compact
+  metrics leave the replay. Histories exceeding the existing float32 bar-index
+  precision bound are rejected. Legacy diagnostic GPU replay retains its histogram.
+
+- Requested native GPU HSL EMA drawdown tails use eligible per-bar device
+  observations instead of logarithmic cutoff-bin averages. Histories stay on
+  the device, scratch admission includes their reduction, and unrequested or
+  disabled HSL work does not allocate them. Native EMA maxima and tails share
+  the bar-reporting clock, including cooldown observations; controller refreshes
+  at fill boundaries do not add report samples, while mark-driven liquidation
+  retains its final bar signal. Unified HSL reports its EMA
+  maximum and tail only at portfolio scope, with zero long/short values.
+
+- EMA Anchor partial closes preserve valid minimum-size remainders when floating
+  subtraction differs only by representation noise; genuinely undersized
+  remainders still use full-position closes.
+
+- Native CUDA EMA Anchor backtests retain complete replay state across temporal
+  dispatches, allowing interruption between history chunks. Native CUDA EMA/TM
+  adjust chunk lengths from completed dispatch durations within their work ceilings.
+  Shared admission includes the compiled state size alongside replay histories.
+
+- One-side CUDA multicoin backtests compile their prepared long or short direction
+  into the kernel, allowing the compiler to omit the unused directional path.
+
+- Multicoin GPU backtests compile away unstuck selection and exclusive close state
+  when every effective candidate, coin override and active side disables it;
+  shared realized-loss and HSL consumers remain independently enabled.
+
+- Native GPU batch tuning retains compatible queued demand through each scenario
+  evidence window, so a cohort tail does not hide opportunities to test a larger width.
+
+- Align the offline GPU cohort benchmark's direct reference with native factual
+  replay and identify the replay policy in reports, so HSL service comparisons
+  use the same simulation contract.
+- Add an offline native CUDA service benchmark for shared-data scenarios, result latency, resource use and completed default tuning windows.
+
+- Native CUDA optimization reconstructs HSL scopes from retained simulation fill
+  facts. Worker-owned factual storage grows within its scratch budget and is
+  omitted when effective HSL policies are off. Native replay reserves only factual
+  HSL scratch, without the legacy observation tree/window. Stable exposed episodes
+  reuse a guarded scalar continuation; changed or uncertain facts reconstruct fresh.
+  Learned factual capacity survives scenario residency switches without retaining
+  device buffers. Native recovery histories reduce to compact metrics before
+  sub-batch results are combined. Earlier native fitness checkpoints
+  require a fresh run; saved configurations remain usable as seeds.
+
+- Trailing-martingale partial initial entries preserve aligned quantity differences instead of losing one step to floating-point subtraction; genuine fractional differences still round down.
+
+- GPU multicoin replay retains small fee/profit contributions with compensated f32 cash-balance accumulation, including across temporal dispatches.
+
+- GPU multicoin trailing-martingale recursive ladders update the initial sizing
+  price with the simulated order-book touch, avoiding oversized short reentries.
+
+- Native GPU batch tuning learns from warm partial request cohorts and can probe
+  smaller widths when queued demand or memory headroom prevents growth.
+
+- GPU EMA/TM portfolio replays compile out unstuck EMA state and updates when
+  no effective candidate or coin-side override uses EMA gating.
+
+- GPU shared-account coin HSL uses a fresh current-position estimate after all
+  fills expire from its lookback, preserving current loss protection without
+  retaining unproven historical exposure.
+
+- Long CUDA trailing-martingale multicoin replays retain both sides and shared
+  account state across bounded history chunks, allowing interruption between
+  dispatches without returning partial backtest metrics.
+
+- Offline GPU parity and cohort tools accept explicit synthetic HSL policies and
+  repeatable price shocks, making long-history expiry and selection comparisons
+  reproducible without custom fixture scripts.
+
+- GPU long/short strategy-equity worst-1% drawdown metrics retain the actual worst
+  daily values instead of averaging a histogram cutoff. Optional tail state is
+  sized automatically from the prepared date range.
+
+- GPU HSL cooldown re-evaluates completed episodes from retained observations
+  after their peak leaves the history window. Preserve current entry-loss
+  estimates for active exposure and the terminal accounting sample.
+
+- Native GPU strategy recovery distributions use factual realized and unrealized
+  trading PnL, retaining terminal losses below the account liquidation floor.
+  Recovery-only requests use the same strategy curve as weighted raw metrics.
+
+- Prepare native GPU requests and offline parity fixtures without importing GPU
+  runtime or legacy benchmark modules. Synthetic candle generation is shared by
+  the comparison tools without changing fixture values.
+
+- Native CUDA optimization can fill the first backtest dispatch with queued compatible
+  requests after worker-owned data preparation discovers its safe capacity, avoiding
+  a forced single-candidate simulation for every new dataset.
+
+- GPU shared-account backtests now reduce portfolio HSL EMA tails from simultaneous
+  bar signals, preserving stresses on different sides instead of taking the maximum
+  of separately reduced side tails.
+
+- Shared GPU raw strategy ADG, MDG, growth-quality and risk-adjusted growth
+  metrics use raw daily equity closes and minima, retaining terminal losses beyond
+  account liquidation clamping. Capture only requested daily summaries and preserve
+  ordinary account metrics and exposure normalization.
+
+- Reduce shared CUDA weighted equity ADG, MDG, Sharpe, Sortino, Omega, Calmar and
+  Sterling metrics from factual raw strategy and account histories, including
+  partial-day suffixes and liquidation. Keep histories on the GPU, return compact
+  results, and include requested capture/reduction memory in batch admission.
+
+- Shared GPU replay reports portfolio raw strategy drawdown, daily worst tail and
+  underwater mean independently of account liquidation clamping, preserving ordinary
+  USD account metrics and requested-feature ablation.
+
+- Sample shared GPU side strategy-equity metrics independently of HSL protection,
+  retaining each side's net PnL in unified mode and the recovery horizon of an
+  inactive side. Use the exact maximum when the worst drawdown tail contains
+  one daily observation.
+
+- Match CPU EMA Anchor entry sizing in shared GPU backtests: use per-coin allocation
+  to size clips while retaining portfolio exposure admission and HSL blocking.
+
+- Count GPU HSL lifecycle metrics from observed RED and restart transitions, including
+  GREEN recovery, retriggers and unfinished panic durations. Preserve unified portfolio
+  attribution and factual fill, mark and forced-delisting reporting endpoints.
+
+- Correct GPU optimizer HSL halt-to-restart loss metrics to use panic-close loss,
+  matching CPU reporting instead of returning a dormant scalar.
+
+- Calculate shared GPU HSL time-in-red from elapsed observations, including
+  dispatch resumption and liquidation/fill boundaries, instead of bar-sample counts.
+
+- Refresh shared GPU EMA flat-coin rankings every bar and derive hysteresis priority
+  from outstanding entry orders, removing deferred-selection caches.
+
+- Refresh scoped HSL before constructing the next orders in shared GPU backtests,
+  correcting delayed panic closes. Keep equity and HSL reporting after forced
+  delisting, preserve factual terminal times, and retain disabled-feature ablation.
+
+- Let offline GPU cohort comparisons use an explicit objective vector, with requested
+  metric collection, min/max directions, Pareto membership and per-objective CPU regret.
+  Preserve the default ADG/drawdown comparison and separate diagnostic limit checks.
+
+- Refine GPU fill-gap histograms from 128 to 512 bins so neighbouring short gaps
+  remain distinguishable in percentile objectives. Keep fixed per-candidate storage,
+  restored same-candle zeros and streamed time-weighted gaps; preserve the separate
+  initial-entry interval format.
+
+- Extend offline GPU cohort measurements with requested metrics, explicit comparison
+  policies and repeatable canonical diagnostic limits. Measure opt-in reductions;
+  keep undefined tolerances unassessed and request limit metrics from both simulators.
+  Report bounded float64 rounding separately in native/direct GPU checks and
+  diagnose larger discrepancies without changing CPU/GPU comparison policies.
+
+- Include zero-length gaps between fills in the same candle in GPU fill-gap
+  percentiles. Recover their multiplicity from compact counts without exporting
+  fill histories; preserve time-weighted gap calculations and logarithmic bins.
+
+- Match CPU traded-volume definitions in shared-account GPU backtests, including
+  native single-coin runs: normalize actual fill quantities without an additional
+  contract-multiplier factor, and include partial UTC days in weighted suffixes.
+  Reduce opt-in volume histories on the GPU and return only compact metrics.
+
+- Measure requested GPU strategy-equity recovery distributions at every simulation
+  step instead of hourly, preserving short recoveries and terminal timestamps.
+  Account for their history and reduction scratch in service dispatch limits and
+  keep mutable reduction buffers local to each dispatch.
+
+- Use the configured realized-loss allowance for shared-account Trailing Martingale
+  GPU backtests, including native single-coin runs. Reserve generated close losses
+  across coins and sides, honor finite fill-PnL history, and consume admitted orders
+  without repeating their loss checks at fill time.
+
+- Honor finite fill-PnL lookback in shared-account EMA Anchor GPU realized-loss
+  admission, including native single-coin and long/short runs. Reuse the existing
+  bounded history buffer and prepare it even when auto-unstuck is disabled.
+
+- Adapt native CUDA request accumulation to CPU submission bursts and successful
+  warm replay cost, with bounded idle and total waiting. Honor explicit service
+  delays and tuning-off mode; keep search and simulation semantics unchanged.
+
+- Reduce optimizer CPU preparation overhead by reusing strategy path metadata
+  within each bounds/execution projection and constructing fallback templates only
+  when needed. Preserve current-config path resolution and validation.
+
+- Add an offline `gpu-cohort-benchmark` tool for serial CPU, direct GPU and native
+  CUDA service measurements, with completion latency, strict metric comparisons,
+  Pareto/feasibility diagnostics and observed batch/tuning evidence.
+
+- Honor finite realized-PnL lookback for EMA Anchor GPU auto-unstuck, including
+  native single-coin and shared long/short replays. Reuse bounded history scratch
+  with Trailing Martingale and omit it when no enabled consumer needs it.
+
+- Allow native GPU optimization to vary coupled unstuck EMA spans with fixed coin
+  patches. Preserve strategy coin pins and prepare optimizer-free backtest views
+  on the CPU before registering them with the GPU service. Compare coupled suite
+  resume recipes against saved candidate spans so generated overrides do not
+  prevent resuming an unchanged run.
+
+- Include terminal cooldown in GPU hard-stop time-in-red reporting, while keeping
+  the panic signal and simulation behavior separate from reporting state.
+
+- Prepare finite side-enable and fine-tune anchor variants for native GPU optimization
+  over shared market data. Restore checkpoint-owned anchors on resume without the
+  original seed files; retain explicit errors for unprepared continuous coin patches.
+
+- Add `gpu-parity --gpu-engine native` to compare CPU backtests with the actual
+  native CUDA service, including its shared-account single-coin replay. Label
+  engine/replay identity and keep unavailable native preparation timings and
+  worker diagnostics explicit. Default legacy comparison remains available.
+
+- Support scenario screening in native GPU optimization using the existing
+  screening settings. Fully evaluate seeds and initial parents, then promote a
+  feasibility/Pareto-diverse subset of offspring to full-suite GPU evaluation.
+  Only full-suite results enter evolutionary fitness, result storage and Pareto.
+  Resume partial screening safely; start a fresh run for older experimental
+  native checkpoints, or reuse their saved result configs as seeds.
+
+- Reuse validated native GPU scenario results when a screened candidate advances
+  to its full suite. Keep partial scores separate, require every full-suite slot,
+  and reject results bound to another submitted request before caching them.
+
+- Start native GPU work after the first prepared candidate and interleave bounded
+  CPU preparation with result scoring/storage. Adapt completion grouping to CPU
+  processing cost while keeping suite fan-in and evolutionary cohorts independent.
+
+- Tune native GPU optimizer batch widths from successful production work when the
+  batch setting is automatic. Keep tuning inside the service and honor prepared
+  work/scratch limits so oversized serial replays do not delay returned completions.
+
+- Restore compact disabled-HSL GPU kernels for single-side multicoin EMA Anchor
+  with side/unified HSL modes. Preserve full coin-mode state for forced-delisting
+  loss diagnostics, even when HSL is disabled.
+
+- Add experimental `gpu_native` optimization using authoritative CUDA simulations,
+  CPU-owned ask/tell search, prompt results/Pareto storage and GPU-only seed/resume
+  evaluation. Existing CPU and GPU screening/validation backends remain available.
+
+- Keep GPU multicoin global strategy defaults separate from coin-specific overrides,
+  preventing the first coin's patch from changing unpatched coins' simulations.
+
+- Expand GPU multicoin Trailing Martingale recursive entry and close ladders for
+  passive execution as well as market execution. Keep market promotion separate from
+  ladder generation, preserving cooldown, exposure-gate and shared-account behavior.
+
+- Use current simulated cash and candle-price exchange minima for GPU multicoin
+  minimum-effective-cost filtering. Remove permanent screening-only flat-slot rejection,
+  while preserving per-coin overrides and held-position management. Single-coin screening
+  and CPU validation remain unchanged.
+
+- Add `passivbot tool gpu-parity` for offline CPU/GPU backtest comparisons with
+  explicit per-metric tolerances, canonical limit-feasibility checks, reproducible
+  synthetic fixtures and prepared dataset inputs. Reject noncanonical coin-column order
+  and inconsistent prepared exchange/source metadata before comparison. GPU optimizer
+  behavior is unchanged.
 - Name optimizer, backtest, suite and iterative sessions with UTC dates, readable coin
   labels, deterministic setup fingerprints and unique run IDs. Record generated optimizer
   seeds for comparison and resume, and freeze selected starting configs before execution.

@@ -925,29 +925,15 @@
     "fixed_params": [],
     "fixed_runtime_overrides": {},
     "gpu": {
-      "auto_lean_parallelism": true,
       "batch_size": null,
       "checkpoint_interval_seconds": 5.0,
-      "drift_halt": 0.6,
-      "drift_min_samples": 32,
-      "drift_objective_tolerance": 1e-06,
-      "drift_probes": 4,
-      "drift_rank_halt": null,
-      "drift_window": 128,
-      "exact_workers": null,
       "max_dispatch_candidate_bars": null,
-      "max_pending_exact": null,
-      "population_size": null,
       "screening": {
         "min_survivors": 64,
         "scenarios": [],
         "survival_fraction": 0.1
       },
-      "seed_bootstrap": {
-        "max_exact": 128,
-        "mode": "auto"
-      },
-      "validate_per_generation": 8
+      "tuning_mode": "auto"
     },
     "iters": 200000,
     "limits": [

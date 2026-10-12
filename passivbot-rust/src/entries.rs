@@ -7,7 +7,7 @@ use crate::types::{
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
     calc_wallet_exposure_if_filled, cost_to_qty, interpolate, quantize_price, quantize_qty, round_,
-    round_dn, round_up, RoundingMode,
+    round_dn, round_up, tolerant_round_dn_preserve_step, RoundingMode,
 };
 
 pub fn wallet_exposure_limit_with_allowance(
@@ -457,7 +457,10 @@ pub fn calc_grid_entry_long(
         return Order {
             qty: f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                round_dn(initial_entry_qty - position.size, exchange_params.qty_step),
+                tolerant_round_dn_preserve_step(
+                    initial_entry_qty - position.size,
+                    exchange_params.qty_step,
+                ),
             ),
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialLong,
@@ -621,7 +624,10 @@ pub fn calc_trailing_entry_long(
         return Order {
             qty: f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                round_dn(initial_entry_qty - position.size, exchange_params.qty_step),
+                tolerant_round_dn_preserve_step(
+                    initial_entry_qty - position.size,
+                    exchange_params.qty_step,
+                ),
             ),
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialLong,
@@ -789,7 +795,7 @@ pub fn calc_grid_entry_short(
         return Order {
             qty: -f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                round_dn(
+                tolerant_round_dn_preserve_step(
                     initial_entry_qty - position_size_abs,
                     exchange_params.qty_step,
                 ),
@@ -907,7 +913,7 @@ pub fn calc_trailing_entry_short(
         return Order {
             qty: -f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                round_dn(
+                tolerant_round_dn_preserve_step(
                     initial_entry_qty - position_size_abs,
                     exchange_params.qty_step,
                 ),
@@ -1247,6 +1253,91 @@ mod tests {
     fn make_runtime_context() -> RuntimeOrderContext {
         RuntimeOrderContext {
             effective_wallet_exposure_limit: 1.0,
+        }
+    }
+
+    #[test]
+    fn partial_initial_entries_preserve_aligned_difference_without_rounding_up() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.001,
+            min_cost: 1.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 1102.0,
+            order_book: OrderBook {
+                bid: 70.62,
+                ask: 70.62,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 0.5,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = RuntimeOrderContext {
+            effective_wallet_exposure_limit: 0.5,
+        };
+        for retracement in [0.0, 0.001] {
+            let entry = TrailingMartingaleEntryParams {
+                initial_qty_pct: 0.012,
+                ema_gate_mode: EmaGateMode::Disabled,
+                retracement_base_pct: retracement,
+                ..Default::default()
+            };
+            assert_eq!(
+                calc_initial_entry_qty(&exchange, &bot, &runtime, &entry, state.balance, 70.62),
+                0.094
+            );
+            // The aligned difference is 28 steps. A genuinely fractional
+            // remaining quantity must still be rounded down to 27 steps.
+            for (size, expected) in [(0.066, 0.028), (0.066000001, 0.027)] {
+                for short in [false, true] {
+                    let position = Position {
+                        size: if short { -size } else { size },
+                        price: 99.85,
+                    };
+                    let order = if short {
+                        calc_next_entry_short(
+                            &exchange,
+                            &state,
+                            &bot,
+                            &runtime,
+                            &entry,
+                            &position,
+                            &TrailingPriceBundle::default(),
+                        )
+                    } else {
+                        calc_next_entry_long(
+                            &exchange,
+                            &state,
+                            &bot,
+                            &runtime,
+                            &entry,
+                            &position,
+                            &TrailingPriceBundle::default(),
+                        )
+                    };
+                    assert_eq!(
+                        order.qty,
+                        if short { -expected } else { expected },
+                        "short={short}, retracement={retracement}, size={size}"
+                    );
+                    assert_eq!(
+                        order.order_type,
+                        if short {
+                            OrderType::EntryInitialPartialShort
+                        } else {
+                            OrderType::EntryInitialPartialLong
+                        }
+                    );
+                    assert_eq!(order.price, 70.62);
+                }
+            }
         }
     }
 

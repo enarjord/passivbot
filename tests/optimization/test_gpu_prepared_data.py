@@ -100,24 +100,23 @@ def test_failed_preparation_never_publishes_cache_entry(monkeypatch):
 
 
 @pytest.mark.parametrize("device,cache_enabled,spilled", [
-    ("cuda", True, True), ("cuda", False, False), ("mps", True, False),
+    ("cuda", True, True), ("cuda", False, False), ("mps", True, True),
 ])
-def test_backend_scope_spills_only_cached_cuda_suite_data(
+def test_backend_scope_spills_only_cached_gpu_suite_data(
     builds, monkeypatch, device, cache_enabled, spilled,
 ):
     from pathlib import Path
-    from optimization.gpu.residency import cuda_suite_residency_scope, current_cuda_residency
+    from optimization.gpu.residency import cuda_residency_scope, metal_residency_scope, current_gpu_residency
 
     monkeypatch.setattr(service, "gpu_device", lambda: device)
-    @cuda_suite_residency_scope
-    def run():
+    scope = {'cuda': cuda_residency_scope, 'mps': metal_residency_scope}[device]
+    with scope():
         cache = {} if cache_enabled else None
         data = service._prepared_multicoin_data(**_inputs(), cache=cache)
-        assert current_cuda_residency().owns(data) is spilled
+        assert current_gpu_residency().owns(data) is spilled
         if spilled:
             assert isinstance(builds[0][1]["spill_dir"], Path)
             assert service._prepared_multicoin_data(**_inputs(), cache=cache) is data
             assert len(builds) == 1
         else:
             assert "spill_dir" not in builds[0][1]
-    run()
