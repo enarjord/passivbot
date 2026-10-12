@@ -186,13 +186,16 @@ fn normalize(snapshot: &mut Snapshot, reasons: &mut BTreeSet<String>) -> Result<
 /// True only when normalization would leave every selected price and source
 /// timestamp unchanged. Validation/reconstruction always runs before this check.
 fn already_normalized(snapshot: &Snapshot) -> Result<bool, String> {
+    normalized_from(snapshot, snapshot.start)
+}
+
+fn normalized_from(snapshot: &Snapshot, start: i64) -> Result<bool, String> {
     let selected = snapshot::select(snapshot)?;
     if selected.is_empty() {
         return Ok(false);
     }
-    let offset = (60_000 - snapshot.start.rem_euclid(60_000)) % 60_000;
-    let first = snapshot
-        .start
+    let offset = (60_000 - start.rem_euclid(60_000)) % 60_000;
+    let first = start
         .checked_add(offset)
         .filter(|t| *t <= snapshot.now)
         .unwrap_or(snapshot.now);
@@ -261,7 +264,38 @@ fn evaluate_inner<const SEED: bool>(mut input: Input) -> Result<Output, String> 
         input.scale_budget_with_excess_allowance,
         input.exposure_budget.as_ref(),
     )?;
-    let trace = if already_normalized(&input.snapshot)? {
+    // Simulator captures may omit only a proven-flat leading price prefix.
+    // Every retained execution and subsequent minute remains in an aligned
+    // factual suffix. No live normalization or controller formula changes.
+    let prefix_start = prepared
+        .pairs
+        .first()
+        .and_then(|p| p.history.samples.first())
+        .map(|s| s.timestamp);
+    let compact_prefix =
+        SEED && prefix_start.is_some_and(|first| {
+            first > input.snapshot.start
+                && prepared.pairs.iter().all(|p| {
+                    p.history.opening_size == 0.0
+                        && p.history
+                            .samples
+                            .first()
+                            .is_some_and(|s| s.timestamp == first)
+                        && p.fills.first().is_none_or(|f| f.timestamp >= first)
+                })
+        }) && normalized_from(&input.snapshot, prefix_start.unwrap())?;
+    let first_grid = input
+        .snapshot
+        .start
+        .checked_add((60_000 - input.snapshot.start.rem_euclid(60_000)) % 60_000)
+        .filter(|t| *t <= input.snapshot.now)
+        .unwrap_or(input.snapshot.now);
+    let omitted = if compact_prefix {
+        (prefix_start.unwrap() - first_grid) / 60_000
+    } else {
+        0
+    };
+    let trace = if compact_prefix || already_normalized(&input.snapshot)? {
         compose_prepared(&input.snapshot, prepared, false)?
     } else {
         drop(prepared); // Do not retain an unused full history during reconstruction.
@@ -269,6 +303,18 @@ fn evaluate_inner<const SEED: bool>(mut input: Input) -> Result<Output, String> 
         compose_with_cashflow_peaks(&input.snapshot, candle_free)?
     };
     reasons.extend(trace.reasons);
+    // Preserve reference observation accounting when the controller retained
+    // the flat seed. An estimated current opening discards the whole prefix.
+    let omitted = if trace
+        .episodes
+        .first()
+        .and_then(|e| e.points.first())
+        .is_some_and(|p| !p.exposed && Some(p.timestamp) == prefix_start)
+    {
+        omitted
+    } else {
+        0
+    };
     let episodes = trace.episodes.len();
     let replay_input = controller::Input {
         episodes: trace.episodes,
@@ -280,11 +326,21 @@ fn evaluate_inner<const SEED: bool>(mut input: Input) -> Result<Output, String> 
         cooldown_ms: input.cooldown_ms,
         restart: input.restart,
     };
-    let replay = if SEED {
+    let mut replay = if SEED {
         controller::replay_latest_with_seed(&replay_input)
     } else {
         controller::replay_latest_with_events(&replay_input)
     }?;
+    replay.observations += omitted as usize;
+    if compact_prefix {
+        if let Some(cursor) = &mut replay.cursor {
+            // Omission must not newly authorize incremental permission after
+            // clipped/reconciled history. Preserve the full replay's boundary.
+            if Some(cursor.first_required) == prefix_start && omitted > 0 {
+                cursor.first_required = first_grid;
+            }
+        }
+    }
     let decisions = replay.decisions;
     if replay.numeric_range_approximation {
         reasons.insert("numeric_range_approximation".into());
@@ -389,6 +445,32 @@ mod tests {
         .unwrap()
     }
 
+    /// A sub-minute endpoint near the timestamp limit cannot overflow while
+    /// accounting for an omitted flat prefix.
+    #[test]
+    fn simulator_compact_endpoint_preserves_extreme_timestamp_reference() {
+        let input = || {
+            let mut i = fixture();
+            let now = i64::MAX;
+            i.snapshot.now = now;
+            i.snapshot.start = now - 1;
+            i.snapshot.balance_at = now;
+            i.snapshot.config_at = now;
+            for p in &mut i.snapshot.pairs {
+                p.position_at = now;
+                p.mark_at = now;
+                p.prices_at = now;
+                p.fills_started_at = Some(now);
+                p.fills_at = Some(now);
+                p.prices = std::collections::BTreeMap::from([(now, 100.)]);
+            }
+            i
+        };
+        assert_eq!(
+            serde_json::to_value(evaluate(input()).unwrap()).unwrap(),
+            serde_json::to_value(evaluate_for_simulator(input()).unwrap()).unwrap()
+        );
+    }
     #[test]
     fn missing_opening_uses_current_basis_without_inventing_old_exposure() {
         let output = evaluate(fixture()).unwrap();

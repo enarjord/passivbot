@@ -38,7 +38,7 @@ impl Backtest<'_> {
         symbol: Option<&str>,
         at_flat_boundary: bool,
     ) -> Result<Inputs, String> {
-        self.hsl_inputs_at_clipped(k, mode, pside, symbol, at_flat_boundary, None)
+        self.capture_hsl_inputs(k, mode, pside, symbol, at_flat_boundary, None, false)
     }
 
     pub(super) fn hsl_inputs_at_clipped(
@@ -49,6 +49,21 @@ impl Backtest<'_> {
         symbol: Option<&str>,
         at_flat_boundary: bool,
         cutoff: Option<(i64, usize)>,
+    ) -> Result<Inputs, String> {
+        self.capture_hsl_inputs(k, mode, pside, symbol, at_flat_boundary, cutoff, true)
+    }
+
+    /// Compact only proven-flat price prefixes. Missing current openings are
+    /// reconciled at now by the shared evaluator, never projected into the past.
+    fn capture_hsl_inputs(
+        &self,
+        k: usize,
+        mode: snapshot::Mode,
+        pside: Option<PositionSide>,
+        symbol: Option<&str>,
+        at_flat_boundary: bool,
+        cutoff: Option<(i64, usize)>,
+        compact: bool,
     ) -> Result<Inputs, String> {
         if self.interval_ms != 60_000 || k >= self.hlcvs.shape()[0] {
             return Err("HSL backtest inputs require a valid 1m bar".into());
@@ -98,6 +113,53 @@ impl Backtest<'_> {
         let fill_end = self
             .fills
             .partition_point(|f| (f.timestamp_ms as i128) <= now as i128);
+        let selected = |side: PositionSide, coin: &str| {
+            pside.is_none_or(|s| s == side) && symbol.is_none_or(|s| s == coin)
+        };
+        // The reconciler has zero historical inventory before a pair's first
+        // retained entry. Keep one flat EMA seed, every retained execution and
+        // every subsequent minute; reductions with missing inventory need the
+        // full lookback. Check the complete scope to preserve aligned grids.
+        let mut compact_prefix = compact
+            && !at_flat_boundary
+            && (self.backtest_params.metrics_only || !self.backtest_params.hsl_detailed_report);
+        let mut first_pairs = BTreeSet::new();
+        let mut first_entry = None;
+        for fill in &self.fills[fill_start..fill_end] {
+            let side = if fill.order_type.is_long() {
+                PositionSide::Long
+            } else {
+                PositionSide::Short
+            };
+            if selected(side, &fill.coin)
+                && first_pairs.insert((&fill.coin, side == PositionSide::Long))
+            {
+                compact_prefix &= fill.order_type.is_entry();
+                first_entry = Some(first_entry.map_or(fill.timestamp_ms as i64, |t: i64| {
+                    t.min(fill.timestamp_ms as i64)
+                }));
+            }
+        }
+        let price_start = if compact_prefix {
+            first_entry
+                .map_or(now, |t| t.saturating_sub(60_000))
+                .max(start)
+        } else {
+            start
+        };
+        // Preserve the original treatment of wholly flat empty scopes.
+        let compact_current = compact_prefix
+            && first_entry.is_none()
+            && self.positions.long.iter().enumerate().any(|(c, long)| {
+                (long.size != 0.0 && selected(PositionSide::Long, &self.backtest_params.coins[c]))
+                    || (self.positions.short[c].size != 0.0
+                        && selected(PositionSide::Short, &self.backtest_params.coins[c]))
+            });
+        let price_start = if first_entry.is_none() && !compact_current {
+            start
+        } else {
+            price_start
+        };
         // The source candle names its open, but its 1m close is an
         // instantaneous observation. Retain a close exactly at the inclusive
         // left edge without retaining any earlier price sample or fill.
@@ -225,21 +287,33 @@ impl Backtest<'_> {
                 if !mark.is_finite() || mark <= 0.0 {
                     return Err("invalid current backtest HSL valuation".into());
                 }
-                let mut closes = Vec::new();
-                for j in first_row..=k {
-                    let end = close_time(j)?;
-                    if end < start || end > now || !self.coin_is_valid_at(idx, j) {
-                        continue;
+                // Full exports retain historical price diagnostics. Compact
+                // execution-free scopes need only the factual endpoint mark.
+                let projected: BTreeMap<_, _> = if compact_current {
+                    BTreeMap::from([(now, mark)])
+                } else {
+                    let mut closes = Vec::new();
+                    let compact_first_row =
+                        (((price_start as i128 - self.first_timestamp_ms as i128 + 59_999).max(0)
+                            / 60_000)
+                            - 1)
+                        .max(0) as usize;
+                    for j in first_row.max(compact_first_row)..=k {
+                        let end = close_time(j)?;
+                        if end < price_start || end > now || !self.coin_is_valid_at(idx, j) {
+                            continue;
+                        }
+                        closes.push((end, self.hlcvs_value(j, idx, CLOSE)));
                     }
-                    closes.push((end, self.hlcvs_value(j, idx, CLOSE)));
-                }
-                let projected = prices::minute_prices_from_ordered_closes(start, now, &closes)?;
-                reasons.extend(projected.reasons);
-                let projected: BTreeMap<_, _> = projected
-                    .rows
-                    .into_iter()
-                    .map(|p| (p.timestamp, p.close))
-                    .collect();
+                    let projected =
+                        prices::minute_prices_from_ordered_closes(price_start, now, &closes)?;
+                    reasons.extend(projected.reasons);
+                    projected
+                        .rows
+                        .into_iter()
+                        .map(|p| (p.timestamp, p.close))
+                        .collect()
+                };
                 let market = &self.exchange_params_list[idx];
                 let revision = u64::try_from(k).map_err(|_| "backtest HSL revision overflow")?;
                 pairs.push(snapshot::Pair {
@@ -1804,6 +1878,253 @@ mod tests {
             assert!((actual.ema - expected.ema).abs() < 1e-12, "k={k}");
         }
     }
+    /// Omitted idle price rows cannot change the shared controller, including
+    /// current RED; retained executions and detailed exports keep the full tape.
+    #[test]
+    fn flat_prefix_capture_is_exact_and_scope_bounded() {
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, evaluate_for_simulator, Input};
+        let mut data = candles(1460, 2);
+        for k in 0..1460 {
+            for c in 0..2 {
+                for f in [HIGH, LOW, CLOSE] {
+                    data[[k, c, f]] = if k < 1400 { 100. } else { 80. };
+                }
+            }
+        }
+        let btc = Array1::from_elem(1460, 50000.);
+        let mut bt = make(&data, &btc);
+        bt.backtest_params.hsl_detailed_report = false;
+        fill(&mut bt, 3, 0, PositionSide::Long, 1., 100.);
+        for later_entry in [false, true] {
+            if later_entry {
+                fill(&mut bt, 1400, 0, PositionSide::Long, 0.5, 80.);
+            }
+            for name in ["coin", "pside", "unified"] {
+                let mode = || match name {
+                    "coin" => snapshot::Mode::Coin,
+                    "pside" => snapshot::Mode::Pside,
+                    _ => snapshot::Mode::Unified,
+                };
+                let side = if name == "unified" {
+                    None
+                } else {
+                    Some(PositionSide::Long)
+                };
+                let symbol = if name == "coin" { Some("C0") } else { None };
+                let full = bt
+                    .capture_hsl_inputs(1450, mode(), side, symbol, false, None, false)
+                    .unwrap();
+                let compact = bt
+                    .capture_hsl_inputs(1450, mode(), side, symbol, false, None, true)
+                    .unwrap();
+                assert_eq!(compact.snapshot.start, full.snapshot.start);
+                assert!(full.snapshot.pairs.iter().any(|p| p.prices.len() > 1000));
+                assert!(compact.snapshot.pairs.iter().all(|p| if later_entry {
+                    (2..100).contains(&p.prices.len())
+                } else {
+                    p.prices.len() == 1
+                }));
+                for threshold in [0.00001, 0.99] {
+                    let eval = |snapshot, compact| {
+                        let evaluator = if compact {
+                            evaluate_for_simulator
+                        } else {
+                            evaluate
+                        };
+                        evaluator(Input {
+                            snapshot,
+                            slots: 1,
+                            scale_budget_with_excess_allowance: false,
+                            exposure_budget: None,
+                            span: 627.5,
+                            threshold,
+                            cooldown_ms: 300000,
+                            restart: Restart::Always,
+                        })
+                        .unwrap()
+                    };
+                    let full = bt
+                        .capture_hsl_inputs(1450, mode(), side, symbol, false, None, false)
+                        .unwrap();
+                    let compact = bt
+                        .capture_hsl_inputs(1450, mode(), side, symbol, false, None, true)
+                        .unwrap();
+                    assert_eq!(
+                        serde_json::to_value(eval(full.snapshot, false)).unwrap(),
+                        serde_json::to_value(eval(compact.snapshot, true)).unwrap()
+                    );
+                }
+            }
+        }
+        bt.backtest_params.hsl_detailed_report = true;
+        let detailed = bt
+            .hsl_inputs_at_clipped(
+                1450,
+                snapshot::Mode::Coin,
+                Some(PositionSide::Long),
+                Some("C0"),
+                false,
+                None,
+            )
+            .unwrap();
+        assert!(detailed.snapshot.pairs[0].prices.len() > 1000);
+        let mut bt = make(&data, &btc);
+        bt.backtest_params.hsl_detailed_report = false;
+        fill(&mut bt, 3, 0, PositionSide::Long, 1., 100.);
+        fill(&mut bt, 3, 1, PositionSide::Long, 1., 100.);
+        fill(&mut bt, 1449, 1, PositionSide::Long, -0.5, 80.);
+        let coin = bt
+            .hsl_inputs_at_clipped(
+                1450,
+                snapshot::Mode::Coin,
+                Some(PositionSide::Long),
+                Some("C0"),
+                false,
+                None,
+            )
+            .unwrap();
+        assert_eq!(coin.snapshot.pairs[0].prices.len(), 1);
+        let aggregate = bt
+            .hsl_inputs_at_clipped(1450, snapshot::Mode::Unified, None, None, false, None)
+            .unwrap();
+        assert!(aggregate
+            .snapshot
+            .pairs
+            .iter()
+            .all(|p| p.prices.len() > 1000));
+    }
+    /// Compact captures remain rederivable through clipping, fees,
+    /// budget/slot changes, GREEN recovery, terminal closes and cache loss.
+    #[test]
+    fn compact_current_matches_fresh_controller_across_runtime_changes() {
+        use crate::backtest::hsl_runtime::{Config, Policy};
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, Input};
+        let n = 1700;
+        let mut data = candles(n, 2);
+        for k in 0..n {
+            let p = if (1530..1536).contains(&k) {
+                45.
+            } else {
+                100. + 12. * (k as f64 * 0.013).sin()
+            };
+            for c in 0..2 {
+                for f in [HIGH, LOW, CLOSE] {
+                    data[[k, c, f]] = p + c as f64;
+                }
+            }
+        }
+        let btc = Array1::from_elem(n, 50000.);
+        for mode in ["coin", "coin_scaled", "pside", "unified"] {
+            for restart in [Restart::Always, Restart::Never] {
+                let mut bt = make(&data, &btc);
+                bt.backtest_params.hsl_detailed_report = false;
+                let policy = Policy {
+                    enabled: true,
+                    scale_budget_with_excess_allowance: mode == "coin_scaled",
+                    red_threshold: 0.06,
+                    ema_span_minutes: 308.5,
+                    cooldown_minutes_after_red: 5.,
+                    restart_after_red_policy: Some(
+                        if restart == Restart::Always {
+                            "always"
+                        } else {
+                            "never"
+                        }
+                        .into(),
+                    ),
+                    panic_close_order_type: "limit".into(),
+                };
+                bt.backtest_params.equity_hard_stop_loss.hsl = Some(Config {
+                    mode: if mode == "coin_scaled" { "coin" } else { mode }.into(),
+                    sides: [policy.clone(), policy.clone()],
+                    portfolio: (mode == "unified").then_some(policy.clone()),
+                    coins: Default::default(),
+                });
+                for k in 2..n {
+                    bt.current_step = k;
+                    for (when, c, side, qty) in [
+                        (3, 0, PositionSide::Long, 2.),
+                        (5, 1, PositionSide::Short, -1.),
+                        (1400, 0, PositionSide::Long, 0.5),
+                        (1510, 0, PositionSide::Long, -1.0),
+                        (1550, 0, PositionSide::Long, -1.5),
+                        (1552, 0, PositionSide::Long, 1.),
+                        (1570, 1, PositionSide::Short, 1.),
+                    ] {
+                        if k == when {
+                            fill(&mut bt, k, c, side, qty, data[[k, c, CLOSE]]);
+                        }
+                    }
+                    if k == 1490 || k == 1520 {
+                        let delta = if k == 1490 { 100. } else { -50. };
+                        bt.balance.usd_total_balance += delta;
+                        bt.balance.usd_cash_wallet += delta;
+                    }
+                    if k == 1500 {
+                        bt.effective_n_positions.long = 1;
+                    }
+                    if k == 1540 || k == 1600 {
+                        bt.hsl_scopes.clear();
+                        bt.hsl_traces.clear();
+                    }
+                    bt.update_hsl(k).unwrap();
+                    if k < 1435 || (k > 1610 && k % 137 != 0) {
+                        continue;
+                    }
+                    for scope in &bt.hsl_scopes {
+                        let side = scope.side.map(|s| {
+                            if s == LONG {
+                                PositionSide::Long
+                            } else {
+                                PositionSide::Short
+                            }
+                        });
+                        let symbol = scope.coin.map(|c| bt.backtest_params.coins[c].as_str());
+                        let selected = match mode {
+                            "coin" | "coin_scaled" => snapshot::Mode::Coin,
+                            "pside" => snapshot::Mode::Pside,
+                            _ => snapshot::Mode::Unified,
+                        };
+                        let full = bt.hsl_inputs_at(k, selected, side, symbol, false).unwrap();
+                        let expected = evaluate(Input {
+                            snapshot: full.snapshot,
+                            slots: scope
+                                .side
+                                .map_or(1, |s| bt.hard_stop_coin_slot_n_positions(s))
+                                as u64,
+                            scale_budget_with_excess_allowance: mode == "coin_scaled",
+                            exposure_budget: bt.hsl_exposure_budget(scope.side, scope.coin),
+                            span: policy.ema_span_minutes,
+                            threshold: policy.red_threshold,
+                            cooldown_ms: 300000,
+                            restart,
+                        })
+                        .unwrap()
+                        .decision
+                        .unwrap();
+                        let actual = scope.result.decision.as_ref().unwrap();
+                        assert_eq!(actual.action, expected.action, "mode={mode} k={k}");
+                        assert_eq!(actual.red_at, expected.red_at, "red mode={mode} k={k}");
+                        assert_eq!(actual.flat_at, expected.flat_at, "flat mode={mode} k={k}");
+                        assert!(
+                            (actual.raw - expected.raw).abs() < 1e-12,
+                            "raw mode={mode} k={k}: {} vs {}",
+                            actual.raw,
+                            expected.raw
+                        );
+                        assert!(
+                            (actual.ema - expected.ema).abs() < 1e-12,
+                            "ema mode={mode} k={k}: {} vs {}",
+                            actual.ema,
+                            expected.ema
+                        );
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn hsl_metrics_survive_draining_equities_and_disabled_policy() {
         for enabled in [false, true] {
@@ -1847,6 +2168,718 @@ mod tests {
                     .overall
                     .gain_strategy_eq
             );
+        }
+    }
+    #[test]
+    fn reduction_only_rolling_cache_matches_fresh_reconstruction() {
+        use crate::backtest::hsl_runtime::{Config, Policy, SignalSettings};
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, Input};
+        for reopen in [false, true] {
+            for side in [LONG, SHORT] {
+                for mode in ["coin", "pside"] {
+                    for restart in [Restart::Always, Restart::Never] {
+                        let mut data = candles(3000, 1);
+                        for k in 0..3000 {
+                            for field in [HIGH, LOW, CLOSE] {
+                                data[[k, 0, field]] = 85.0 + ((k * 17) % 53) as f64;
+                            }
+                        }
+                        let btc = Array1::from_elem(3000, 50000.);
+                        let mut bt = make(&data, &btc);
+                        bt.exchange_params_list[0].qty_step = 0.01;
+                        let policy = Policy {
+                            enabled: true,
+                            scale_budget_with_excess_allowance: false,
+                            red_threshold: 0.005,
+                            ema_span_minutes: 17.5,
+                            cooldown_minutes_after_red: 5.,
+                            restart_after_red_policy: Some(if restart == Restart::Always {
+                                "always".into()
+                            } else {
+                                "never".into()
+                            }),
+                            panic_close_order_type: "limit".into(),
+                        };
+                        bt.backtest_params.equity_hard_stop_loss.hsl = Some(Config {
+                            mode: mode.into(),
+                            sides: [policy.clone(), policy.clone()],
+                            portfolio: None,
+                            coins: Default::default(),
+                        });
+                        let pside = if side == LONG {
+                            PositionSide::Long
+                        } else {
+                            PositionSide::Short
+                        };
+                        let sign = if side == LONG { 1.0 } else { -1.0 };
+                        fill(&mut bt, 1, 0, pside, sign * 17.13, 93.2);
+                        let coin = (mode == "coin").then_some(0);
+                        let settings = SignalSettings {
+                            scale_budget_with_excess_allowance: false,
+                            span: policy.ema_span_minutes,
+                            threshold: policy.red_threshold,
+                            cooldown_ms: 300_000,
+                            restart,
+                        };
+                        let mut hits = 0;
+                        for k in (1448..1480).chain(2888..2930) {
+                            bt.current_step = k;
+                            if k == 1450 || k == 1460 {
+                                fill(&mut bt, k, 0, pside, -sign * 6.27, 107.4);
+                            }
+                            if k == 1478 && reopen {
+                                fill(&mut bt, k, 0, pside, sign * 0.83, 91.2);
+                            }
+                            if k == 2920 {
+                                let size = if side == LONG {
+                                    bt.positions.long[0].size
+                                } else {
+                                    bt.positions.short[0].size
+                                };
+                                fill(&mut bt, k, 0, pside, -size, 99.3);
+                            }
+                            if k == 2922 {
+                                fill(&mut bt, k, 0, pside, sign * 0.64, 98.1);
+                            }
+                            if k == 1468 {
+                                bt.balance.usd_total_balance += 13.0;
+                            }
+                            let reduction_only = (!reopen || k < 1478) && k < 2920;
+                            if k == 1478 && reopen {
+                                assert!(bt
+                                    .replay_hsl_trace(k, Some(side), coin, settings)
+                                    .is_none());
+                            }
+                            let replay = if reduction_only {
+                                bt.replay_hsl_trace(k, Some(side), coin, settings)
+                            } else {
+                                None
+                            };
+                            if let Some(scope) = replay {
+                                hits += 1;
+                                bt.hsl_scopes.push(scope);
+                            } else {
+                                bt.update_hsl(k).unwrap();
+                            }
+                            let cutoff = bt.hsl_history_cutoff(Some(side), coin);
+                            let actual = &bt
+                                .hsl_scopes
+                                .iter()
+                                .find(|s| s.side == Some(side) && s.coin == coin)
+                                .unwrap()
+                                .result;
+                            let full = bt
+                                .hsl_inputs_at_clipped(
+                                    k,
+                                    if mode == "coin" {
+                                        snapshot::Mode::Coin
+                                    } else {
+                                        snapshot::Mode::Pside
+                                    },
+                                    Some(pside),
+                                    coin.map(|_| "C0"),
+                                    false,
+                                    cutoff,
+                                )
+                                .unwrap();
+                            let expected = evaluate(Input {
+                                snapshot: full.snapshot,
+                                slots: if coin.is_some() {
+                                    full.slots[side] as u64
+                                } else {
+                                    1
+                                },
+                                scale_budget_with_excess_allowance: false,
+                                exposure_budget: None,
+                                span: settings.span,
+                                threshold: settings.threshold,
+                                cooldown_ms: settings.cooldown_ms,
+                                restart,
+                            })
+                            .unwrap();
+                            let a = actual.decision.as_ref().unwrap();
+                            let b = expected.decision.as_ref().unwrap();
+                            assert_eq!(a.action, b.action, "{mode} side={side} k={k}");
+                            assert_eq!(a.red_at, b.red_at, "{mode} side={side} k={k}");
+                            assert_eq!(a.flat_at, b.flat_at, "{mode} side={side} k={k}");
+                            // The existing non-rolling cache retains only the
+                            // latest episode after flatten/reopen, so its total
+                            // historical diagnostics intentionally differ.
+                            if reduction_only {
+                                assert_eq!(actual.observations, expected.observations, "k={k}");
+                                assert_eq!(actual.reasons, expected.reasons, "k={k}");
+                            }
+                            assert!(
+                                (a.raw - b.raw).abs() < 1e-12,
+                                "raw k={k}: {} != {}",
+                                a.raw,
+                                b.raw
+                            );
+                            assert!(
+                                (a.ema - b.ema).abs() < 1e-12,
+                                "ema k={k}: {} != {}",
+                                a.ema,
+                                b.ema
+                            );
+                            if reduction_only {
+                                assert_eq!(actual.events.len(), expected.events.len());
+                                for (a, b) in actual.events.iter().zip(&expected.events) {
+                                    // Incremental EMA seed correction changes floating-point
+                                    // operation order, just as the terminal EMA above does.
+                                    assert!((a.raw.unwrap() - b.raw.unwrap()).abs() < 1e-12);
+                                    assert!((a.ema.unwrap() - b.ema.unwrap()).abs() < 1e-12);
+                                    let mut a = serde_json::to_value(a).unwrap();
+                                    let mut b = serde_json::to_value(b).unwrap();
+                                    for key in ["raw", "ema"] {
+                                        a.as_object_mut().unwrap().remove(key);
+                                        b.as_object_mut().unwrap().remove(key);
+                                    }
+                                    assert_eq!(a, b, "event identity k={k}");
+                                }
+                            }
+                        }
+                        assert!(hits >= 20, "rolling cache must be exercised: {hits}");
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    /// Current estimates receive fresh GREEN/RED signals without invented age.
+    fn estimated_current_singleton_reuses_only_completed_green_history() {
+        use crate::backtest::hsl_runtime::{Config, Policy, SignalSettings};
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, Input};
+        for side in [LONG, SHORT] {
+            for mode in ["coin", "pside"] {
+                let mut data = candles(1600, 1);
+                for k in 0..1600 {
+                    for field in [HIGH, LOW, CLOSE] {
+                        data[[k, 0, field]] = if k >= 1455 { if side == LONG { 90.0 } else { 110.0 } } else { 95.0 + ((k * 17) % 13) as f64 };
+                    }
+                }
+                let btc = Array1::from_elem(1600, 50_000.0);
+                let mut bt = make(&data, &btc);
+                let policy = Policy { enabled: true, scale_budget_with_excess_allowance: false,
+                    red_threshold: 0.4, ema_span_minutes: 2103.0,
+                    cooldown_minutes_after_red: 5.0, restart_after_red_policy: Some("always".into()),
+                    panic_close_order_type: "limit".into() };
+                bt.backtest_params.equity_hard_stop_loss.hsl = Some(Config {
+                    mode: mode.into(), sides: [policy.clone(), policy],
+                    portfolio: None, coins: Default::default() });
+                let pside = if side == LONG { PositionSide::Long } else { PositionSide::Short };
+                let sign = if side == LONG { 1.0 } else { -1.0 };
+                fill(&mut bt, 1, 0, pside, sign, 100.0);
+                fill(&mut bt, 500, 0, pside, -sign * 0.8, 101.0);
+                fill(&mut bt, 1000, 0, pside, sign, 99.0);
+                fill(&mut bt, 1100, 0, pside, -sign * 1.1, 101.0);
+                let coin = (mode == "coin").then_some(0);
+                let settings = SignalSettings { scale_budget_with_excess_allowance: false,
+                    span: 2103.0, threshold: 0.4, cooldown_ms: 300_000, restart: Restart::Always };
+                let mut hits = 0;
+                for k in 1448..1480 {
+                    bt.current_step = k;
+                    if k == 1455 {
+                        // A newly reported authoritative size invalidates the
+                        // cache; its fresh singleton can legitimately be RED.
+                        if side == LONG { bt.positions.long[0].size = 50.0; }
+                        else { bt.positions.short[0].size = -50.0; }
+                    }
+                    if let Some(scope) = bt.replay_hsl_trace(k, Some(side), coin, settings) {
+                        hits += 1;
+                        bt.hsl_scopes.push(scope);
+                    } else { bt.update_hsl(k).unwrap(); }
+                    let cutoff = bt.hsl_history_cutoff(Some(side), coin);
+                    let full = bt.hsl_inputs_at_clipped(k,
+                        if coin.is_some() { snapshot::Mode::Coin } else { snapshot::Mode::Pside },
+                        Some(pside), coin.map(|_| "C0"), false, cutoff).unwrap();
+                    let expected = evaluate(Input { snapshot: full.snapshot,
+                        slots: if coin.is_some() { full.slots[side] as u64 } else { 1 },
+                        scale_budget_with_excess_allowance: false, exposure_budget: None,
+                        span: settings.span, threshold: settings.threshold,
+                        cooldown_ms: settings.cooldown_ms, restart: settings.restart }).unwrap();
+                    let actual = &bt.hsl_scopes.iter().find(|s| s.side == Some(side) && s.coin == coin).unwrap().result;
+                    if k >= 1456 {
+                        assert_eq!(actual.decision.as_ref().unwrap().action, crate::hsl_controller::Action::Panic);
+                        assert_eq!(actual.decision.as_ref().unwrap().red_at, Some(actual.decision.as_ref().unwrap().timestamp));
+                    }
+                    assert!(actual.reasons.contains("estimated_current_opening"), "{mode} {side} {k}");
+                    assert_eq!(actual.reasons, expected.reasons);
+                    assert_eq!(actual.observations, expected.observations);
+                    assert_eq!(serde_json::to_value(&actual.decision).unwrap(), serde_json::to_value(&expected.decision).unwrap());
+                    assert_eq!(serde_json::to_value(&actual.events).unwrap(), serde_json::to_value(&expected.events).unwrap());
+                }
+                assert!(hits >= 20, "estimated singleton cache hits={hits}");
+            }
+        }
+    }
+    #[test]
+    /// Mixed partial closes and additions preserve authoritative HSL decisions.
+    fn mixed_partial_close_window_matches_fresh_reconstruction() {
+        use crate::backtest::hsl_runtime::{Config, Policy, SignalSettings};
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, Input};
+        for reopen in [true] {
+            for side in [LONG, SHORT] {
+                for mode in ["coin", "pside"] {
+                    for restart in [Restart::Always, Restart::Never] {
+                        let mut data = candles(3000, 1);
+                        for k in 0..3000 {
+                            for field in [HIGH, LOW, CLOSE] {
+                                data[[k, 0, field]] = 85.0 + ((k * 17) % 53) as f64;
+                            }
+                        }
+                        let btc = Array1::from_elem(3000, 50000.);
+                        let mut bt = make(&data, &btc);
+                        bt.exchange_params_list[0].qty_step = 0.00001;
+                        let policy = Policy {
+                            enabled: true,
+                            scale_budget_with_excess_allowance: false,
+                            red_threshold: 0.4,
+                            ema_span_minutes: 17.5,
+                            cooldown_minutes_after_red: 5.,
+                            restart_after_red_policy: Some(if restart == Restart::Always {
+                                "always".into()
+                            } else {
+                                "never".into()
+                            }),
+                            panic_close_order_type: "limit".into(),
+                        };
+                        bt.backtest_params.equity_hard_stop_loss.hsl = Some(Config {
+                            mode: mode.into(),
+                            sides: [policy.clone(), policy.clone()],
+                            portfolio: None,
+                            coins: Default::default(),
+                        });
+                        let pside = if side == LONG {
+                            PositionSide::Long
+                        } else {
+                            PositionSide::Short
+                        };
+                        let sign = if side == LONG { 1.0 } else { -1.0 };
+                        fill(&mut bt, 1, 0, pside, sign * 0.1713, 93.2);
+                        let coin = (mode == "coin").then_some(0);
+                        let settings = SignalSettings {
+                            scale_budget_with_excess_allowance: false,
+                            span: policy.ema_span_minutes,
+                            threshold: policy.red_threshold,
+                            cooldown_ms: 300_000,
+                            restart,
+                        };
+                        let mut hits = 0;
+                        let mut mixed_hits = 0;
+                        let mut closed_hits = 0;
+                        for k in (1448..1540).chain(2888..2930) {
+                            bt.current_step = k;
+                            if k == 1450 || k == 1460 {
+                                fill(&mut bt, k, 0, pside, -sign * 0.0627, 107.4);
+                            }
+                            if k == 1478 && reopen {
+                                fill(&mut bt, k, 0, pside, sign * 0.0083, 91.2);
+                            }
+                            if k == 1480 {
+                                fill(&mut bt, k, 0, pside, -sign * 0.004, 108.2);
+                            }
+                            if k == 1510 {
+                                let size = if side == LONG {
+                                    bt.positions.long[0].size
+                                } else {
+                                    bt.positions.short[0].size
+                                };
+                                fill(&mut bt, k, 0, pside, -size, 99.3);
+                            }
+                            if k == 2922 {
+                                fill(&mut bt, k, 0, pside, sign * 0.0064, 98.1);
+                            }
+                            if k == 1468 {
+                                bt.balance.usd_total_balance += 13.0;
+                            }
+                            if k == 1482 {
+                                bt.hsl_scopes.clear();
+                                bt.hsl_traces.clear();
+                            }
+                            let reduction_only = k < 2920;
+                            if k == 1478 && reopen {
+                                assert!(bt
+                                    .replay_hsl_trace(k, Some(side), coin, settings)
+                                    .is_none());
+                            }
+                            let replay = if reduction_only {
+                                let fast = bt.advance_hsl_scope(k, Some(side), coin, settings);
+                                if fast.is_some() && (1513..1540).contains(&k) { closed_hits += 1; }
+                                fast.or_else(|| bt.replay_hsl_trace(k, Some(side), coin, settings))
+                            } else {
+                                None
+                            };
+                            if let Some(scope) = replay {
+                                hits += 1;
+                                if k > 1482 && k < 1510 { mixed_hits += 1; }
+                                bt.hsl_scopes.push(scope);
+                            } else {
+                                bt.update_hsl(k).unwrap();
+                            }
+                            let cutoff = bt.hsl_history_cutoff(Some(side), coin);
+                            let actual = &bt
+                                .hsl_scopes
+                                .iter()
+                                .find(|s| s.side == Some(side) && s.coin == coin)
+                                .unwrap()
+                                .result;
+                            let full = bt
+                                .hsl_inputs_at_clipped(
+                                    k,
+                                    if mode == "coin" {
+                                        snapshot::Mode::Coin
+                                    } else {
+                                        snapshot::Mode::Pside
+                                    },
+                                    Some(pside),
+                                    coin.map(|_| "C0"),
+                                    false,
+                                    cutoff,
+                                )
+                                .unwrap();
+                            let expected = evaluate(Input {
+                                snapshot: full.snapshot,
+                                slots: if coin.is_some() {
+                                    full.slots[side] as u64
+                                } else {
+                                    1
+                                },
+                                scale_budget_with_excess_allowance: false,
+                                exposure_budget: None,
+                                span: settings.span,
+                                threshold: settings.threshold,
+                                cooldown_ms: settings.cooldown_ms,
+                                restart,
+                            })
+                            .unwrap();
+                            let a = actual.decision.as_ref().unwrap();
+                            let b = expected.decision.as_ref().unwrap();
+                            assert_eq!(a.action, b.action, "{mode} side={side} k={k}");
+                            assert_eq!(a.red_at, b.red_at, "{mode} side={side} k={k}");
+                            assert_eq!(a.flat_at, b.flat_at, "{mode} side={side} k={k}");
+                            // The existing non-rolling cache retains only the
+                            // latest episode after flatten/reopen, so its total
+                            // historical diagnostics intentionally differ.
+                            if reduction_only && k < 1478 {
+                                assert_eq!(actual.observations, expected.observations, "k={k}");
+                                assert_eq!(actual.reasons, expected.reasons, "k={k}");
+                            }
+                            assert!(
+                                (a.raw - b.raw).abs() < 1e-12,
+                                "raw k={k}: {} != {}",
+                                a.raw,
+                                b.raw
+                            );
+                            assert!(
+                                (a.ema - b.ema).abs() < 1e-12,
+                                "ema k={k}: {} != {}",
+                                a.ema,
+                                b.ema
+                            );
+                            if reduction_only && (k < 1478 || (1482..1540).contains(&k)) {
+                                assert_eq!(actual.events.len(), expected.events.len(), "events mode={mode} side={side} k={k}");
+                                for (a, b) in actual.events.iter().zip(&expected.events) {
+                                    // Incremental EMA seed correction changes floating-point
+                                    // operation order, just as the terminal EMA above does.
+                                    for (x, y) in [(a.raw, b.raw), (a.ema, b.ema)] {
+                                        match (x, y) {
+                                            (Some(x), Some(y)) => assert!((x - y).abs() < 1e-12),
+                                            (None, None) => (),
+                                            _ => panic!("event numeric fields differ k={k}"),
+                                        }
+                                    }
+                                    let mut a = serde_json::to_value(a).unwrap();
+                                    let mut b = serde_json::to_value(b).unwrap();
+                                    for key in ["raw", "ema"] {
+                                        a.as_object_mut().unwrap().remove(key);
+                                        b.as_object_mut().unwrap().remove(key);
+                                    }
+                                    assert_eq!(a, b, "event identity k={k}");
+                                }
+                            }
+                        }
+                        assert!(hits >= 20, "rolling cache must be exercised: {hits}");
+                        assert!(mixed_hits >= 20, "mixed cache hits={mixed_hits}");
+                        assert!(closed_hits >= 20, "closed reconstructed cache hits={closed_hits}");
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn closed_reduction_window_matches_fresh_reference_until_execution_expiry() {
+        use crate::backtest::hsl_runtime::{Config, Policy, SignalSettings};
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, Input};
+        for side in [LONG, SHORT] {
+            for reopen in [false, true] {
+                let mut data = candles(3000, 1);
+                for k in 0..3000 {
+                    for field in [HIGH, LOW, CLOSE] {
+                        data[[k, 0, field]] = 85.0 + ((k * 17) % 53) as f64;
+                    }
+                }
+                let btc = Array1::from_elem(3000, 50000.);
+                let mut bt = make(&data, &btc);
+                let policy = Policy {
+                    enabled: true,
+                    scale_budget_with_excess_allowance: false,
+                    red_threshold: 0.9,
+                    ema_span_minutes: 17.5,
+                    cooldown_minutes_after_red: 5.,
+                    restart_after_red_policy: Some("always".into()),
+                    panic_close_order_type: "limit".into(),
+                };
+                bt.backtest_params.equity_hard_stop_loss.hsl = Some(Config {
+                    mode: "coin".into(),
+                    sides: [policy.clone(), policy.clone()],
+                    portfolio: None,
+                    coins: Default::default(),
+                });
+                let pside = if side == LONG {
+                    PositionSide::Long
+                } else {
+                    PositionSide::Short
+                };
+                let sign = if side == LONG { 1.0 } else { -1.0 };
+                fill(&mut bt, 1, 0, pside, sign, 93.2);
+                fill(&mut bt, 400, 0, pside, -sign, 107.4);
+                let settings = SignalSettings {
+                    scale_budget_with_excess_allowance: false,
+                    span: 17.5,
+                    threshold: 0.9,
+                    cooldown_ms: 300_000,
+                    restart: Restart::Always,
+                };
+                let mut clipped_hits = 0;
+                for k in (1438..1470).chain(1810..1860) {
+                    bt.current_step = k;
+                    if reopen && k == 1455 {
+                        fill(&mut bt, k, 0, pside, sign, 91.2);
+                    }
+                    if reopen && k == 1462 {
+                        fill(&mut bt, k, 0, pside, -sign, 99.3);
+                    }
+                    if let Some(scope) = bt.advance_hsl_scope(k, Some(side), Some(0), settings) {
+                        if k >= 1445 && k < 1470 && !reopen {
+                            clipped_hits += 1;
+                        }
+                        bt.hsl_scopes.push(scope);
+                    } else {
+                        bt.update_hsl(k).unwrap();
+                    }
+                    let cutoff = bt.hsl_history_cutoff(Some(side), Some(0));
+                    let full = bt
+                        .hsl_inputs_at_clipped(
+                            k,
+                            snapshot::Mode::Coin,
+                            Some(pside),
+                            Some("C0"),
+                            false,
+                            cutoff,
+                        )
+                        .unwrap();
+                    let source_reasons = full.reasons.clone();
+                    let mut expected = evaluate(Input {
+                        snapshot: full.snapshot,
+                        slots: full.slots[side] as u64,
+                        scale_budget_with_excess_allowance: false,
+                        exposure_budget: None,
+                        span: settings.span,
+                        threshold: settings.threshold,
+                        cooldown_ms: settings.cooldown_ms,
+                        restart: settings.restart,
+                    })
+                    .unwrap();
+                    expected.reasons.extend(source_reasons);
+                    let actual = &bt
+                        .hsl_scopes
+                        .iter()
+                        .find(|s| s.side == Some(side) && s.coin == Some(0))
+                        .unwrap()
+                        .result;
+                    let a = actual.decision.as_ref().unwrap();
+                    let b = expected.decision.as_ref().unwrap();
+                    assert_eq!(a.action, b.action, "side={side} k={k}");
+                    assert_eq!(a.red_at, b.red_at);
+                    assert_eq!(a.flat_at, b.flat_at);
+                    assert!((a.raw - b.raw).abs() < 1e-12);
+                    assert!((a.ema - b.ema).abs() < 1e-12);
+                    if reopen && k >= 1464 {
+                        assert_eq!(
+                            actual.observations, expected.observations,
+                            "reopened observations k={k}"
+                        );
+                        assert_eq!(actual.reasons, expected.reasons);
+                        assert_eq!(
+                            serde_json::to_value(&actual.events).unwrap(),
+                            serde_json::to_value(&expected.events).unwrap()
+                        );
+                    }
+                    if !reopen {
+                        // Once the last execution expires, the pre-existing
+                        // all-flat scalar cache has separate count semantics.
+                        // Require fresh counts throughout this closed-tape proof.
+                        if k < 1841 {
+                            assert_eq!(
+                                actual.observations, expected.observations,
+                                "observations k={k}"
+                            );
+                        }
+                        assert_eq!(actual.reasons, expected.reasons, "reasons k={k}");
+                        assert_eq!(
+                            serde_json::to_value(&actual.events).unwrap(),
+                            serde_json::to_value(&expected.events).unwrap()
+                        );
+                    }
+                }
+                if !reopen {
+                    assert!(clipped_hits >= 20, "clipped flat cache hits={clipped_hits}");
+                }
+            }
+        }
+    }    #[test]
+    fn settled_red_history_matches_current_reference_until_execution_expiry() {
+        use crate::backtest::hsl_runtime::{Config, Policy, SignalSettings};
+        use crate::hsl_controller::Restart;
+        use crate::hsl_evaluator::{evaluate, Input};
+        for (threshold, restart) in [(0.005, Restart::Always), (0.005, Restart::Never), (0.9, Restart::Always), (0.9, Restart::Never)] {
+        for side in [LONG, SHORT] {
+            for reopen in [false, true] {
+                let mut data = candles(3000, 1);
+                for k in 0..3000 {
+                    for field in [HIGH, LOW, CLOSE] {
+                        data[[k, 0, field]] = 85.0 + ((k * 17) % 53) as f64;
+                    }
+                }
+                let btc = Array1::from_elem(3000, 50000.);
+                let mut bt = make(&data, &btc);
+                let policy = Policy {
+                    enabled: true,
+                    scale_budget_with_excess_allowance: false,
+                    red_threshold: threshold,
+                    ema_span_minutes: 17.5,
+                    cooldown_minutes_after_red: 5.,
+                    restart_after_red_policy: Some(if restart == Restart::Always { "always" } else { "never" }.into()),
+                    panic_close_order_type: "limit".into(),
+                };
+                bt.backtest_params.equity_hard_stop_loss.hsl = Some(Config {
+                    mode: "coin".into(),
+                    sides: [policy.clone(), policy.clone()],
+                    portfolio: None,
+                    coins: Default::default(),
+                });
+                let pside = if side == LONG {
+                    PositionSide::Long
+                } else {
+                    PositionSide::Short
+                };
+                let sign = if side == LONG { 1.0 } else { -1.0 };
+                fill(&mut bt, 1, 0, pside, sign, 93.2);
+                fill(&mut bt, 400, 0, pside, -sign, 107.4);
+                let settings = SignalSettings {
+                    scale_budget_with_excess_allowance: false,
+                    span: 17.5,
+                    threshold,
+                    cooldown_ms: 300_000,
+                    restart,
+                };
+                let mut actual_report = crate::backtest::hsl_report::Report::new(false, true);
+                let mut reference_report = crate::backtest::hsl_report::Report::new(false, true);
+                let mut clipped_hits = 0;
+                for k in (1438..1470).chain(1810..1860) {
+                    bt.current_step = k;
+                    if k == 1815 {
+                        bt.balance.usd_total_balance = 1.0;
+                        bt.balance.usd_cash_wallet = 1.0;
+                    }
+                    if reopen && k == 1455 {
+                        fill(&mut bt, k, 0, pside, sign, 91.2);
+                    }
+                    if reopen && k == 1462 {
+                        fill(&mut bt, k, 0, pside, -sign, 99.3);
+                    }
+                    if let Some(scope) = bt.advance_hsl_scope(k, Some(side), Some(0), settings) {
+                        if k >= 1445 && k < 1470 && !reopen {
+                            clipped_hits += 1;
+                        }
+                        bt.hsl_scopes.push(scope);
+                    } else {
+                        bt.update_hsl(k).unwrap();
+                    }
+                    let cutoff = bt.hsl_history_cutoff(Some(side), Some(0));
+                    let full = bt
+                        .hsl_inputs_at_clipped(
+                            k,
+                            snapshot::Mode::Coin,
+                            Some(pside),
+                            Some("C0"),
+                            false,
+                            cutoff,
+                        )
+                        .unwrap();
+                    let source_reasons = full.reasons.clone();
+                    let mut expected = evaluate(Input {
+                        snapshot: full.snapshot,
+                        slots: full.slots[side] as u64,
+                        scale_budget_with_excess_allowance: false,
+                        exposure_budget: None,
+                        span: settings.span,
+                        threshold: settings.threshold,
+                        cooldown_ms: settings.cooldown_ms,
+                        restart: settings.restart,
+                    })
+                    .unwrap();
+                    expected.reasons.extend(source_reasons);
+                    let actual = &bt
+                        .hsl_scopes
+                        .iter()
+                        .find(|s| s.side == Some(side) && s.coin == Some(0))
+                        .unwrap()
+                        .result;
+                    let a = actual.decision.as_ref().unwrap();
+                    let b = expected.decision.as_ref().unwrap();
+                    assert_eq!(a.action, b.action, "side={side} k={k}");
+                    assert_eq!(a.red_at, b.red_at);
+                    assert_eq!(a.flat_at, b.flat_at);
+                    assert!((a.raw - b.raw).abs() < 1e-12);
+                    assert!((a.ema - b.ema).abs() < 1e-12);
+                    if !reopen {
+                    actual_report.observe((Some(side), Some(0)), a.timestamp, "bar_close", actual);
+                    reference_report.observe((Some(side), Some(0)), b.timestamp, "bar_close", &expected);
+                    assert_eq!(serde_json::to_value(&actual_report.summary).unwrap(), serde_json::to_value(&reference_report.summary).unwrap(), "summary {restart:?} threshold={threshold} side={side} k={k}");
+                    assert_eq!(serde_json::to_value(&actual_report.events).unwrap(), serde_json::to_value(&reference_report.events).unwrap(), "reported events k={k}");
+                    }
+                    if reopen && k >= 1464 && k < 1815 {
+                        assert_eq!(
+                            actual.observations, expected.observations,
+                            "reopened observations k={k}"
+                        );
+                        assert_eq!(actual.reasons, expected.reasons);
+                        assert!(actual.events.iter().all(|e| e.timestamp <= a.timestamp));
+                    }
+                    if !reopen {
+                        // Once the last execution expires, the pre-existing
+                        // all-flat scalar cache has separate count semantics.
+                        // Require fresh counts throughout this closed-tape proof.
+                        if k < 1815 {
+                            assert_eq!(
+                                actual.observations, expected.observations,
+                                "observations k={k}"
+                            );
+                        }
+                        assert_eq!(actual.reasons, expected.reasons, "reasons k={k}");
+                        assert!(actual.events.iter().all(|e| e.timestamp <= a.timestamp));
+                    }
+                }
+                if !reopen && restart == Restart::Always {
+                    assert!(clipped_hits >= 20, "clipped flat cache hits={clipped_hits}");
+                }
+            }
+        }
         }
     }
 }
