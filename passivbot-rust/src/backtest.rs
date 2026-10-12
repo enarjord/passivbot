@@ -605,6 +605,7 @@ pub struct Backtest<'a> {
     last_increase_fill_timestamp_long: Vec<Option<u64>>,
     last_increase_fill_timestamp_short: Vec<Option<u64>>,
     pub total_wallet_exposures: Vec<f64>,
+    pub exposure_rms: crate::exposure_rms::ExposureRms,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
     debug_writer: Option<DebugOrderWriter>,
@@ -2141,6 +2142,7 @@ impl<'a> Backtest<'a> {
             last_increase_fill_timestamp_long: vec![None; n_coins],
             last_increase_fill_timestamp_short: vec![None; n_coins],
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
+            exposure_rms: Default::default(),
             equity_tracking_active: false,
             debug_writer: if DEBUG_DUMP_ORDERS {
                 DebugOrderWriter::new_for_mode()
@@ -2888,8 +2890,26 @@ impl<'a> Backtest<'a> {
 
     fn record_total_wallet_exposure(&mut self) {
         // For analysis time series we record the net TWE (long + short, where short is negative).
-        let (_, _, twe_net) = self.compute_twe_components();
-        self.total_wallet_exposures.push(twe_net);
+        let limits = [
+            self.bot_params_master.long.total_wallet_exposure_limit,
+            self.bot_params_master.short.total_wallet_exposure_limit,
+        ];
+        let mut exposure = [0.0; 2];
+        let mut position_moments = [0.0; 2];
+        for (side, positions) in [&self.positions.long, &self.positions.short].iter().enumerate() {
+            for (idx, position) in positions.iter().enumerate() {
+                if position.size == 0.0 {
+                    continue;
+                }
+                let e = position.size.abs() * position.price
+                    * self.exchange_params_list[idx].c_mult / self.balance.usd_total_balance;
+                let wel = self.runtime_budget(idx, side).effective_wallet_exposure_limit;
+                exposure[side] += e;
+                position_moments[side] += crate::exposure_rms::position_moment(e, wel, limits[side]);
+            }
+        }
+        self.total_wallet_exposures.push(exposure[0] - exposure[1]);
+        self.exposure_rms.record_moments(exposure, position_moments, limits);
     }
 
     fn compute_twe_components(&self) -> (f64, f64, f64) {
@@ -7383,6 +7403,18 @@ mod tests {
             "k=4 expected wel to remain 1.5/3 after B delists"
         );
         assert_eq!(bt.effective_n_positions.long, 3);
+
+        // Exposure diagnostics read the retained runtime budget for a held,
+        // nontradable coin, independently of cached order-generation inputs.
+        bt.runtime_budget[1].long.effective_wallet_exposure_limit = 0.75;
+        bt.positions.long[1] = Position { size: 5.0, price: 100.0 };
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
+        bt.record_total_wallet_exposure();
+        let mut analysis = crate::types::Analysis::default();
+        bt.exposure_rms.apply(&mut analysis);
+        assert!((analysis.total_wallet_exposure_rms_long - 0.5).abs() < 1e-12);
+        assert!((analysis.position_exposure_utilization_rms_long
+            - (0.25_f64 / (1.5 * 0.75)).sqrt()).abs() < 1e-12);
     }
 
     #[test]

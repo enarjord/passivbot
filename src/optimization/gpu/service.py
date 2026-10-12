@@ -12,6 +12,7 @@ from optimization.gpu.replay_progress import replay_scope
 
 import numpy as np
 
+from config.metrics import EXPOSURE_RMS_METRICS
 from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.parameters import (
     _single_coin_exposure_params, _position_exposure_enforcer_params,
@@ -90,6 +91,7 @@ def _noop_interrupt_check():
 
 
 CORE_OUTPUT_KEYS = {
+    *EXPOSURE_RMS_METRICS,
     "entry_interval_native_metrics",
     "hsl_drawdown_ema_max_portfolio",
     "hsl_drawdown_ema_mean_worst_1pct_portfolio",

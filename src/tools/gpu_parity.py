@@ -21,6 +21,7 @@ import sys
 import time
 
 from optimization.gpu.parity import MetricTolerance, compare_limits, compare_metrics
+from config.metrics import EXPOSURE_RMS_METRICS
 
 
 DEFAULT_METRICS = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day")
@@ -34,6 +35,7 @@ STRESS_OPTIONS = ("hsl_red_threshold", "hsl_ema_span_minutes", "hsl_cooldown_min
                   "hsl_lookback_days", "price_shocks")
 # Provisional measurement gates for selected definitions, not a release certificate.
 DEFAULT_TOLERANCES = {
+    **{name: MetricTolerance(1e-5, 1e-4) for name in EXPOSURE_RMS_METRICS},
     "adg_strategy_eq": MetricTolerance(1e-7, 1e-4),
     "drawdown_worst_strategy_eq": MetricTolerance(1e-5, 1e-4),
     "fills_per_day": MetricTolerance(1e-6, 1e-5),

@@ -1190,6 +1190,7 @@ def _ema_anchor_multicoin_shader_library(
     source = (
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
+        f"#define PASSIVBOT_EXPOSURE_RMS_ENABLED {int(hsl_factual_only)}\n"
         f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     )
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
@@ -1283,6 +1284,7 @@ def _trailing_martingale_multicoin_shader_library(
     source = (
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
+        f"#define PASSIVBOT_EXPOSURE_RMS_ENABLED {int(hsl_factual_only)}\n"
         f"#define PASSIVBOT_HSL_FACTUAL_ONLY {int(hsl_factual_only)}\n" + source
     )
     source = _with_unstuck_ema(source, unstuck_ema_enabled)
@@ -1487,6 +1489,10 @@ def _require_available_held_valuation(scalars):
 
 
 def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_factual_hsl=False) -> dict:
+    # Native multicoin ABI appends seven moments after the legacy scalar tail.
+    rms_scalars = scalars[:, -7:] if native_factual_hsl else None
+    if native_factual_hsl:
+        scalars = scalars[:, :-7]
     _require_available_held_valuation(scalars)
     active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
 
@@ -1596,6 +1602,13 @@ def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_fact
         ),
     }
     if native_factual_hsl:
+        for i, name in enumerate((
+            "total_wallet_exposure_rms_long", "total_wallet_exposure_rms_short",
+            "total_wallet_exposure_rms_gross", "total_wallet_exposure_utilization_rms_long",
+            "total_wallet_exposure_utilization_rms_short", "position_exposure_utilization_rms_long",
+            "position_exposure_utilization_rms_short",
+        )):
+            output[name] = rms_scalars[:, i]
         # Column 17 is unused by legacy shared replay. Native reporting owns a
         # distinct portfolio maximum, since unified side signals are zero.
         output["hsl_drawdown_ema_max_portfolio"] = scalars[:, 17]
@@ -1607,6 +1620,8 @@ def _decode_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_fact
 def _decode_multicoin_fused_outputs(daily, scalars, gaps, *, btc_risk_enabled=False, native_factual_hsl=False) -> dict:
     output = _decode_outputs(daily, scalars, gaps, btc_risk_enabled=btc_risk_enabled,
                              native_factual_hsl=native_factual_hsl)
+    if native_factual_hsl:
+        scalars = scalars[:, :-7]
     long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
     output.update(
         {
@@ -2471,6 +2486,8 @@ class _MulticoinReplayRunner:
                 if fused
                 else MPS_MULTICOIN_BASE_SCALAR_COLS
             )
+        if self.native_factual_hsl:
+            self.scalar_cols += 7
         self.run_config = run
         interval_minutes = float(run.interval_ms) / 60_000.0
         if (

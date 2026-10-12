@@ -56,7 +56,18 @@ CURRENCY_METRICS = {
     "sterling_ratio_w",
 }
 
+EXPOSURE_RMS_METRICS = frozenset({
+    "total_wallet_exposure_rms_long",
+    "total_wallet_exposure_rms_short",
+    "total_wallet_exposure_rms_gross",
+    "total_wallet_exposure_utilization_rms_long",
+    "total_wallet_exposure_utilization_rms_short",
+    "position_exposure_utilization_rms_long",
+    "position_exposure_utilization_rms_short",
+})
+
 SHARED_METRICS = {
+    *EXPOSURE_RMS_METRICS,
     "adg_strategy_eq_ew",
     "sharpe_ratio_strategy_eq_ew",
     "sortino_ratio_strategy_eq_ew",
