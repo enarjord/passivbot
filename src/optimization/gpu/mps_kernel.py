@@ -93,7 +93,7 @@ _TM_VOLATILITY_DISABLED_DEFINE = "#define PASSIVBOT_TM_VOLATILITY_DISABLED 1\n"
 def _hsl_layout(capacity: int) -> tuple[int, int]:
     blocks = (capacity + 63) // 64
     tree_size = 1 << (blocks - 1).bit_length()
-    storage_nodes = 2 * tree_size + (capacity + 3) // 4
+    storage_nodes = 4 * tree_size + (capacity + 3) // 4
     return tree_size, storage_nodes
 
 

@@ -49,13 +49,15 @@ inline HslNode hsl_join(HslNode l, HslNode r) {
     return n;
 }
 
+// Primary aggregate tree, equally sized query cache, then packed samples.
+// Cache storage is private to the same candidate/controller as the tree.
 inline int hsl_storage_nodes(int capacity, int tree_size) {
     // Four two-float samples fit in one 32-byte node-sized allocation.
-    return 2 * tree_size + (capacity + 3) / 4;
+    return 4 * tree_size + (capacity + 3) / 4;
 }
 
 inline device float2* hsl_samples(device HslNode* tree, int tree_size) {
-    return reinterpret_cast<device float2*>(tree + 2 * tree_size);
+    return reinterpret_cast<device float2*>(tree + 4 * tree_size);
 }
 
 inline HslNode hsl_sample(float2 row, float alpha) {
@@ -75,11 +77,13 @@ inline void hsl_set(
 ) {
     int index = tree_size + slot;
     tree[index] = n;
+    tree[2 * tree_size + index].count = 0;
     // Only complete aligned blocks can be consumed by a chronological range
     // query. Updating completed right edges makes append amortized O(1).
     while (index > 1 && (index & 1) != 0) {
         index /= 2;
         tree[index] = hsl_join(tree[index * 2], tree[index * 2 + 1]);
+        tree[2 * tree_size + index].count = 0;
     }
 }
 
@@ -93,7 +97,7 @@ inline HslWindow hsl_init(
     w.alpha = 2.0f / (span + 1.0f);
     w.last_minute = -1;
     w.block_prefix = hsl_empty_node();
-    for (int i = 0; i < 2 * tree_size; ++i) tree[i] = hsl_empty_node();
+    for (int i = 0; i < 4 * tree_size; ++i) tree[i] = hsl_empty_node();
     return w;
 }
 
@@ -127,6 +131,7 @@ inline bool hsl_push(
     HslNode n = hsl_join(w.block_prefix,
         hsl_sample(samples[slot], w.alpha));
     tree[w.tree_size + block] = n;
+    tree[3 * w.tree_size + block].count = 0;
     if (slot % 64 == 63) hsl_set(tree, w.tree_size, block, n);
     times[slot] = minute;
     w.last_minute = minute;
@@ -135,7 +140,8 @@ inline bool hsl_push(
 }
 
 // Iterative left-to-right traversal; Metal prohibits recursive functions.
-// At most one right sibling per level is pending (90d of minutes < 2^18).
+// At most one right sibling and one cache-write marker per level are pending.
+// A 90d window has at most 2^12 blocks, so 32 stack entries remain sufficient.
 inline void hsl_visit(
     device HslNode* tree, int tree_size, int begin, int end,
     float offset, float alpha, thread float& peak, thread float& ema
@@ -143,6 +149,8 @@ inline void hsl_visit(
     int pending_index[32];
     int pending_lo[32];
     int pending_hi[32];
+    float pending_ema[32];
+    float pending_peak[32];
     int count = 1;
     pending_index[0] = 1;
     pending_lo[0] = 0;
@@ -150,11 +158,36 @@ inline void hsl_visit(
     while (count > 0) {
         --count;
         int index = pending_index[count];
+        if (index < 0) {
+            // Save the subtree's zero-seed EMA contribution, then restore the
+            // caller's incoming EMA. Peak and offset are the cache key.
+            index = -index;
+            device HslNode* cache = tree + 2 * tree_size + index;
+            cache->peak = pending_peak[count];
+            cache->first = offset;
+            cache->last = peak;
+            cache->loss = ema;
+            cache->decay = tree[index].decay;
+            cache->count = 1;
+            ema = pending_ema[count] * cache->decay + ema;
+            continue;
+        }
         int lo = pending_lo[count];
         int hi = pending_hi[count];
         if (hi <= begin || end <= lo) continue;
         HslNode n = tree[index];
         if (begin <= lo && hi <= end) {
+            device HslNode* cache = tree + 2 * tree_size + index;
+            if (cache->count && cache->peak == peak && cache->first == offset) {
+                peak = cache->last;
+                ema = ema * cache->decay + cache->loss;
+                continue;
+            }
+            pending_index[count] = -index;
+            pending_ema[count] = ema;
+            pending_peak[count] = peak;
+            ++count;
+            ema = 0.0f;
             if (n.count == 0) continue;
             if (n.peak <= peak) {
                 float contribution = offset + peak > 0.0f

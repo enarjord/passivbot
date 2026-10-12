@@ -272,7 +272,28 @@ def test_ninety_day_history_layout_is_compact_and_aligned():
     capacity = 90 * 1440 + 2
     tree_size, nodes = _hsl_layout(capacity)
     assert tree_size * 64 >= capacity
-    assert nodes * 32 >= tree_size * 2 * 32 + capacity * 8
+    assert nodes * 32 >= tree_size * 4 * 32 + capacity * 8
     assert nodes * 32 + capacity * 8 < 2_300_000
     # 64 coins, both sides, fit within the same 512 MiB candidate budget.
     assert 128 * (nodes * 32 + capacity * 8) < 512 * 1024 * 1024
+
+
+@pytest.mark.parametrize("span", [1.0, 17.5, 356.5])
+def test_cached_history_matches_reference_across_wrap_and_offset_changes(span):
+    """Repeated subtree queries survive ring wrap and invalidate changed offsets."""
+    import passivbot_rust
+
+    steps = 4096
+    minutes = np.arange(steps, dtype=np.int32)
+    realized = np.zeros(steps, dtype=np.float32)
+    realized[1024:] = -25.0
+    realized[2048:] = 10.0
+    upnl = (40 * np.sin(minutes / 13.0) - 60).astype(np.float32)
+    budgets = np.full(steps, 1000.0, dtype=np.float32)
+    budgets[1536:2560] = 500.0
+    data = np.stack([realized, upnl, budgets, np.full(steps, span)], axis=-1)
+    actual = run_window(data[None].astype(np.float32), minutes, lookback=511)
+    for i in sorted({511, 512, 1023, 1024, 1535, 1536, 2047, 2048, 2559, 2560, steps - 1}):
+        rows = [(j * 60000, float(realized[j]), float(upnl[j])) for j in range(max(0, i - 511), i + 1)]
+        reference = json.loads(passivbot_rust.hsl_signal(rows, float(budgets[i]), span, 0.1, None))
+        np.testing.assert_allclose(actual[0, i], [reference["raw"][-1], reference["ema"][-1]], rtol=2e-5, atol=2e-6)
