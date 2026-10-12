@@ -142,6 +142,7 @@ CORE_OUTPUT_KEYS = {
     "last_high_ts",
     "first_eq_ts",
     "last_eq_ts",
+    "last_eq_step",
     "liq_step",
     "profit_sum",
     "loss_sum",
@@ -1711,6 +1712,13 @@ def _combine_hedged_multicoin_outputs(
     combined["last_eq_ts"] = last_eq_ts.minimum(complete_tail_ms).where(
         liquidated, last_eq_ts
     )
+    if "last_eq_step" in long or "last_eq_step" in short:
+        last_step = long["last_eq_step"].minimum(short["last_eq_step"])
+        # Keep the existing conservative day boundary for independent side
+        # liquidations, using integer candle arithmetic for completion.
+        terminal_step = ((terminal_day.to(torch.int64) * 86_400_000
+                          - int(start_minute_of_day) * 60_000) // int(interval_ms) - 1).clamp(min=0)
+        combined["last_eq_step"] = last_step.minimum(terminal_step).where(liquidated, last_step)
 
     combined["liq_step"] = liquidation_day
     combined["profit_sum"] = long["profit_sum"] + short["profit_sum"]
@@ -2957,6 +2965,11 @@ class MpsMulticoinProxy:
             last_valid_idx=max(run.last_valid_idx for run in runs),
             trade_start_idx=min(run.trade_start_idx for run in runs),
         )
+        if factual_hsl:
+            from utils import date_to_ts, format_end_date
+            self.run = replace(self.run, requested_end_ts_ms=int(
+                date_to_ts(format_end_date(config["backtest"]["end_date"]))
+            ))
         wallet_exposure_column = (
             EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
             if self.strategy_kind == "ema_anchor"

@@ -17,6 +17,34 @@ from optimization.gpu.exponential_equity import exponential_equity_metrics
 
 from optimization.gpu.model import GAP_BINS
 
+
+def _backtest_completion_ratio(out, run, data, has_equity):
+    """Coverage from the authoritative native candle endpoint, without epsilon.
+
+    Legacy replay retains its timestamp contract. Native replay must not infer
+    full coverage from alive status: an explicit end step can truncate a survivor.
+    """
+    origin = int(data["ts0"])
+    count = int(data["n"])
+    interval = int(run.interval_ms)
+    start = int(run.requested_start_ts_ms)
+    requested_end = getattr(run, "requested_end_ts_ms", None)
+    end = int(requested_end) if requested_end is not None else origin + count * interval
+    if end <= start:
+        return has_equity.to(torch.float64)
+    if "last_eq_step" in out:
+        step = out["last_eq_step"]
+        if (step.dtype not in {torch.int32, torch.int64} or step.shape != has_equity.shape
+                or bool(((step < -1) | (step >= count)).any())):
+            raise RuntimeError("Invalid native GPU completion candle endpoint")
+        covered = (origin + (step.to(torch.int64) + 1) * interval).clamp(max=end)
+        ratio = (covered - start).to(torch.float64) / max(end - start, 1)
+        return torch.where(has_equity & (step >= 0), ratio.clamp(0.0, 1.0), torch.zeros_like(ratio))
+    last = out["last_eq_ts"]
+    covered = torch.minimum(torch.full_like(last, float(end)), last + float(interval))
+    ratio = ((covered - float(start)) / max(end - start, 1)).clamp(0.0, 1.0)
+    return torch.where(has_equity, ratio, torch.zeros_like(last))
+
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
     ENTRY_INTERVAL_METRICS,
@@ -2389,20 +2417,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         else {}
     )
 
-    requested_start = float(run.requested_start_ts_ms)
-    first_timestamp = data["ts0"]
-    candle_count = int(data["n"])
-    requested_end = float(first_timestamp + candle_count * run.interval_ms)
-    covered_end = torch.minimum(
-        torch.full_like(last_eq_ts, requested_end),
-        last_eq_ts + float(max(1, run.interval_ms // 60_000) * 60_000),
-    )
-    requested_span = max(requested_end - requested_start, 1.0)
-    completion = torch.where(
-        has_equity,
-        ((covered_end - requested_start) / requested_span).clamp(0.0, 1.0),
-        torch.zeros_like(last_eq_ts),
-    )
+    completion = _backtest_completion_ratio(out, run, data, has_equity)
 
     objectives = {
         "adg_pnl": adg_pnl,

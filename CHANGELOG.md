@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Compute native CUDA and Metal backtest completion from exact candle endpoints. Fully replayed candidates report exactly 1.0, while early liquidation and explicitly truncated replay remain incomplete.
+
 - Support experimental native GPU optimization on Apple Silicon through Metal/MPS,
   including both strategies, suites, HSL, weighted and exponential equity metrics,
   bounded dataset residency, interruption and device-specific checkpoint identity.

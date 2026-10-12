@@ -3862,8 +3862,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
         ? last_high_k * interval_ms : -1.0f;
     scalars[scalar_offset + 7] = first_eq_k >= 0.0f
         ? first_eq_k * interval_ms : -1.0f;
+    #if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Candle indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 8] = last_eq_k;
+#else
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
+#endif
     scalars[scalar_offset + 9] = float(liquidation_day);
     scalars[scalar_offset + 10] = balance;
     scalars[scalar_offset + 11] = short_side ? 0.0f : total_size;
@@ -5233,8 +5238,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         ? last_high_k * interval_ms : -1.0f;
     scalars[scalar_offset + 7] = first_eq_k >= 0.0f
         ? first_eq_k * interval_ms : -1.0f;
+    #if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Candle indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 8] = last_eq_k;
+#else
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
+#endif
     scalars[scalar_offset + 9] = float(liquidation_day);
     scalars[scalar_offset + 10] = account.balance;
     scalars[scalar_offset + 11] = long_total_size;
