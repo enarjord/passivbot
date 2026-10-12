@@ -20,6 +20,9 @@ struct HslScopePair {
     bool short_side;
     int consumed;
     float boundary_size;
+    float boundary_basis;
+    int next_fill_minute;
+    int next_fill_sequence;
 };
 
 inline float hsl_scope_price_at(thread const HslScopePair& pair, int minute, int start, int end) {
@@ -315,6 +318,9 @@ inline bool hsl_compose_scope(
         if (pair.sequence_stride < 1 || pair.price_stride < 1) return false;
         pair.consumed = 0;
         pair.boundary_size = fabs(pair.history.opening_size);
+        pair.boundary_basis = pair.history.opening_basis;
+        pair.next_fill_minute = pair.facts.count > 0 ? hsl_pair_minute(pair.facts, 0) : -1;
+        pair.next_fill_sequence = pair.facts.count > 0 ? hsl_scope_pair_sequence(pair, 0) : -1;
         estimated = estimated || pair.history.opening_size != 0.0f;
         current_exposed = current_exposed || pair.current_size != 0.0f;
         reconstructed_flat = reconstructed_flat && (pair.facts.count == 0
@@ -343,9 +349,9 @@ inline bool hsl_compose_scope(
                 thread HslScopePair& pair = pairs[p];
                 int i = pair.consumed;
                 if (i >= pair.facts.count) continue;
-                int t = hsl_pair_minute(pair.facts, i);
+                int t = pair.next_fill_minute;
                 if (!hsl_pair_fill_precedes_price(t, minute, end, before_price)) continue;
-                int seq = hsl_scope_pair_sequence(pair, i);
+                int seq = pair.next_fill_sequence;
                 if (selected < 0 || t < selected_minute
                     || (t == selected_minute && seq < sequence)) {
                     selected = p; selected_minute = t; sequence = seq;
@@ -355,6 +361,11 @@ inline bool hsl_compose_scope(
             thread HslScopePair& pair = pairs[selected];
             int i = pair.consumed++;
             HslPairEvent event = pair.events[i];
+            pair.boundary_basis = event.basis;
+            pair.next_fill_minute = pair.consumed < pair.facts.count
+                ? hsl_pair_minute(pair.facts, pair.consumed) : -1;
+            pair.next_fill_sequence = pair.consumed < pair.facts.count
+                ? hsl_scope_pair_sequence(pair, pair.consumed) : -1;
             bool had_exposure = event.before > 0.0f || event.after > 0.0f;
             for (int p = 0; p < pair_count; ++p)
                 had_exposure = had_exposure || pairs[p].boundary_size != 0.0f;
@@ -396,8 +407,10 @@ inline bool hsl_compose_scope(
             thread HslScopePair& pair = pairs[p];
             HslPairSample sample;
             float price = hsl_scope_price_at(pair, minute, start, end);
-            if (!hsl_sample_pair(pair.history, pair.events, pair.consumed,
-                pair.facts.count, minute, end, before_price, pair.current_size,
+            // Inventory changes only at consumed facts. Keep its selected
+            // values locally instead of reloading the same event every minute.
+            if (!hsl_sample_pair_state(pair.history, pair.boundary_size,
+                pair.boundary_basis, 0.0f, minute, end, before_price, pair.current_size,
                 pair.current_basis, pair.current_mark, price, pair.multiplier,
                 pair.short_side, sample)) return false;
             hsl_pair_sum_add(upnl, sample.upnl);
