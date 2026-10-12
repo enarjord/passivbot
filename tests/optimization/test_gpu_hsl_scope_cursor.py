@@ -23,6 +23,9 @@ _BODY = r"""
         pairs[p].current_mark=hsl_scope_price_at(pairs[p],seed,start,seed);
 #else
         pairs[p].current_mark=pairs[p].prices[(seed-start)*pairs[p].price_stride];
+#if CURSOR_GUARD == 19
+        pairs[p].current_mark+=float(seed%5)*.01f;
+#endif
 #endif
     }
     HslScopeCursor cursor;
@@ -39,6 +42,9 @@ _BODY = r"""
         for(int p=0;p<count;++p) {
             thread HslScopePair& pair=pairs[p];
             pair.current_mark=pair.prices[(minute-start)*pair.price_stride];
+#if CURSOR_GUARD == 19
+            pair.current_mark+=float(minute%5)*.01f;
+#endif
             float direction=pair.short_side ? -1.0f : 1.0f;
             hsl_pair_sum_add(upnl,pair.current_size==0.0f ? 0.0f
                 : direction*fabs(pair.current_size)*pair.multiplier
@@ -76,17 +82,31 @@ _BODY = r"""
 #elif CURSOR_GUARD == 16
         never=true;
 #endif
+        float historical_upnl=NAN;
+        if(count==1 && cursor.historical_endpoint) {
+            historical_upnl=(pairs[0].short_side ? -1.0f : 1.0f)
+                *cursor.historical_size*pairs[0].multiplier
+                *(pairs[0].prices[(minute-start)*pairs[0].price_stride]-cursor.historical_basis);
+        }
+#if CURSOR_GUARD == 18
+        historical_upnl=NAN;
+#endif
         bool advanced=hsl_advance_scope(cursor,next_start,next_minute,current_upnl,
             budget,alpha,threshold,cooldown,never,
-            pairs[0].current_size != 0.0f,result);
+            pairs[0].current_size != 0.0f,result,historical_upnl);
         advanced_count+=advanced ? 1 : 0;
-#if CURSOR_GUARD == 0 || CURSOR_GUARD >= 14
+#if CURSOR_GUARD == 0 || (CURSOR_GUARD >= 14 && CURSOR_GUARD != 18)
         HslScopeResult fresh;
         if(!hsl_compose_scope(pairs,count,start,minute,false,params[po+18],params[po+19],
             threshold,cooldown,never,fresh)) {
             status[int(b)]=-4;return;
         }
-        if(!advanced || fabs(result.raw-fresh.raw)>2e-6f || fabs(result.ema-fresh.ema)>2e-6f
+        if(!advanced
+#if CURSOR_GUARD == 17 || CURSOR_GUARD == 19
+            || result.raw!=fresh.raw || result.ema!=fresh.ema
+#else
+            || fabs(result.raw-fresh.raw)>2e-6f || fabs(result.ema-fresh.ema)>2e-6f
+#endif
             || result.action!=fresh.action || result.flat_minute!=fresh.flat_minute
             || result.point_count!=fresh.point_count || result.latest_flat_minute!=fresh.latest_flat_minute
             || result.latest_flat_raw!=fresh.latest_flat_raw || result.latest_flat_ema!=fresh.latest_flat_ema)
@@ -154,7 +174,7 @@ def test_cursor_rejects_changed_or_uncertain_inputs(reference, monkeypatch, guar
     assert statuses.tolist() == [0 if guard == 10 else 1]
 
 
-@pytest.mark.parametrize("kind", ["missing_opening", "future_fill", "same_minute_fill", "endpoint_size", "endpoint_basis",
+@pytest.mark.parametrize("kind", ["missing_opening", "future_fill", "same_minute_fill",
                                   "first_quote", "nonpositive_peak_equity"])
 def test_cursor_does_not_seed_uncertain_history(reference, monkeypatch, kind):
     row = deepcopy(_row(constant=True))
@@ -164,10 +184,6 @@ def test_cursor_does_not_seed_uncertain_history(reference, monkeypatch, kind):
         row["pairs"][0]["fills"][0]["timestamp"] = 10
     elif kind == "same_minute_fill":
         row["pairs"][0]["fills"][0]["timestamp"] = 2
-    elif kind == "endpoint_size":
-        row["pairs"][0]["position"]["size"] = 1.01
-    elif kind == "endpoint_basis":
-        row["pairs"][0]["position"]["basis"] = 100.01
     elif kind == "first_quote":
         row["pairs"][0]["prices"] = {str(t): float("nan") if t < 31 else 100.0
                                       for t in range(33)}
@@ -177,6 +193,61 @@ def test_cursor_does_not_seed_uncertain_history(reference, monkeypatch, kind):
         row["pairs"][0]["prices"] = {str(t): 80.0 for t in range(33)}
         row["pairs"][0]["position"]["mark"] = 80.0
     _, _, statuses = _run(monkeypatch, [row], 12 if kind == "first_quote" else 9)
+    assert statuses.tolist() == [0]
+
+
+@pytest.mark.parametrize("short", [False, True])
+@pytest.mark.parametrize("kind", ["basis_rounding", "size_rounding", "basis_revision"])
+def test_single_pair_historical_prefix_preserves_exact_current_endpoint(reference, monkeypatch, short, kind):
+    row = _row(short)
+    row.update(span=7.5, threshold=.0025)
+    position = row["pairs"][0]["position"]
+    if kind == "basis_rounding":
+        position["basis"] = float(np.nextafter(np.float32(100), np.float32(101)))
+    elif kind == "size_rounding":
+        position["size"] *= 1.01
+    else:
+        position["basis"] = 101.5
+    _, result, statuses = _run(monkeypatch, [row], 17)
+    assert statuses.tolist() == [1 + 2 * 30]
+    monkeypatch.undo()
+    _, expected, status = composer._run([row])
+    np.testing.assert_array_equal(status, 1)
+    np.testing.assert_array_equal(result, expected)
+    composer._check(reference, [row])
+
+
+def test_historical_prefix_requires_finite_current_historical_mark(reference, monkeypatch):
+    row = _row()
+    row["pairs"][0]["position"]["basis"] = 100.01
+    _, _, statuses = _run(monkeypatch, [row], 18)
+    assert statuses.tolist() == [1]
+
+
+@pytest.mark.parametrize("guard", [1, 2, 3, 4, 5, 6, 7, 9, 13])
+def test_historical_prefix_rejects_changed_replay_inputs(reference, monkeypatch, guard):
+    row = _row(constant=True)
+    row["pairs"][0]["position"]["basis"] = 100.01
+    _, _, statuses = _run(monkeypatch, [row], guard)
+    assert statuses.tolist() == [1]
+
+
+def test_historical_prefix_does_not_carry_current_mark_into_history(reference, monkeypatch):
+    row = _row()
+    row["pairs"][0]["position"]["basis"] = 100.01
+    row["pairs"][0]["position"]["mark"] += .02
+    _, result, statuses = _run(monkeypatch, [row], 19)
+    assert statuses.tolist() == [1 + 2 * 30]
+    monkeypatch.undo()
+    _, expected, _ = composer._run([row])
+    np.testing.assert_array_equal(result, expected)
+    composer._check(reference, [row])
+
+
+def test_multi_pair_revised_endpoint_still_uses_fresh_reconstruction(reference, monkeypatch):
+    row = _row(pairs=3)
+    row["pairs"][0]["position"]["basis"] = 100.01
+    _, _, statuses = _run(monkeypatch, [row], 9)
     assert statuses.tolist() == [0]
 
 
