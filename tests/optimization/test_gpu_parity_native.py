@@ -67,7 +67,7 @@ def test_native_service_failure_is_not_replaced_by_legacy_comparison(monkeypatch
     ))
     def unavailable(**_kwargs):
         raise RuntimeError("native CUDA unavailable")
-    monkeypatch.setattr(native, "CudaBacktestService", unavailable)
+    monkeypatch.setattr(native, "NativeBacktestService", unavailable)
     monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", SimpleNamespace(
         validate_gpu_metric_names=lambda names: names,
     ))
@@ -104,11 +104,11 @@ def test_native_parity_uses_actual_service_shared_replay_and_one_cpu_simulation(
         cpu_rows.append(output[2])
         return output
     monkeypatch.setattr(backtest, "execute_backtest", observed_cpu)
-    class Service(native.CudaBacktestService):
+    class Service(native.NativeBacktestService):
         def register_dataset(self, identity, dataset):
             registered.append(dataset)
             return super().register_dataset(identity, dataset)
-    monkeypatch.setattr(native, "CudaBacktestService", Service)
+    monkeypatch.setattr(native, "NativeBacktestService", Service)
     def wrong_engine(**_kwargs):
         pytest.fail("native parity must not select the legacy single-coin replay")
     monkeypatch.setattr(replays, "MpsSingleCoinProxy", wrong_engine)

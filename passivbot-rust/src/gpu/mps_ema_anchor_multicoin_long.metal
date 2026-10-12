@@ -5321,11 +5321,16 @@ kernel void passivbot_ema_anchor_multicoin_fused(
     device int2* unstuck_pnl_indices,
 #endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
-    device EmaMulticoinFusedReplayState* replay_states,
+    device char* replay_state_bytes,
     constant int* replay_range,
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_EMA_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device EmaMulticoinFusedReplayState* replay_states = reinterpret_cast<device EmaMulticoinFusedReplayState*>(replay_state_bytes);
+#endif
     passivbot_ema_anchor_multicoin_fused_impl(
         bars, fill_ticks, touch_ticks, hour_log_ranges, coin_settings,
         long_coin_overrides, short_coin_overrides,
@@ -5400,11 +5405,16 @@ kernel void passivbot_ema_anchor_multicoin(
     device int2* unstuck_pnl_indices,
 #endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
-    device EmaMulticoinReplayState* replay_states,
+    device char* replay_state_bytes,
     constant int* replay_range,
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_EMA_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device EmaMulticoinReplayState* replay_states = reinterpret_cast<device EmaMulticoinReplayState*>(replay_state_bytes);
+#endif
 #ifdef PASSIVBOT_MULTICOIN_SHORT_SIDE
     const bool short_side = PASSIVBOT_MULTICOIN_SHORT_SIDE != 0;
 #else
@@ -5484,11 +5494,16 @@ kernel void passivbot_ema_anchor_multicoin_long(
     device int2* unstuck_pnl_indices,
 #endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
-    device EmaMulticoinReplayState* replay_states,
+    device char* replay_state_bytes,
     constant int* replay_range,
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_EMA_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device EmaMulticoinReplayState* replay_states = reinterpret_cast<device EmaMulticoinReplayState*>(replay_state_bytes);
+#endif
     passivbot_ema_anchor_multicoin_impl(
         bars, fill_ticks, touch_ticks, hour_log_ranges,
         coin_settings, coin_overrides, params, run_settings,

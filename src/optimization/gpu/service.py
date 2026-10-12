@@ -807,7 +807,7 @@ def _mps_multicoin_dispatch_plan(
     device: str = "mps",
     factual_hsl: bool = False,
 ) -> tuple[bool, int, int]:
-    native_replay = factual_hsl and device == "cuda" and strategy_kind in {
+    native_replay = factual_hsl and device in {"cuda", "mps"} and strategy_kind in {
         "ema_anchor", "trailing_martingale",
     }
     temporal_chunking = native_replay or (
@@ -2553,8 +2553,8 @@ def _prepared_multicoin_data(
             data["invariant_bytes"] / 2**30,
         )
         return data
-    from optimization.gpu.residency import current_cuda_residency
-    residency = current_cuda_residency()
+    from optimization.gpu.residency import current_gpu_residency
+    residency = current_gpu_residency()
     def build(spill_dir=None):
         kwargs = {"spill_dir": spill_dir} if spill_dir is not None else {}
         return build_mps_multicoin_data(
@@ -2563,7 +2563,7 @@ def _prepared_multicoin_data(
         )
     data = (
         residency.prepare(key, build)
-        if residency is not None and cache is not None and gpu_device() == "cuda"
+        if residency is not None and cache is not None
         else build()
     )
     if cache is not None:
@@ -2616,14 +2616,11 @@ class MpsMulticoinProxy:
         half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
         if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and half_life is None:
             raise ValueError("Exponential (_ew) metrics require backtest.ew_half_life_days")
-        if self.needed_metrics & EXPONENTIAL_EQUITY_METRICS and gpu_device(torch) != "cuda":
-            raise ValueError("Exponential GPU metrics require CUDA; use a CPU backend")
-        # Authoritative chronological reductions currently use CUDA's f64
-        # working arithmetic. Retained Metal screening keeps its daily proxy
-        # reductions until a separately validated Metal reducer is available.
+        # Capture factual suffix histories on either device. Metal reductions
+        # use f32; compact host scoring retains f64 arithmetic.
         self.weighted_equity_metrics = tuple(sorted(
             weighted_equity_capture_metrics(self.needed_metrics)
-        )) if gpu_device(torch) == "cuda" else ()
+        ))
 
         from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
@@ -2980,8 +2977,8 @@ class MpsMulticoinProxy:
             cache=prepared_data_cache,
             limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
         )
-        from optimization.gpu.residency import current_cuda_residency
-        residency = current_cuda_residency()
+        from optimization.gpu.residency import current_gpu_residency
+        residency = current_gpu_residency()
         self._cuda_residency = residency if residency is not None and residency.owns(self.data) else None
         self.metrics_data = {
             "ts0": self.data["ts0"],

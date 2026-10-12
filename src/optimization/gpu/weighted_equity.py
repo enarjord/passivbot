@@ -1,6 +1,7 @@
 """Requested weighted equity reductions over resident factual sample histories."""
 
 import math
+import struct
 
 import torch
 
@@ -101,15 +102,32 @@ def weighted_equity_from_samples(
                 pieces[name].append(value)
         return {name: torch.cat(values) for name, values in pieces.items()}
 
+    metal = samples.device.type == "mps"
+    dtype = torch.float32 if metal else torch.float64
+    # Metal has no f64 tensors. Keep full histories and suffix/calendar work
+    # resident, then apply f64 ratio/moment arithmetic to compact daily summaries.
+    # This is analysis of the same replay, never a CPU simulation.
+    metric_device = "cpu" if metal else samples.device
+
+    def compact(value):
+        return value.cpu().to(torch.float64) if metal else value.to(torch.float64)
+
     indices = torch.arange(capacity, device=samples.device)[None, :].expand(batch, -1)
     valid = indices < sample_counts[:, None]
-    first = first_timestamps_ms.to(torch.float64)
+    first = first_timestamps_ms
+    if metal and first.dtype not in (torch.int32, torch.int64):
+        raise ValueError("Metal weighted equity requires integer UTC timestamps")
+    first = first.to(torch.int64) if metal else first.to(dtype)
     invalid = ((sample_counts < 0) | (sample_counts > capacity)
                | ((sample_counts > 0) & (~torch.isfinite(first) | (first < 0))))
     if curve == "account":
         invalid |= ~torch.isfinite(fill_counts) | (fill_counts < 0)
     # Empty histories have no clock. This unused shape origin is not a sample.
     first = torch.where(sample_counts > 0, first, torch.zeros_like(first))
+    if metal:
+        if not float(interval_ms).is_integer():
+            raise ValueError("Metal weighted equity requires integer candle milliseconds")
+        interval_ms = int(interval_ms)
     day_ids = torch.div(
         first[:, None] + indices * interval_ms, 86_400_000, rounding_mode="floor"
     ) - torch.div(first[:, None], 86_400_000, rounding_mode="floor")
@@ -118,7 +136,7 @@ def weighted_equity_from_samples(
     if bool(invalid.any()):
         raise ValueError("weighted equity history has invalid samples, counts or timestamps")
     totals = {
-        name: torch.zeros(batch, dtype=torch.float64, device=samples.device)
+        name: torch.zeros(batch, dtype=torch.float64, device=metric_device)
         for name in requested
     }
     if capacity == 0:
@@ -131,28 +149,32 @@ def weighted_equity_from_samples(
     need_adg = bool(stems - {"mdg", "omega_ratio"})
     need_minima = bool(stems & {"sharpe_ratio", "sortino_ratio"})
     need_drawdowns = bool(stems & {"calmar_ratio", "sterling_ratio"})
-    drawdown_samples = samples.to(torch.float64) if need_drawdowns else None
+    drawdown_samples = samples.to(dtype) if need_drawdowns else None
     full_peaks = (
         torch.cummax(torch.where(valid, drawdown_samples, float("-inf")), dim=1).values
         if need_drawdowns and curve == "raw_strategy" else None
     )
-    included = torch.zeros(batch, dtype=torch.float64, device=samples.device)
-    counts = sample_counts.to(torch.float64)
+    included = torch.zeros(batch, dtype=torch.float64, device=metric_device)
+    counts = sample_counts.to(dtype)
     for suffix in range(10):
-        start = torch.floor(counts - counts / (1.0 + suffix) + 0.5).to(torch.long)
+        divisor = suffix + 1
+        start = ((sample_counts * (2 * divisor - 2) + divisor) // (2 * divisor)
+                 if metal else
+                 torch.floor(counts - counts / divisor + 0.5).to(torch.long))
         mask = valid & (indices >= start[:, None])
         last = torch.full((batch, n_days), -1, dtype=torch.long, device=samples.device)
         last.scatter_reduce_(
             1, day_ids, torch.where(mask, indices, -1), reduce="amax", include_self=True
         )
         active = last >= 0
-        ends = samples.gather(1, last.clamp(min=0)).to(torch.float64)
+        ends = compact(samples.gather(1, last.clamp(min=0)))
+        active_metrics = active.cpu() if metal else active
         values = {}
         if need_adg:
-            adg = _smoothed_adg(ends, active)
+            adg = _smoothed_adg(ends, active_metrics)
             values["adg"] = adg
         if need_returns:
-            returns, return_mask = _pct_change(ends, active)
+            returns, return_mask = _pct_change(ends, active_metrics)
             if "mdg" in stems:
                 values["mdg"] = _masked_median(returns, return_mask)
             if "omega_ratio" in stems:
@@ -165,7 +187,7 @@ def weighted_equity_from_samples(
                 1, day_ids, torch.where(mask, samples, float("inf")),
                 reduce="amin", include_self=True,
             )
-            changes, change_mask = _pct_change(minima.to(torch.float64), active)
+            changes, change_mask = _pct_change(compact(minima), active_metrics)
             values["sharpe_ratio"], values["sortino_ratio"] = _sharpe_sortino(
                 changes, change_mask, adg
             )
@@ -180,29 +202,41 @@ def weighted_equity_from_samples(
                 initial = drawdown_samples.gather(
                     1, start.clamp(max=capacity - 1)[:, None]
                 )
-                peaks = torch.where(
-                    (initial.abs() < 1e-12) | (peaks > initial),
-                    peaks.clamp(min=1e-12), peaks,
-                )
+                floor_policy = (initial.abs() < 1e-12) | (peaks > initial)
+                if metal:
+                    # f32(1e-12) lies just below Rust's f64 floor. Preserve
+                    # the residual so a rounded-equal sample still has its
+                    # positive drawdown, rather than a zero risk denominator.
+                    floor_policy = (initial.abs() <= 1e-12) | (peaks > initial)
+                    floor_active = floor_policy & (peaks <= 1e-12)
+                peaks = torch.where(floor_policy, peaks.clamp(min=1e-12), peaks)
+            numerator = peaks - drawdown_samples
+            if metal and curve == "account":
+                floor_hi = struct.unpack("f", struct.pack("f", 1e-12))[0]
+                floor_residual = 1e-12 - floor_hi
+                numerator += torch.where(floor_active, floor_residual, 0.0)
             drawdowns = torch.where(
-                mask, (peaks - drawdown_samples) / peaks.abs().clamp(min=1e-12), 0
+                mask, numerator / peaks.abs().clamp(min=1e-12), 0
             )
             daily_dd = torch.zeros(
-                (batch, n_days), dtype=torch.float64, device=samples.device
+                (batch, n_days), dtype=dtype, device=samples.device
             )
             daily_dd.scatter_reduce_(1, day_ids, drawdowns, reduce="amax", include_self=True)
+            daily_dd = compact(daily_dd)
             if "calmar_ratio" in stems:
                 values["calmar_ratio"] = adg / daily_dd.max(dim=1).values.clamp(min=1e-12)
             if "sterling_ratio" in stems:
                 values["sterling_ratio"] = adg / _mean_worst_one_pct_largest(
-                    daily_dd, active
+                    daily_dd, active_metrics
                 ).clamp(min=1e-12)
-        include = active.any(dim=1)
+        include = active_metrics.any(dim=1)
         included += include.to(torch.float64)
         for name in requested:
             totals[name] += torch.where(include, values[names[name]], 0)
     denominator = 10.0 if curve == "raw_strategy" else included.clamp(min=1)
     eligible = sample_counts >= 2 if curve == "raw_strategy" else fill_counts > 0
+    if metal:
+        eligible = eligible.cpu()
     return {
         name: torch.where(eligible, value / denominator, torch.zeros_like(value))
         for name, value in totals.items()

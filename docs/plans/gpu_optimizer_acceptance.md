@@ -2602,3 +2602,23 @@ equal-budget search quality or universal speedup. The
 [final foundation status](#final-foundation-status) records PR #1960's completed
 current-head review, CI and development integration; master integration remains
 a separate decision.
+
+
+## Apple Metal native service
+
+Apple Silicon uses `NativeBacktestService` with the same request/future and shared-account
+strategy replay contracts. `test_native_backend_mps.py` exercises both strategies,
+standalone/suite search, weighted objectives, HSL EMA-tail limits, interrupted persistence
+and checkpoint resume while forbidding CPU simulations. `test_gpu_metal_native.py` checks
+Rust-generated weighted suffix fixtures (including near-zero signed equity), EW UTC metadata,
+entry-interval quantiles, shared-service fixture comparisons for both strategies/sides,
+and factual HSL equivalence across full/chunked dispatch and policy transitions.
+`test_gpu_metal_service.py` covers residency budgets, repeated scenario switching, lazy
+registration, failure/interruption cleanup and device-specific saved-fitness identity.
+
+Metal retains float32 replay and EW arithmetic. Weighted histories and daily extrema
+reduce on the device; only compact daily suffix summaries enter float64 host ratio/moment
+analysis. UTC clocks and suffix/count ranks use integer arithmetic. This scope establishes
+native execution/lifecycle and the listed numerical fixtures, not general long-history
+ranking acceptance or a measured throughput advantage over Rust. Existing unsupported
+collateral/strategy contracts remain explicit errors.

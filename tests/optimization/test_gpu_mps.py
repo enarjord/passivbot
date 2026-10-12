@@ -108,7 +108,8 @@ from optimization.gpu.service import MpsMulticoinEmaProxy
 def test_strategy_runner_valid_evaluation_has_one_kernel_dispatch(
     runner_cls, dispatch_name
 ):
-    source = inspect.getsource(runner_cls.run)
+    method = runner_cls._run_factual_attempt if runner_cls is MpsEmaAnchorMulticoinRunner else runner_cls.run
+    source = inspect.getsource(method)
     tree = ast.parse(textwrap.dedent(source))
     dispatch_calls = [
         node
