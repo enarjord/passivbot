@@ -445,3 +445,28 @@ unobserved tail, and temporal dispatches retain the complete clock. The two pack
 scalar labels remain unchanged. Retained legacy directional single-coin replay
 still counts samples. Controller-active parity checks remain required to assess
 observation timing and numerical discrepancies.
+
+### Coin HSL replay arithmetic
+
+Native trailing-martingale replay on CUDA and Metal may maintain a bounded arithmetic
+index per coin and position side. Execution facts, current positions, current balance
+budgets and the independent factual composer remain authoritative. The index owns no
+panic permission or cooldown. Changed facts return to independent composition. A budget
+change prevents reuse of a previously certified scalar continuation and refreshes that path.
+Sliding lookbacks or histories without scalar continuation can use bounded indexed queries
+with the current budget. A certified scalar continuation supplies ordinary observations
+without maintaining an unused index. Changed facts and budgets retire optional
+arithmetic; unchanged sliding histories build it after three consecutive observations
+that cannot continue the scalar result. Brief gaps between fills do not rebuild the index.
+
+Each owner has separate scratch and event ownership. Candidate batches with mixed HSL
+scope modes, unsupported devices, or insufficient cache/scratch budget use independent
+factual replay. Cache rejection or loss never clips retained facts or publishes a rejected
+attempt. Numerical conditioning and threshold guards retain the scalar adjudication path.
+Growing factual capacity can disable optional indexing while retaining authoritative history.
+
+Run the offline synthetic matched benchmark with
+`python -m tools.gpu_hsl_coin_cache_benchmark --sides both --bars 8192 --lookback-days 1 --candidates 8`.
+It warms both shader variants before comparing repeated cache-off/cache-on runs,
+checks replay parity, and reports completed single-scenario backtests per second.
+Results depend on device, batch size and history; they do not predict suite throughput.

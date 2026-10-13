@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Native CUDA and Metal trailing-martingale coin HSL replay now reuses bounded per-coin factual arithmetic while preserving independent reconstruction at changed facts, budgets and numerical boundaries.
+
 - Native fused trailing-martingale replay now excludes sides with zero exposure or zero position slots from entry generation and one-way arbitration, preventing inactive sides from delaying the active side.
 - GPU optimizer logs now show completed and screened candidates per second, plus recent and average estimated full-history backtests per second for each scenario replay. Batch ETA follows recent replay speed so an early fast prefix does not conceal a later slowdown.
 
