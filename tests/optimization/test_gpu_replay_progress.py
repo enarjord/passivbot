@@ -131,3 +131,73 @@ def test_phase_elapsed_resets_without_increasing_console_cadence(monkeypatch, ca
     tick[0] = 120
     progress.report()
     assert "phase_elapsed=1m00s run_elapsed=2m00s" in caplog.messages[-1]
+
+
+@pytest.mark.parametrize("candidates,total,completed,elapsed,expected", [
+    (64, 2565359, 131072, 178.0, "0.0184"),
+    (64, 1000, 250, 10.0, "1.6000"),
+    (64, 1000, 1000, 10.0, "6.4000"),
+    (1, 0, 0, 1.0, "unknown"),
+    (1, 100, 0, 0.0, "unknown"),
+])
+def test_scoped_full_history_backtest_throughput_estimate(
+    caplog, candidates, total, completed, elapsed, expected
+):
+    caplog.set_level(logging.DEBUG)
+    replay = TemporalReplayProgress(candidates, total)
+    replay.log("progress", completed, elapsed)
+    assert f"est_backtests/s={expected}" in caplog.text
+    assert all(len(r.getMessage()) <= 240 for r in caplog.records)
+
+
+def test_throughput_estimate_does_not_count_other_scenarios_or_sides(caplog):
+    caplog.set_level(logging.INFO)
+    with suite_replay_context(pass_index=2, pass_count=3, labels=["recent"],
+                             exchanges=["combined"], evaluation_stage="full"):
+        replay = TemporalReplayProgress(10, 100)
+        replay.log("complete", 100, 5.0)
+    assert "est_backtests/s=2.0000" in caplog.text
+    assert "stage=full" in caplog.text and "group=2/3" in caplog.text
+
+
+def test_recent_throughput_and_eta_reveal_late_history_slowdown(caplog):
+    caplog.set_level(logging.INFO)
+    replay = TemporalReplayProgress(64, 100000)
+    replay.log("progress", 90000, 60)
+    replay.log("progress", 90600, 120)
+    assert "rate=10 bars/s eta_batch=15m40s" in caplog.text
+    assert "est_backtests/s=0.0064" in caplog.text
+    assert "avg_backtests/s=0.4832" in caplog.text
+    assert all(len(r.getMessage()) <= 240 for r in caplog.records)
+
+
+def test_completed_suite_rates_exclude_restored_checkpoint_counts(monkeypatch, caplog):
+    from optimization import progress as module
+    tick = [0.0]
+    counts = {"gen": 7, "completed": 100, "screened": 300}
+    monkeypatch.setattr(module.time, "monotonic", lambda: tick[0])
+    caplog.set_level(logging.INFO)
+    progress = module.OptimizerProgress(lambda: counts)
+    progress.transition("generation")
+    tick[0] = 60
+    counts.update(completed=160, screened=420)
+    progress.report()
+    assert "completed=160 screened=420 completed/s=1.0000 screened/s=2.0000" in caplog.text
+    assert all(len(r.getMessage()) <= 240 for r in caplog.records)
+
+
+def test_completed_rates_do_not_depend_on_phase_or_timer_updates(monkeypatch, caplog):
+    from optimization import progress as module
+    tick = [0.0]
+    counts = {"gen": 1, "completed": 0, "screened": 0}
+    monkeypatch.setattr(module.time, "monotonic", lambda: tick[0])
+    caplog.set_level(logging.INFO)
+    progress = module.OptimizerProgress(lambda: counts)
+    progress.transition("screening")
+    tick[0] = 60
+    counts.update(screened=120)
+    progress.transition("generation")
+    tick[0] = 120
+    counts.update(completed=60)
+    progress.report()
+    assert "completed/s=0.5000 screened/s=1.0000" in caplog.text
