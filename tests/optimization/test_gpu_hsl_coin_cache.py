@@ -134,3 +134,8 @@ def test_coin_fact_growth_drops_optional_cache_without_dropping_facts():
     assert runner.run(matrix) == {"accepted": True}
     assert attempts == [32, 64] and runner.hsl_fact_capacity_learned == 64
     assert runner.last_hsl_fact_retries == 1
+
+
+def test_coin_native_owner_busy_wrap_rebudget_invalid_mark_and_cache_loss():
+    from test_gpu_hsl_native_cache import _native_caller_ablation
+    _native_caller_ablation("trailing_martingale", coin=True)

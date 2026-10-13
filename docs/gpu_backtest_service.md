@@ -462,3 +462,9 @@ scope modes, unsupported devices, or insufficient cache/scratch budget use indep
 factual replay. Cache rejection or loss never clips retained facts or publishes a rejected
 attempt. Numerical conditioning and threshold guards retain the scalar adjudication path.
 Growing factual capacity can disable optional indexing while retaining authoritative history.
+
+Run the offline synthetic matched benchmark with
+`python -m tools.gpu_hsl_coin_cache_benchmark --sides both --bars 65536 --lookback-days 30 --candidates 8`.
+It warms both shader variants before comparing repeated cache-off/cache-on runs,
+checks replay parity, and reports completed single-scenario backtests per second.
+Results depend on device, batch size and history; they do not predict suite throughput.

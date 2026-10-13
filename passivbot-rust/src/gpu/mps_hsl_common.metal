@@ -339,19 +339,17 @@ inline bool replay_factual_hsl(
     // Keep the original O(1) scalar continuation while its facts, budget and
     // window remain certified. Recompose at changed facts/budgets to refresh
     // that cursor; the index handles unchanged facts with a sliding window.
-    if (cache_eligible && reused_cutoff
+    if (cache_eligible && advanced) {
+        // A certified scalar continuation needs no indexed history work.
+        // Retire stale arithmetic; independent composition primes it only if
+        // a later sliding window or changed fact makes continuation fail.
+        native_cache.header->valid = 0;
+    } else if (cache_eligible && reused_cutoff
         && !(h.scope_cursor.valid && h.scope_cursor.budget != budget)) {
-        bool continued = advanced;
-        HslScopeResult continued_result;
-        if (continued) continued_result = result;
         for (int p = 0; p < count; ++p)
             pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
         advanced = hsl_native_cache_replay(native_cache, pairs, count, pair_ids,
-            quantity_steps, first, minute, cutoff, budget, h.alpha, h.red_threshold,
-            result, !continued);
-        // Cache loss or a declined update cannot invalidate an independently
-        // certified scalar result. The next query rebuilds disposable history.
-        if (continued) { advanced = true; result = continued_result; }
+            quantity_steps, first, minute, cutoff, budget, h.alpha, h.red_threshold, result);
     }
 #endif
     if (!advanced) {

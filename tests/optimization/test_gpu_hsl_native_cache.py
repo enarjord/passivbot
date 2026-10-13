@@ -3,10 +3,12 @@ import numpy as np
 import pytest
 
 
-def _device_reference():
+def _device_reference(cuda_only=True):
     torch = pytest.importorskip("torch")
-    if not torch.cuda.is_available():
+    if cuda_only and not torch.cuda.is_available():
         pytest.skip("NVIDIA CUDA required")
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip("Metal or CUDA required")
     import passivbot_rust
     from rust_utils import verify_loaded_runtime_extension
     assert not verify_loaded_runtime_extension().get("skipped")
@@ -96,8 +98,8 @@ def test_native_caller_dense_flat_suffix():
     _native_caller_ablation("ema_anchor", dense=True)
 
 
-def _native_caller_ablation(strategy, dense=False):
-    torch, reference = _device_reference()
+def _native_caller_ablation(strategy, dense=False, coin=False):
+    torch, reference = _device_reference(cuda_only=not coin)
     from optimization.gpu.runtime import compile_shader, gpu_device
     from optimization.gpu.mps_kernel import _hsl_native_cache_bytes
     device = gpu_device()
@@ -111,6 +113,14 @@ def _native_caller_ablation(strategy, dense=False):
     params = torch.tensor([[1,.002,2.5,5,0,0,2], [1,.01,10000,5,0,0,2]],
                           dtype=torch.float32, device=device)
     caller = _CALLER
+    if coin:
+        # One coin owner observes its own facts; other fills still change the
+        # shared budget. Reuse the busy wrap/reset/invalid-mark schedule.
+        params[:, 5] = 2
+        caller = caller.replace(
+            "int sequence=0;",
+            "aggregate.replay_coin=0; int sequence=0;",
+        )
     if dense:
         schedule = "(t==0 || t%13==0 || t%17==0 || t%800==799)"
         assert caller.count(schedule) == 1
@@ -124,13 +134,15 @@ def _native_caller_ablation(strategy, dense=False):
               "#define PASSIVBOT_HSL_TREE_SIZE 32\n"
               f"#define PASSIVBOT_HSL_LOOKBACK {lookback}\n"
               "#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY 1536\n"
+              + ("#define PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED 1\n" if coin else "")
               + getattr(reference, f"mps_{strategy}_multicoin_source_py")() + caller)
     outputs = []
     for enabled in (0, 1):
         library = compile_shader(f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {enabled}\n"+source)
         for reset in (-1, 1900):
             trees = torch.empty((2,3,386,32), dtype=torch.uint8, device=device)
-            words = _hsl_native_cache_bytes(1536,2,256)//4 if enabled else 0
+            words = ((2 * _hsl_native_cache_bytes(1536,1,256) if coin
+                      else _hsl_native_cache_bytes(1536,2,256))//4 if enabled else 0)
             rows = torch.empty((2,words), dtype=torch.int32, device=device)
             out = torch.full((2,length,6), float("nan"), dtype=torch.float32, device=device)
             library.native_cache_caller(params,bars,settings,trees,rows,out,reset,threads=2)
