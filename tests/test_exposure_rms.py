@@ -158,7 +158,11 @@ def test_native_scalar_transport_preserves_legacy_tail_and_optional_columns(fuse
     assert not EXPOSURE_RMS_METRICS & native_without_rms.keys()
     assert native_without_rms["hsl_drawdown_ema_max_portfolio"].item() == scalars[0, 17].item()
     for key in legacy:
-        assert torch.equal(native[key], legacy[key]), key
+        if key == "last_eq_ts":
+            assert torch.equal(native[key], legacy[key] * 60_000), key
+            assert torch.equal(native["last_eq_step"], scalars[:, 8].to(torch.int64))
+        else:
+            assert torch.equal(native[key], legacy[key]), key
     assert [native[name].item() for name in NAMES] == list(range(columns, columns + 7))
 
 

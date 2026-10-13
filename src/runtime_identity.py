@@ -58,9 +58,9 @@ def _canonical_value(value: Any) -> Any:
 
 
 def config_sha256(config: Mapping[str, Any]) -> str:
-    """Hash a canonical config without retaining or emitting its contents."""
+    """Hash config content, excluding the timestamped loader audit trail."""
     payload = json.dumps(
-        _canonical_value(config),
+        _canonical_value({key: value for key, value in config.items() if key != "_transform_log"}),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,

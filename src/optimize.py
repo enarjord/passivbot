@@ -2343,13 +2343,15 @@ class SuiteEvaluator:
         ]
 
     def score_scenario_results(
-        self, scenario_results: List[ScenarioResult]
+        self, scenario_results: List[ScenarioResult], *, stage: str = "full"
     ) -> Dict[str, Any]:
         """Apply the canonical suite reducers, objectives, and limits to scenario stats."""
 
+        if stage not in {"full", "screening"}:
+            raise ValueError("evaluation stage must be full or screening")
         result_labels = {result.scenario.label for result in scenario_results}
         for ctx in getattr(self, "contexts", []):
-            if ctx.label not in result_labels and any(
+            if stage == "full" and ctx.label not in result_labels and any(
                 is_ew_metric(metric)
                 for metric in self.required_metrics_for_scenario(ctx.label)
             ):
@@ -3508,7 +3510,7 @@ def _run_gpu_preparation_preflight(
 
     if str(config.get("optimize", {}).get("backend", "")).strip().lower() != "gpu":
         return
-    from config.gpu import resolve_gpu_screening, validate_gpu_backtest_config
+    from config.gpu import resolve_gpu_screening, resolve_gpu_sizing, validate_gpu_backtest_config
     from optimization.warmup import _apply_config_overrides
 
     effective_config = deepcopy(config)
@@ -3516,6 +3518,8 @@ def _run_gpu_preparation_preflight(
     if effective_config["live"]["strategy_kind"] != config["live"]["strategy_kind"]:
         raise ValueError("fixed_runtime_overrides may not change live.strategy_kind")
     validate_gpu_backtest_config(effective_config)
+    for field in ("batch_size", "max_dispatch_candidate_bars"):
+        resolve_gpu_sizing(config["optimize"]["gpu"].get(field), field=field)
     screening = resolve_gpu_screening(config["optimize"]["gpu"].get("screening"))
     if suite_cfg.get("enabled"):
         scenarios, _reducer_cfg = build_scenarios(

@@ -5964,3 +5964,64 @@ def test_rejected_duplicate_timestamp_is_accepted_when_any_row_is_valid(tmp_path
 
     assert list(normalized["ts"]) == [base]
     assert cm._rejected_ccxt_ohlcv_timestamps(raw, normalized) == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("tail", [2, 1], ids=["repeated", "regressed"])
+@pytest.mark.parametrize("corrected_close", [98, 102])
+@pytest.mark.parametrize("timeframe,period", [("1m", ONE_MIN_MS), ("1h", 60 * ONE_MIN_MS)])
+async def test_paginated_sparse_tail_stops_when_response_does_not_advance(
+    tmp_path, strict, tail, corrected_close, timeframe, period
+):
+    class Exchange:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(exchange=Exchange(), exchange_name="kucoin", cache_dir=str(tmp_path))
+    start = 1000 * period
+    calls = []
+    batches = []
+
+    async def fetch_once(_symbol, since, _limit, **_kwargs):
+        calls.append(since)
+        assert len(calls) <= 2, "pagination repeated an unchanged sparse tail"
+        last = 2 if len(calls) == 1 else tail
+        return [[start + i * period, 100, 103, 97, 100 if len(calls) == 1 else corrected_close, 1] for i in range(last + 1)]
+
+    cm._ccxt_fetch_ohlcv_once = fetch_once
+    request = cm._fetch_ohlcv_paginated(
+        "SPARSE/USDT:USDT", start, start + 20 * period,
+        timeframe=timeframe, on_batch=batches.append, raise_on_partial_empty_page=strict,
+    )
+    if strict:
+        with pytest.raises(OhlcvTerminalEmptyPage, match="did not advance") as caught:
+            await request
+        result = caught.value.partial_rows
+    else:
+        result = await request
+    assert len(calls) == 2
+    assert len(batches) == 2
+    assert batches[1][-1]["c"] == corrected_close
+    assert set(result["ts"]) == {start + i * period for i in range(3)}
+    assert len(result) == 3
+    assert all(row["c"] == corrected_close for row in result if row["ts"] <= start + tail * period)
+
+
+@pytest.mark.asyncio
+async def test_paginated_overlap_with_advancing_tail_completes(tmp_path):
+    class Exchange:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(exchange=Exchange(), exchange_name="kucoin", cache_dir=str(tmp_path))
+    start = 1000 * ONE_MIN_MS
+    pages = [[0, 1, 2], [1, 2, 3, 4]]
+
+    async def fetch_once(*_args, **_kwargs):
+        return [[start + i * ONE_MIN_MS, 100, 101, 99, 100, 1] for i in pages.pop(0)]
+
+    cm._ccxt_fetch_ohlcv_once = fetch_once
+    result = await cm._fetch_ohlcv_paginated(
+        "SPARSE/USDT:USDT", start, start + 5 * ONE_MIN_MS, raise_on_partial_empty_page=True
+    )
+    assert not pages
+    assert list(result["ts"]) == [start + i * ONE_MIN_MS for i in range(5)]

@@ -2103,7 +2103,10 @@ def add_config_arguments(
 
 def _gpu_sizing_cli_value(value):
     """Keep automatic intent when overriding an explicitly numeric input config."""
-    return "auto" if value.strip().lower() == "auto" else float(value)
+    if value.strip().lower() == "auto":
+        return "auto"
+    number = float(value)
+    return int(number) if number.is_integer() else number
 
 
 def add_arguments_recursively(

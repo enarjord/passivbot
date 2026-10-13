@@ -24,6 +24,33 @@ def suite_inputs(manager, *, n_obj=2, constrained=True, all_scenarios=False):
                                          {"default":"mean"})
 
 
+def test_ew_subset_screening_evolves_with_meaningful_promotion_scores(monkeypatch, tmp_path):
+    from optimization.backends.gpu_backend import _Search
+    guard_cpu(monkeypatch)
+    scores = []
+    promote = _Search.promote_screening
+    def observe_promotion(search):
+        partial = [individual.screening_payload for individual in search.state["population"]]
+        assert all(row["constraint_violation"] == 0 for row in partial)
+        scores.extend(tuple(row["fitness"]) for row in partial)
+        promote(search)
+    monkeypatch.setattr(_Search, "promote_screening", observe_promotion)
+    with managed_arrays() as manager:
+        base, original = suite_inputs(manager)
+        config = deepcopy(base.config)
+        config["backtest"]["ew_half_life_days"] = 30.0
+        config["optimize"].update(scoring=[{"metric": "adg_strategy_eq_ew", "goal": "max"}], limits=[])
+        base = optimize.Evaluator(base.hlcvs_specs, base.btc_usd_specs, base.msss,
+                                  config, timestamps=base.timestamps)
+        suite = optimize.SuiteEvaluator(base, original.contexts, {"default": "mean"})
+        records, path = [], tmp_path / "checkpoint.pkl"
+        execute(base, SimpleNamespace(record=records.append), path, evaluator=suite)
+        assert len(records) == 8
+        assert scores and len(set(scores)) > 1
+        assert load_checkpoint(path, config)["screened"] == 8
+        assert all("error" not in row["metrics"] for row in records)
+
+
 @pytest.mark.parametrize("n_obj,constrained,all_scenarios", [(2, True, False), (2, False, False),
                                                            (4, True, False), (2, False, True)])
 def test_screened_offspring_use_only_full_survivor_fitness_and_records(monkeypatch, tmp_path, n_obj,

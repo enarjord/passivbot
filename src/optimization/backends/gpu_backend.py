@@ -16,7 +16,7 @@ from pymoo.core.problem import Problem
 from pymoo.core.callback import Callback
 from pymoo.termination import get_termination
 
-from config.gpu import resolve_gpu_screening
+from config.gpu import resolve_gpu_screening, resolve_gpu_sizing
 from optimization.backend_shared import load_starting_individuals
 from optimization.backends.pymoo_backend import (
     _build_algorithm, _build_random_sampling, _prepare_resumed_algorithm,
@@ -196,7 +196,6 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                 checkpoint_path=None, resume=False, interrupt_check=no_interrupt_requested,
                 standalone_candle_coins=None, **_cpu_only_arguments):
     from optimization.gpu.native import NativeBacktestService
-    from optimization.gpu.autotune import is_auto
 
     base = getattr(evaluator_for_pool, "base", evaluator_for_pool)
     problem = NativeSearchProblem(base)
@@ -209,11 +208,12 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
     screening_policy = resolve_gpu_screening(gpu.get("screening"))
     if screening_policy["scenarios"] and not callable(getattr(evaluator_for_pool, "score_scenario_results", None)):
         raise ValueError("GPU screening.scenarios requires a prepared scenario suite")
-    batch_size = None if is_auto(gpu.get("batch_size")) else gpu["batch_size"]
-    dispatch_budget = (500_000_000 if gpu.get("max_dispatch_candidate_bars") is None
-                       else gpu["max_dispatch_candidate_bars"])
-    if batch_size is not None and (isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1):
-        raise ValueError("GPU native batch size must be a positive integer")
+    batch_size = resolve_gpu_sizing(gpu.get("batch_size"), field="batch_size")
+    dispatch_budget = resolve_gpu_sizing(
+        gpu.get("max_dispatch_candidate_bars"), field="max_dispatch_candidate_bars",
+    )
+    if dispatch_budget is None:
+        dispatch_budget = 500_000_000
     checkpoint_interval = float(gpu.get("checkpoint_interval_seconds", 5.0))
     if not math.isfinite(checkpoint_interval) or checkpoint_interval < 0:
         raise ValueError("GPU checkpoint interval must be finite and nonnegative")

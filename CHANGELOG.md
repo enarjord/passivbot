@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix native GPU optimizer sizing overrides and EW scenario-subset screening.
+  Preserve analysis metadata when promoted candidates reuse screened simulations.
+  Reject unsupported EMA Anchor position-exposure enforcers and search spaces
+  that can disable both sides before GPU execution or evolution.
+
 - GPU Trailing Martingale replay skips repeated coin-override lookups when the prepared dataset contains only inherited values, without changing candidate parameters or HSL behavior.
 
 - Accelerate trailing-martingale GPU portfolio replay by skipping order construction for unselected flat coins after clearing pending orders and updating cooldowns. Preserve held-position handling, coin selection and HSL behavior.
@@ -43,6 +48,9 @@ since the latest release tag; these features may already be available when insta
   include availability/sample metadata and half-life/version fitness compatibility.
   Enabling EW requires a candle interval dividing a UTC day; invalid intervals
   are rejected before replay.
+- Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
+
+- Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
 
 - Fix historical candle-resolution seams when retained 1m history begins inside a higher-timeframe bucket. A straddling coarse bucket may now reconstruct the missing pre-boundary minutes when the overlapping exact 1m interval is complete, preserving extrema known to belong to the missing prefix and leaving exact rows unchanged. Genuine internal 1m gaps remain unavailable.
 
@@ -301,10 +309,6 @@ since the latest release tag; these features may already be available when insta
 - Restore compact disabled-HSL GPU kernels for single-side multicoin EMA Anchor
   with side/unified HSL modes. Preserve full coin-mode state for forced-delisting
   loss diagnostics, even when HSL is disabled.
-
-- Add experimental `gpu_native` optimization using authoritative CUDA simulations,
-  CPU-owned ask/tell search, prompt results/Pareto storage and GPU-only seed/resume
-  evaluation. Existing CPU and GPU screening/validation backends remain available.
 
 - Keep GPU multicoin global strategy defaults separate from coin-specific overrides,
   preventing the first coin's patch from changing unpatched coins' simulations.
