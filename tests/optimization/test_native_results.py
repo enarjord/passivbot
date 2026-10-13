@@ -121,6 +121,54 @@ def test_partial_suite_screening_is_scored_but_cannot_be_recorded_as_full(monkey
         CandidateEvaluation("incomplete", [], graph, scorer)
 
 
+@pytest.mark.parametrize("required_by", ["objective", "limit"])
+def test_ew_screening_ranks_selected_subset_without_weakening_full_coverage(required_by):
+    config = get_template_config()
+    ew_metric = "adg_strategy_eq_ew"
+    config["backtest"]["ew_half_life_days"] = 30.0
+    config["optimize"]["scoring"] = [{"metric": ew_metric, "goal": "max"}]
+    config["optimize"]["limits"] = []
+    if required_by == "limit":
+        config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
+        config["optimize"]["limits"] = [{"metric": ew_metric, "penalize_if": "less_than", "value": .05}]
+    base = Evaluator({"binance": None}, {}, {}, config)
+    suite = SuiteEvaluator(base, [SimpleNamespace(label=label, exchanges=["binance"])
+                                 for label in ("base", "stress")], {"default": "mean"})
+    scorer = CanonicalResultScorer(suite)
+    graph = [ResultSlot("request", "dataset", "base", "binance", (ew_metric, "adg_strategy_eq"))]
+    rows = []
+    for gain in (.01, .1):
+        pending = CandidateEvaluation("candidate", [gain], graph, scorer, stage="screening")
+        complete = pending.add_result(BacktestResult("request", "dataset",
+            {ew_metric: gain, "adg_strategy_eq": gain}, False))
+        assert complete.stage == "screening"
+        assert "error" not in complete.payload["metrics"]
+        rows.append(complete.payload)
+    assert rows[0]["fitness"] != rows[1]["fitness"]
+    if required_by == "limit":
+        assert rows[0]["constraint_violation"] > rows[1]["constraint_violation"] == 0
+    invalid = scorer.score([], {"base": {"binance": {ew_metric: .1, "adg_strategy_eq": .1,
+                                                     "liquidated": False}}})
+    assert "required EW scenario" in invalid["metrics"]["error"]
+    assert invalid["constraint_violation"] > 0
+    with pytest.raises(ValueError, match="complete required"):
+        CandidateEvaluation("partial", [], graph, scorer)
+
+
+def test_unavailable_selected_ew_metrics_still_penalize_screening():
+    from test_gpu_suite_invalid_metrics import assert_invalid
+    config = get_template_config()
+    metric = "adg_strategy_eq_ew"
+    config["backtest"]["ew_half_life_days"] = 30.0
+    config["optimize"].update(scoring=[{"metric": metric, "goal": "max"}], limits=[])
+    base = Evaluator({"binance": None}, {}, {}, config)
+    suite = SuiteEvaluator(base, [SimpleNamespace(label=label, exchanges=["binance"])
+                                 for label in ("base", "stress")], {"default": "mean"})
+    pending = CandidateEvaluation("unavailable", [], [ResultSlot("request", "data", "base", "binance", (metric,))],
+                                  CanonicalResultScorer(suite), stage="screening")
+    assert_invalid(pending.add_result(BacktestResult("request", "data", {metric: -float("inf")}, False)).payload)
+
+
 @pytest.mark.parametrize("problem", ["request", "dataset", "status", "missing", "nan"])
 def test_invalid_result_does_not_satisfy_a_slot(problem):
     graph = slots("base")

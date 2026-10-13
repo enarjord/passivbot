@@ -28,13 +28,13 @@ class Service:
         self.requests[request.request_id], self.futures[request.request_id] = request, future
         return future
 
-    def complete(self, request_id, failure=None):
+    def complete(self, request_id, failure=None, *, metadata=None):
         future, request = self.futures[request_id], self.requests[request_id]
         if failure is not None:
             future.set_exception(failure)
         else:
             future.set_result(BacktestResult(request.request_id, request.dataset_id,
-                                            {"adg_strategy_eq": 0.01, "drawdown_worst_usd": 0.1}, False))
+                                            {"adg_strategy_eq": 0.01, "drawdown_worst_usd": 0.1}, False, metadata))
 
 
 def scorer():
@@ -54,9 +54,9 @@ def test_bounded_admission_refills_service_and_scores_on_cpu_poller(monkeypatch)
     service, value = Service(), scorer()
     caller = get_ident()
     original = value.score
-    def scored(*args):
+    def scored(*args, **kwargs):
         assert get_ident() == caller
-        return original(*args)
+        return original(*args, **kwargs)
     monkeypatch.setattr(value, "score", scored)
     session = NativeEvaluationSession(service, value, max_candidates=2)
     session.admit(plan(0))
@@ -212,9 +212,9 @@ def test_screening_rows_reuse_simulations_but_cannot_satisfy_full_suite_score(mo
     value = suite_scorer()
     scored = []
     original = value.score
-    def score(vector, analyses):
+    def score(vector, analyses, **kwargs):
         scored.append(tuple(analyses))
-        return original(vector, analyses)
+        return original(vector, analyses, **kwargs)
     monkeypatch.setattr(value, "score", score)
     session = NativeEvaluationSession(service, value)
     session.admit(suite_plan(0, labels=("base",)))
@@ -233,6 +233,30 @@ def test_screening_rows_reuse_simulations_but_cannot_satisfy_full_suite_score(mo
         service.complete(name)
     assert session.poll()[0].require_full()["fitness"]
     assert scored == [("base",), ("base", "stress")]
+
+
+def test_screening_reuse_preserves_independent_metadata_snapshots():
+    from copy import deepcopy
+    service = Service(capacity=4)
+    session = NativeEvaluationSession(service, suite_scorer())
+    metadata = {"ew": {"strategy_eq": {"status": "available", "observation_count": 30}}}
+    expected = deepcopy(metadata)
+    session.admit(suite_plan(0, labels=("base",)))
+    session.poll()
+    for name in tuple(service.requests):
+        service.complete(name, metadata=deepcopy(metadata))
+    screening = session.poll()[0]
+    session.admit(suite_plan(1))
+    session.poll()
+    assert not any(name.startswith("1:base") for name in service.requests)
+    for name in ("1:stress:binance", "1:stress:bybit"):
+        service.complete(name, metadata=deepcopy(metadata))
+    full = session.poll()[0].require_full()["metrics"]["analysis_metadata"]
+    assert full == {label: {venue: expected for venue in ("binance", "bybit")}
+                    for label in ("base", "stress")}
+    full["base"]["binance"]["ew"]["strategy_eq"]["observation_count"] = -1
+    assert full["base"]["bybit"] == expected
+    assert screening.payload["metrics"]["analysis_metadata"]["base"]["binance"] == expected
 
 
 @pytest.mark.parametrize("changed", ["candidate", "dataset", "parameters"])

@@ -318,8 +318,10 @@ cannot restore their anchors automatically; use saved configs as seeds for a fre
 
 Finite anchor and side-enable choices use registered compatible execution views without
 copying candle histories. Numeric candidate values still travel in compact requests.
-Continuous changes to dataset-owned coin patches remain explicit errors, and candidates
-with both sides disabled remain unsupported by the replay. Measured parity, specialized/general equivalence and resource limits are recorded in the
+Continuous changes to dataset-owned coin patches remain explicit errors. Search spaces
+with a reachable both-sides-disabled execution view are rejected before evolution;
+constrain at least one side to remain enabled. EMA Anchor position-exposure enforcers
+on an enabled side, including coin overrides, require the CPU backend. Measured parity, specialized/general equivalence and resource limits are recorded in the
 acceptance map. They certify the stated cases rather than every possible trajectory.
 
 ## Execution and cleanup

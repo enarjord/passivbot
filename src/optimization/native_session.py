@@ -115,6 +115,7 @@ class NativeEvaluationSession:
                     future = Future()
                     future.set_result(BacktestResult(
                         request.request_id, request.dataset_id, deepcopy(row.metrics), row.liquidated,
+                        deepcopy(row.metadata),
                     ))
                 else:
                     future = self.service.submit(request)

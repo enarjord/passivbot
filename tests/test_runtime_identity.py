@@ -36,6 +36,30 @@ def test_config_sha256_is_canonical_and_content_sensitive():
     assert config_sha256(left) != config_sha256({**right, "extra": True})
 
 
+def test_config_sha256_is_stable_across_timestamped_live_projection(monkeypatch):
+    from config.project import project_config
+    from config.transform_log import record_transform
+
+    config = {"bot": {"long": {"risk": {"n_positions": 3}}}, "live": {"user": "example"}}
+    monkeypatch.setattr("config.transform_log.time.time", lambda: 1000.0)
+    record_transform(config, "load_config")
+    first = project_config(config, "live")
+    monkeypatch.setattr("config.transform_log.time.time", lambda: 2000.0)
+    second = project_config(config, "live")
+
+    assert first["_transform_log"] != second["_transform_log"]
+    assert config_sha256(first) == config_sha256(second)
+    assert config_sha256(first) == config_sha256({"bot": config["bot"], "live": config["live"]})
+    second["bot"]["long"]["risk"]["n_positions"] = 4
+    assert config_sha256(first) != config_sha256(second)
+
+
+def test_config_sha256_ignores_only_top_level_transform_provenance():
+    config = {"live": {"user": "example", "_transform_log": "user_content"}, "_raw": {"x": 1}}
+    assert config_sha256(config) != config_sha256({**config, "_raw": {"x": 2}})
+    assert config_sha256(config) != config_sha256({**config, "live": {"user": "example"}})
+
+
 def test_build_runtime_identity_records_loaded_binary_without_exposing_config(
     monkeypatch, tmp_path
 ):
