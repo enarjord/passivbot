@@ -25,7 +25,10 @@ def test_zero_side_cannot_block_active_initial_entries(inactive, disable, coins)
     outputs = []
     for hedge_mode in (False, True):
         proxy = make_proxy('coin', minutes=2000, coin_count=coins, factual_hsl=True)
-        proxy.fused_runner.hedge_mode = hedge_mode
+        runner_cls, kwargs = proxy._runner_specs['fused']
+        proxy.fused_runner = proxy._construct_runner(
+            'fused', runner_cls, dict(kwargs, hedge_mode=hedge_mode)
+        )
         _, result = raw(proxy, [candidate])
         outputs.append(result)
     assert outputs[0]['fill_count'].item() > 0
