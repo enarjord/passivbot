@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+torch = pytest.importorskip("torch")
+
 
 def host_runner(device="mps", coins=2, sides=2):
     pytest.importorskip("torch")
