@@ -4366,6 +4366,9 @@ inline void generate_tm_multicoin_side_orders(
                 ? psize[c] * pprice[c] * c_mult / balance / fmax(coin_wel, 1.0e-12f) : 0.0f,
             short_side);
         side.effective_cooldown[c] = coin_cooldown_min;
+        // Old orders were cleared above. A flat unselected coin has no entry
+        // intent or protective close; keep its cooldown current for future picks.
+        if (!selected[c] && psize[c] <= 0.0f) continue;
         int touch_down = touch_ticks[tick_offset + 0];
         int touch_up = touch_ticks[tick_offset + 1];
         int entry_touch = short_side ? touch_up : touch_down;

@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Accelerate trailing-martingale GPU portfolio replay by skipping order construction for unselected flat coins after clearing pending orders and updating cooldowns. Preserve held-position handling, coin selection and HSL behavior.
+
 - Accelerate native temporal CUDA portfolio replay with bounded shared-memory side state. Keep independent candidate and directional ownership, and retain private storage for oversized states and other replay paths.
 
 - Compute native CUDA and Metal backtest completion from exact candle endpoints. Fully replayed candidates report exactly 1.0, while early liquidation and explicitly truncated replay remain incomplete.
