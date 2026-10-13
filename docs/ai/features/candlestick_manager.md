@@ -42,7 +42,12 @@
 Ordinary native higher-timeframe reads reuse verified persisted rows and fetch only missing spans,
 with one source bucket of overlap on each side. Overlapping requests are coalesced; the overlap
 retains within-response evidence for KuCoin's no-tick gaps. Pages persisted before a deadline or
-cancellation remain useful to the next acquisition, including after manager restart. Forced
+cancellation remain useful to the next acquisition, including after manager restart.
+Pagination stops when a nonempty response tail repeats or regresses. Best-effort reads
+retain all successful pages, including corrections in the stalled page. Accumulated output
+is sorted and unique by timestamp, with later pages winning corrections. Forced strict
+reads report the incomplete acquisition through the
+existing terminal-page failure contract. A moving request cursor alone is not progress. Forced
 `max_age_ms=0` reads still refetch the full requested range. Missing buckets remain unavailable;
 this acquisition optimization does not relax full-coverage EMA readiness or fabricate candles.
 

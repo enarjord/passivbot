@@ -5980,7 +5980,9 @@ class CandlestickManager:
         def _partial_rows() -> np.ndarray:
             if not all_rows:
                 return np.empty((0,), dtype=CANDLE_DTYPE)
-            return np.sort(np.concatenate(all_rows), order="ts")
+            if len(all_rows) == 1:
+                return all_rows[0].copy()
+            return self._merge_overwrite(all_rows[0], np.concatenate(all_rows[1:]))
 
         def _raise_terminal_empty_page(message: str) -> None:
             raise OhlcvTerminalEmptyPage(
@@ -6126,6 +6128,11 @@ class CandlestickManager:
                         "reaching the requested end"
                     )
                 break
+            # Cursor overlap is intentional on sparse venues, but advancing the
+            # request cursor is not evidence of new data. Still persist a stalled
+            # response below: it may correct already admitted candle values.
+            response_last_ts = int(arr[-1]["ts"])
+            response_stalled = prev_last_ts is not None and response_last_ts <= prev_last_ts
             # Diagnostics: page ts range and step
             try:
                 first_ts = int(arr[0]["ts"])  # type: ignore[index]
@@ -6209,6 +6216,22 @@ class CandlestickManager:
                         },
                     )
                     break
+            if response_stalled:
+                if raise_on_partial_empty_page and not _requested_end_is_covered():
+                    _raise_terminal_empty_page(
+                        "ccxt OHLCV pagination did not advance the response tail "
+                        "before reaching the requested end"
+                    )
+                self._log(
+                    "debug",
+                    "ccxt_pagination_stalled",
+                    symbol=symbol,
+                    tf=tf_norm,
+                    pages=pages,
+                    last_ts=response_last_ts,
+                    previous_last_ts=prev_last_ts,
+                )
+                break
             last_ts = int(arr[-1]["ts"])  # inclusive last
             if last_ts >= end_excl - period_ms:
                 break
@@ -6262,7 +6285,7 @@ class CandlestickManager:
         )
         if not all_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
-        return np.sort(np.concatenate(all_rows), order="ts")
+        return _partial_rows()
 
     # ----- Public helpers required by tests -----
 
