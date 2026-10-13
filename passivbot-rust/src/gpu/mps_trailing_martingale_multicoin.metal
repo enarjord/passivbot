@@ -17,6 +17,12 @@ using namespace metal;
 #define PASSIVBOT_EXPOSURE_RMS_ENABLED 0
 #endif
 
+// CUDA may place each candidate's mutable side state in block-owned storage.
+// Metal and non-temporal replays retain their ordinary thread-local value.
+#ifndef PASSIVBOT_GPU_SIDE_STATE
+#define PASSIVBOT_GPU_SIDE_STATE(TYPE, NAME, SLOT) TYPE NAME
+#endif
+
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 64;
 constant int OVERRIDE_COLS = 49;
@@ -5336,8 +5342,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         return;
     }
 
-    TrailingMartingaleMulticoinSideState long_side;
-    TrailingMartingaleMulticoinSideState short_side;
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, long_side, 0);
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, short_side, 1);
     init_trailing_martingale_multicoin_side_state(
         long_side, long_config, coin_settings,
         long_coin_overrides, C
@@ -6669,7 +6675,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_pct = config.allowance_pct;
-    TrailingMartingaleMulticoinSideState side;
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, side, 0);
     init_trailing_martingale_multicoin_side_state(
         side, config, coin_settings, coin_overrides, C
     );
