@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- GPU Trailing Martingale replay skips repeated coin-override lookups when the prepared dataset contains only inherited values, without changing candidate parameters or HSL behavior.
+
 - Accelerate trailing-martingale GPU portfolio replay by skipping order construction for unselected flat coins after clearing pending orders and updating cooldowns. Preserve held-position handling, coin selection and HSL behavior.
 
 - Accelerate native temporal CUDA portfolio replay with bounded shared-memory side state. Keep independent candidate and directional ownership, and retain private storage for oversized states and other replay paths.

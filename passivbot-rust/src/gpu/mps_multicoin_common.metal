@@ -476,11 +476,19 @@ inline int wallet_exposure_denominator_n_positions(
 #endif
 }
 
+#ifndef PASSIVBOT_COIN_OVERRIDES_ABSENT
+#define PASSIVBOT_COIN_OVERRIDES_ABSENT 0
+#endif
+
 inline float coin_override_or(
     constant float* coin_overrides, int coin, int column, float fallback
 ) {
+#if PASSIVBOT_COIN_OVERRIDES_ABSENT
+    return fallback;
+#else
     float value = coin_overrides[coin * OVERRIDE_COLS + column];
     return isfinite(value) ? value : fallback;
+#endif
 }
 
 inline float allowed_wallet_exposure_limit(

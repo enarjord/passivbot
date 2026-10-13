@@ -1263,6 +1263,7 @@ def _trailing_martingale_multicoin_shader_library(
     side: str | None = None,
     hsl_native_cache_capacity: int = 0,
     exposure_rms_enabled: bool = False,
+    coin_overrides_absent: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1284,6 +1285,7 @@ def _trailing_martingale_multicoin_shader_library(
         raw_tail_capacity=hsl_raw_tail_capacity,
     )
     source = (
+        f"#define PASSIVBOT_COIN_OVERRIDES_ABSENT {int(coin_overrides_absent)}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
         f"#define PASSIVBOT_EXPOSURE_RMS_ENABLED {int(exposure_rms_enabled)}\n"
@@ -2641,9 +2643,11 @@ class _MulticoinReplayRunner:
         )
         unstuck_start = self.coin_override_unstuck_start
         self._unstuck_ema_overrides = (coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
-        self.coin_overrides = torch.as_tensor(
-            self._prepare_coin_overrides(coin_overrides), device=gpu_device()
-        )
+        prepared_overrides = self._prepare_coin_overrides(coin_overrides)
+        # Only immutable dataset values specialize lookup; candidate fallbacks
+        # stay in the Rust-owned shader and may differ on every dispatch.
+        self.coin_overrides_absent = not bool(np.isfinite(prepared_overrides).any())
+        self.coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         forager_score_hysteresis_pct = float(forager_score_hysteresis_pct)
         if not np.isfinite(forager_score_hysteresis_pct) or (
             forager_score_hysteresis_pct < 0.0
@@ -4132,6 +4136,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             self._compiled_side(),
             self._hsl_native_cache_capacity(),
             getattr(self, "exposure_rms_enabled", False),
+            getattr(self, "coin_overrides_absent", False),
         )
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -4306,9 +4311,11 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         ]].copy(),)
         unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
-        self.short_coin_overrides = torch.as_tensor(
-            self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
+        prepared_overrides = self._prepare_coin_overrides(short_coin_overrides)
+        self.coin_overrides_absent = (
+            self.coin_overrides_absent and not bool(np.isfinite(prepared_overrides).any())
         )
+        self.short_coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             float(max_realized_loss_pct)
         )
