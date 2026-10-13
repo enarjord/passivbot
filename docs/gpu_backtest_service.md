@@ -445,3 +445,20 @@ unobserved tail, and temporal dispatches retain the complete clock. The two pack
 scalar labels remain unchanged. Retained legacy directional single-coin replay
 still counts samples. Controller-active parity checks remain required to assess
 observation timing and numerical discrepancies.
+
+### Coin HSL replay arithmetic
+
+Native trailing-martingale replay on CUDA and Metal may maintain a bounded arithmetic
+index per coin and position side. Execution facts, current positions, current balance
+budgets and the independent factual composer remain authoritative. The index owns no
+panic permission or cooldown. Changed facts return to independent composition. A budget
+change prevents reuse of a previously certified scalar continuation and refreshes that path.
+Sliding lookbacks or histories without scalar continuation can use bounded indexed queries
+with the current budget. A certified scalar continuation supplies ordinary observations
+without repeating the index query.
+
+Each owner has separate scratch and event ownership. Candidate batches with mixed HSL
+scope modes, unsupported devices, or insufficient cache/scratch budget use independent
+factual replay. Cache rejection or loss never clips retained facts or publishes a rejected
+attempt. Numerical conditioning and threshold guards retain the scalar adjudication path.
+Growing factual capacity can disable optional indexing while retaining authoritative history.

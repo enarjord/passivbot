@@ -696,7 +696,7 @@ inline bool hsl_native_cache_replay(
     thread const HslNativeCache& cache, thread HslScopePair* pairs, int count,
     thread const int* pair_ids, thread const float* quantity_steps, int first, int end,
     HslScopeCutoff cutoff, float budget, float alpha, float threshold,
-    thread HslScopeResult& result
+    thread HslScopeResult& result, bool query = true
 ) {
     HslNativeCacheHeader prior = *cache.header;
     cache.header->valid = 0;
@@ -834,6 +834,9 @@ inline bool hsl_native_cache_replay(
     hsl_native_cache_store(cache, end, current_upnl, hsl_pair_sum_value(current_cash));
     cache.header->minute = end; cache.header->first = first; cache.header->pair_count = count;
     cache.header->cutoff = cutoff; cache.header->alpha = alpha; cache.header->latest_flat = latest;
+    // A certified scalar continuation supplies this observation. Keep only
+    // disposable factual arithmetic current, without repeating its block query.
+    if (!query) { cache.header->valid = 1; return true; }
     // The source's actual singleton drops the preceding curve. Keep that narrow
     // case on the independent composer unless the existing empty shortcut applies.
     if (reconstructed_flat) return false;

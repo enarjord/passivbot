@@ -1264,6 +1264,7 @@ def _trailing_martingale_multicoin_shader_library(
     hsl_native_cache_capacity: int = 0,
     exposure_rms_enabled: bool = False,
     coin_overrides_absent: bool = False,
+    hsl_native_coin_cache: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1286,6 +1287,7 @@ def _trailing_martingale_multicoin_shader_library(
     )
     source = (
         f"#define PASSIVBOT_COIN_OVERRIDES_ABSENT {int(coin_overrides_absent)}\n"
+        f"#define PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED {int(hsl_native_coin_cache)}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
         f"#define PASSIVBOT_EXPOSURE_RMS_ENABLED {int(exposure_rms_enabled)}\n"
@@ -2792,21 +2794,40 @@ class _MulticoinReplayRunner:
     # Disposable unified factual arithmetic. Strategy subclasses enable only
     # supported device shapes; this internal flag retains scalar ablation.
     hsl_native_cache_enabled = False
+    hsl_native_coin_cache_enabled = False
     hsl_native_cache_budget_bytes = 64 * 1024 * 1024
 
+    def _hsl_native_coin_cache_selected(self):
+        return bool(
+            getattr(self, "hsl_native_coin_cache_enabled", False)
+            and getattr(self, "dispatch_native_hsl_coin_cache_eligible", False)
+            and self.bars.device.type in {"cuda", "mps"}
+        )
+
+    def _hsl_native_cache_layout_bytes(self, capacity):
+        if self._hsl_native_coin_cache_selected():
+            # Coin controllers own independent reconstructed pairs and events.
+            return (_hsl_native_cache_bytes(capacity, 1, self.hsl_fact_capacity)
+                    * self.hsl_replay_sides * self.n_coins)
+        return _hsl_native_cache_bytes(
+            capacity, self.hsl_replay_sides * self.n_coins, self.hsl_fact_capacity
+        )
+
     def _hsl_native_cache_capacity(self):
-        if not (getattr(self, "hsl_native_cache_enabled", False)
+        coin_cache = self._hsl_native_coin_cache_selected()
+        unified_cache = (
+            getattr(self, "hsl_native_cache_enabled", False)
+            and self.bars.device.type == "cuda"
+            and getattr(self, "dispatch_native_hsl_cache_eligible", False)
+        )
+        if not ((coin_cache or unified_cache)
                 and getattr(self, "native_factual_hsl", False)
-                and self.bars.device.type == "cuda"
-                and getattr(self, "dispatch_native_hsl_cache_eligible", False)
                 and not getattr(self, "dispatch_native_hsl_cache_budget_disabled", False)
                 and self.hsl_capacity and getattr(self, "hsl_fact_capacity", 0)
                 and not getattr(self, "dispatch_hsl_disabled", False)):
             return 0
         capacity = ((self.hsl_capacity + 64 + 63) // 64) * 64
-        needed = _hsl_native_cache_bytes(
-            capacity, self.hsl_replay_sides * self.n_coins, self.hsl_fact_capacity
-        )
+        needed = self._hsl_native_cache_layout_bytes(capacity)
         return capacity if needed <= self.hsl_native_cache_budget_bytes else 0
 
     def _disable_native_cache_over_budget(self):
@@ -2821,13 +2842,7 @@ class _MulticoinReplayRunner:
 
     def _hsl_native_cache_bytes_per_candidate(self):
         capacity = self._hsl_native_cache_capacity()
-        if not capacity:
-            return 0
-        return _hsl_native_cache_bytes(
-            capacity,
-            self.hsl_replay_sides * self.n_coins,
-            getattr(self, "hsl_fact_capacity", 0),
-        )
+        return self._hsl_native_cache_layout_bytes(capacity) if capacity else 0
 
     def _hsl_history_bytes_per_candidate(self):
         if not self.hsl_capacity:
@@ -3147,6 +3162,7 @@ class _MulticoinReplayRunner:
 
     def _prepare_native_factual_hsl(self, params):
         self.dispatch_native_hsl_cache_eligible = False
+        self.dispatch_native_hsl_coin_cache_eligible = False
         self.dispatch_native_hsl_cache_budget_disabled = False
         if not getattr(self, "native_factual_hsl", False):
             return
@@ -3160,6 +3176,11 @@ class _MulticoinReplayRunner:
         unified = np.stack([matrix[:, mode + side * len(keys)] == 0
                             for side in range(self.hsl_replay_sides)], axis=1)
         self.dispatch_native_hsl_cache_eligible = bool(np.any(effective & unified))
+        # One compile-time owner layout serves the whole dispatch. Decline
+        # mixed scope modes rather than allowing shared physical event scratch.
+        modes = matrix[:, [mode + side * len(keys)
+                           for side in range(self.hsl_replay_sides)]]
+        self.dispatch_native_hsl_coin_cache_eligible = bool(active and np.all(modes == 2))
         capacity = self.hsl_fact_capacity_learned if active else 0
         if capacity != self.hsl_fact_capacity:
             self._hsl_scratch_buffers.clear()
@@ -3993,6 +4014,8 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
 class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
 
+    hsl_native_coin_cache_enabled = True
+
     replay_kernel_name = "passivbot_trailing_martingale_multicoin"
     replay_state_size_kernel_name = "passivbot_tm_multicoin_replay_state_bytes"
     replay_sides = 1
@@ -4137,6 +4160,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             self._hsl_native_cache_capacity(),
             getattr(self, "exposure_rms_enabled", False),
             getattr(self, "coin_overrides_absent", False),
+            bool(self._hsl_native_cache_capacity() and self._hsl_native_coin_cache_selected()),
         )
         return _trailing_martingale_multicoin_shader_library, args
 

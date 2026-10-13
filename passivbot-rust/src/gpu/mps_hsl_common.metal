@@ -1,3 +1,7 @@
+#ifndef PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+#define PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED 0
+#endif
+
 // Shared GPU HSL adapters and reporting. Strategy kernels provide simulator
 // facts. The opt-in native reconstruction keeps factual history and disposable
 // event scratch resident; ordinary result payloads contain compact metrics.
@@ -166,15 +170,33 @@ inline bool replay_factual_hsl(
 #if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
     // Exactly one bounded owner allocation per candidate, shared by both sides.
     // The cache contains disposable arithmetic, never controller permission.
+#if PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+    bool cache_selected = h.signal_mode == HSL_SIGNAL_COIN && h.replay_coin >= 0;
+#if !PASSIVBOT_HSL_INCREMENTAL_ENABLED || !PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    cache_selected = false;
+#endif
+#else
     bool cache_selected = h.signal_mode == HSL_SIGNAL_UNIFIED && h.replay_coin < 0;
+#endif
     HslNativeCache native_cache;
     if (cache_selected) {
         int scopes = context.side_count * (context.coin_count + 1);
         int candidate = h.native_cache_scope / scopes;
+#if PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+        int owners = context.side_count * context.coin_count;
+        int owner = h.replay_side * context.coin_count + h.replay_coin;
+        int pairs = 1;
+#else
         int pairs = context.side_count * context.coin_count;
+#endif
         int facts = context.coins[0][0].facts.capacity;
         int words = hsl_native_cache_bytes(pairs, facts) / 4;
+#if PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+        native_cache = hsl_native_cache_view(
+            h.native_cache_words + (candidate * owners + owner) * words, pairs, facts);
+#else
         native_cache = hsl_native_cache_view(h.native_cache_words + candidate * words, pairs, facts);
+#endif
         if (h.native_cache_reset || terminal || !exposed) native_cache.header->valid = 0;
         h.native_cache_reset = false;
     }
@@ -273,7 +295,7 @@ inline bool replay_factual_hsl(
 #endif
     if (cutoff.found) first = max(first, cutoff.minute);
     bool advanced = false;
-#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY && !PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
     if (cache_eligible) {
         for (int p = 0; p < count; ++p)
             pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
@@ -283,7 +305,7 @@ inline bool replay_factual_hsl(
 #endif
 #if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
     if (reused_cutoff && !terminal
-#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && !PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
         && (!cache_selected || !exposed)
 #endif
     ) {
@@ -311,6 +333,25 @@ inline bool replay_factual_hsl(
         advanced = valid_marks && hsl_advance_scope(h.scope_cursor, first, minute,
             hsl_pair_sum_value(upnl), budget, 2.0f / (span + 1.0f), h.red_threshold,
             h.cooldown_minutes, h.restart_policy == 2, exposed, result, historical_upnl);
+    }
+#endif
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    // Keep the original O(1) scalar continuation while its facts, budget and
+    // window remain certified. Recompose at changed facts/budgets to refresh
+    // that cursor; the index handles unchanged facts with a sliding window.
+    if (cache_eligible && reused_cutoff
+        && !(h.scope_cursor.valid && h.scope_cursor.budget != budget)) {
+        bool continued = advanced;
+        HslScopeResult continued_result;
+        if (continued) continued_result = result;
+        for (int p = 0; p < count; ++p)
+            pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
+        advanced = hsl_native_cache_replay(native_cache, pairs, count, pair_ids,
+            quantity_steps, first, minute, cutoff, budget, h.alpha, h.red_threshold,
+            result, !continued);
+        // Cache loss or a declined update cannot invalidate an independently
+        // certified scalar result. The next query rebuilds disposable history.
+        if (continued) { advanced = true; result = continued_result; }
     }
 #endif
     if (!advanced) {
