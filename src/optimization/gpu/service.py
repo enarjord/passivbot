@@ -3181,6 +3181,7 @@ class MpsMulticoinProxy:
         if (self._automatic_scratch_budget and runner.bars.device.type == "cuda"):
             from optimization.gpu.autotune import cuda_history_budget
 
+            runner.automatic_scratch_budget = True
             free, total = map(int, self._torch.cuda.mem_get_info())
             runner.hsl_scratch_budget_bytes = cuda_history_budget(
                 runner, free, total,

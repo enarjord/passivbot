@@ -255,8 +255,10 @@ created, after its market tensors are resident. The budget includes per-candidat
 history and shared metric workspace, and reserves the
 larger of 1 GiB or 20% of total VRAM when feasible. Under pressure it uses 35% of free
 VRAM, with room for one candidate if that candidate fits. Directional owners share
-the allowance. Switching datasets releases the old owner's scratch and samples free
-VRAM again; active owners are never resized. Explicit batch widths, tuning mode
+the allowance. Before a physical batch changes width or factual storage shape,
+automatic CUDA owners release all completed scratch so replacement histories do
+not overlap retained histories. Unchanged shapes reuse their buffers. Switching
+datasets releases the old owner's scratch and samples free VRAM again; active owners are never resized. Explicit batch widths, tuning mode
 `"off"`, and Metal retain their existing scratch budgets. Increased capacity does
 not eagerly allocate scratch or force a wider batch: dispatch limits and completed
 throughput evidence still govern actual widths. The allowance leaves room for

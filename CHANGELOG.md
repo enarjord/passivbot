@@ -6,7 +6,7 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Size automatic native CUDA replay history and shared metric workspace from available VRAM after market tensors are loaded. Preserve device headroom, dispatch limits, fixed-width execution and Metal budgets.
+- Size automatic native CUDA replay history and shared metric workspace from available VRAM after market tensors are loaded. Release completed scratch before changing allocation shape. Preserve device headroom, dispatch limits, fixed-width execution and Metal budgets.
 - Native CUDA and Metal trailing-martingale coin HSL replay now reuses bounded per-coin factual arithmetic while preserving independent reconstruction at changed facts, budgets and numerical boundaries.
 
 - Native fused trailing-martingale replay now excludes sides with zero exposure or zero position slots from entry generation and one-way arbitration, preventing inactive sides from delaying the active side.
