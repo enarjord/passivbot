@@ -455,7 +455,8 @@ panic permission or cooldown. Changed facts return to independent composition. A
 change prevents reuse of a previously certified scalar continuation and refreshes that path.
 Sliding lookbacks or histories without scalar continuation can use bounded indexed queries
 with the current budget. A certified scalar continuation supplies ordinary observations
-without repeating the index query.
+without maintaining an unused index. Changed facts and budgets retire optional
+arithmetic; unchanged sliding histories build it lazily when continuation fails.
 
 Each owner has separate scratch and event ownership. Candidate batches with mixed HSL
 scope modes, unsupported devices, or insufficient cache/scratch budget use independent
@@ -464,7 +465,7 @@ attempt. Numerical conditioning and threshold guards retain the scalar adjudicat
 Growing factual capacity can disable optional indexing while retaining authoritative history.
 
 Run the offline synthetic matched benchmark with
-`python -m tools.gpu_hsl_coin_cache_benchmark --sides both --bars 65536 --lookback-days 30 --candidates 8`.
+`python -m tools.gpu_hsl_coin_cache_benchmark --sides both --bars 8192 --lookback-days 1 --candidates 8`.
 It warms both shader variants before comparing repeated cache-off/cache-on runs,
 checks replay parity, and reports completed single-scenario backtests per second.
 Results depend on device, batch size and history; they do not predict suite throughput.

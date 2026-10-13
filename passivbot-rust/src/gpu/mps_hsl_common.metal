@@ -294,6 +294,19 @@ inline bool replay_factual_hsl(
         cursors, prior_sizes, cutoff)) return false;
 #endif
     if (cutoff.found) first = max(first, cutoff.minute);
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
+    bool prime_native_cache = cache_eligible;
+#if PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+    // Changed facts or budgets must use independent composition. Do not also
+    // build an index which another fill could immediately retire. An unchanged
+    // rolling history primes it on its first uncontinuable observation.
+    prime_native_cache = false;
+#if PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
+    prime_native_cache = cache_eligible && reused_cutoff
+        && !(h.scope_cursor.valid && h.scope_cursor.budget != budget);
+#endif
+#endif
+#endif
     bool advanced = false;
 #if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY && !PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
     if (cache_eligible) {
@@ -344,8 +357,7 @@ inline bool replay_factual_hsl(
         // Retire stale arithmetic; independent composition primes it only if
         // a later sliding window or changed fact makes continuation fail.
         native_cache.header->valid = 0;
-    } else if (cache_eligible && reused_cutoff
-        && !(h.scope_cursor.valid && h.scope_cursor.budget != budget)) {
+    } else if (prime_native_cache) {
         for (int p = 0; p < count; ++p)
             pairs[p].facts = hsl_pair_ring_view_after(rings[p], first, cutoff);
         advanced = hsl_native_cache_replay(native_cache, pairs, count, pair_ids,
@@ -374,7 +386,7 @@ inline bool replay_factual_hsl(
 #if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
         // Only the independent original composer supplies fitness after a
         // decline. Rebuild the disposable cache afterward for the next bar.
-        if (cache_eligible && native_cache.header->valid == 0)
+        if (prime_native_cache && native_cache.header->valid == 0)
             hsl_native_cache_initialize(native_cache, pairs, count, pair_ids,
                 quantity_steps, first, minute, cutoff, h.alpha);
 #endif
