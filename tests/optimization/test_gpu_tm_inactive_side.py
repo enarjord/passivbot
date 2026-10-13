@@ -19,6 +19,8 @@ def test_zero_side_cannot_block_active_initial_entries(inactive, disable, coins)
         f'{active}_entry_initial_ema_dist': -0.02,
         f'{inactive}_total_wallet_exposure_limit': 0.0 if disable == 'exposure' else 2.0,
         f'{inactive}_n_positions': 0.0 if disable == 'slots' else 1.0,
+        f'{active}_hsl_red_threshold': 0.0001,
+        f'{active}_hsl_ema_span_minutes': 1.0,
     }
     outputs = []
     for hedge_mode in (False, True):
