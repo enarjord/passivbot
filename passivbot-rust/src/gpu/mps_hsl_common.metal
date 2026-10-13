@@ -197,7 +197,12 @@ inline bool replay_factual_hsl(
 #else
         native_cache = hsl_native_cache_view(h.native_cache_words + candidate * words, pairs, facts);
 #endif
-        if (h.native_cache_reset || terminal || !exposed) native_cache.header->valid = 0;
+        if (h.native_cache_reset || terminal || !exposed) {
+            native_cache.header->valid = 0;
+#if PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+            native_cache.header->reserved[0] = 0;
+#endif
+        }
         h.native_cache_reset = false;
     }
     bool cache_eligible = cache_selected && exposed && !terminal;
@@ -352,6 +357,16 @@ inline bool replay_factual_hsl(
     // Keep the original O(1) scalar continuation while its facts, budget and
     // window remain certified. Recompose at changed facts/budgets to refresh
     // that cursor; the index handles unchanged facts with a sliding window.
+    if (cache_eligible) {
+        // Amortize construction across stable observations. A single gap
+        // between frequent fills does not justify rebuilding a retained curve.
+        // This counter is disposable execution policy, never HSL permission.
+        if (advanced || !prime_native_cache) native_cache.header->reserved[0] = 0;
+        else if (!native_cache.header->valid) {
+            native_cache.header->reserved[0] = min(native_cache.header->reserved[0] + 1, 3);
+            prime_native_cache = native_cache.header->reserved[0] >= 3;
+        }
+    }
     if (cache_eligible && advanced) {
         // A certified scalar continuation needs no indexed history work.
         // Retire stale arithmetic; independent composition primes it only if

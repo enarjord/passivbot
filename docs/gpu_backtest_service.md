@@ -456,7 +456,8 @@ change prevents reuse of a previously certified scalar continuation and refreshe
 Sliding lookbacks or histories without scalar continuation can use bounded indexed queries
 with the current budget. A certified scalar continuation supplies ordinary observations
 without maintaining an unused index. Changed facts and budgets retire optional
-arithmetic; unchanged sliding histories build it lazily when continuation fails.
+arithmetic; unchanged sliding histories build it after three consecutive observations
+that cannot continue the scalar result. Brief gaps between fills do not rebuild the index.
 
 Each owner has separate scratch and event ownership. Candidate batches with mixed HSL
 scope modes, unsupported devices, or insufficient cache/scratch budget use independent
