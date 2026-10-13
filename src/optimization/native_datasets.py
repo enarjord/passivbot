@@ -16,6 +16,7 @@ from optimization.fine_tune_anchors import ANCHOR_GENE_KEY
 from optimization.gpu.model import gpu_side_enabled
 from optimization.native_results import CanonicalResultScorer
 from config.project import project_config
+from config.gpu import validate_gpu_backtest_config
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.prepared_dataset_identity import _array_identity
 from shared_arrays import SharedArrayManager
@@ -140,10 +141,14 @@ class NativeDatasetRegistry:
                     effective = evaluator.build_scenario_candidate_config(effective, contexts[binding.scenario])
                 variants.setdefault(execution_key(effective), effective)
             for index, effective in enumerate(variants.values()):
-                # Existing replay support requires an enabled side; do not
-                # manufacture a trading side for a zero-side candidate.
+                # Reject unsupported reachable topologies before evolution,
+                # rather than aborting a later cohort on a randomly drawn row.
                 if not any(gpu_side_enabled(effective, side) for side in ("long", "short")):
-                    continue
+                    raise ValueError(
+                        f"GPU search space permits both sides disabled in scenario {binding.scenario!r}; "
+                        "constrain at least one side to remain enabled or use a CPU backend"
+                    )
+                validate_gpu_backtest_config(effective)
                 identity = binding.dataset_id if index == 0 else f"{binding.dataset_id}:variant:{index}"
                 dataset = binding.dataset if index == 0 else binding.dataset.with_config(effective)
                 result.append(ScenarioBinding(binding.scenario, identity, dataset))

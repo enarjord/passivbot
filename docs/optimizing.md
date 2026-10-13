@@ -279,6 +279,8 @@ selection promotes survivors for the remaining scenarios. Retain the larger of
 Explicit objective/limit scenarios must be included. Only full-suite survivors receive
 fitness, result records and Pareto admission. Completed scenario rows can be reused
 at promotion without reusing partial scores as full fitness.
+Suite-aggregated EW objectives and limits reduce the selected scenarios during screening;
+full evaluation still requires all scenarios and available EW samples from every source.
 
 Empty screening labels disable the partial stage. Selecting all scenarios or retaining
 all offspring bypasses it. Screening reduces full evaluations within `iters`; it does

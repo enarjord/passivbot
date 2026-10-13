@@ -17,6 +17,12 @@ using namespace metal;
 #define PASSIVBOT_EXPOSURE_RMS_ENABLED 0
 #endif
 
+// CUDA may place each candidate's mutable side state in block-owned storage.
+// Metal and non-temporal replays retain their ordinary thread-local value.
+#ifndef PASSIVBOT_GPU_SIDE_STATE
+#define PASSIVBOT_GPU_SIDE_STATE(TYPE, NAME, SLOT) TYPE NAME
+#endif
+
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 64;
 constant int OVERRIDE_COLS = 49;
@@ -2750,7 +2756,7 @@ load_trailing_martingale_multicoin_side_config(
         config.w_ready = 1.0f;
         config.w_volatility = 0.0f;
     }
-    config.n_positions = max(1, int(rint(params[po + 33])));
+    config.n_positions = max(0, int(rint(params[po + 33])));
     config.allowance_pct = params[po + 34];
     config.scale_hsl_budget = params[po + 35] > 0.5f;
     config.twel_entry_gate_enabled = params[po + 36] > 0.5f;
@@ -4360,6 +4366,9 @@ inline void generate_tm_multicoin_side_orders(
                 ? psize[c] * pprice[c] * c_mult / balance / fmax(coin_wel, 1.0e-12f) : 0.0f,
             short_side);
         side.effective_cooldown[c] = coin_cooldown_min;
+        // Old orders were cleared above. A flat unselected coin has no entry
+        // intent or protective close; keep its cooldown current for future picks.
+        if (!selected[c] && psize[c] <= 0.0f) continue;
         int touch_down = touch_ticks[tick_offset + 0];
         int touch_up = touch_ticks[tick_offset + 1];
         int entry_touch = short_side ? touch_up : touch_down;
@@ -5336,8 +5345,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         return;
     }
 
-    TrailingMartingaleMulticoinSideState long_side;
-    TrailingMartingaleMulticoinSideState short_side;
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, long_side, 0);
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, short_side, 1);
     init_trailing_martingale_multicoin_side_state(
         long_side, long_config, coin_settings,
         long_coin_overrides, C
@@ -5697,9 +5706,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_config.n_positions, short_side.max_tradable_seen
             );
         const bool long_can_generate = alive
+            && long_config.twel > 0.0f
             && long_effective_n_positions > 0
             && long_side.max_tradable_seen > 0 && past_activation_guard;
         const bool short_can_generate = alive
+            && short_config.twel > 0.0f
             && short_effective_n_positions > 0
             && short_side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started
@@ -6340,8 +6351,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         ? last_high_k * interval_ms : -1.0f;
     scalars[scalar_offset + 7] = first_eq_k >= 0.0f
         ? first_eq_k * interval_ms : -1.0f;
+    #if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Candle indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 8] = last_eq_k;
+#else
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
+#endif
     scalars[scalar_offset + 9] = float(liquidation_day);
     scalars[scalar_offset + 10] = account.balance;
     scalars[scalar_offset + 11] = long_total_size;
@@ -6664,7 +6680,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_pct = config.allowance_pct;
-    TrailingMartingaleMulticoinSideState side;
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, side, 0);
     init_trailing_martingale_multicoin_side_state(
         side, config, coin_settings, coin_overrides, C
     );
@@ -7446,8 +7462,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         ? last_high_k * interval_ms : -1.0f;
     scalars[scalar_offset + 7] = first_eq_k >= 0.0f
         ? first_eq_k * interval_ms : -1.0f;
+    #if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Candle indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 8] = last_eq_k;
+#else
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
+#endif
     scalars[scalar_offset + 9] = float(liquidation_day);
     scalars[scalar_offset + 10] = balance;
     scalars[scalar_offset + 11] = short_side ? 0.0f : total_size;

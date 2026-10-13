@@ -90,7 +90,7 @@ class CanonicalResultScorer:
         if required - selected:
             raise ValueError("screening must retain explicitly selected objective/limit scenarios")
 
-    def score(self, vector, analyses):
+    def score(self, vector, analyses, *, stage="full"):
         liquidated = any(row["liquidated"] for venues in analyses.values() for row in venues.values())
         try:
             if self.suite:
@@ -100,7 +100,7 @@ class CanonicalResultScorer:
                     per_exchange=analyses[label], metrics=build_scenario_metrics(analyses[label]),
                     elapsed_seconds=0.0, output_path=None,
                 ) for label in self.coverage if label in analyses]
-                scored = self.evaluator.score_scenario_results(rows)
+                scored = self.evaluator.score_scenario_results(rows, stage=stage)
                 objectives, penalty = scored["objectives"], scored["constraint_violation"]
                 metrics = dict(
                     objectives={f"w_{index}": value for index, value in enumerate(objectives)},
@@ -186,7 +186,7 @@ class CandidateEvaluation:
         analyses = {}
         for request_id, slot in self._slots.items():
             analyses.setdefault(slot.scenario, {})[slot.exchange] = self._rows[request_id]
-        payload = self.scorer.score(self.vector, analyses)
+        payload = self.scorer.score(self.vector, analyses, stage=self.stage)
         if self._metadata:
             metadata = {}
             for request_id, slot in self._slots.items():
