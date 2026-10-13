@@ -47,6 +47,7 @@ class TemporalReplayProgress:
         self.total_bars = total_bars
         self.history_chunk_bars = history_chunk_bars
         self.last_info_elapsed = 0.0
+        self.last_info_bars = 0
         self.log("start", 0, 0.0)
 
     def log(self, state, completed_bars, elapsed, *, kernel_dispatches=None):
@@ -61,7 +62,21 @@ class TemporalReplayProgress:
             publish_progress()
             return
         percent = 100.0 * completed_bars / self.total_bars if self.total_bars else 100.0
-        rate = completed_bars / elapsed if elapsed > 0.0 else 0.0
+        window_elapsed = elapsed - self.last_info_elapsed
+        window_bars = completed_bars - self.last_info_bars
+        rate = window_bars / window_elapsed if window_elapsed > 0.0 else 0.0
+        average_rate = completed_bars / elapsed if elapsed > 0.0 else 0.0
+        # A replay is one scenario batch. Fractional progress estimates its
+        # full-history equivalent throughput; it does not certify candidates
+        # as completed or include compilation, reduction or other scenarios.
+        backtests_per_second = (
+            self.candidates * rate / self.total_bars
+            if self.total_bars > 0 and window_elapsed > 0 else None
+        )
+        average_backtests_per_second = (
+            self.candidates * average_rate / self.total_bars
+            if self.total_bars > 0 and elapsed > 0 else None
+        )
         eta = duration(max(0, self.total_bars - completed_bars) / rate) if rate > 0 else "unknown"
         level = logging.INFO
         if state == "progress":
@@ -71,11 +86,16 @@ class TemporalReplayProgress:
             f"progress={percent:.1f}%",
             f"bars={completed_bars}/{self.total_bars}", f"elapsed={duration(elapsed)}",
             f"rate={rate:.0f} bars/s", f"eta_batch={eta}",
+            (f"est_backtests/s={backtests_per_second:.4f}"
+             if backtests_per_second is not None else "est_backtests/s=unknown"),
+            (f"avg_backtests/s={average_backtests_per_second:.4f}"
+             if average_backtests_per_second is not None else "avg_backtests/s=unknown"),
             *([f"kernel_dispatches={kernel_dispatches}"] if kernel_dispatches is not None else []),
         ], level=level)
         if level == logging.INFO:
             if state == "progress" and delivered:
                 self.last_info_elapsed = elapsed
+                self.last_info_bars = completed_bars
             publish_progress()
 
 

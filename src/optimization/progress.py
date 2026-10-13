@@ -82,6 +82,7 @@ class OptimizerProgress:
         self.phase_started = self.started
         self.last_log = None
         self.phase = "startup"
+        self.rate_baselines = {}
         self._lock = RLock()
 
     def transition(self, phase):
@@ -103,8 +104,17 @@ class OptimizerProgress:
                 # A progress snapshot is optional presentation, never evidence.
                 generation = "unknown"
                 snapshot = dict(snapshot="unavailable", error_type=type(error).__name__)
+            rates = []
+            for key in ("completed", "screened"):
+                value = snapshot.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    baseline = self.rate_baselines.setdefault(key, value)
+                    elapsed = now - self.started
+                    rate = (value - baseline) / elapsed if elapsed > 0 and value >= baseline else None
+                    rates.append(f"{key}/s={rate:.4f}" if rate is not None else f"{key}/s=unknown")
             delivered = log_tokens(f"GPU optimizer progress | gen={generation} phase={self.phase} |", [
                 *(f"{key}={value}" for key, value in snapshot.items()),
+                *rates,
                 f"phase_elapsed={duration(now - self.phase_started)}",
                 f"run_elapsed={duration(now - self.started)}",
             ])

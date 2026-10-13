@@ -2756,7 +2756,7 @@ load_trailing_martingale_multicoin_side_config(
         config.w_ready = 1.0f;
         config.w_volatility = 0.0f;
     }
-    config.n_positions = max(1, int(rint(params[po + 33])));
+    config.n_positions = max(0, int(rint(params[po + 33])));
     config.allowance_pct = params[po + 34];
     config.scale_hsl_budget = params[po + 35] > 0.5f;
     config.twel_entry_gate_enabled = params[po + 36] > 0.5f;
@@ -5706,9 +5706,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_config.n_positions, short_side.max_tradable_seen
             );
         const bool long_can_generate = alive
+            && long_config.twel > 0.0f
             && long_effective_n_positions > 0
             && long_side.max_tradable_seen > 0 && past_activation_guard;
         const bool short_can_generate = alive
+            && short_config.twel > 0.0f
             && short_effective_n_positions > 0
             && short_side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started
