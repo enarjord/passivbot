@@ -121,6 +121,20 @@ def _native_caller_ablation(strategy, dense=False, coin=False):
             "int sequence=0;",
             "aggregate.replay_coin=0; int sequence=0;",
         )
+        # Retain partial owner fills after its original opening ages out.
+        # Otherwise the empty-scope shortcut would make cache loss a no-op.
+        caller = caller.replace("t==0 || t%13==0", "t==0 || t==1300 || t==1700 || t==2100 || t%13==0")
+        caller = caller.replace("t==0 ? 0 : 1", "t==0 || t==1300 || t==1700 || t==2100 ? 0 : 1")
+        caller = caller.replace("(int(b)*length+t)*6", "(int(b)*length+t)*7")
+        caller = caller.replace("out[o+5]=aggregate.hsl.last_observed;", """out[o+5]=aggregate.hsl.last_observed;
+#if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+            int words=hsl_native_cache_bytes(1,256)/4;
+            HslNativeCache owner=hsl_native_cache_view(aggregate.native_cache_words+int(b)*2*words,1,256);
+            out[o+6]=float(owner.header->valid);
+#else
+            out[o+6]=0.0f;
+#endif
+""")
     if dense:
         schedule = "(t==0 || t%13==0 || t%17==0 || t%800==799)"
         assert caller.count(schedule) == 1
@@ -139,15 +153,18 @@ def _native_caller_ablation(strategy, dense=False, coin=False):
     outputs = []
     for enabled in (0, 1):
         library = compile_shader(f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {enabled}\n"+source)
-        for reset in (-1, 1900):
+        for reset in (-1, 1901 if coin else 1900):
             trees = torch.empty((2,3,386,32), dtype=torch.uint8, device=device)
             words = ((2 * _hsl_native_cache_bytes(1536,1,256) if coin
                       else _hsl_native_cache_bytes(1536,2,256))//4 if enabled else 0)
             rows = torch.empty((2,words), dtype=torch.int32, device=device)
-            out = torch.full((2,length,6), float("nan"), dtype=torch.float32, device=device)
+            out = torch.full((2,length,7 if coin else 6), float("nan"), dtype=torch.float32, device=device)
             library.native_cache_caller(params,bars,settings,trees,rows,out,reset,threads=2)
             outputs.append(out.cpu().numpy())
     np.testing.assert_array_equal(outputs[0], outputs[1])
+    if coin:
+        for output in outputs[2:]:
+            assert np.all(output[:,1900,6] == 1), "reset must lose a live owner index"
     for output in outputs[2:]:
         assert np.all(output[:,:,0] == 1)
         np.testing.assert_array_equal(outputs[0][:,:,[0,3,4,5]], output[:,:,[0,3,4,5]])
