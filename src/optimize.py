@@ -1726,11 +1726,13 @@ class Evaluator:
         for label, config in configs.items():
             markets = self.msss if markets_by_scenario is None else markets_by_scenario[label]
             for exchange in markets:
-                views[f"{label}/{exchange}"] = prefilter_config_for_exchange(config, markets[exchange], exchange)
+                views.setdefault(label, []).append(
+                    prefilter_config_for_exchange(config, markets[exchange], exchange))
         constraint, findings = prefilter_candidate(views, params)
         if constraint == 0.0:
             return None
-        payload = build_prefilter_payload(self, individual, constraint, findings, suite=suite)
+        payload = build_prefilter_payload(self, individual, constraint, findings, suite=suite,
+                                          scenario_labels=tuple(configs) if suite else ())
         _set_candidate_metrics(individual, payload["metrics"])
         if self.use_duplicate_guard:
             self.seen_hashes[calc_hash(individual)] = (payload["fitness"], constraint)

@@ -250,6 +250,74 @@ def test_zero_global_wel_derives_capacity_but_zero_coin_wel_disables_entry(
     assert config_prefilter(candidate, policy(max=0.1)) == 0
 
 
+def test_denomination_alias_preserves_its_resolved_override(
+    require_real_passivbot_rust_module,
+):
+    candidate = config()
+    candidate["backtest"]["coins"] = {"binance": ["1000ABC"]}
+    candidate["live"]["approved_coins"]["long"] = ["ABC"]
+    candidate["coin_overrides"] = {
+        "1000ABC": {
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {"entry": {"threshold_base_pct": 0.001}}
+                    }
+                }
+            }
+        }
+    }
+    view = prefilter_config_for_exchange(candidate, {"1000ABC": {}}, "binance")
+    assert config_prefilter(view, policy(max=0.1)) == 0
+
+
+def test_multiple_venues_combine_check_maxima_before_scenario_selection(
+    require_real_passivbot_rust_module,
+):
+    first, second = config(), config()
+    first["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 0
+    second["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] = 0.001
+    params = policy(max=0.1)
+    params["checks"].append(
+        {
+            "metric": "entry_cooldown_minutes",
+            "enabled": True,
+            "sides": ["long"],
+            "max": 1,
+        }
+    )
+    first_constraint = config_prefilter(first, params)
+    second_constraint = config_prefilter(second, params)
+    combined, findings = prefilter_candidate(
+        {"joint": [first, second], "other": first}, params
+    )
+    assert combined == pytest.approx(first_constraint + second_constraint)
+    assert len(findings) == 2
+    assert all(row["scenario"] == "joint" for row in findings)
+
+
+def test_rejected_suite_metrics_are_consumable_by_pareto_reducers():
+    from pareto_store import _suite_metrics_to_stats
+    from pareto_explorer import _extract_suite_metrics
+
+    base = SimpleNamespace(
+        scoring_specs=extract_objective_specs(["adg_strategy_eq"]), limit_checks=[]
+    )
+    payload = build_prefilter_payload(
+        base, [1], 25, [], suite=True, scenario_labels=("base", "stress")
+    )
+    entry = {"suite_metrics": payload["metrics"]["suite_metrics"]}
+    for flat, values in (
+        _suite_metrics_to_stats(entry, {"default": "min"}),
+        _extract_suite_metrics(entry, {"default": "min"}),
+        _extract_suite_metrics(entry, {"default": "mean"}, scenario_labels=["stress"]),
+    ):
+        assert flat["adg_strategy_eq_mean"] == -25
+        assert values["drawdown_worst_strategy_eq"] == 25
+
+
 def test_defaults_and_clean_roundtrip_keep_explicit_policy():
     candidate = config()
     assert candidate["optimize"]["prefilter"]["checks"] == []

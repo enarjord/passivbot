@@ -159,9 +159,9 @@ class NativeCandidatePlanner:
                 effective, json.loads(binding.dataset.markets_json), binding.dataset.exchange,
             )
             if prefilter_enabled(policy):
-                probe_configs[f"{scenario}/{exchange}"] = prefilter_config_for_exchange(
+                probe_configs.setdefault(scenario, []).append(prefilter_config_for_exchange(
                     effective, json.loads(binding.dataset.markets_json), exchange,
-                )
+                ))
             identity.append((binding.dataset_id, parameters))
             if binding.scenario in selected:
                 slot = ResultSlot(f"{candidate_id}:{index}", binding.dataset_id, binding.scenario,
@@ -176,7 +176,8 @@ class NativeCandidatePlanner:
             constraint, findings = prefilter_candidate(probe_configs, policy)
             if constraint > 0:
                 payload = build_prefilter_payload(self.base, values, constraint, findings,
-                                                 suite=self.scorer.suite)
+                                                 suite=self.scorer.suite,
+                                                 scenario_labels=tuple(configs) if self.scorer.suite else ())
                 plan = CandidatePlan(candidate_id, tuple(values), key, stage,
                                      tuple(requests), tuple(slots), payload)
         return plan

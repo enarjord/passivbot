@@ -144,7 +144,7 @@ def test_mixed_screened_cohort_keeps_config_rejections_in_tell(monkeypatch, tmp_
     def controlled(configs, params):
         # Exercise admission/selection independently of strategy measurement:
         # the scalar worsens continuously as this proposed gene moves down.
-        qty = next(iter(configs.values()))["bot"]["long"]["strategy"][
+        qty = next(iter(configs.values()))[0]["bot"]["long"]["strategy"][
             "trailing_martingale"
         ]["entry"]["initial_qty_pct"]
         if qty < 0.03:

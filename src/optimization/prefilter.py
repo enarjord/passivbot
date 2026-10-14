@@ -17,7 +17,7 @@ from config.metrics import CURRENCY_METRICS
 from config.scoring import default_objective_goal, from_engine_value
 from config.shared_bot import require_grouped_bot_value
 from config.strategy import build_runtime_strategy_side, merge_runtime_bot_side
-from metrics_schema import KNOWN_ANALYSIS_METRICS
+from metrics_schema import KNOWN_ANALYSIS_METRICS, merge_suite_payload
 from optimization.evaluation_payload import build_evaluation_payload
 from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
 
@@ -47,9 +47,9 @@ def _probe_inputs(config, params, checks):
     data = config["backtest"].get("coins", {})
     if not isinstance(data, dict):
         raise ValueError("prefilter requires resolved backtest coin membership")
-    coins = {
-        normalize_backtest_coin(coin) for values in data.values() for coin in values
-    }
+    # Preserve prepared dataset keys for override lookup, just as backtest does.
+    # Normalization is for membership comparisons, not identity replacement.
+    coins = {str(coin).strip() for values in data.values() for coin in values}
     overrides = config.get("coin_overrides", {})
     for side in ("long", "short"):
         if not any(side in check["sides"] for check in checks):
@@ -58,7 +58,7 @@ def _probe_inputs(config, params, checks):
             {
                 coin
                 for coin in coins
-                if coin in approved[side]
+                if normalize_backtest_coin(coin) in approved[side]
                 or any(
                     not looks_like_exact_market_identifier(identifier)
                     and heuristic_symbol_to_coin(identifier)
@@ -172,6 +172,7 @@ def inspect_config_prefilter(config, prefilter_params):
                     # initial-to-last-fill span, even if its partial span fits.
                     violation = max(1.0, violation)
                 item = {
+                    "check_index": index,
                     "metric": check["metric"],
                     "coin": coin,
                     "side": side,
@@ -186,6 +187,10 @@ def inspect_config_prefilter(config, prefilter_params):
     contributions = [
         item for item in worst if item is not None and item["violation"] > 0
     ]
+    return _constraint(params, contributions), contributions
+
+
+def _constraint(params, contributions):
     constraint = params["penalty_weight"] * math.fsum(
         item["weight"] * item["violation"] for item in contributions
     )
@@ -194,7 +199,7 @@ def inspect_config_prefilter(config, prefilter_params):
     # DEAP's existing comparator treats differences <= 1e-12 as ties.
     if contributions:
         constraint = max(constraint, 1e-9)
-    return constraint, contributions
+    return constraint
 
 
 def config_prefilter(config, prefilter_params) -> float:
@@ -206,16 +211,29 @@ def prefilter_candidate(configs, params):
     """Use the worst complete scenario constraint, independent of screen subset."""
     if not prefilter_enabled(params):
         return 0.0, []
+    params = resolve_prefilter(params)
     worst, findings = 0.0, []
-    for label, config in configs.items():
-        value, rows = inspect_config_prefilter(config, params)
+    for label, views in configs.items():
+        maxima = {}
+        # A scenario may own multiple venue-specific config views. Maximize
+        # each check across those views before summing the scenario constraint.
+        for config in views if isinstance(views, list) else [views]:
+            _, rows = inspect_config_prefilter(config, params)
+            for row in rows:
+                index = row["check_index"]
+                if index not in maxima or row["violation"] > maxima[index]["violation"]:
+                    maxima[index] = row
+        rows = list(maxima.values())
+        value = _constraint(params, rows)
         if value > worst:
             worst = value
             findings = [dict(row, scenario=label) for row in rows]
     return worst, findings
 
 
-def build_prefilter_payload(base, vector, constraint, findings, *, suite=False):
+def build_prefilter_payload(
+    base, vector, constraint, findings, *, suite=False, scenario_labels=()
+):
     """Make penalty defaults directly; never rescore them as simulator output."""
     if not math.isfinite(constraint) or constraint <= 0:
         raise ValueError("prefilter rejection requires a finite positive constraint")
@@ -256,10 +274,13 @@ def build_prefilter_payload(base, vector, constraint, findings, *, suite=False):
         "prefilter": {"version": PREFILTER_VERSION, "findings": deepcopy(findings)},
     }
     if suite:
-        metrics["suite_metrics"] = {
-            "evaluation_origin": "config_prefilter",
-            "metrics": deepcopy(metrics["stats"]),
-        }
+        metrics["suite_metrics"] = merge_suite_payload(
+            metrics["stats"],
+            scenario_metrics={
+                label: {"stats": metrics["stats"]} for label in scenario_labels
+            },
+        )
+        metrics["suite_metrics"]["evaluation_origin"] = "config_prefilter"
     return build_evaluation_payload(
         tuple(constraint for _ in specs), constraint, metrics, vector
     )
