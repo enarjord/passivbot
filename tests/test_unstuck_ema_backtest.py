@@ -226,14 +226,22 @@ def test_orchestrator_profiling_preserves_replay_and_records_stages(
     assert not profile_path.exists()
 
     monkeypatch.setenv("PASSIVBOT_ORCH_PROFILE", "1")
-    fills, equity, analysis = _replay(deepcopy(config))
+    fills, equity, analysis, payload = _replay(deepcopy(config), return_payload=True)
     np.testing.assert_array_equal(fills, expected_fills)
     np.testing.assert_array_equal(equity, expected_equity)
     np.testing.assert_equal(analysis, expected_analysis)
+    np.testing.assert_equal(payload.hard_stop_plot_data, expected_payload.hard_stop_plot_data)
     profile = json.loads(profile_path.read_text())
+    stages = ("clear_orders", "peek_hints", "input_update", "compute", "distribute")
+    assert set(profile) == {
+        "mode", "steps", "total_ns", "sort_bundles_ns",
+        *(f"{stage}_ns" for stage in stages),
+    }
+    assert profile["mode"] == "orchestrator"
     assert profile["steps"] > 0
-    for stage in ("clear_orders", "peek_hints", "input_update", "compute", "distribute"):
+    for stage in stages:
         assert profile[f"{stage}_ns"] >= 0
     assert profile["input_update_ns"] > 0
     assert profile["compute_ns"] > 0
-    assert profile["total_ns"] >= profile["input_update_ns"] + profile["compute_ns"]
+    assert profile["sort_bundles_ns"] == 0
+    assert profile["total_ns"] >= sum(profile[f"{stage}_ns"] for stage in stages)
