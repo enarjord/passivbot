@@ -993,6 +993,97 @@ mod tests {
     }
 
     #[test]
+    fn cached_orchestrator_input_reuses_configured_hsl_policies() {
+        use super::super::hsl_runtime::{Config, Policy};
+        for mode in ["coin", "pside", "unified"] {
+            for enabled in [false, true] {
+                let data = candles(5, 2);
+                let btc = Array1::from_elem(5, 1.0);
+                let mut bt = make(&data, &btc);
+                let policy = Policy {
+                    enabled,
+                    panic_close_order_type: "limit".into(),
+                    restart_after_red_policy: Some("always".into()),
+                    ..Policy::default()
+                };
+                let mut config = Config {
+                    mode: mode.into(),
+                    sides: [policy.clone(), policy.clone()],
+                    portfolio: (mode == "unified").then(|| Policy {
+                        panic_close_order_type: "market".into(),
+                        ..policy.clone()
+                    }),
+                    coins: BTreeMap::new(),
+                };
+                if mode == "coin" {
+                    let override_policy = Policy {
+                        enabled: !enabled,
+                        panic_close_order_type: "market".into(),
+                        ..policy.clone()
+                    };
+                    config.coins.insert(
+                        "C0".into(),
+                        [override_policy.clone(), override_policy],
+                    );
+                }
+                config.validate(&bt.backtest_params.coins, 1.0, 1).unwrap();
+                bt.backtest_params.equity_hard_stop_loss.hsl = Some(config);
+                for pair in &mut bt.bot_params {
+                    pair.long.hsl_enabled = !enabled;
+                    pair.short.hsl_enabled = !enabled;
+                    pair.long.hsl_panic_close_order_type = "stale".into();
+                    pair.short.hsl_panic_close_order_type = "stale".into();
+                }
+                let expected = |coin: usize| {
+                    if mode == "coin" && coin == 0 {
+                        (!enabled, "market")
+                    } else if mode == "unified" {
+                        (enabled, "market")
+                    } else {
+                        (enabled, "limit")
+                    }
+                };
+                let initial = bt.get_orchestrator_input_cached(1, None, None);
+                let pointers: Vec<_> = initial
+                    .symbols
+                    .iter()
+                    .map(|symbol| {
+                        (
+                            symbol.long.bot_params.hsl_panic_close_order_type.as_ptr(),
+                            symbol.short.bot_params.hsl_panic_close_order_type.as_ptr(),
+                        )
+                    })
+                    .collect();
+                for symbol in &initial.symbols {
+                    let (flag, order_type) = expected(symbol.symbol_idx);
+                    for params in [&symbol.long.bot_params, &symbol.short.bot_params] {
+                        assert_eq!(params.hsl_enabled, flag);
+                        assert_eq!(params.hsl_panic_close_order_type, order_type);
+                    }
+                }
+                bt.orchestrator_input_cache = Some(initial);
+                let refreshed = bt.get_orchestrator_input_cached(2, None, None);
+                for symbol in &refreshed.symbols {
+                    let (flag, order_type) = expected(symbol.symbol_idx);
+                    for params in [&symbol.long.bot_params, &symbol.short.bot_params] {
+                        assert_eq!(params.hsl_enabled, flag);
+                        assert_eq!(params.hsl_panic_close_order_type, order_type);
+                    }
+                    // Immutable cached strings must retain their owned buffers during refresh.
+                    assert_eq!(
+                        symbol.long.bot_params.hsl_panic_close_order_type.as_ptr(),
+                        pointers[symbol.symbol_idx].0,
+                    );
+                    assert_eq!(
+                        symbol.short.bot_params.hsl_panic_close_order_type.as_ptr(),
+                        pointers[symbol.symbol_idx].1,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn hsl_runtime_drives_real_panic_orders_for_all_scopes() {
         for mode in ["coin", "pside", "unified"] {
             for order_type in ["market", "limit"] {

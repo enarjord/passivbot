@@ -1625,14 +1625,6 @@ impl<'a> Backtest<'a> {
 
             sym.long.mode = mode_long;
             sym.short.mode = mode_short;
-            if self.hsl_enabled() {
-                let long = self.hsl_order_params(LONG, idx);
-                let short = self.hsl_order_params(SHORT, idx);
-                sym.long.bot_params.hsl_enabled = long.hsl_enabled;
-                sym.long.bot_params.hsl_panic_close_order_type = long.hsl_panic_close_order_type;
-                sym.short.bot_params.hsl_enabled = short.hsl_enabled;
-                sym.short.bot_params.hsl_panic_close_order_type = short.hsl_panic_close_order_type;
-            }
 
             sym.emas.m1.signed_unilateralness = self.unilateralness_at(idx, k);
             sym.unilateralness_warmup_spans = self.unilateralness_warmup_spans(idx, k);

@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reuse immutable HSL order policy fields in cached backtest inputs instead of cloning policy parameters on every candle.
+
 - Add opt-in optimizer config prefilters for entry/close span, trailing confirmation,
   effective cooldown and normalized initial-to-last-reentry grid span. Rejected
   candidates skip CPU/native GPU replay and return graded constraints to evolution.
