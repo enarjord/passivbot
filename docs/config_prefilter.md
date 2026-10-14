@@ -64,6 +64,13 @@ The policy defaults are:
 Exposure probes are fractions of the effective per-position allowance, including
 the bounded excess allowance. They must remain below the Rust full-capacity
 boundary of `0.999`. Cooldown exposure weights use Rust's base-WEL denominator.
+Inherited WEL uses the backtest allocation master's total and configured slots.
+With dynamic WEL enabled, a single entry-eligible coin has one effective slot;
+one configured slot likewise has an unambiguous denominator. Multiple eligible
+coins and multiple slots have a candle-dependent grow-only tradability count.
+This foundation raises an explicit unsupported-input error for inherited WEL in
+that case rather than guessing a denominator. Fixed WEL mode and explicit coin
+WEL allocations support multiple coins. Disabled filters impose no such limit.
 Volatility inputs are declared log-range EMA values, not estimates derived from
 EMA spans. Adverse directionality is an explicit value in `[0, 1]`.
 

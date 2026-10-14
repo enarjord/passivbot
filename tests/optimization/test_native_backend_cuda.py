@@ -31,7 +31,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     from tools.gpu_parity import build_parser, fixture_inputs
 
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
-        "--fixture", strategy_kind, "--sides", sides, "--coins", "3", "--bars",
+        "--fixture", strategy_kind, "--sides", sides, "--coins", "1" if prefilter else "3", "--bars",
         "3000" if weighted_equity or raw_equity else "512",
     ]))
     if suite and sides != "both":
@@ -120,7 +120,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             }}},
         }
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},
-        {"label": "window", "coins": ["COIN00", "COIN02"]}] if suite else [])
+        {"label": "window", "coins": ["COIN00"] if prefilter else ["COIN00", "COIN02"]}] if suite else [])
     config_path = tmp_path / "input.json"
     config_path.write_text(json.dumps(config))
     seeds_path = tmp_path / "seeds"

@@ -318,6 +318,43 @@ def test_rejected_suite_metrics_are_consumable_by_pareto_reducers():
         assert values["drawdown_worst_strategy_eq"] == 25
 
 
+def test_single_coin_dynamic_wel_matches_capacity_and_exposure_cooldown(
+    require_real_passivbot_rust_module,
+):
+    candidate = config()
+    candidate["bot"]["long"]["risk"].update(n_positions=4, we_excess_allowance_pct=0.5)
+    candidate["bot"]["long"]["entry_cooldown"]["weights_minutes"]["exposure_ratio"] = 10
+    candidate["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 100
+    params = policy("entry_cooldown_minutes", max=14)
+    # One eligible coin => one effective slot => capped allowance == base WEL.
+    assert candidate["backtest"]["dynamic_wel_by_tradability"] is True
+    assert config_prefilter(candidate, params) == 0
+    candidate["backtest"]["dynamic_wel_by_tradability"] = False
+    # Four fixed slots => .25 WEL with .5 excess => exposure ratio 1.2 at 80%.
+    assert config_prefilter(candidate, params) == pytest.approx(3e6)
+
+
+def test_ambiguous_dynamic_multicoin_wel_fails_instead_of_guessing(
+    require_real_passivbot_rust_module,
+):
+    candidate = config()
+    candidate["bot"]["long"]["risk"]["n_positions"] = 4
+    candidate["backtest"]["coins"]["binance"].append("OTHER")
+    candidate["live"]["approved_coins"]["long"].append("OTHER")
+    assert config_prefilter(candidate, None) == 0
+    with pytest.raises(ValueError, match="data-dependent dynamic WEL"):
+        config_prefilter(candidate, policy(max=0.2))
+    candidate["bot"]["long"]["risk"]["n_positions"] = 1
+    assert config_prefilter(candidate, policy(max=0.2)) == 0
+    candidate["bot"]["long"]["risk"]["n_positions"] = 4
+    # Explicit allocations do not depend on the grow-only tradability count.
+    candidate["coin_overrides"] = {
+        coin: {"bot": {"long": {"wallet_exposure_limit": 0.25}}}
+        for coin in ("TEST", "OTHER")
+    }
+    assert config_prefilter(candidate, policy(max=0.2)) == 0
+
+
 def test_defaults_and_clean_roundtrip_keep_explicit_policy():
     candidate = config()
     assert candidate["optimize"]["prefilter"]["checks"] == []

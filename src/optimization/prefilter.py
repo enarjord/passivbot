@@ -69,6 +69,39 @@ def _probe_inputs(config, params, checks):
             if data
             else set(approved[side])
         )
+        eligible = {
+            coin
+            for coin in selected
+            if overrides.get(coin, {})
+            .get("bot", {})
+            .get(side, {})
+            .get("wallet_exposure_limit")
+            != 0
+        }
+        # Backtest's allocation master is the first prepared coin, including
+        # its overrides. Per-coin strategy/risk parameters remain independent.
+        first = min(coins or selected, default=None)
+        master = merge_runtime_bot_side(
+            config["bot"][side],
+            pside=side,
+            strategy_kind=kind,
+            override_side=overrides.get(first, {}).get("bot", {}).get(side, {}),
+        )
+        slots = int(
+            round(
+                float(
+                    require_grouped_bot_value(
+                        master, side, "n_positions", prefer_flat=True
+                    )
+                )
+            )
+        )
+        allocation_total = float(
+            require_grouped_bot_value(
+                master, side, "total_wallet_exposure_limit", prefer_flat=True
+            )
+        )
+        dynamic = config["backtest"]["dynamic_wel_by_tradability"]
         for coin in sorted(selected):
             patch = overrides.get(coin, {})
             if (
@@ -89,9 +122,8 @@ def _probe_inputs(config, params, checks):
             def required(key):
                 return require_grouped_bot_value(bot, side, key, prefer_flat=True)
 
-            slots = int(round(float(required("n_positions"))))
             total = float(required("total_wallet_exposure_limit"))
-            if slots <= 0 or total <= 0:
+            if slots <= 0 or allocation_total <= 0 or total <= 0:
                 continue
             # prep_backtest_args derives global WEL from total/slots; only an
             # explicit per-coin WEL overrides that runtime allocation.
@@ -99,7 +131,13 @@ def _probe_inputs(config, params, checks):
             if base_limit == 0:
                 continue
             if base_limit <= 0:
-                base_limit = total / slots
+                if dynamic and slots > 1 and len(eligible) > 1:
+                    raise ValueError(
+                        "config prefilter cannot establish data-dependent dynamic WEL with multiple eligible coins; "
+                        "use one eligible coin, one position slot, explicit coin WELs, or fixed WEL mode"
+                    )
+                denominator = min(slots, len(eligible)) if dynamic else slots
+                base_limit = allocation_total / denominator
             weights = required("entry_cooldown_weights_minutes")
             yield coin, side, {
                 "side": side,

@@ -38,6 +38,7 @@ def test_cpu_prefilter_skips_payload_and_replay_and_activates_constraints(
         base, suite = suite_inputs(manager) if suite_mode else (inputs(manager), None)
         base.config["optimize"]["limits"] = []
         base.config["optimize"]["prefilter"] = rejecting_policy()
+        base.config["backtest"]["dynamic_wel_by_tradability"] = False
         base.build_limit_checks()
         base.use_duplicate_guard = False
         evaluator = suite or base
@@ -61,6 +62,7 @@ def test_cpu_prefilter_skips_payload_and_replay_and_activates_constraints(
 def test_passing_cpu_prefilter_continues_into_existing_payload_path(monkeypatch):
     with managed_arrays() as manager:
         base = inputs(manager)
+        base.config["backtest"]["dynamic_wel_by_tradability"] = False
         base.config["optimize"]["prefilter"] = {
             "checks": [
                 {"metric": "entry_retracement", "enabled": True, "max": 100},
@@ -82,6 +84,7 @@ def test_passing_cpu_prefilter_continues_into_existing_payload_path(monkeypatch)
 def test_duplicate_rejection_keeps_its_non_replay_provenance(monkeypatch):
     with managed_arrays() as manager:
         base = inputs(manager)
+        base.config["backtest"]["dynamic_wel_by_tradability"] = False
         base.config["optimize"]["prefilter"] = rejecting_policy()
         base.duplicate_counter = defaultdict(int)
         for name in (
@@ -112,6 +115,7 @@ def test_all_rejected_gpu_cohorts_reach_evolution_and_resume_without_replay(
         )
         base.config["optimize"]["limits"] = []
         base.config["optimize"]["prefilter"] = rejecting_policy()
+        base.config["backtest"]["dynamic_wel_by_tradability"] = False
         base.build_limit_checks()
         records, path = [], tmp_path / "checkpoint.pkl"
         execute(
@@ -155,6 +159,7 @@ def test_mixed_screened_cohort_keeps_config_rejections_in_tell(monkeypatch, tmp_
     with managed_arrays() as manager:
         base, suite = suite_inputs(manager, constrained=False)
         base.config["optimize"]["prefilter"] = rejecting_policy()
+        base.config["backtest"]["dynamic_wel_by_tradability"] = False
         records, path = [], tmp_path / "checkpoint.pkl"
         execute(base, SimpleNamespace(record=records.append), path, evaluator=suite)
         rejected = [
