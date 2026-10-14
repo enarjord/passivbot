@@ -34,6 +34,8 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
             raise TypeError(
                 "config.optimize.fixed_runtime_overrides keys must be dotted strings"
             )
+        if dotted_path == "optimize.prefilter" or dotted_path.startswith("optimize.prefilter."):
+            raise ValueError("prefilter policy belongs in optimize.prefilter, not runtime overrides")
         resolved = require_existing_config_path(config, dotted_path)
         prior = resolved_sources.get(resolved)
         if prior is not None:
@@ -97,6 +99,11 @@ def validate_config(
 ) -> None:
     from analysis_visibility import validate_visible_metrics_config
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
+    from .prefilter import resolve_prefilter, prefilter_enabled
+
+    policy = resolve_prefilter(config["optimize"].get("prefilter"))
+    if prefilter_enabled(policy) and config["live"]["strategy_kind"] != "trailing_martingale":
+        raise ValueError("enabled config prefilters currently require trailing_martingale")
 
     from .hsl import normalize_hsl
     from .schema import get_template_config

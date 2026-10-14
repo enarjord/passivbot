@@ -11,6 +11,7 @@ from optimization.fine_tune_anchors import get_anchor_plan
 from optimization.evaluation_implementation import evaluation_implementation_identity
 from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
+from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
 CONTRACT_VERSION = 2
 CONTRACT_KEY = "optimizer_evaluation_contract"
@@ -135,6 +136,9 @@ def build_evaluation_contract(config: dict) -> dict:
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }
+    policy = resolve_prefilter(config.get("optimize", {}).get("prefilter"))
+    if prefilter_enabled(policy):
+        contract["prefilter"] = {"version": PREFILTER_VERSION, "policy": policy}
     half_life = effective.get("backtest", {}).get("ew_half_life_days")
     if half_life is not None:
         from config.ew import EW_DEFINITION_VERSION

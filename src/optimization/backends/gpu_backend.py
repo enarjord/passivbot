@@ -17,6 +17,7 @@ from pymoo.core.callback import Callback
 from pymoo.termination import get_termination
 
 from config.gpu import resolve_gpu_screening, resolve_gpu_sizing
+from config.prefilter import prefilter_enabled
 from optimization.backend_shared import load_starting_individuals
 from optimization.backends.pymoo_backend import (
     _build_algorithm, _build_random_sampling, _prepare_resumed_algorithm,
@@ -37,7 +38,7 @@ from optimization.fine_tune_anchors import get_anchor_plan
 class NativeSearchProblem(Problem):
     def __init__(self, base):
         super().__init__(n_var=len(base.bounds), n_obj=len(base.scoring_specs),
-                         n_ieq_constr=int(bool(base.limit_checks)),
+                         n_ieq_constr=int(bool(base.limit_checks) or prefilter_enabled(base.config["optimize"].get("prefilter"))),
                          xl=np.asarray([bound.low for bound in base.bounds]),
                          xu=np.asarray([bound.high for bound in base.bounds]))
 
@@ -62,6 +63,7 @@ class _Search:
         self._progress = OptimizerProgress(lambda: dict(
             gen=self.state["algorithm"].n_iter or 0,
             completed=self.state["completed"], screened=self.state["screened"],
+            prefilter_rejected=self.state.get("prefilter_rejected", 0),
             pending=len(self._pending),
         ))
 
@@ -95,24 +97,40 @@ class _Search:
                 self.state["screened"] += 1
                 self.checkpoint()
                 continue
-            self.recorder.record(build_pymoo_record_entry(
-                vector=payload["evaluation_vector"], metrics=payload["metrics"],
-                template=self.template, build_config_fn=self.build_config_fn,
-                overrides_fn=self.overrides_fn, overrides_list=self.overrides_list,
-            ))
-            individual.F = objectives
-            if problem.n_ieq_constr:
-                individual.G = np.asarray([penalty if penalty > 0 else -1.0])
-            individual.evaluated.update(("F", "G", "H"))
-            self.state["completed"] += 1
-            self.state["algorithm"].evaluator.n_eval += 1
-            self.checkpoint()
+            self.apply_terminal(index, payload)
+
+    def apply_terminal(self, index, payload):
+        population = self.state["population"]
+        problem = self.state["algorithm"].problem
+        objectives = np.asarray(payload["fitness"], dtype=np.float64)
+        penalty = float(payload["constraint_violation"])
+        if (objectives.shape != (problem.n_obj,) or np.isnan(objectives).any()
+                or not math.isfinite(penalty) or penalty < 0):
+            raise RuntimeError("invalid terminal optimizer evaluation")
+        individual = population[index]
+        individual.X = np.asarray(payload["evaluation_vector"], dtype=np.float64)
+        rejected = payload["metrics"].get("evaluation_origin") == "config_prefilter"
+        self.recorder.record(build_pymoo_record_entry(
+            vector=payload["evaluation_vector"], metrics=payload["metrics"],
+            template=self.template, build_config_fn=self.build_config_fn,
+            overrides_fn=self.overrides_fn, overrides_list=self.overrides_list,
+        ))
+        individual.F = objectives
+        if problem.n_ieq_constr:
+            individual.G = np.asarray([penalty if penalty > 0 else -1.0])
+        individual.evaluated.update(("F", "G", "H"))
+        individual.prefilter_rejected = rejected
+        if rejected:
+            self.state["prefilter_rejected"] = self.state.get("prefilter_rejected", 0) + 1
+        self.state["completed"] += 1
+        self.state["algorithm"].evaluator.n_eval += 1
+        self.checkpoint()
 
     def evaluate_population(self):
         population = self.state["population"]
         screening = self.state["phase"] == "screening"
         waiting = iter(index for index, individual in enumerate(population)
-                       if (not hasattr(individual, "screening_payload") if screening else
+                       if (not hasattr(individual, "screening_payload") and not {"F", "G", "H"} <= individual.evaluated if screening else
                            not {"F", "G", "H"} <= individual.evaluated))
         exhausted = False
         initial = True
@@ -155,6 +173,11 @@ class _Search:
                     candidate_id, population[index].X,
                     scenarios=self.screening_policy["scenarios"] if screening else None,
                 )
+                if plan.prefilter_payload is not None:
+                    self.apply_terminal(index, plan.prefilter_payload)
+                    if time.perf_counter() - started >= self._cadence.budget_seconds:
+                        break
+                    continue
                 self.session.admit(plan)
                 self._pending[candidate_id] = index
                 if initial or time.perf_counter() - started >= self._cadence.budget_seconds:
@@ -163,18 +186,22 @@ class _Search:
 
     def promote_screening(self):
         population = self.state["population"]
-        scores = [individual.screening_payload for individual in population]
-        count = screening_survivor_count(len(population), self.screening_policy)
+        rejected = population[[index for index, individual in enumerate(population)
+                               if getattr(individual, "prefilter_rejected", False)]]
+        partial = population[[index for index, individual in enumerate(population)
+                              if not getattr(individual, "prefilter_rejected", False)]]
+        scores = [individual.screening_payload for individual in partial]
+        count = screening_survivor_count(len(partial), self.screening_policy) if len(partial) else 0
         survivors = screening_survivor_indices(
             np.asarray([score["fitness"] for score in scores]),
             np.asarray([score["constraint_violation"] for score in scores]), count=count,
-        )
-        promoted = population[survivors]
+        ) if count else []
+        promoted = partial[survivors]
         for individual in promoted:
             del individual.screening_payload
         # Rejected partial observations never enter evolutionary survival. The
         # existing complete parent population remains available to pymoo.
-        self.state.update(phase="generation", population=promoted)
+        self.state.update(phase="generation", population=Population.merge(rejected, promoted))
         self.checkpoint(force=True)
         logging.info("GPU scenario screening | candidates=%d full_suite=%d scenarios=%s",
                      len(population), len(promoted), self.screening_policy["scenarios"])

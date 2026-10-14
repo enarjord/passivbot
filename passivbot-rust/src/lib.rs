@@ -3,6 +3,7 @@ mod backtest;
 mod exposure_rms;
 mod closes;
 mod coin_selection;
+mod config_prefilter;
 mod constants;
 mod dynamic;
 mod entries;
@@ -115,6 +116,7 @@ fn mps_weighted_volume_source_py() -> &'static str {
 /// A Python module implemented in Rust.
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(config_prefilter::config_prefilter_metrics_json, m)?)?;
     m.add_class::<HlcvsBundlePy>()?;
     m.add_function(wrap_pyfunction!(
         unilateralness::calc_signed_unilateralness,

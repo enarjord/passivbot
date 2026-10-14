@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add opt-in optimizer config prefilters for entry/close span, trailing confirmation,
+  effective cooldown and normalized initial-to-last-reentry grid span. Rejected
+  candidates skip CPU/native GPU replay and return graded constraints to evolution.
+  Every check is disabled unless explicitly enabled.
+
 - Skip backtest orchestrator clock reads when optional profiling is disabled, while preserving profiling stages and replay output.
 
 - Simplify backtest unstuck debug traversal by avoiding temporary position-index vectors on each order refresh.

@@ -53,6 +53,8 @@ class NativeEvaluationSession:
         return plan.stage, tuple(slot.dataset_id for slot in plan.slots), plan.effective_key
 
     def admit(self, plan):
+        if getattr(plan, "prefilter_payload", None) is not None:
+            raise ValueError("prefilter rejections must not enter the replay service")
         if self._failure is not None:
             raise RuntimeError("CPU evaluation session failed") from self._failure
         if self._stopped:

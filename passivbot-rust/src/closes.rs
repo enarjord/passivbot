@@ -265,7 +265,7 @@ pub(crate) fn calc_wel_auto_reduce_short(
     })
 }
 
-fn calc_close_retracement_multiplier(
+pub(crate) fn calc_close_retracement_multiplier(
     state_params: &StateParams,
     close_params: &TrailingMartingaleCloseParams,
 ) -> f64 {
@@ -280,7 +280,7 @@ fn calc_close_retracement_multiplier(
     })
 }
 
-fn calc_close_threshold_pct(
+pub(crate) fn calc_close_threshold_pct(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,

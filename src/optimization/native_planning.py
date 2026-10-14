@@ -21,6 +21,8 @@ from optimization.gpu.model import gpu_side_enabled
 from optimization.gpu.parameters import prepare_candidate_parameters
 from optimization.native_results import CandidateEvaluation, CanonicalResultScorer, ResultSlot
 from optimizer_overrides import unstuck_ema_spans_coupled
+from config.prefilter import prefilter_enabled
+from optimization.prefilter import prefilter_candidate, build_prefilter_payload, prefilter_config_for_exchange
 
 
 def _remove_path(config, path):
@@ -100,6 +102,7 @@ class CandidatePlan:
     stage: str
     requests: tuple[BacktestRequest, ...]
     slots: tuple[ResultSlot, ...]
+    prefilter_payload: dict | None = None
 
     def collector(self, scorer):
         return CandidateEvaluation(self.candidate_id, self.vector, self.slots, scorer, stage=self.stage)
@@ -144,6 +147,8 @@ class NativeCandidatePlanner:
             raise ValueError("screening must select nonempty known scenario labels")
         stage = "full" if selected == set(configs) else "screening"
         requests, slots, identity = [], [], []
+        policy = self.base.config["optimize"].get("prefilter")
+        probe_configs = {}
         for index, ((scenario, exchange), variants) in enumerate(self._variants.items()):
             effective = configs[scenario]
             binding = variants.get(execution_key(effective))
@@ -153,6 +158,10 @@ class NativeCandidatePlanner:
             parameters = prepare_candidate_parameters(
                 effective, json.loads(binding.dataset.markets_json), binding.dataset.exchange,
             )
+            if prefilter_enabled(policy):
+                probe_configs[f"{scenario}/{exchange}"] = prefilter_config_for_exchange(
+                    effective, json.loads(binding.dataset.markets_json), exchange,
+                )
             identity.append((binding.dataset_id, parameters))
             if binding.scenario in selected:
                 slot = ResultSlot(f"{candidate_id}:{index}", binding.dataset_id, binding.scenario,
@@ -163,6 +172,13 @@ class NativeCandidatePlanner:
         plan = CandidatePlan(candidate_id, tuple(values), key, stage, tuple(requests), tuple(slots))
         # Validate the selected stage and requested metric surface before device work.
         plan.collector(self.scorer)
+        if prefilter_enabled(policy):
+            constraint, findings = prefilter_candidate(probe_configs, policy)
+            if constraint > 0:
+                payload = build_prefilter_payload(self.base, values, constraint, findings,
+                                                 suite=self.scorer.suite)
+                plan = CandidatePlan(candidate_id, tuple(values), key, stage,
+                                     tuple(requests), tuple(slots), payload)
         return plan
 
 

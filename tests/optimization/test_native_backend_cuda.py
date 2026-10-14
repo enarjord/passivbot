@@ -15,7 +15,7 @@ import pytest
 @pytest.mark.parametrize("automatic", [False, True])
 async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatch, tmp_path, suite, interrupted, automatic,
                                                                     screening=False, anchors=False, coupled=False, scaled_hsl=False, generated_seed=False,
-                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False, sides="both", hsl_tail=False, device="cuda"):
+                                                                    strategy_kind="trailing_martingale", weighted_equity=False, raw_equity=False, portfolio_ema=False, recovery=False, sides="both", hsl_tail=False, device="cuda", prefilter=False):
 
     torch = pytest.importorskip("torch")
     if device == "cuda" and not torch.cuda.is_available():
@@ -39,6 +39,10 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         coins = list(config["backtest"]["coins"]["binance"])
         config["live"]["approved_coins"] = {side: list(coins) for side in ("long", "short")}
     config["optimize"].update(backend="gpu", population_size=4, iters=8, seed=12)
+    if prefilter:
+        config["optimize"]["prefilter"] = {"checks": [
+            {"metric": "entry_close_span", "enabled": True, "max": 100},
+        ]}
     if generated_seed:
         import session_artifacts
         config["optimize"]["seed"] = None

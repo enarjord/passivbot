@@ -153,7 +153,7 @@ pub(crate) fn finalize_next_entry(
     entry
 }
 
-fn calc_entry_distance_multiplier(
+pub(crate) fn calc_entry_distance_multiplier(
     wallet_exposure: f64,
     effective_wallet_exposure_limit: f64,
     entry_params: &TrailingMartingaleEntryParams,
@@ -176,7 +176,7 @@ fn calc_entry_distance_multiplier(
     })
 }
 
-fn calc_entry_retracement_multiplier(
+pub(crate) fn calc_entry_retracement_multiplier(
     wallet_exposure: f64,
     effective_wallet_exposure_limit: f64,
     entry_params: &TrailingMartingaleEntryParams,

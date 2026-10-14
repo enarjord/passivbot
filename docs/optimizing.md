@@ -33,6 +33,10 @@ cutoff requires a fresh run instead of reusing scores from the earlier window.
 
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
+Optional [configuration prefilters](config_prefilter.md) return graded constraints
+before CPU or native GPU replay. All checks are disabled by default; each must be
+explicitly enabled under `optimize.prefilter.checks`.
+
 The canonical defaults live in `src/config/schema.py`. The example config
 `configs/examples/default_trailing_martingale_long.json` mirrors those defaults exactly. For the
 recommended config workflow, see [Config Workflow](config_workflow.md).
