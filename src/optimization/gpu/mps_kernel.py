@@ -2890,6 +2890,27 @@ class _MulticoinReplayRunner:
     def _history_batch_bytes(self, batch_size):
         return batch_size * self._history_bytes_per_candidate() + self._history_workspace_bytes()
 
+    def _prepare_scratch_shape(self, batch_size):
+        """Drop completed automatic CUDA scratch before allocating a new shape."""
+        if not getattr(self, "automatic_scratch_budget", False):
+            return
+        shape = (batch_size, self.hsl_fact_capacity,
+                 self._hsl_native_cache_bytes_per_candidate(), self._replay_state_bytes)
+        if shape == getattr(self, "_scratch_shape", None):
+            return
+        # Clearing one buffer at its allocator still overlaps the new tensor
+        # with every other old history. Release the complete prior dispatch
+        # before params, outputs or any replacement histories are allocated.
+        for name in (
+            "_buffers", "_hsl_scratch_buffers", "_unstuck_pnl_buffers",
+            "_recovery_buffers", "_volume_buffers", "_weighted_equity_buffers",
+            "_hsl_ema_tail_buffers", "_equity_balance_diff_buffers",
+            "_entry_interval_stat_buffers", "_entry_interval_count_buffers",
+            "_replay_states", "_sizes", "_full_end_steps",
+        ):
+            getattr(self, name).clear()
+        self._scratch_shape = shape
+
     def _history_batch_limit(self):
         resident = self._history_bytes_per_candidate()
         available = self.hsl_scratch_budget_bytes - self._history_workspace_bytes()
@@ -2963,6 +2984,7 @@ class _MulticoinReplayRunner:
                 }
             )
             profiles.append(dict(self.last_profile))
+            del result
         combined = {}
         for key, value in outputs[0].items():
             if isinstance(value, torch.Tensor):
@@ -3450,8 +3472,9 @@ class _MulticoinReplayRunner:
         if factual_replay and not getattr(self, "hsl_fact_capacity", 0):
             raise ValueError("GPU factual HSL evaluation requires retained fill capacity")
         self.settings[-1] = float(factual_replay)
-        params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
+        self._prepare_scratch_shape(batch_size)
+        params_mps = torch.as_tensor(matrix, device=gpu_device())
         end_steps_mps = self._end_steps(end_steps, batch_size)
         daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
         recovery_samples = (

@@ -2602,6 +2602,7 @@ class MpsMulticoinProxy:
         prepared_data_cache: dict | None = None,
         factual_hsl: bool = False,
         factual_capacity_hints: dict | None = None,
+        automatic_scratch_budget: bool = False,
     ):
         from config.gpu import validate_gpu_backtest_config
         validate_gpu_backtest_config(config)
@@ -3021,6 +3022,7 @@ class MpsMulticoinProxy:
         # Small service-owned estimates outlive residency eviction. This mapping
         # contains integers only, never runners, tensors or checkpoint state.
         self._factual_capacity_hints = factual_capacity_hints
+        self._automatic_scratch_budget = automatic_scratch_budget
         common_runner_kwargs = {
             "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
             "max_realized_loss_pct": float(
@@ -3176,8 +3178,18 @@ class MpsMulticoinProxy:
                 raise ValueError("Invalid learned GPU HSL factual capacity")
             capacity = max(capacity, runner.hsl_fact_capacity_learned)
             runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = capacity
-            if runner._history_batch_bytes(1) > runner.hsl_scratch_budget_bytes:
-                raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
+        if (self._automatic_scratch_budget and runner.bars.device.type == "cuda"):
+            from optimization.gpu.autotune import cuda_history_budget
+
+            runner.automatic_scratch_budget = True
+            free, total = map(int, self._torch.cuda.mem_get_info())
+            runner.hsl_scratch_budget_bytes = cuda_history_budget(
+                runner, free, total,
+                owners=1 if self.shared_account_fused else len(self.sides),
+            )
+        if (self._factual_capacity_hints is not None and runner.native_factual_hsl
+                and runner._history_batch_bytes(1) > runner.hsl_scratch_budget_bytes):
+            raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
         return runner
 
     def _remember_factual_capacities(self):
