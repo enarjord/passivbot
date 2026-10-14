@@ -138,6 +138,11 @@ def test_memory_query_failure_propagates_without_fallback():
         proxy._construct_runner("long", lambda *_args, **_kwargs: runner(), {})
 
 
+@pytest.fixture
+def torch_runtime():
+    return pytest.importorskip("torch")
+
+
 SCRATCH_CACHES = (
     "_buffers", "_hsl_scratch_buffers", "_unstuck_pnl_buffers", "_recovery_buffers",
     "_volume_buffers", "_weighted_equity_buffers", "_hsl_ema_tail_buffers",
@@ -160,6 +165,7 @@ def scratch_runner():
 
 
 @pytest.mark.parametrize("change", ["grow", "shrink", "facts", "cache", "state"])
+@pytest.mark.usefixtures("torch_runtime")
 def test_shape_changes_release_all_retained_scratch_and_reuse_unchanged_shapes(change):
     import weakref
 
@@ -193,6 +199,7 @@ def test_shape_changes_release_all_retained_scratch_and_reuse_unchanged_shapes(c
     assert market() is value.bars
 
 
+@pytest.mark.usefixtures("torch_runtime")
 def test_physical_attempt_releases_scratch_before_first_device_allocation(monkeypatch):
     import numpy as np
     import weakref
@@ -231,6 +238,7 @@ def test_physical_attempt_releases_scratch_before_first_device_allocation(monkey
 
 
 @pytest.mark.parametrize("automatic", [False, True])
+@pytest.mark.usefixtures("torch_runtime")
 def test_real_hsl_allocator_does_not_overlap_64_and_117_candidate_histories(monkeypatch, automatic):
     import math
     from optimization.gpu import mps_kernel as kernel
@@ -266,6 +274,7 @@ def test_real_hsl_allocator_does_not_overlap_64_and_117_candidate_histories(monk
             value._hsl_buffers(117)
 
 
+@pytest.mark.usefixtures("torch_runtime")
 def test_split_replay_drops_previous_raw_result_before_next_dispatch():
     import numpy as np
     import torch
@@ -288,6 +297,7 @@ def test_split_replay_drops_previous_raw_result_before_next_dispatch():
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
+@pytest.mark.usefixtures("torch_runtime")
 def test_device_shape_release_preserves_native_replay(strategy, sides):
     import numpy as np
     import torch
