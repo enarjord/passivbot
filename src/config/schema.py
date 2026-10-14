@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from .gpu import GPU_SCREENING_DEFAULTS
+from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
 
@@ -482,6 +483,7 @@ def get_template_config():
                     "crossover_eta": 20,
                     "crossover_probability": 0.64,
                     "enable_overrides": [],
+                    "prefilter": deepcopy(PREFILTER_DEFAULTS),
                     "fixed_params": [],
                     "fixed_runtime_overrides": {
                         "bot.long.hsl.restart_after_red_policy": "always",

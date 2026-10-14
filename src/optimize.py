@@ -244,6 +244,8 @@ from optimization.evaluation_payload import (
     apply_evaluation_payload,
     build_evaluation_payload,
 )
+from config.prefilter import prefilter_enabled
+from optimization.prefilter import prefilter_candidate, build_prefilter_payload, prefilter_config_for_exchange
 from optimization.prepared_dataset_identity import (
     PREPARED_DATASET_KEY,
     build_prepared_dataset_identity,
@@ -913,6 +915,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "fixed_params",
         "fixed_runtime_overrides",
         "limits",
+        "prefilter",
         "mutation_eta",
         "mutation_indpb",
         "mutation_probability",
@@ -1715,6 +1718,26 @@ class Evaluator:
 
         self.build_limit_checks()
 
+    def prefilter_payload(self, individual, configs, *, suite=False, markets_by_scenario=None):
+        params = self.config["optimize"].get("prefilter")
+        if not prefilter_enabled(params):
+            return None
+        views = {}
+        for label, config in configs.items():
+            markets = self.msss if markets_by_scenario is None else markets_by_scenario[label]
+            for exchange in markets:
+                views.setdefault(label, []).append(
+                    prefilter_config_for_exchange(config, markets[exchange], exchange))
+        constraint, findings = prefilter_candidate(views, params)
+        if constraint == 0.0:
+            return None
+        payload = build_prefilter_payload(self, individual, constraint, findings, suite=suite,
+                                          scenario_labels=tuple(configs) if suite else ())
+        _set_candidate_metrics(individual, payload["metrics"])
+        if self.use_duplicate_guard:
+            self.seen_hashes[calc_hash(individual)] = (payload["fitness"], constraint)
+        return payload
+
     def _ensure_attached(self, exchange: str) -> None:
         if exchange not in self.shared_hlcvs_np:
             spec = self.hlcvs_specs[exchange]
@@ -1884,6 +1907,9 @@ class Evaluator:
                 else:
                     if existing_score is not None:
                         self.duplicate_counter["reused"] += 1
+                        rejected = self.prefilter_payload(individual, {"base": config})
+                        if rejected is not None:
+                            return rejected
                         return build_evaluation_payload(
                             existing_score,
                             existing_penalty,
@@ -1892,6 +1918,9 @@ class Evaluator:
                         )
             else:
                 self.seen_hashes[individual_hash] = None
+        rejected = self.prefilter_payload(individual, {"base": config})
+        if rejected is not None:
+            return rejected
         required_metrics = [
             *(spec.metric for spec in self.scoring_specs),
             *(check["metric"] for check in self.limit_checks),
@@ -2503,6 +2532,13 @@ class SuiteEvaluator:
                 else:
                     if existing_score is not None:
                         duplicate_counter["reused"] += 1
+                        if prefilter_enabled(self.base.config["optimize"].get("prefilter")):
+                            configs = {ctx.label: self.build_scenario_candidate_config(config, ctx)
+                                       for ctx in self.contexts}
+                            rejected = self.base.prefilter_payload(individual, configs, suite=True,
+                                markets_by_scenario={ctx.label: ctx.msss for ctx in self.contexts})
+                            if rejected is not None:
+                                return rejected
                         return build_evaluation_payload(
                             existing_score,
                             existing_penalty,
@@ -2512,6 +2548,13 @@ class SuiteEvaluator:
             else:
                 seen_hashes[individual_hash] = None
 
+        if prefilter_enabled(self.base.config["optimize"].get("prefilter")):
+            configs = {ctx.label: self.build_scenario_candidate_config(config, ctx)
+                       for ctx in self.contexts}
+            rejected = self.base.prefilter_payload(individual, configs, suite=True,
+                markets_by_scenario={ctx.label: ctx.msss for ctx in self.contexts})
+            if rejected is not None:
+                return rejected
         scenario_results: List[ScenarioResult] = []
         liquidated = False
 

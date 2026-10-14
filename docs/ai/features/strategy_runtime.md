@@ -71,6 +71,11 @@ Seed evaluation contract:
 - CPU optimizers evaluate every deduplicated seed with Rust CPU backtests. GPU optimization
   evaluates every deduplicated seed and initial parent with its authoritative CUDA service.
   Seed work is additional to the evolutionary `optimize.iters` budget.
+- Explicitly enabled `optimize.prefilter` checks may instead complete a seed or offspring with
+  a graded constraint and signed numerical penalty defaults, without replay. Such records carry
+  `backtest_performed=false`; they are terminal optimizer evaluations, not simulator evidence.
+  Disabled checks perform no strategy probing. Rust owns hypothetical geometry and grid sizing;
+  Python owns normalized policy violations and ordinary evolutionary F/G transport.
 - Partial scenario-screening observations may select later offspring for full-suite evaluation;
   they must never supply complete fitness, result records or Pareto membership.
 - Incomplete GPU checkpoints own normalized CPU search/cohort state and anchors, without
