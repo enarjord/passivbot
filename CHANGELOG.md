@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Skip backtest orchestrator clock reads when optional profiling is disabled, while preserving profiling stages and replay output.
+
 - Simplify backtest unstuck debug traversal by avoiding temporary position-index vectors on each order refresh.
 
 - Size automatic native CUDA replay history and shared metric workspace from available VRAM after market tensors are loaded. Release completed scratch before changing allocation shape. Preserve device headroom, dispatch limits, fixed-width execution and Metal budgets.

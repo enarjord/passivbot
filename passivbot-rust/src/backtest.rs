@@ -3696,24 +3696,25 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_open_orders_all_orchestrator(&mut self, k: usize) -> Result<(), String> {
-        let total_t0 = Instant::now();
+        let profiling = self.orch_profile.is_some();
+        let total_t0 = profiling.then(Instant::now);
         if let Some(p) = self.orch_profile.as_mut() {
             p.steps = p.steps.saturating_add(1);
         }
 
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         let forager_hysteresis = self.forager_hysteresis_state_from_open_orders();
         self.open_orders.clear_all();
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.clear_orders_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.clear_orders_ns, started.elapsed());
         }
 
         // Backtest-only peek: if next order will fill next candle, expand the full grid.
         // The orchestrator can do this internally when provided `next_candle` in the input.
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         let peek_hints: Option<EntryPeekHints> = None;
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.peek_hints_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.peek_hints_ns, started.elapsed());
         }
 
         // Debug: dump exact unstuck calculation inputs/components for parity investigations.
@@ -3729,11 +3730,11 @@ impl<'a> Backtest<'a> {
         }
 
         let (res, input_update_elapsed, compute_elapsed) = {
-            let t0 = Instant::now();
+            let t0 = profiling.then(Instant::now);
             let input = self.get_orchestrator_input_cached(k, peek_hints, Some(forager_hysteresis));
-            let input_update_elapsed = t0.elapsed();
+            let input_update_elapsed = t0.map(|started| started.elapsed());
 
-            let t1 = Instant::now();
+            let t1 = profiling.then(Instant::now);
             let mut res = orchestrator::compute_ideal_orders_with_workspace(
                 &input,
                 &mut self.orchestrator_workspace,
@@ -3750,16 +3751,20 @@ impl<'a> Backtest<'a> {
                 });
                 res.orders.extend(self.hsl_protective_orders(k)?);
             }
-            let compute_elapsed = t1.elapsed();
+            let compute_elapsed = t1.map(|started| started.elapsed());
             self.orchestrator_input_cache = Some(input);
             (res, input_update_elapsed, compute_elapsed)
         };
-        if let Some(p) = self.orch_profile.as_mut() {
+        if let (Some(p), Some(input_update_elapsed), Some(compute_elapsed)) = (
+            self.orch_profile.as_mut(),
+            input_update_elapsed,
+            compute_elapsed,
+        ) {
             OrchProfile::add_ns(&mut p.input_update_ns, input_update_elapsed);
             OrchProfile::add_ns(&mut p.compute_ns, compute_elapsed);
         }
 
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         for o in res.orders {
             let order = Order {
                 qty: o.qty,
@@ -3789,8 +3794,8 @@ impl<'a> Backtest<'a> {
                 }
             }
         }
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.distribute_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.distribute_ns, started.elapsed());
         }
 
         // The orchestrator guarantees deterministic per-symbol entry/close ordering; we preserve
@@ -3798,8 +3803,8 @@ impl<'a> Backtest<'a> {
 
         self.record_debug_orders_stage(k, "orch_final");
 
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.total_ns, total_t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), total_t0) {
+            OrchProfile::add_ns(&mut p.total_ns, started.elapsed());
         }
         Ok(())
     }
