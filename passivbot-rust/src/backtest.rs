@@ -3717,25 +3717,15 @@ impl<'a> Backtest<'a> {
         }
 
         // Debug: dump exact unstuck calculation inputs/components for parity investigations.
-        let long_position_keys: Vec<usize> = self
-            .positions
-            .long
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, position)| (position.size != 0.0).then_some(idx))
-            .collect();
-        for idx in long_position_keys {
-            self.debug_dump_unstuck_calc(k, idx, LONG);
+        for idx in 0..self.positions.long.len() {
+            if self.positions.long[idx].size != 0.0 {
+                self.debug_dump_unstuck_calc(k, idx, LONG);
+            }
         }
-        let short_position_keys: Vec<usize> = self
-            .positions
-            .short
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, position)| (position.size != 0.0).then_some(idx))
-            .collect();
-        for idx in short_position_keys {
-            self.debug_dump_unstuck_calc(k, idx, SHORT);
+        for idx in 0..self.positions.short.len() {
+            if self.positions.short[idx].size != 0.0 {
+                self.debug_dump_unstuck_calc(k, idx, SHORT);
+            }
         }
 
         let (res, input_update_elapsed, compute_elapsed) = {

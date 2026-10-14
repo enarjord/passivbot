@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import numpy as np
+import pytest
 from config import get_template_config, prepare_config
 from config.overrides import parse_overrides
 from backtest import run_backtest
@@ -168,3 +169,52 @@ def test_migrated_replay_matches_explicit_legacy_pairs_and_independent_spans_cha
     independent["coin_overrides"]["ETH"]["bot"]["long"].pop("unstuck")
     new_fills, _, _ = _replay(independent)
     assert not np.array_equal(new_fills, old_fills)
+
+
+@pytest.mark.parametrize("hsl_enabled", [False, True])
+@pytest.mark.parametrize("active_side", ["long", "short"])
+def test_orchestrator_profiling_preserves_replay_and_records_stages(
+    monkeypatch, tmp_path, hsl_enabled, active_side
+):
+    import json
+    import passivbot_rust as pbr
+
+    assert not getattr(pbr, "__is_stub__", False)
+    # Author a current-schema fixture; do not activate HSL in legacy input.
+    migrated = prepare_config(_legacy_replay_config(), verbose=False)
+    raw = get_template_config()
+    for section in ("bot", "coin_overrides", "backtest", "live"):
+        raw[section] = deepcopy(migrated[section])
+    inactive_side = "short" if active_side == "long" else "long"
+    raw["bot"][active_side]["risk"].update(
+        n_positions=2, total_wallet_exposure_limit=1.0
+    )
+    raw["bot"][inactive_side]["risk"].update(
+        n_positions=0, total_wallet_exposure_limit=0.0
+    )
+    raw["live"]["approved_coins"] = {
+        active_side: ["BTC", "ETH"], inactive_side: []
+    }
+    raw["bot"][active_side]["hsl"].update(
+        enabled=hsl_enabled, restart_after_red_policy="always"
+    )
+    config = parse_overrides(prepare_config(raw, verbose=False), verbose=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PASSIVBOT_ORCH_PROFILE", raising=False)
+    expected_fills, expected_equity, expected_analysis = _replay(deepcopy(config))
+    assert any(row[13].endswith(f"_{active_side}") for row in expected_fills)
+    profile_path = tmp_path / "measurements" / "orch_profile_orchestrator.json"
+    assert not profile_path.exists()
+
+    monkeypatch.setenv("PASSIVBOT_ORCH_PROFILE", "1")
+    fills, equity, analysis = _replay(deepcopy(config))
+    np.testing.assert_array_equal(fills, expected_fills)
+    np.testing.assert_array_equal(equity, expected_equity)
+    np.testing.assert_equal(analysis, expected_analysis)
+    profile = json.loads(profile_path.read_text())
+    assert profile["steps"] > 0
+    for stage in ("clear_orders", "peek_hints", "input_update", "compute", "distribute"):
+        assert profile[f"{stage}_ns"] >= 0
+    assert profile["input_update_ns"] > 0
+    assert profile["compute_ns"] > 0
+    assert profile["total_ns"] >= profile["input_update_ns"] + profile["compute_ns"]
