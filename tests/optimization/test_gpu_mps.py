@@ -20409,7 +20409,7 @@ def test_multicoin_excess_allowance_changes_coin_hsl_signal(strategy_kind, side)
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-def test_gpu_strict_entry_gate_decrements_exactly_one_quantity_step():
+def test_gpu_strict_entry_gate_decrements_representable_quantity_steps():
     import passivbot_rust
 
     # Exercise the production arithmetic directly on the device. Venue counts
@@ -20427,7 +20427,7 @@ kernel void passivbot_quantity_decrement_probe(
     result[b] = decrement_aligned_qty_step(quantity[b], steps[b]);
 }
 """
-    counts = np.asarray([0, 1, 2, 64, 66, 70, 78, 81, 93, 65537], dtype=np.float32)
+    counts = np.asarray([0, 1, 2, 64, 66, 70, 78, 81, 93, 65537, 16777216, 16777218, 20000000, 33554432, 67108864, 1e10], dtype=np.float32)
     steps = np.repeat(np.asarray([0.001, 0.1, 0.25, 1e-8], dtype=np.float32), len(counts))
     counts = np.tile(counts, 4)
     quantity = torch.as_tensor(counts * steps, device=gpu_device())
@@ -20437,5 +20437,10 @@ kernel void passivbot_quantity_decrement_probe(
     library.passivbot_quantity_decrement_probe(quantity, packed_steps, output,
         threads=(len(counts), 1, 1))
     synchronize()
-    assert torch.round(output / packed_steps).cpu().tolist() == np.maximum(counts - 1, 0).tolist()
+    returned_counts = torch.round(output / packed_steps).cpu().numpy()
+    exact = counts < 2**24
+    assert returned_counts[exact].tolist() == np.maximum(counts[exact] - 1, 0).tolist()
+    large = ~exact
+    assert np.all(returned_counts[large] < counts[large])
+    assert bool(torch.all(output[quantity > 0] < quantity[quantity > 0]).item())
     assert bool(torch.all(output >= 0).item())
