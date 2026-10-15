@@ -6,9 +6,8 @@ use crate::types::{
 };
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
-    calc_wallet_exposure_if_filled, cost_to_qty, interpolate, quantize_price, quantize_qty, round_,
-    tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
-    RoundingMode,
+    calc_wallet_exposure_if_filled, canonical_qty_units, cost_to_qty, floor_qty_difference,
+    interpolate, quantize_price, quantize_qty, round_, round_price_distance, RoundingMode,
 };
 
 pub fn wallet_exposure_limit_with_allowance(
@@ -322,16 +321,25 @@ pub fn calc_cropped_reentry_qty(
 // rounding boundary. Aligned positions are an integer number of venue steps;
 // round their DDF product in those units. Preserve off-grid input behavior.
 fn rounded_position_reentry_qty(position_size: f64, factor: f64, step: f64) -> f64 {
-    let units = position_size.abs() / step;
-    let aligned = units.round();
-    if (units - aligned).abs() <= f64::EPSILON * units.abs().max(aligned.abs()) * 4.0 {
+    if let Some(aligned) = canonical_qty_units(position_size.abs(), step) {
         let product = aligned * factor;
         let half_step = product.floor() + 0.5;
-        let tolerance = f64::EPSILON * product.abs() * 4.0;
-        // Recover only representation noise at a resolvable half-step. Once
-        // that tolerance spans a quarter-step, do not infer decimal intent.
-        let rounded_product = if tolerance < 0.25 && (product - half_step).abs() <= tolerance {
-            half_step
+        let gap = half_step - product;
+        // The cheap relative check only identifies possible boundaries. Decide
+        // with the measured multiplication residual and at most half an input
+        // factor ULP; a count-scaled epsilon can erase genuine sub-half units.
+        let rounded_product = if gap > 0.0 && gap <= f64::EPSILON * product.abs() * 4.0 {
+            let factor_half_ulp = (factor.next_up() - factor)
+                .abs()
+                .max((factor - factor.next_down()).abs())
+                * 0.5;
+            let multiplication_error = aligned.mul_add(factor, -product).abs();
+            let tolerance = aligned.abs().mul_add(factor_half_ulp, multiplication_error);
+            if tolerance < 0.25 && gap <= tolerance {
+                half_step
+            } else {
+                product
+            }
         } else {
             product
         };
@@ -398,9 +406,11 @@ fn calc_reentry_price_bid(
         volatility_ema_1m,
     );
     let reentry_price = f64::min(
-        tolerant_round_dn_preserve_step(
-            position_price * (1.0 - entry_params.threshold_base_pct * spacing_multiplier),
+        round_price_distance(
+            position_price,
+            -entry_params.threshold_base_pct * spacing_multiplier,
             exchange_params.price_step,
+            RoundingMode::Floor,
         ),
         order_book_bid,
     );
@@ -435,9 +445,11 @@ fn calc_reentry_price_ask(
         volatility_ema_1m,
     );
     let reentry_price = f64::max(
-        tolerant_round_up_preserve_step(
-            position_price * (1.0 + entry_params.threshold_base_pct * spacing_multiplier),
+        round_price_distance(
+            position_price,
+            entry_params.threshold_base_pct * spacing_multiplier,
             exchange_params.price_step,
+            RoundingMode::Ceil,
         ),
         order_book_ask,
     );
@@ -485,8 +497,9 @@ pub fn calc_grid_entry_long(
         return Order {
             qty: f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                tolerant_round_dn_preserve_step(
-                    initial_entry_qty - position.size,
+                floor_qty_difference(
+                    initial_entry_qty,
+                    position.size,
                     exchange_params.qty_step,
                 ),
             ),
@@ -652,8 +665,9 @@ pub fn calc_trailing_entry_long(
         return Order {
             qty: f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                tolerant_round_dn_preserve_step(
-                    initial_entry_qty - position.size,
+                floor_qty_difference(
+                    initial_entry_qty,
+                    position.size,
                     exchange_params.qty_step,
                 ),
             ),
@@ -711,9 +725,11 @@ pub fn calc_trailing_entry_long(
             entry_triggered = true;
             reentry_price = f64::min(
                 state_params.order_book.bid,
-                tolerant_round_dn_preserve_step(
-                    position.price * (1.0 - threshold_pct),
+                round_price_distance(
+                    position.price,
+                    -threshold_pct,
                     exchange_params.price_step,
+                    RoundingMode::Floor,
                 ),
             );
         } else {
@@ -725,9 +741,11 @@ pub fn calc_trailing_entry_long(
                 entry_triggered = true;
                 reentry_price = f64::min(
                     state_params.order_book.bid,
-                    tolerant_round_dn_preserve_step(
-                        position.price * (1.0 - threshold_pct + retracement_pct),
+                    round_price_distance(
+                        position.price,
+                        -threshold_pct + retracement_pct,
                         exchange_params.price_step,
+                        RoundingMode::Floor,
                     ),
                 );
             }
@@ -823,8 +841,9 @@ pub fn calc_grid_entry_short(
         return Order {
             qty: -f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                tolerant_round_dn_preserve_step(
-                    initial_entry_qty - position_size_abs,
+                floor_qty_difference(
+                    initial_entry_qty,
+                    position_size_abs,
                     exchange_params.qty_step,
                 ),
             ),
@@ -941,8 +960,9 @@ pub fn calc_trailing_entry_short(
         return Order {
             qty: -f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                tolerant_round_dn_preserve_step(
-                    initial_entry_qty - position_size_abs,
+                floor_qty_difference(
+                    initial_entry_qty,
+                    position_size_abs,
                     exchange_params.qty_step,
                 ),
             ),
@@ -1000,9 +1020,11 @@ pub fn calc_trailing_entry_short(
             entry_triggered = true;
             reentry_price = f64::max(
                 state_params.order_book.ask,
-                tolerant_round_up_preserve_step(
-                    position.price * (1.0 + threshold_pct),
+                round_price_distance(
+                    position.price,
+                    threshold_pct,
                     exchange_params.price_step,
+                    RoundingMode::Ceil,
                 ),
             );
         } else {
@@ -1014,9 +1036,11 @@ pub fn calc_trailing_entry_short(
                 entry_triggered = true;
                 reentry_price = f64::max(
                     state_params.order_book.ask,
-                    tolerant_round_up_preserve_step(
-                        position.price * (1.0 + threshold_pct - retracement_pct),
+                    round_price_distance(
+                        position.price,
+                        threshold_pct - retracement_pct,
                         exchange_params.price_step,
+                        RoundingMode::Ceil,
                     ),
                 );
             }
@@ -1323,7 +1347,11 @@ mod tests {
             );
             // The aligned difference is 28 steps. A genuinely fractional
             // remaining quantity must still be rounded down to 27 steps.
-            for (size, expected) in [(0.066, 0.028), (0.066000001, 0.027)] {
+            for (size, expected) in [
+                (0.066, 0.028),
+                (0.066_f64.next_up(), 0.027),
+                (0.066000001, 0.027),
+            ] {
                 for short in [false, true] {
                     let position = Position {
                         size: if short { -size } else { size },
@@ -1655,6 +1683,40 @@ mod tests {
             ),
             100.12
         );
+    }
+
+    #[test]
+    fn reentry_unit_recovery_preserves_genuine_off_grid_sizes() {
+        for sign in [-1.0, 1.0] {
+            let size = sign * 0.477_f64.next_down();
+            assert_eq!(
+                round_(rounded_position_reentry_qty(size, 0.5, 0.001), 0.001),
+                0.238
+            );
+        }
+        // Preserve a distinct, authored factor immediately below 1.15.
+        assert_eq!(
+            round_(
+                rounded_position_reentry_qty(5.0, 1.15_f64.next_down(), 0.1),
+                0.1
+            ),
+            5.7
+        );
+    }
+
+    #[test]
+    fn large_reentry_products_preserve_resolvable_sub_half_units() {
+        // Independent decimal reference: 10,000,000,003,871 * 1.19
+        // = 11,900,000,004,606.49 venue units, which must round down.
+        for sign in [-1.0, 1.0] {
+            assert_eq!(
+                round_(
+                    rounded_position_reentry_qty(sign * 100_000.00003871, 1.19, 1e-8),
+                    1e-8
+                ),
+                119_000.00004606
+            );
+        }
     }
 
     #[test]

@@ -30,6 +30,57 @@ fn round_to_step_decimal_places(value: f64, step: f64) -> f64 {
     }
 }
 
+/// Recover venue units only when the quantity is canonical and adjacent units
+/// remain distinguishable. Fractional or unresolved inputs retain physical-unit
+/// arithmetic at their caller.
+pub(crate) fn canonical_qty_units(quantity: f64, step: f64) -> Option<f64> {
+    let units = (quantity / step).round();
+    if units >= 0.0
+        && units < 9_007_199_254_740_992.0
+        && quantity.next_up() - quantity <= step
+        && quantity == round_(quantity, step)
+    {
+        Some(units)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn floor_qty_difference(total: f64, held: f64, step: f64) -> f64 {
+    match (
+        canonical_qty_units(total, step),
+        canonical_qty_units(held, step),
+    ) {
+        (Some(total_units), Some(held_units)) => {
+            round_((total_units - held_units).max(0.0) * step, step)
+        }
+        _ => round_dn_preserve_step(total - held, step),
+    }
+}
+
+/// Form a relative price target with one arithmetic rounding. Only an exact
+/// match to the venue's canonical decimal representation counts as aligned;
+/// a genuine adjacent float must retain directional rounding.
+pub(crate) fn round_price_distance(base: f64, distance: f64, step: f64, mode: RoundingMode) -> f64 {
+    let target = base.mul_add(distance, base);
+    let units = target / step;
+    let decimal_multiplier = step_decimal_places(step).map(|places| 10f64.powi(places as i32));
+    let canonical = |value: f64| match decimal_multiplier {
+        Some(multiplier) => (value * multiplier).round() / multiplier,
+        None => value,
+    };
+    let nearest = canonical(units.round() * step);
+    if target == nearest {
+        return nearest;
+    }
+    let count = match mode {
+        RoundingMode::Nearest => units.round(),
+        RoundingMode::Floor => units.floor(),
+        RoundingMode::Ceil => units.ceil(),
+    };
+    canonical(count * step)
+}
+
 fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool {
     let scale = value.abs().max(aligned_value.abs());
     (value - aligned_value).abs() <= f64::EPSILON * scale * 4.0
@@ -461,6 +512,36 @@ mod tests {
         assert_eq!(round_(1e-10, 3e-12), 9.9e-11);
         assert_eq!(round_dn(0.999999999999, 3e-12), 0.999999999999);
         assert_eq!(round_up(1.000000000001, 3e-12), 1.000000000002);
+    }
+
+    #[test]
+    fn relative_price_quantization_preserves_exact_venue_alignment() {
+        use super::{round_price_distance, RoundingMode};
+        for (base, distance, step, expected) in [
+            (131.25, -0.0016, 0.01, 131.04),
+            (100.0, 0.0011, 0.01, 100.11),
+            (2.5, -0.044, 0.01, 2.39),
+            (0.29, 0.0, 0.01, 0.29),
+            (10.0, 0.025, 0.25, 10.25),
+            (1e-10, -0.01, 3e-12, 9.9e-11),
+        ] {
+            assert_eq!(
+                round_price_distance(base, distance, step, RoundingMode::Floor),
+                expected
+            );
+            assert_eq!(
+                round_price_distance(base, distance, step, RoundingMode::Ceil),
+                expected
+            );
+        }
+        assert_eq!(
+            round_price_distance(100.0, 0.00111, 0.01, RoundingMode::Floor),
+            100.11
+        );
+        assert_eq!(
+            round_price_distance(100.0, 0.00111, 0.01, RoundingMode::Ceil),
+            100.12
+        );
     }
 
     #[test]

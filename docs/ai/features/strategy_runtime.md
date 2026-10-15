@@ -161,6 +161,13 @@ Close thresholds are additive so they can intentionally cross through break-even
 as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
 wallet-exposure modifier.
 
+TM grid and trailing re-entry/close distance targets use a fused base-plus-distance expression.
+An aligned target equals the canonical decimal venue price; a distinct float keeps directional
+rounding. Quantity-unit arithmetic requires exact canonical quantities, fewer than 2^53 units,
+and distinguishable adjacent physical quantities. Other positions retain physical-unit rounding.
+Half-step recovery is bounded by the measured multiplication residual and half a factor ULP,
+and is disabled when that bound reaches a quarter-step.
+
 Auto-unstuck has its own EMA trigger toggle:
 `bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
