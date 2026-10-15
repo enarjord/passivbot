@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve valid tick-aligned trailing-martingale reentry prices when floating-point
+  multiplication lands just above or below the tick. Genuine off-tick targets keep
+  their existing directional rounding.
+
 - Preserve unfilled native GPU TM entries through forager hysteresis, reduce
   coin-HSL replay scratch and Metal pipeline preparation cost, reuse immutable
   TM rung settings, and expose opt-in replay phase and production-search host profiling

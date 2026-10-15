@@ -7,7 +7,8 @@ use crate::types::{
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
     calc_wallet_exposure_if_filled, cost_to_qty, interpolate, quantize_price, quantize_qty, round_,
-    round_dn, round_up, tolerant_round_dn_preserve_step, RoundingMode,
+    round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
+    RoundingMode,
 };
 
 pub fn wallet_exposure_limit_with_allowance(
@@ -370,7 +371,7 @@ fn calc_reentry_price_bid(
         volatility_ema_1m,
     );
     let reentry_price = f64::min(
-        round_dn(
+        tolerant_round_dn_preserve_step(
             position_price * (1.0 - entry_params.threshold_base_pct * spacing_multiplier),
             exchange_params.price_step,
         ),
@@ -407,7 +408,7 @@ fn calc_reentry_price_ask(
         volatility_ema_1m,
     );
     let reentry_price = f64::max(
-        round_up(
+        tolerant_round_up_preserve_step(
             position_price * (1.0 + entry_params.threshold_base_pct * spacing_multiplier),
             exchange_params.price_step,
         ),
@@ -1562,6 +1563,71 @@ mod tests {
             c_mult: 1.0,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn reentry_targets_preserve_aligned_ticks_despite_binary_noise() {
+        let mut exchange = make_exchange_params();
+        exchange.price_step = 0.01;
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = RuntimeOrderContext {
+            effective_wallet_exposure_limit: 1.0,
+        };
+        let mut entry = make_entry_params();
+        entry.threshold_we_weight = 0.0;
+        entry.threshold_volatility_1h_weight = 0.0;
+        entry.threshold_volatility_1m_weight = 0.0;
+        entry.threshold_base_pct = 0.0016;
+        // 131.25 * (1 - 0.0016) = 131.04 exactly in decimal arithmetic.
+        // The ordinary binary multiplication lands just below that valid tick.
+        assert_eq!(
+            calc_reentry_price_bid(
+                131.25, 0.1, 200.0, &exchange, &bot, &runtime, &entry, 0.0, 0.0, 1.0
+            ),
+            131.04
+        );
+        assert_eq!(
+            calc_reentry_price_bid(
+                131.25 - 1e-8,
+                0.1,
+                200.0,
+                &exchange,
+                &bot,
+                &runtime,
+                &entry,
+                0.0,
+                0.0,
+                1.0
+            ),
+            131.03
+        );
+        entry.threshold_base_pct = 0.0011;
+        // 100 * (1 + 0.0011) = 100.11; binary noise must not add a tick.
+        assert_eq!(
+            calc_reentry_price_ask(
+                100.0, 0.1, 1.0, &exchange, &bot, &runtime, &entry, 0.0, 0.0, 1.0
+            ),
+            100.11
+        );
+        assert_eq!(
+            calc_reentry_price_ask(
+                100.0 + 1e-8,
+                0.1,
+                1.0,
+                &exchange,
+                &bot,
+                &runtime,
+                &entry,
+                0.0,
+                0.0,
+                1.0
+            ),
+            100.12
+        );
     }
 
     fn make_entry_params() -> TrailingMartingaleEntryParams {
