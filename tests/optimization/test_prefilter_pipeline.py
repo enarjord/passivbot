@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from copy import deepcopy
 from collections import defaultdict
 
 import numpy as np
@@ -161,6 +162,16 @@ def test_mixed_screened_cohort_keeps_config_rejections_in_tell(monkeypatch, tmp_
         base.config["optimize"]["prefilter"] = rejecting_policy()
         base.config["backtest"]["dynamic_wel_by_tradability"] = False
         records, path = [], tmp_path / "checkpoint.pkl"
+        # Explicitly place both outcomes in the initial cohort. A random cohort
+        # need not contain both classes, even when its configured seed is fixed.
+        import optimization.backends.gpu_backend as backend
+        population = []
+        for qty in (0.01, 0.02, 0.04, 0.05):
+            config = deepcopy(base.config)
+            config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = qty
+            population.append(optimize.config_to_individual(config, base.bounds,
+                              optimization_shape=base.optimization_shape))
+        monkeypatch.setattr(backend, "_build_random_sampling", lambda *_args: np.asarray(population))
         execute(base, SimpleNamespace(record=records.append), path, evaluator=suite)
         rejected = [
             row for row in records if row["metrics"].get("backtest_performed") is False
