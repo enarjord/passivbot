@@ -3274,7 +3274,13 @@ class _MulticoinReplayRunner:
             raise RuntimeError("GPU replay state has an invalid compiled size")
 
     def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
+        # Metal creates the compute pipeline lazily at kernel lookup. Keep its
+        # first-use cost separate from device execution, including unchunked replay.
+        profile_pipeline = getattr(self, "_profile_pipeline", False)
+        lookup_started = time.perf_counter() if profile_pipeline else 0.0
         kernel = getattr(library, self.replay_kernel_name)
+        if profile_pipeline:
+            self._pipeline_seconds += time.perf_counter() - lookup_started
         if not self._temporal_replay_enabled():
             dispatch_options = {"threads": (batch_size, 1, 1)}
             if gpu_device(torch) == "cuda" and self.replay_sides == 1 and self.cuda_whole_group_size is not None:
@@ -3560,6 +3566,8 @@ class _MulticoinReplayRunner:
                 device=gpu_device(),
             )
         prepared = time.perf_counter() if profile else 0.0
+        self._profile_pipeline = profile
+        self._pipeline_seconds = 0.0
         if profile:
             synchronize()
             dispatched = time.perf_counter()
@@ -3591,7 +3599,8 @@ class _MulticoinReplayRunner:
                 "upload_and_zero_seconds": prepared - compiled,
                 "compile_seconds": compiled - packed,
                 "pre_dispatch_sync_seconds": dispatched - prepared,
-                "kernel_seconds": finished - dispatched,
+                "pipeline_seconds": self._pipeline_seconds,
+                "kernel_seconds": max(0.0, finished - dispatched - self._pipeline_seconds),
                 "batch_size": batch_size,
                 "dispatch_count": 1,
                 "kernel_candidate_steps": int(

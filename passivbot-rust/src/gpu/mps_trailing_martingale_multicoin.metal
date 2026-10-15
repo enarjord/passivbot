@@ -1004,39 +1004,25 @@ struct RecursiveEntryCandidate {
 };
 
 // Rebuild one recursive grid reentry from an immutable generation snapshot.
-// Portfolio TWEL gating is intentionally outside this helper; the baseline
-// multi-coin recursive-entry slice fails closed while that gate is enabled.
-inline RecursiveEntryCandidate next_recursive_grid_entry(
+// Portfolio TWEL gating is handled by the caller. Immutable rung settings
+// can be shared across its admission and fill loops without changing arithmetic.
+// Generation-time indicators and policy stay fixed across one recursive ladder.
+// Resolve overrides and EMA gate ticks once rather than at every rung.
+struct RecursiveEntryContext {
+    float initial_qty_pct;
+    float threshold_base;
+    float threshold_we;
+    float threshold_v1h;
+    float threshold_v1m;
+    float ddf;
+    int band_tick;
+    bool coin_gate_reentry;
+};
+inline RecursiveEntryContext recursive_entry_context(
     thread const TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
-    constant float* coin_overrides,
-    int coin,
-    bool short_side,
-    float sim_psize,
-    float sim_pprice,
-    float generation_balance,
-    float allowed_wel,
-    float generation_initial_price,
-    int generation_touch_tick,
-    float generation_market_price,
-    float qty_step,
-    float price_step,
-    float min_qty,
-    float min_cost,
-    float c_mult,
-    bool market_orders_allowed,
-    float market_order_near_touch_threshold
+    constant float* coin_overrides, int coin, bool short_side, float price_step
 ) {
-    RecursiveEntryCandidate out;
-    out.ticks = 0;
-    out.order_type = short_side ? 15 : 4;
-    out.price = 0.0f;
-    out.strategy_qty = 0.0f;
-    out.executable_qty = 0.0f;
-    out.market = false;
-    if (!(sim_psize > 0.0f && sim_pprice > 0.0f
-        && generation_balance > 0.0f && allowed_wel > 0.0f)) return out;
-
     float initial_ema_dist = coin_override_or(
         coin_overrides, coin, 5, config.initial_ema_dist
     );
@@ -1066,6 +1052,64 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
         : int(floor(
             band * (1.0f - initial_ema_dist) / price_step + 1.0e-6f
         ));
+    bool coin_gate_reentry = coin_override_or(
+        coin_overrides, coin, GATE_REENTRY_OVERRIDE_COL,
+        config.gate_reentry ? 1.0f : 0.0f
+    ) > 0.5f;
+
+    RecursiveEntryContext out;
+    out.initial_qty_pct = initial_qty_pct;
+    out.threshold_base = threshold_base;
+    out.threshold_we = threshold_we;
+    out.threshold_v1h = threshold_v1h;
+    out.threshold_v1m = threshold_v1m;
+    out.ddf = ddf;
+    out.band_tick = band_tick;
+    out.coin_gate_reentry = coin_gate_reentry;
+    return out;
+}
+inline RecursiveEntryCandidate next_recursive_grid_entry(
+    thread const TrailingMartingaleMulticoinSideState& side,
+    thread const TrailingMartingaleMulticoinSideConfig& config,
+    constant float* coin_overrides,
+    int coin,
+    bool short_side,
+    float sim_psize,
+    float sim_pprice,
+    float generation_balance,
+    float allowed_wel,
+    float generation_initial_price,
+    int generation_touch_tick,
+    float generation_market_price,
+    float qty_step,
+    float price_step,
+    float min_qty,
+    float min_cost,
+    float c_mult,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold,
+    thread const RecursiveEntryContext* cached_context = nullptr
+) {
+    RecursiveEntryCandidate out;
+    out.ticks = 0;
+    out.order_type = short_side ? 15 : 4;
+    out.price = 0.0f;
+    out.strategy_qty = 0.0f;
+    out.executable_qty = 0.0f;
+    out.market = false;
+    if (!(sim_psize > 0.0f && sim_pprice > 0.0f
+        && generation_balance > 0.0f && allowed_wel > 0.0f)) return out;
+
+    RecursiveEntryContext context = cached_context != nullptr ? *cached_context
+        : recursive_entry_context(side, config, coin_overrides, coin, short_side, price_step);
+    float initial_qty_pct = context.initial_qty_pct;
+    float threshold_base = context.threshold_base;
+    float threshold_we = context.threshold_we;
+    float threshold_v1h = context.threshold_v1h;
+    float threshold_v1m = context.threshold_v1m;
+    float ddf = context.ddf;
+    int band_tick = context.band_tick;
+    bool coin_gate_reentry = context.coin_gate_reentry;
     // Rust's recursive ladder advances the simulated book after each rung.
     // Reprice its initial-quantity floor at that touch while keeping the
     // original raw sizing price when it still controls (including EMA gating).
@@ -1103,10 +1147,6 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
         ? generation_touch_tick >= raw_tick
         : generation_touch_tick <= raw_tick;
     int entry_tick = touch_controls ? generation_touch_tick : raw_tick;
-    bool coin_gate_reentry = coin_override_or(
-        coin_overrides, coin, GATE_REENTRY_OVERRIDE_COL,
-        config.gate_reentry ? 1.0f : 0.0f
-    ) > 0.5f;
     if (coin_gate_reentry) {
         bool band_controls = short_side
             ? band_tick >= entry_tick : band_tick <= entry_tick;
@@ -1214,6 +1254,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
 ) {
     if (!side.entry_deferred_twel_gate) return;
 
+    RecursiveEntryContext entry_contexts[MAX_COINS];
     RecursiveEntryCandidate first[MAX_COINS];
     RecursiveEntryCandidate suffix[MAX_COINS];
     float sim_psize[MAX_COINS];
@@ -1289,6 +1330,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
         sim_touch_tick[c] = short_side
             ? max(sim_touch_tick[c], first[c].ticks)
             : min(sim_touch_tick[c], first[c].ticks);
+        entry_contexts[c] = recursive_entry_context(side, config, coin_overrides, c, short_side, coin_settings[coin_offset + 1]);
         suffix[c] = next_recursive_grid_entry(
             side, config, coin_overrides, c, short_side,
             sim_psize[c], sim_pprice[c], side.entry_gen_balance[c],
@@ -1298,7 +1340,8 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             coin_settings[coin_offset + 1],
             coin_settings[coin_offset + 2],
             coin_settings[coin_offset + 3], c_mult, market_orders_allowed,
-            market_order_near_touch_threshold
+            market_order_near_touch_threshold,
+            &entry_contexts[c]
         );
         suffix_valid[c] = suffix[c].ticks > 1
             && suffix[c].ticks != previous_tick[c]
@@ -1429,7 +1472,8 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             sim_touch_tick[best_coin],
             side.entry_gen_market_price[best_coin],
             qty_step, coin_settings[coin_offset + 1], min_qty, min_cost,
-            c_mult, market_orders_allowed, market_order_near_touch_threshold
+            c_mult, market_orders_allowed, market_order_near_touch_threshold,
+            &entry_contexts[best_coin]
         );
         suffix_valid[best_coin] = suffix[best_coin].ticks > 1
             && suffix[best_coin].ticks != previous_tick[best_coin]
@@ -2475,6 +2519,9 @@ inline bool process_tm_multicoin_side_fills(
             && entry_recursive_mode[c]
             && (entry_qty[c] > 0.0f
                 || side.entry_gate_suffix_keep_count[c] > 0);
+        RecursiveEntryContext entry_context;
+        if (gated_recursive_plan || (filled_entry && entry_recursive_mode[c]))
+            entry_context = recursive_entry_context(side, config, coin_overrides, c, short_side, price_step);
         if (gated_recursive_plan) {
             float sim_psize = entry_gen_psize[c];
             float sim_pprice = entry_gen_pprice[c];
@@ -2501,7 +2548,8 @@ inline bool process_tm_multicoin_side_fills(
                         entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
-                        market_orders_allowed, market_order_near_touch_threshold
+                        market_orders_allowed, market_order_near_touch_threshold,
+                        &entry_context
                     );
                     int suffix_index = rung - 1;
                     if (suffix_index == suffix_partial_rank) {
@@ -2572,7 +2620,10 @@ inline bool process_tm_multicoin_side_fills(
                     ? max(sim_touch_tick, candidate.ticks)
                     : min(sim_touch_tick, candidate.ticks);
             }
-            entry_qty[c] = 0.0f;
+            // An unfilled first entry remains an outstanding order for the
+            // next forager hysteresis decision, as in the Rust order bundle.
+            // Actual fills already retire their entry through position update.
+            if (filled_entry) entry_qty[c] = 0.0f;
         } else if (filled_entry && entry_recursive_mode[c]) {
             float sim_psize = entry_gen_psize[c];
             float sim_pprice = entry_gen_pprice[c];
@@ -2594,7 +2645,8 @@ inline bool process_tm_multicoin_side_fills(
                         entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
-                        market_orders_allowed, market_order_near_touch_threshold
+                        market_orders_allowed, market_order_near_touch_threshold,
+                        &entry_context
                     );
                 }
                 if (!(candidate.strategy_qty > 0.0f

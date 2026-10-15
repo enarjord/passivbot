@@ -163,10 +163,21 @@ inline void attach_hsl_replay_side(
     }
 }
 
-inline bool replay_factual_hsl(
+// Keep the large reconstruction outside Metal's fused strategy call sites.
+// Inlining it there duplicates optimizer work during lazy pipeline creation.
+// CUDA retains its existing device-inline translation.
+#if defined(__METAL_VERSION__) && PASSIVBOT_HSL_FACTUAL_ONLY
+#define PASSIVBOT_HSL_REPLAY_FUNCTION __attribute__((noinline))
+#else
+#define PASSIVBOT_HSL_REPLAY_FUNCTION inline
+#endif
+PASSIVBOT_HSL_REPLAY_FUNCTION bool replay_factual_hsl(
     thread HslState& h, float budget, int minute, bool exposed, bool terminal
 ) {
     thread HslReplayContext& context = *h.replay;
+#if PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+    if (h.signal_mode != HSL_SIGNAL_COIN || h.replay_coin < 0) return false;
+#endif
 #if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
     // Exactly one bounded owner allocation per candidate, shared by both sides.
     // The cache contains disposable arithmetic, never controller permission.
@@ -207,10 +218,10 @@ inline bool replay_factual_hsl(
     }
     bool cache_eligible = cache_selected && exposed && !terminal;
 #endif
-    HslPairRing rings[2 * MAX_COINS];
-    HslScopePair pairs[2 * MAX_COINS];
-    float current_sizes[2 * MAX_COINS], quantity_steps[2 * MAX_COINS], prior_sizes[2 * MAX_COINS];
-    int cursors[2 * MAX_COINS], pair_ids[2 * MAX_COINS];
+    HslPairRing rings[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY];
+    HslScopePair pairs[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY];
+    float current_sizes[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY], quantity_steps[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY], prior_sizes[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY];
+    int cursors[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY], pair_ids[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY];
     int count = 0;
     int first = max(minute - h.hsl_lookback, 0);
     for (int s = 0; s < context.side_count; ++s) {
@@ -223,7 +234,7 @@ inline bool replay_factual_hsl(
             // Observed flat, without any retained activity, has no valuation
             // contribution. It does not require an invented quote or multiplier.
             if (source.facts.state->current_size == 0.0f && view.count == 0) continue;
-            if (count >= 2 * MAX_COINS) return false;
+            if (count >= PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY) return false;
             rings[count] = source.facts;
             pair_ids[count] = s * MAX_COINS + c;
             current_sizes[count] = source.facts.state->current_size;

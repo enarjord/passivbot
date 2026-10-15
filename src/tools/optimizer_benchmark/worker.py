@@ -166,7 +166,16 @@ def legacy_parameters(config, inputs, metrics):
     return result
 
 
-def instrument_replay(replay, dispatches):
+def instrument_replay(replay, dispatches, *, profiles=None):
+    replay.profile_enabled = profiles is not None
+    if profiles is not None:
+        name = "_evaluate" if callable(getattr(replay, "_evaluate", None)) else "evaluate"
+        original_evaluate = getattr(replay, name)
+        def profiled_evaluate(*args, **kwargs):
+            output = original_evaluate(*args, **kwargs)
+            profiles.append(deepcopy(replay.last_profile))
+            return output
+        setattr(replay, name, profiled_evaluate)
     def observe_runner(runner):
         if getattr(runner, "_optimizer_benchmark_observed", False):
             return
@@ -177,6 +186,8 @@ def instrument_replay(replay, dispatches):
             started = time.perf_counter()
             output = _original(params, *args, **kwargs)
             observation = dict(candidates=count, host_seconds=time.perf_counter() - started)
+            if profiles is not None:
+                observation["runner_profile"] = deepcopy(getattr(runner, "last_profile", {}))
             if "liq_step" in output:
                 observation["liquidation_flags"] = (output["liq_step"] >= 0).detach().cpu().tolist()
             dispatches.append(observation)
@@ -196,7 +207,22 @@ def instrument_replay(replay, dispatches):
         replay._construct_runner = observed_construct
 
 
-def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget):
+def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget, phase_profile=False):
+    # Instrumentation belongs to this measurement, including failed setup. Keep
+    # repeated in-process runs from accumulating wrappers and old observations.
+    from optimization.gpu.autotune import BatchController
+    from optimization.gpu.service import MpsMulticoinProxy
+    original_observe = BatchController.observe
+    original_init = MpsMulticoinProxy.__init__
+    try:
+        return _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds,
+                         dispatch_budget, phase_profile)
+    finally:
+        BatchController.observe = original_observe
+        MpsMulticoinProxy.__init__ = original_init
+
+
+def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget, phase_profile=False):
     import torch
     from optimization.gpu.runtime import gpu_device, synchronize
     from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
@@ -205,7 +231,7 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
     candles, btc, timestamps = arrays
     metrics, markets, exchange = entry["metrics"], entry["markets"], entry["exchange"]
     native = (Path("src/optimization/gpu/native.py")).exists()
-    dispatches, samples, tuning, tuning_windows = [], [], [], []
+    dispatches, samples, tuning, tuning_windows, profiles = [], [], [], [], []
     from optimization.gpu.autotune import BatchController
     original_observe = BatchController.observe
     tuning_started = time.perf_counter()
@@ -246,7 +272,7 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
         original_init = module.MpsMulticoinProxy.__init__
         def observed_init(self, *args, **kwargs):
             original_init(self, *args, **kwargs)
-            instrument_replay(self, dispatches)
+            instrument_replay(self, dispatches, profiles=profiles if phase_profile else None)
         module.MpsMulticoinProxy.__init__ = observed_init
         service.__enter__()
         service.register_dataset(entry["id"], dataset)
@@ -275,7 +301,7 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
         replay = proxy_type(config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
             exchange=exchange, batch_size=64 if width == "auto" else int(width), needed_metrics=set(metrics),
             max_dispatch_candidate_bars=dispatch_budget)
-        instrument_replay(replay, dispatches)
+        instrument_replay(replay, dispatches, profiles=profiles if phase_profile else None)
         if width == "auto":
             from optimization.gpu.autotune import configure_batch_tuning
             auto_config = deepcopy(config)
@@ -302,6 +328,7 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
             synchronize()
             sample_start = time.perf_counter()
             dispatch_start = len(dispatches)
+            profile_start = len(profiles)
             rows, latencies = evaluate(round_index)
             synchronize()
             seconds = time.perf_counter() - sample_start
@@ -316,6 +343,10 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
                           dispatches=dispatches[dispatch_start:], completion_latencies_seconds=latencies,
                           elapsed_seconds=time.perf_counter() - started,
                           results_sha256=cohort_digest(rows))
+            if phase_profile:
+                sample["phase_profiles"] = profiles[profile_start:]
+                sample["outside_replay_seconds"] = max(0.0, seconds - sum(
+                    p["wall_seconds"] for p in profiles[profile_start:])) if len(profiles) > profile_start else None
             if round_index == 0:
                 cold = sample
             if round_index >= warmup:
@@ -349,6 +380,7 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
     return dict(samples=samples, first_use=cold, parameter_seconds=parameter_seconds,
                 setup_seconds=setup_seconds, device=device, device_memory=memory,
                 engine="native_service" if native else "legacy_direct_replay",
+                phase_profile_enabled=phase_profile,
                 tuning_observations=tuning,
                 tuning_windows=tuning_windows,
                 first_tuning_window_seconds=tuning_windows[0]["elapsed_seconds"] if tuning_windows else None,
@@ -495,7 +527,7 @@ def run(args):
                           latency_scope="payload preparation plus simulation")
         else:
             result = gpu_runs(entry, arrays, args.width, args.repeats, args.warmup,
-                              args.tune_seconds, args.dispatch_budget)
+                              args.tune_seconds, args.dispatch_budget, args.phase_profile)
     import importlib.metadata
     versions = {name: importlib.metadata.version(name) for name in ("numpy", "pymoo", "psutil")}
     try:
@@ -533,6 +565,7 @@ def main():
     parser.add_argument("--tune-seconds", type=float, default=0)
     parser.add_argument("--dispatch-budget", type=int, default=50_000_000)
     parser.add_argument("--search-iters", type=int, default=64)
+    parser.add_argument("--phase-profile", action="store_true")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     sys.path.insert(0, str(Path(args.backend).resolve() / "src"))

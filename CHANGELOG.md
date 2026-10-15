@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve unfilled native GPU TM entries through forager hysteresis, reduce
+  coin-HSL replay scratch and Metal pipeline preparation cost, reuse immutable
+  TM rung settings, and expose opt-in
+  phase profiling in the repeatable optimizer benchmark suite.
+
 - Add an offline optimizer benchmark suite with frozen random candidate populations,
   feature and pairwise case coverage, bounded CPU/GPU measurements, production-search
   timing, and correctness-aware comparisons between pinned checkouts.

@@ -126,6 +126,14 @@ iteration counts do not by themselves establish equal search quality.
   never the unweighted mean of per-batch rates. A candidate has one scenario here.
 - Master uses direct legacy GPU replay in frozen-population mode. That timing omits
   its CPU exact-validation pipeline. `search-gpu` uses each branch's real backend.
+- `run --phase-profile` adds opt-in frozen-GPU phase measurements to each
+  cohort and runner observation: packing, upload/clear, library compilation,
+  lazy pipeline preparation, kernel execution, readback and metric reduction.
+  `outside_replay_seconds` measures caller work outside replay, including service
+  submission/collection; it is not a pure queue-time measurement. First use can
+  spend most of its time creating a Metal pipeline after library compilation.
+  Profiling adds synchronization overhead; use separate unprofiled runs for
+  acceptance throughput. This option does not profile production search modes.
 - Warm runs exclude setup and first use. First use may reuse on-disk Metal/CUDA
   compiler caches; it is not a cold-machine measurement.
 - Runner-call candidate counts are observed execution widths, not measured hardware

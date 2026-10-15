@@ -336,3 +336,62 @@ def test_cpu_worker_hashes_repetitions_without_latency_noise(frozen, monkeypatch
 def test_cohort_digest_covers_terminal_status():
     rows = [dict(metrics={"adg_strategy_eq": 1.0}, liquidated=False)]
     assert cohort_digest(rows) != cohort_digest([dict(metrics=rows[0]["metrics"], liquidated=True)])
+
+
+def test_phase_profiles_are_snapshotted_on_the_replay_owner():
+    class Replay:
+        profile_enabled = False
+        runners = {}
+        last_profile = {}
+        def evaluate(self, rows):
+            self.last_profile.clear()
+            self.last_profile.update(wall_seconds=float(len(rows)))
+            return rows
+    replay, profiles, dispatches = Replay(), [], []
+    instrument_replay(replay, dispatches, profiles=profiles)
+    assert replay.profile_enabled
+    replay.evaluate([1])
+    replay.evaluate([1, 2])
+    assert profiles == [dict(wall_seconds=1.0), dict(wall_seconds=2.0)]
+
+
+def test_summary_aggregates_phases_without_losing_timing_scope():
+    result = dict(status="completed", samples=[dict(seconds=5.0, completed=2, results=[],
+        phase_profiles=[dict(timings_seconds={"pipeline_preparation": 1.0, "kernel_execution": 2.0})],
+        outside_replay_seconds=2.0), dict(seconds=4.0, completed=2, results=[],
+        phase_profiles=[dict(timings_seconds={"pipeline_preparation": 0.0, "kernel_execution": 3.0})],
+        outside_replay_seconds=1.0)])
+    measured = summary(result)
+    assert measured["profiled_evaluations"] == 2
+    assert measured["phase_seconds_total"] == {"pipeline_preparation": 1.0, "kernel_execution": 5.0}
+    assert measured["outside_replay_seconds_total"] == 3.0
+    assert measured["candidates_per_second"] == pytest.approx(4 / 9)
+
+
+def test_phase_profile_rejects_search_modes(frozen):
+    from tools.optimizer_benchmark.__main__ import run
+    directory, _ = frozen
+    with pytest.raises(ValueError, match="supports frozen replay"):
+        run(SimpleNamespace(workload=directory, modes=["search-gpu:8"], phase_profile=True))
+
+
+def test_gpu_instrumentation_hooks_are_restored_after_failed_setup(monkeypatch):
+    pytest.importorskip("torch")
+    from optimization.gpu.autotune import BatchController
+    from optimization.gpu.service import MpsMulticoinProxy
+    original_observe, original_init = BatchController.observe, MpsMulticoinProxy.__init__
+    def failing(*_args):
+        BatchController.observe = object()
+        MpsMulticoinProxy.__init__ = object()
+        raise RuntimeError("setup failed")
+    monkeypatch.setattr(worker, "_gpu_runs", failing)
+    with pytest.raises(RuntimeError, match="setup failed"):
+        worker.gpu_runs(None, None, "8", 1, 1, 0, 100)
+    assert BatchController.observe is original_observe
+    assert MpsMulticoinProxy.__init__ is original_init
+
+
+def test_frozen_gpu_profiling_is_explicit():
+    replay = SimpleNamespace(profile_enabled=True, runners={})
+    instrument_replay(replay, [])
+    assert replay.profile_enabled is False

@@ -5074,7 +5074,7 @@ def test_tm_multicoin_temporal_replay_preserves_unavailable_valuation():
         (-4, ValueError, "HSL controller inputs"),
     ],
 )
-def test_tm_multicoin_temporal_continuation_preserves_fatal_marker(
+def test_tm_multicoin_temporal_replay_stops_on_fatal_marker(
     side, marker, error, message
 ):
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
@@ -5089,7 +5089,7 @@ def test_tm_multicoin_temporal_continuation_preserves_fatal_marker(
         calls += 1
         if calls == 2:
             # A completed early dispatch reported fatal input/history failure.
-            # Later real GPU dispatches must not restore state or overwrite it.
+            # The next compact status check must stop replay immediately.
             runner._buffers[1][1][0, 9] = marker
 
     runner = MpsTrailingMartingaleMulticoinRunner(
@@ -5103,7 +5103,10 @@ def test_tm_multicoin_temporal_continuation_preserves_fatal_marker(
     matrix = np.asarray([row], dtype=np.float64)
     with pytest.raises(error, match=message):
         runner.run(matrix)
-    assert calls > 2 and runner._buffers[1][1][0, 9].item() == marker
+    # Fatal statuses are checked after every completed chunk. Waiting for a
+    # third interrupt callback would require continuing work after that failure.
+    assert calls == 2
+    assert runner._buffers[1][1][0, 9].item() == marker
     runner.interrupt_check = lambda: None
     assert runner.run(matrix)["alive"].item()  # A new replay resets fatal state.
 
@@ -18634,7 +18637,7 @@ def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_finalization(
+def test_mps_trailing_martingale_multicoin_drops_subminimum_final_touch_close(
     side,
 ):
     count = 6
@@ -18703,11 +18706,14 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
     ).run(np.array([row], dtype=np.float64))
     synchronize()
 
-    # Exact Rust sizes against the raw 100.004 touch before finalizing the
-    # executable close to 100.00. The raw minimum is 0.100; recomputing it
-    # after finalization would yield 0.101 and leave the wrong remainder.
+    # Raw-touch sizing proposes 0.100, but its finalized limit price is 100.00:
+    # notional 10.0 is below 10.0004. Rust's final close normalization drops
+    # this leg; the position is not itself dust, so the full-position exception
+    # does not apply. Sizing at the raw touch does not bypass final admission.
     position_key = "psize" if side == "long" else "short_psize"
-    assert output[position_key].item() == pytest.approx(0.9, abs=1e-6)
+    assert 0.1 * 100.0 < markets[0].min_cost
+    assert output[position_key].item() == pytest.approx(1.0, abs=1e-6)
+    assert output["fill_count"].item() == 1
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -20519,3 +20525,28 @@ def test_multicoin_excess_allowance_changes_coin_hsl_signal(strategy_kind, side)
     assert out[f"hsl_triggers_{side}"][0].item() > 0
     assert out[f"hsl_triggers_{side}"][1].item() == 0
     assert (out["coin_fill_counts"] >= 1).all().item()
+
+
+@pytest.mark.parametrize("profile", [False, True])
+def test_multicoin_pipeline_lookup_is_profiled_only_when_enabled(monkeypatch, profile):
+    from optimization.gpu import mps_kernel
+
+    runner = mps_kernel._MulticoinReplayRunner.__new__(mps_kernel._MulticoinReplayRunner)
+    runner.replay_kernel_name = "replay"
+    runner._profile_pipeline = profile
+    runner._pipeline_seconds = 0.0
+    runner._temporal_replay_enabled = lambda: False
+    calls = []
+    clock = iter([10.0, 13.0])
+    def tick():
+        assert profile, "disabled profiling must not read the clock"
+        return next(clock)
+    class Library:
+        @property
+        def replay(self):
+            return lambda *args, **kwargs: calls.append((args, kwargs))
+    monkeypatch.setattr(mps_kernel.time, "perf_counter", tick)
+    monkeypatch.setattr(mps_kernel, "gpu_device", lambda *_: "mps")
+    runner._dispatch_replay(Library(), ("input",), None, batch_size=2, scalars=None)
+    assert runner._pipeline_seconds == (3.0 if profile else 0.0)
+    assert calls == [(("input",), {"threads": (2, 1, 1)})]

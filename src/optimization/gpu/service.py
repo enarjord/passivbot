@@ -168,6 +168,7 @@ _GPU_PROFILE_TIMING_KEYS = (
     "upload_and_buffer_clear",
     "cold_compilation",
     "warm_library_lookup",
+    "pipeline_preparation",
     "kernel_execution",
     "device_to_host",
     "metric_reduction",
@@ -180,6 +181,7 @@ _GPU_PROFILE_RUNNER_TIMING_KEYS = (
     "upload_and_buffer_clear",
     "cold_compilation",
     "warm_library_lookup",
+    "pipeline_preparation",
     "kernel_execution",
     "metric_reduction",
 )
@@ -445,6 +447,7 @@ def _add_gpu_runner_profile(
     ) + float(runner_profile.get("pre_dispatch_sync_seconds", 0.0))
     compile_seconds = float(runner_profile.get("compile_seconds", 0.0))
     timings["cold_compilation" if cold else "warm_library_lookup"] += compile_seconds
+    timings["pipeline_preparation"] += float(runner_profile.get("pipeline_seconds", 0.0))
     timings["kernel_execution"] += float(runner_profile.get("kernel_seconds", 0.0))
     timings["metric_reduction"] += float(
         runner_profile.get("metric_decode_seconds", 0.0)

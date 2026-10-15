@@ -57,6 +57,11 @@ def summary(result):
     completion_latencies = [v for s in samples for v in s.get("completion_latencies_seconds", [])]
     if result.get("isolated_requests"):
         latencies = completion_latencies
+    profiles = [p for sample in samples for p in sample.get("phase_profiles", [])]
+    phase_seconds = {}
+    for profile in profiles:
+        for key, value in profile.get("timings_seconds", {}).items():
+            phase_seconds[key] = phase_seconds.get(key, 0.0) + value
     def p95(values):
         return sorted(values)[max(0, math.ceil(len(values) * .95) - 1)] if values else None
     return dict(status="completed", median_batch_seconds=statistics.median(seconds),
@@ -67,7 +72,10 @@ def summary(result):
                 dispatch_size_counts={str(n): dispatches.count(n) for n in sorted(set(dispatches))},
                 single_candidate_latency_median_seconds=statistics.median(latencies) if latencies else None,
                 single_candidate_latency_p95_seconds=p95(latencies),
-                request_latency_p95_seconds=p95(completion_latencies))
+                request_latency_p95_seconds=p95(completion_latencies),
+                profiled_evaluations=len(profiles), phase_seconds_total=phase_seconds,
+                outside_replay_seconds_total=sum(sample.get("outside_replay_seconds") or 0.0 for sample in samples)
+                    if profiles else None)
 
 
 def numerical_comparison(reference, observed, metrics, policies, checks=()):
