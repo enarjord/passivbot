@@ -132,6 +132,10 @@ iteration counts do not by themselves establish equal search quality.
   `outside_replay_seconds` measures caller work outside replay, including service
   submission/collection; it is not a pure queue-time measurement. First use can
   spend most of its time creating a Metal pipeline after library compilation.
+  Older implementations without the separate pipeline field retain a combined
+  `kernel_execution_and_pipeline_preparation` phase and explicitly report that
+  pipeline preparation was not measured separately. State-size probing belongs
+  to compiled ABI preparation, outside replay execution.
   Profiling adds synchronization overhead; use separate unprofiled runs for
   acceptance throughput. This option does not profile production search modes.
 - Search modes accept `run --host-profile` for a main-thread function profile of

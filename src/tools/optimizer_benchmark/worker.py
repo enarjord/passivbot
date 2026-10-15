@@ -174,7 +174,17 @@ def instrument_replay(replay, dispatches, *, profiles=None):
         original_evaluate = getattr(replay, name)
         def profiled_evaluate(*args, **kwargs):
             output = original_evaluate(*args, **kwargs)
-            profiles.append(deepcopy(replay.last_profile))
+            snapshot = deepcopy(replay.last_profile)
+            timings = snapshot.get("timings_seconds")
+            if timings is not None:
+                measured = "pipeline_preparation" in timings
+                snapshot["pipeline_preparation_measured"] = measured
+                if not measured and "kernel_execution" in timings:
+                    # Older implementations combine lazy pipeline creation and
+                    # replay. Preserve that measured scope instead of implying
+                    # that pipeline preparation took zero seconds.
+                    timings["kernel_execution_and_pipeline_preparation"] = timings.pop("kernel_execution")
+            profiles.append(snapshot)
             return output
         setattr(replay, name, profiled_evaluate)
     def observe_runner(runner):

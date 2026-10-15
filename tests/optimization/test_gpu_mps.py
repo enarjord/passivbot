@@ -20550,3 +20550,22 @@ def test_multicoin_pipeline_lookup_is_profiled_only_when_enabled(monkeypatch, pr
     runner._dispatch_replay(Library(), ("input",), None, batch_size=2, scalars=None)
     assert runner._pipeline_seconds == (3.0 if profile else 0.0)
     assert calls == [(("input",), {"threads": (2, 1, 1)})]
+
+
+@pytest.mark.parametrize("profile", [False, True])
+def test_all_replay_kernel_lookup_profiles_only_when_enabled(monkeypatch, profile):
+    from optimization.gpu import mps_kernel
+    clock = iter([10.0, 13.0])
+    def tick():
+        assert profile, "disabled profiling must not read the clock"
+        return next(clock)
+    kernel = object()
+    class Library:
+        @property
+        def replay(self):
+            return kernel
+    monkeypatch.setattr(mps_kernel.time, "perf_counter", tick)
+    actual, seconds, prepared = mps_kernel._lookup_replay_kernel(Library(), "replay", profile=profile)
+    assert actual is kernel
+    assert seconds == (3.0 if profile else 0.0)
+    assert prepared == (13.0 if profile else 0.0)

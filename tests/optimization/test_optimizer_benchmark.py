@@ -486,3 +486,16 @@ def test_profiled_timings_cannot_establish_an_acceptance_speedup(profiling):
     row = compare(report, manifest)["rows"][0]
     assert row["speedup_second_over_first"] == 1.0
     assert row["equivalent_work_speedup"] == (None if profiling else 1.0)
+
+
+def test_older_replay_pipeline_timing_remains_explicitly_combined():
+    class Replay:
+        runners = {}
+        def evaluate(self, rows):
+            self.last_profile = dict(timings_seconds=dict(kernel_execution=12.0), wall_seconds=12.0)
+            return rows
+    replay, profiles = Replay(), []
+    instrument_replay(replay, [], profiles=profiles)
+    replay.evaluate([])
+    assert profiles[0]["pipeline_preparation_measured"] is False
+    assert profiles[0]["timings_seconds"] == {"kernel_execution_and_pipeline_preparation": 12.0}

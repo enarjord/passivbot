@@ -824,6 +824,14 @@ def _decode_entry_interval_outputs(stats, counts) -> dict:
     }
 
 
+def _lookup_replay_kernel(library, name, *, profile):
+    """Metal creates its compute pipeline lazily during kernel lookup."""
+    started = time.perf_counter() if profile else 0.0
+    kernel = getattr(library, name)
+    finished = time.perf_counter() if profile else 0.0
+    return kernel, finished - started, finished
+
+
 def _cached_library_with_miss(loader, *args):
     misses_before = loader.cache_info().misses
     library = loader(*args)
@@ -2325,6 +2333,9 @@ class MpsEmaAnchorRunner:
         loader, library_args = self._shader_library_cache_call()
         library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
+        kernel, pipeline_seconds, pipeline_finished = _lookup_replay_kernel(
+            library, "passivbot_ema_anchor", profile=profile
+        )
         if profile:
             synchronize()
             dispatched = time.perf_counter()
@@ -2351,7 +2362,7 @@ class MpsEmaAnchorRunner:
             kernel_args += self._hsl_buffers(batch_size)
             if self.recovery_distribution_enabled:
                 kernel_args += (recovery_samples,)
-            library.passivbot_ema_anchor(
+            kernel(
                 *kernel_args,
                 threads=(batch_size, 1, 1),
             )
@@ -2364,7 +2375,8 @@ class MpsEmaAnchorRunner:
                 "cpu_pack_seconds": packed - started,
                 "upload_and_zero_seconds": prepared - packed,
                 "compile_seconds": compiled - prepared,
-                "pre_dispatch_sync_seconds": dispatched - compiled,
+                "pre_dispatch_sync_seconds": dispatched - pipeline_finished,
+                "pipeline_seconds": pipeline_seconds,
                 "kernel_seconds": finished - dispatched,
                 "batch_size": batch_size,
                 "dispatch_count": 1,
@@ -3277,10 +3289,11 @@ class _MulticoinReplayRunner:
         # Metal creates the compute pipeline lazily at kernel lookup. Keep its
         # first-use cost separate from device execution, including unchunked replay.
         profile_pipeline = getattr(self, "_profile_pipeline", False)
-        lookup_started = time.perf_counter() if profile_pipeline else 0.0
-        kernel = getattr(library, self.replay_kernel_name)
+        kernel, pipeline_seconds, _prepared = _lookup_replay_kernel(
+            library, self.replay_kernel_name, profile=profile_pipeline
+        )
         if profile_pipeline:
-            self._pipeline_seconds += time.perf_counter() - lookup_started
+            self._pipeline_seconds += pipeline_seconds
         if not self._temporal_replay_enabled():
             dispatch_options = {"threads": (batch_size, 1, 1)}
             if gpu_device(torch) == "cuda" and self.replay_sides == 1 and self.cuda_whole_group_size is not None:
@@ -4938,7 +4951,15 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             dispatch_features, temporal_chunking=temporal_chunking
         )
         library, cold = _cached_library_with_miss(loader, *library_args)
+        # State layout probing prepares the compiled ABI, before replay timing.
+        if temporal_chunking and library_args not in self._replay_state_sizes:
+            size = torch.empty(1, dtype=torch.int32, device=gpu_device())
+            library.passivbot_tm_single_coin_replay_state_bytes(size, threads=1)
+            self._replay_state_sizes[library_args] = int(size.item())
         compiled = time.perf_counter() if profile else 0.0
+        kernel, pipeline_seconds, pipeline_finished = _lookup_replay_kernel(
+            library, "passivbot_trailing_martingale", profile=profile
+        )
         if profile:
             synchronize()
             dispatched = time.perf_counter()
@@ -4968,7 +4989,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             if self.recovery_distribution_enabled:
                 kernel_args += (recovery_samples,)
             if not temporal_chunking:
-                library.passivbot_trailing_martingale(
+                kernel(
                     *kernel_args,
                     threads=(batch_size, 1, 1),
                     **(
@@ -4991,10 +5012,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 raise ValueError(
                     "MPS replay batch exceeds the per-dispatch work envelope"
                 )
-            if library_args not in self._replay_state_sizes:
-                size = torch.empty(1, dtype=torch.int32, device=gpu_device())
-                library.passivbot_tm_single_coin_replay_state_bytes(size, threads=1)
-                self._replay_state_sizes[library_args] = int(size.item())
             # Feature specialization changes the state ABI. Only the current
             # candidate batch allocation is retained across evaluations.
             state_bytes = self._replay_state_sizes[library_args]
@@ -5023,7 +5040,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                     device=gpu_device(),
                 )
                 started = time.perf_counter()
-                library.passivbot_trailing_martingale(
+                kernel(
                     *kernel_args,
                     replay_states,
                     replay_range,
@@ -5065,7 +5082,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 "cpu_pack_seconds": packed - started,
                 "upload_and_zero_seconds": prepared - packed,
                 "compile_seconds": compiled - prepared,
-                "pre_dispatch_sync_seconds": dispatched - compiled,
+                "pre_dispatch_sync_seconds": dispatched - pipeline_finished,
+                "pipeline_seconds": pipeline_seconds,
                 "kernel_seconds": finished - dispatched,
                 "batch_size": batch_size,
                 **dispatch_profile,
