@@ -1,5 +1,8 @@
 # Offline GPU cohort benchmark
 
+For frozen populations sampled from optimizer bounds, feature coverage and paired
+checkout measurements, use the [optimizer benchmark suite](optimizer_benchmark.md).
+
 `passivbot tool gpu-cohort-benchmark` measures deterministic synthetic candidate
 cohorts through serial CPU backtests, direct shared-account GPU replay and the
 native CUDA service. It never downloads data, reads accounts or runs optimization.
