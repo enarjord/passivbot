@@ -161,9 +161,9 @@ def legacy_parameters(config, inputs, metrics):
 
 
 def instrument_replay(replay, dispatches):
-    runners = [getattr(replay, "runner", None), getattr(replay, "fused_runner", None),
-               *getattr(replay, "runners", {}).values()]
-    for runner in {id(r): r for r in runners if r is not None}.values():
+    def observe_runner(runner):
+        if getattr(runner, "_optimizer_benchmark_observed", False):
+            return
         original = runner.run
         def measured(params, *args, _original=original, **kwargs):
             arrays = list(params.values()) if isinstance(params, dict) else [params]
@@ -176,6 +176,18 @@ def instrument_replay(replay, dispatches):
             dispatches.append(observation)
             return output
         runner.run = measured
+        runner._optimizer_benchmark_observed = True
+    runners = [getattr(replay, "runner", None), getattr(replay, "fused_runner", None),
+               *getattr(replay, "runners", {}).values()]
+    for runner in {id(r): r for r in runners if r is not None}.values():
+        observe_runner(runner)
+    if callable(getattr(replay, "_construct_runner", None)):
+        construct = replay._construct_runner
+        def observed_construct(*args, **kwargs):
+            runner = construct(*args, **kwargs)
+            observe_runner(runner)
+            return runner
+        replay._construct_runner = observed_construct
 
 
 def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget):

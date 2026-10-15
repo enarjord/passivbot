@@ -15,9 +15,9 @@ import pytest
 from tools.optimizer_benchmark.catalogue import (Case, PAIRWISE_FLAGS, catalogue,
     declared_gpu_support, pairwise_rows, select_cases)
 from tools.optimizer_benchmark.workloads import array_digest, digest, freeze, load_manifest
-from tools.optimizer_benchmark.report import numerical_comparison, summary, tuning_comparison
+from tools.optimizer_benchmark.report import numerical_comparison, summary, tuning_comparison, validate_policies
 from tools.optimizer_benchmark.__main__ import modes
-from tools.optimizer_benchmark.worker import strict_json
+from tools.optimizer_benchmark.worker import strict_json, instrument_replay
 
 
 def test_pairwise_covers_all_pairs_and_states():
@@ -204,3 +204,28 @@ def test_full_catalogue_freezes_without_device_import(tmp_path, real_runtime):
     manifest = freeze(tmp_path / "all-cases", profile="standard", candidates=2, bars=128)
     assert len(manifest["entries"]) == len(catalogue())
     assert {entry["case"]["name"] for entry in manifest["entries"]} == {case.name for case in catalogue()}
+
+
+def test_lazy_native_runner_is_observed_after_materialization():
+    class Runner:
+        def run(self, params):
+            return {}
+    class LazyReplay:
+        runners = {}
+        fused_runner = None
+        def _construct_runner(self, name, cls, kwargs):
+            return cls(**kwargs)
+    observations = []
+    replay = LazyReplay()
+    instrument_replay(replay, observations)
+    runner = replay._construct_runner("fused", Runner, {})
+    runner.run(np.zeros((3, 2)))
+    assert len(observations) == 1
+    assert observations[0]["candidates"] == 3
+
+
+@pytest.mark.parametrize("policy", [dict(absolute=-1, relative=0), dict(absolute=float("inf"), relative=0),
+                                   dict(absolute=True, relative=0), dict(absolute=0, relative=0, matching_infinity="false")])
+def test_invalid_tolerances_are_rejected(policy):
+    with pytest.raises(ValueError):
+        validate_policies(dict(metric=policy))

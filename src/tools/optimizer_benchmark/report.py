@@ -4,8 +4,25 @@ import math
 import statistics
 
 
+def validate_policies(policies):
+    if not isinstance(policies, dict):
+        raise ValueError("numerical policies must be an object")
+    for name, policy in policies.items():
+        if not isinstance(name, str) or not name or not isinstance(policy, dict):
+            raise ValueError("each policy needs a metric name and an object")
+        if set(policy) - {"absolute", "relative", "matching_infinity"} or not {"absolute", "relative"} <= set(policy):
+            raise ValueError(f"{name} policy requires absolute/relative and optional matching_infinity")
+        for field in ("absolute", "relative"):
+            value = policy[field]
+            if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name}.{field} must be finite and nonnegative")
+        if not isinstance(policy.get("matching_infinity", False), bool):
+            raise ValueError(f"{name}.matching_infinity must be boolean")
+
+
 def compare_values(reference, observed, metrics, policies):
     """Standalone comparison so older target branches need no parity module."""
+    validate_policies(policies)
     rows = {}
     for name in metrics:
         left, right, policy = reference.get(name), observed.get(name), policies.get(name)

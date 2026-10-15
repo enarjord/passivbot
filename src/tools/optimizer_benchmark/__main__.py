@@ -12,7 +12,7 @@ import sys
 import time
 
 from .catalogue import catalogue
-from .report import compare, markdown
+from .report import compare, markdown, validate_policies
 from .workloads import freeze, harness_digest, load_manifest
 
 
@@ -97,6 +97,7 @@ def run(args):
     policies = {name: vars(policy) for name, policy in DEFAULT_TOLERANCES.items()}
     if args.policies:
         policies.update(json.loads(Path(args.policies).read_text()))
+    validate_policies(policies)
     report = dict(version=1, workload_sha256=manifest["sha256"],
         harness_sha256=fingerprint,
         backends={label: dict(checkout=str(Path(root).resolve()), python=str(Path(python).absolute()),
