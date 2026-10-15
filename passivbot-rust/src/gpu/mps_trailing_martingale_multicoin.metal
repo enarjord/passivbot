@@ -4453,9 +4453,9 @@ inline void generate_tm_multicoin_side_orders(
         ));
         bool flat = psize[c] <= 0.0f;
         bool partial = !flat && psize[c] < iq * 0.8f;
-        float iq_partial = fmax(
-            min_iq, floor_step(iq - psize[c], qty_step)
-        );
+        float iq_partial = partial ? fmax(
+            min_iq, aligned_qty_difference(iq, psize[c], qty_step)
+        ) : 0.0f;
         float iq_effective = !flat && psize[c] < iq
             ? fmax(round_step(psize[c], qty_step), min_iq) : iq;
         float we = !flat && balance > 0.0f

@@ -17,6 +17,8 @@ since the latest release tag; these features may already be available when insta
   when floating-point multiplication lands just above or below the tick. Genuine
   off-tick targets keep their existing directional rounding. Round aligned reentry
   quantity products in venue units, recovering representation-only half-step noise.
+  Directional and multicoin GPU top-ups after partial closes also subtract
+  recoverable venue-unit counts without losing a quantity step.
 
 - Preserve unfilled native GPU TM entries through forager hysteresis, reduce
   coin-HSL replay scratch and Metal pipeline preparation cost, reuse immutable

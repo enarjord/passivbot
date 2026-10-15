@@ -1129,7 +1129,16 @@ mod tests {
         assert_eq!(source.matches("const int touch_up_tick").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 14);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 14);
-        assert!(!source.contains("nextafter("));
+        // Quantity-unit recovery bounds float spacing with nextafter; price
+        // tick comparisons must still avoid physical-price perturbations.
+        let (before_qty_difference, qty_and_rest) = source
+            .split_once("inline float aligned_qty_difference(")
+            .unwrap();
+        let (_, after_qty_difference) = qty_and_rest
+            .split_once("inline float min_entry_qty(")
+            .unwrap();
+        assert!(!before_qty_difference.contains("nextafter("));
+        assert!(!after_qty_difference.contains("nextafter("));
         assert!(source.contains("int cticks = touch_controls ? touch_nearest_ticks : target_ticks"));
         assert!(source.contains("remainder == mq && mq_relation > 0"));
         assert!(!source.contains("entry_raw_touch"));
