@@ -3204,10 +3204,58 @@ class _MulticoinReplayRunner:
                            for side in range(self.hsl_replay_sides)]]
         self.dispatch_native_hsl_coin_cache_eligible = bool(active and np.all(modes == 2))
         capacity = self.hsl_fact_capacity_learned if active else 0
-        if capacity != self.hsl_fact_capacity:
+        if (capacity != self.hsl_fact_capacity
+                and not (active and getattr(self, "initial_factual_capacity_batch_width", 0)
+                         and self.hsl_fact_capacity_learned == min(256, max(1, self.n)))):
             self._hsl_scratch_buffers.clear()
+        # An enabled fixed owner finalizes its reservation after policy validation.
+        # Keep completed buffers until that decision to avoid temporary reallocation.
         self.hsl_fact_capacity = capacity
         self.hsl_factual_replay = active
+
+    def _seed_initial_factual_capacity(self, batch_size):
+        """Reserve only an unlearned owner's window; guesses never become learning."""
+        width = getattr(self, "initial_factual_capacity_batch_width", 0)
+        if not width or not self.native_factual_hsl or not self.hsl_factual_replay:
+            return
+        baseline = self.hsl_fact_capacity_learned
+        if baseline != min(256, max(1, self.n)):
+            return  # Preserve useful overflow learning and its accepted storage.
+        width = min(width, self._history_batch_limit())
+        desired = 1 << (min(self.n, self.pnl_lookback_bars + 2) - 1).bit_length()
+        identity = self._library_cache_call()
+        available = None
+        candidate = max(baseline, desired)
+        try:
+            while candidate > baseline:
+                self.hsl_fact_capacity = candidate
+                needed = self._history_batch_bytes(width)
+                key = (batch_size, candidate, self._hsl_native_cache_bytes_per_candidate())
+                if (width >= batch_size and needed <= self.hsl_scratch_budget_bytes
+                        and self._library_cache_call() == identity):
+                    state_key = (batch_size, self._replay_state_bytes)
+                    if (key in self._hsl_scratch_buffers
+                            and (not self._temporal_replay_enabled()
+                                 or state_key in self._replay_states)):
+                        break  # Matching completed storage requires no resource query.
+                    if available is None:
+                        if self.bars.device.type == "cuda":
+                            free, total = map(int, torch.cuda.mem_get_info())
+                        else:
+                            total = int(torch.mps.recommended_max_memory())
+                            free = total - int(torch.mps.driver_allocated_memory())
+                        # Existing fixed-service growth headroom, without changing caps.
+                        available = max(0, free - max(256 * 1024**2, int(total * 0.2)))
+                    if needed <= available:
+                        break
+                candidate //= 2
+        finally:
+            self.hsl_fact_capacity = baseline
+        self.hsl_fact_capacity = max(baseline, candidate)
+        key = (batch_size, self.hsl_fact_capacity, self._hsl_native_cache_bytes_per_candidate())
+        if self._hsl_scratch_buffers and key not in self._hsl_scratch_buffers:
+            # Release completed factual storage before allocating its replacement.
+            self._hsl_scratch_buffers.clear()
 
     def _prepare_replay_state_layout(self, library, library_args):
         if not self._temporal_replay_enabled():
@@ -3467,6 +3515,9 @@ class _MulticoinReplayRunner:
                     effective = np.repeat(effective, 2, axis=1)
             self._validate_hsl_params(
                 policy_matrix, keys, effective_enabled=effective)
+        # The baseline split and policy validation precede any new headroom query.
+        # Admission preserves that split width and the already-sized compiled ABI.
+        self._seed_initial_factual_capacity(int(matrix.shape[0]))
         self.settings[-2] = getattr(self, "hsl_fact_capacity", 0)
         factual_replay = bool(getattr(self, "hsl_factual_replay", False))
         if factual_replay and not getattr(self, "hsl_fact_capacity", 0):

@@ -3190,6 +3190,11 @@ class MpsMulticoinProxy:
         if (self._factual_capacity_hints is not None and runner.native_factual_hsl
                 and runner._history_batch_bytes(1) > runner.hsl_scratch_budget_bytes):
             raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
+        if (self._factual_capacity_hints is not None and not self._automatic_scratch_budget
+                and runner.native_factual_hsl):
+            # Fixed service owners reserve against their maximum configured width.
+            # Automatic owners retain the existing seed and growth policy.
+            runner.initial_factual_capacity_batch_width = self.dispatch_batch_size
         return runner
 
     def _remember_factual_capacities(self):

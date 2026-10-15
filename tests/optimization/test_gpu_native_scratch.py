@@ -99,6 +99,7 @@ def test_new_owner_policy_preserves_fixed_and_metal_and_learned_facts(automatic,
     assert result is value
     assert getattr(value, "automatic_scratch_budget", False) == (automatic and device == "cuda")
     assert value.hsl_fact_capacity == value.hsl_fact_capacity_learned == 9
+    assert getattr(value, "initial_factual_capacity_batch_width", 0) == (0 if automatic else 128)
     assert len(calls) == int(automatic and device == "cuda")
     if automatic and device == "cuda":
         expected = cuda_history_budget(value, 10 * GIB, 12 * GIB, owners=1 if fused else 2)

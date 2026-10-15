@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reserve initial factual HSL storage from the input window for fresh fixed-width native GPU workers when the existing scratch budget and device headroom permit. Keep learned capacities, automatic sizing and overflow recovery unchanged.
+
 - Reuse immutable HSL order policy fields in cached backtest inputs instead of cloning policy parameters on every candle.
 
 - Add opt-in optimizer config prefilters for entry/close span, trailing confirmation,
