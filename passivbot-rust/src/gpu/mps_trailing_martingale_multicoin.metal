@@ -1416,7 +1416,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             );
             if (retained_cost + kept_qty * gate_price * c_mult
                 >= cap_cost) {
-                kept_qty = floor_step(kept_qty - qty_step, qty_step);
+                kept_qty = decrement_aligned_qty_step(kept_qty, qty_step);
             }
             float executable_min = min_entry_qty(
                 gate_price, qty_step, min_qty, min_cost, c_mult

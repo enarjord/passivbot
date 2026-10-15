@@ -20569,3 +20569,36 @@ def test_all_replay_kernel_lookup_profiles_only_when_enabled(monkeypatch, profil
     assert actual is kernel
     assert seconds == (3.0 if profile else 0.0)
     assert prepared == (13.0 if profile else 0.0)
+
+
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+def test_gpu_strict_entry_gate_decrements_exactly_one_quantity_step():
+    import passivbot_rust
+
+    # Exercise the production arithmetic directly on the device. Venue counts
+    # specify the expected decrement independently of floating physical units.
+    source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+    start = source.index("inline float decrement_aligned_qty_step(")
+    stop = source.index("\n}", start) + 2
+    probe = """#include <metal_stdlib>
+using namespace metal;
+""" + source[start:stop] + """
+kernel void passivbot_quantity_decrement_probe(
+    constant float* quantity, constant float* steps, device float* result,
+    uint b [[thread_position_in_grid]]
+) {
+    result[b] = decrement_aligned_qty_step(quantity[b], steps[b]);
+}
+"""
+    counts = np.asarray([0, 1, 2, 64, 66, 70, 78, 81, 93, 65537], dtype=np.float32)
+    steps = np.repeat(np.asarray([0.001, 0.1, 0.25, 1e-8], dtype=np.float32), len(counts))
+    counts = np.tile(counts, 4)
+    quantity = torch.as_tensor(counts * steps, device=gpu_device())
+    packed_steps = torch.as_tensor(steps, device=gpu_device())
+    output = torch.empty_like(quantity)
+    library = compile_shader(probe)
+    library.passivbot_quantity_decrement_probe(quantity, packed_steps, output,
+        threads=(len(counts), 1, 1))
+    synchronize()
+    assert torch.round(output / packed_steps).cpu().tolist() == np.maximum(counts - 1, 0).tolist()
+    assert bool(torch.all(output >= 0).item())
