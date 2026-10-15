@@ -8,7 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Preserve valid tick-aligned trailing-martingale reentry prices when floating-point
   multiplication lands just above or below the tick. Genuine off-tick targets keep
-  their existing directional rounding.
+  their existing directional rounding. Round aligned reentry quantity products in
+  venue units so exact half-steps are not rounded down by physical-unit binary noise.
 
 - Preserve unfilled native GPU TM entries through forager hysteresis, reduce
   coin-HSL replay scratch and Metal pipeline preparation cost, reuse immutable

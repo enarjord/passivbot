@@ -318,6 +318,19 @@ pub fn calc_cropped_reentry_qty(
     }
 }
 
+// Multiplying physical quantities can push an exact half-step below its
+// rounding boundary. Aligned positions are an integer number of venue steps;
+// round their DDF product in those units. Preserve off-grid input behavior.
+fn rounded_position_reentry_qty(position_size: f64, factor: f64, step: f64) -> f64 {
+    let units = position_size.abs() / step;
+    let aligned = units.round();
+    if (units - aligned).abs() <= f64::EPSILON * units.abs().max(aligned.abs()) * 4.0 {
+        (aligned * factor).round() * step
+    } else {
+        position_size.abs() * factor
+    }
+}
+
 pub fn calc_reentry_qty(
     entry_price: f64,
     balance: f64,
@@ -337,7 +350,11 @@ pub fn calc_reentry_qty(
         calc_min_entry_qty(entry_price, &exchange_params),
         round_(
             f64::max(
-                position_size.abs() * double_down_factor,
+                rounded_position_reentry_qty(
+                    position_size,
+                    double_down_factor,
+                    exchange_params.qty_step,
+                ),
                 cost_to_qty(balance, entry_price, exchange_params.c_mult)
                     * effective_wallet_exposure_limit
                     * entry_params.initial_qty_pct,
@@ -1628,6 +1645,38 @@ mod tests {
             ),
             100.12
         );
+    }
+
+    #[test]
+    fn aligned_reentry_quantity_half_steps_round_in_venue_units() {
+        let mut exchange = make_exchange_params();
+        exchange.qty_step = 0.001;
+        exchange.min_qty = 0.0;
+        exchange.min_cost = 0.0;
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = RuntimeOrderContext {
+            effective_wallet_exposure_limit: 1.0,
+        };
+        let mut entry = make_entry_params();
+        entry.initial_qty_pct = 0.0001;
+        let calculate = |size, factor| {
+            calc_reentry_qty(
+                100.0, 1.0, size, factor, &exchange, &bot, &runtime, &entry, 1.0,
+            )
+        };
+        // Decimal references: 0.477 * 0.5 = 0.2385; 0.85 * 1.19 = 1.0115.
+        assert_eq!(calculate(0.477, 0.5), 0.239);
+        assert_eq!(calculate(-0.477, 0.5), 0.239);
+        assert_eq!(calculate(0.85, 1.19), 1.012);
+        // Genuine differences on either side of a half-step remain distinct.
+        assert_eq!(calculate(0.477, 0.5 - 1e-12), 0.238);
+        assert_eq!(calculate(0.477, 0.5 + 1e-12), 0.239);
+        assert_eq!(calculate(0.477 - 1e-8, 0.5), 0.238);
+        assert_eq!(calculate(0.477 + 1e-8, 0.5), 0.239);
     }
 
     fn make_entry_params() -> TrailingMartingaleEntryParams {
