@@ -291,6 +291,68 @@ def test_cleanup_normalizes_dynamic_market_setting_numeric_types(mode):
     assert outputs[0] == outputs[1]
 
 
+@pytest.mark.parametrize("mode", ["full", "optimize"])
+@pytest.mark.parametrize("max_inline", [0, 10000])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_cleanup_normalizes_numeric_limit_lists(mode, max_inline, reverse):
+    outputs = []
+    for number in (int, float):
+        cfg = get_template_config()
+        limits = [
+            {
+                "metric": "backtest_completion_ratio",
+                "penalize_if": "less_than",
+                "value": number(1),
+                "threshold": number(1),
+                "bound": number(1),
+                "enabled": True,
+                "metadata": {"value": 2},
+            },
+            {
+                "metric": "adg_strategy_eq",
+                "penalize_if": "outside_range",
+                "range": [number(0), number(1)],
+                "values": [number(0), number(1)],
+                "bounds": {"min": number(0), "max": number(1)},
+            },
+            {"metric": "fills_count", "penalize_if": "greater_than", "value": number(10)},
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "value": 0.125,
+            },
+            {
+                "metric": "adg_strategy_eq",
+                "penalize_if": "inside_range",
+                "range": [0.125, number(1)],
+            },
+        ]
+        cfg["optimize"]["limits"] = list(reversed(limits)) if reverse else limits
+        output = render_source(
+            json.dumps(cfg), source=Path("input.json"), mode=mode, max_inline=max_inline
+        )
+        result = json.loads(output)["optimize"]["limits"]
+        assert result == cfg["optimize"]["limits"]
+        for limit in result:
+            for field in ("value", "threshold", "bound"):
+                if field in limit:
+                    assert type(limit[field]) is float
+            for field in ("range", "values"):
+                if field in limit:
+                    assert all(type(endpoint) is float for endpoint in limit[field])
+            if "bounds" in limit:
+                assert all(type(endpoint) is float for endpoint in limit["bounds"].values())
+            if "metadata" in limit:
+                assert type(limit["metadata"]["value"]) is int
+                assert limit["enabled"] is True
+        assert (
+            render_source(output, source=Path("input.json"), mode=mode, max_inline=max_inline)
+            == output
+        )
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
 def test_export_numeric_normalization_preserves_values_and_non_numeric_leaves():
     cfg = {
         "bot": {"long": {"unstuck": {"ema_span_0": 60.25, "enabled": False}}},

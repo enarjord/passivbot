@@ -72,6 +72,16 @@ def normalize_export_numbers(config: dict) -> dict:
             isinstance(part, str) for part in path
         ):
             path = resolve_dotted_config_path(config, ".".join(path))
+        # Limit entries are an open list: their threshold type does not depend
+        # on the entry's position or on the number of template examples.
+        if path[:2] == ("optimize", "limits") and len(path) in (4, 5):
+            if len(path) == 4 and path[3] in {"value", "threshold", "bound"}:
+                return 0.0
+            if len(path) == 5 and path[3] in {"range", "values", "bounds", "value"}:
+                if isinstance(path[4], int) or path[4] in {
+                    "low", "high", "min", "max", "start", "end"
+                }:
+                    return 0.0
         if (
             path[:2] == ("backtest", "market_settings")
             and path[-1] in market_float_fields
