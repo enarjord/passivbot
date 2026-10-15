@@ -466,6 +466,7 @@ def test_factual_capacity_survives_production_residency_eviction(runtime, runner
         result.fused_runner = None
         result._factual_capacity_hints = hints
         result._automatic_scratch_budget = automatic
+        result.dispatch_batch_size = 1
         result._torch = torch
         result.sides = ["long"]
         result.shared_account_fused = runner_key == "fused"
