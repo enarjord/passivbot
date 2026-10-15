@@ -37,6 +37,85 @@ def _reject_constant(value):
     raise ValueError(f"{value} is not a valid JSON number")
 
 
+def normalize_export_numbers(config: dict) -> dict:
+    """Use schema numeric types without rounding values or hydrating sparse patches."""
+    from config.schema import get_template_config
+
+    template = get_template_config()
+    template["bot"]["hsl"] = template["bot"]["long"]["hsl"]
+    for side in ("long", "short"):
+        # Position counts are rounded to integers by the shared loader even
+        # though historical template defaults use floats.
+        template["bot"][side]["risk"]["n_positions"] = 0
+        template["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 0.0
+    # Nullable numeric fields have no numeric default from which to infer type.
+    template["backtest"].update(btc_collateral_ltv_cap=0.0, ew_half_life_days=0.0)
+    template["live"].update(
+        balance_override=0.0,
+        max_concurrent_api_requests=0,
+        max_forager_candle_staleness_minutes=0.0,
+    )
+    template["optimize"].update(population_size=0, seed=0)
+    template["optimize"]["gpu"].update(batch_size=0, max_dispatch_candidate_bars=0)
+
+    def schema_at(path):
+        node = template
+        for part in path:
+            if isinstance(node, dict):
+                node = node.get(part)
+            elif (
+                isinstance(node, list)
+                and path[:2] == ("optimize", "bounds")
+                and isinstance(part, int)
+                and part < len(node)
+            ):
+                node = node[part]
+            else:
+                return None
+        return node
+
+    def normalize(value, path=()):
+        if isinstance(value, dict):
+            if path == ("coin_overrides",):
+                return {coin: normalize(patch) for coin, patch in value.items()}
+            if path == ("optimize", "fixed_runtime_overrides") or (
+                len(path) == 4
+                and path[:2] == ("backtest", "scenarios")
+                and path[-1] == "overrides"
+            ):
+                return {
+                    key: normalize(item, tuple(key.split(".")))
+                    for key, item in value.items()
+                }
+            return {
+                key: normalize(item, (*path, key)) for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [normalize(item, (*path, index)) for index, item in enumerate(value)]
+        default = schema_at(path)
+        if path[:2] == ("optimize", "bounds") and isinstance(path[-1], int):
+            parameter_default = schema_at(("bot", *path[2:-1]))
+            if type(parameter_default) in (int, float):
+                default = parameter_default
+        if type(default) is float and type(value) is int:
+            try:
+                converted = float(value)
+            except OverflowError as exc:
+                raise ValueError(
+                    f"{'.'.join(map(str, path))} is too large to export as a float"
+                ) from exc
+            if converted != value:
+                raise ValueError(
+                    f"{'.'.join(map(str, path))} cannot be exported as a float without losing precision"
+                )
+            return converted
+        if type(default) is int and type(value) is float and value.is_integer():
+            return int(value)
+        return value
+
+    return normalize(config)
+
+
 def cleanup_config(
     source: dict, *, mode: str = "full", base_config_path: str = ""
 ) -> dict:
@@ -149,7 +228,7 @@ def render_source(
     cleaned = cleanup_config(payload, mode=mode, base_config_path=str(source))
     return (
         json_dumps_streamlined(
-            cleaned,
+            normalize_export_numbers(cleaned),
             indent=indent,
             max_inline=max_inline,
             sort_keys=True,
