@@ -6,17 +6,17 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Preserve aligned trailing-mode reentry prices and authored half-step reentry
-  quantity products when binary arithmetic strays across their rounding boundary.
+- Reuse coin-HSL factual indexes across balance-budget changes while recomputing
+  each signal against the current budget; rejected queries use independent replay.
 
 - Reduce GPU trailing-martingale entry quantities at strict exposure-cap boundaries
   without losing an extra venue step to binary rounding. Above float32's exact unit-count
   range, retain a representably smaller quantity so the reduction cannot round away.
 
-- Preserve valid tick-aligned trailing-martingale entry and close prices when floating-point
-  multiplication lands just above or below the tick. Genuine off-tick targets keep
-  their existing directional rounding. Round aligned reentry quantity products in
-  venue units so exact half-steps are not rounded down by physical-unit binary noise.
+- Preserve valid tick-aligned trailing-martingale grid/trailing entry and close prices
+  when floating-point multiplication lands just above or below the tick. Genuine
+  off-tick targets keep their existing directional rounding. Round aligned reentry
+  quantity products in venue units, recovering representation-only half-step noise.
 
 - Preserve unfilled native GPU TM entries through forager hysteresis, reduce
   coin-HSL replay scratch and Metal pipeline preparation cost, reuse immutable
@@ -140,8 +140,8 @@ since the latest release tag; these features may already be available when insta
   maximum and tail only at portfolio scope, with zero long/short values.
 
 - EMA Anchor partial closes preserve valid minimum-size remainders when floating
-  subtraction differs only by representation noise; genuinely undersized
-  remainders still use full-position closes.
+  subtraction differs only by representation noise, including at representable
+  power-of-two quantity boundaries. Genuinely undersized remainders still close in full.
 
 - Native CUDA EMA Anchor backtests retain complete replay state across temporal
   dispatches, allowing interruption between history chunks. Native CUDA EMA/TM

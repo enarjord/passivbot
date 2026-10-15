@@ -313,13 +313,12 @@ PASSIVBOT_HSL_REPLAY_FUNCTION bool replay_factual_hsl(
 #if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY
     bool prime_native_cache = cache_eligible;
 #if PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
-    // Changed facts or budgets must use independent composition. Do not also
-    // build an index which another fill could immediately retire. An unchanged
-    // rolling history primes it on its first uncontinuable observation.
+    // The factual index is independent of the budget used to query it.
+    // The owner still validates retained facts, and numerical query rejection
+    // falls back to independent composition with the current budget.
     prime_native_cache = false;
 #if PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
-    prime_native_cache = cache_eligible && reused_cutoff
-        && !(h.scope_cursor.valid && h.scope_cursor.budget != budget);
+    prime_native_cache = cache_eligible && reused_cutoff;
 #endif
 #endif
 #endif
@@ -366,8 +365,8 @@ PASSIVBOT_HSL_REPLAY_FUNCTION bool replay_factual_hsl(
 #endif
 #if PASSIVBOT_HSL_NATIVE_CACHE_ENABLED && PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED && PASSIVBOT_HSL_INCREMENTAL_ENABLED && PASSIVBOT_HSL_CUTOFF_CACHE_ENABLED
     // Keep the original O(1) scalar continuation while its facts, budget and
-    // window remain certified. Recompose at changed facts/budgets to refresh
-    // that cursor; the index handles unchanged facts with a sliding window.
+    // window remain certified. The factual index handles sliding windows
+    // and queries changed budgets without retaining a prior budget's signal.
     if (cache_eligible) {
         // Amortize construction across stable observations. A single gap
         // between frequent fills does not justify rebuilding a retained curve.

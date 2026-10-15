@@ -52,6 +52,9 @@ Both current and terminal replay use the current budget. Changed balance, slots 
 headroom invalidates cached signals and can reclassify terminal cooldown without
 renewing the original flatten timestamp. Reject true for aggregate modes and reject
 coin overrides of this switch.
+A disposable factual index may survive a budget change only when each query recomputes
+the signal for the current budget. Index rejection or loss returns to independent factual
+replay without changing the controller decision.
 
 Use minute closes in live and backtest reconstruction. Historical coarser candles use the
 shared deterministic OHLC expansion; remaining gaps forward-fill then backfill a missing

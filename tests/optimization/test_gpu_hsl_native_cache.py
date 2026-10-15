@@ -98,7 +98,7 @@ def test_native_caller_dense_flat_suffix():
     _native_caller_ablation("ema_anchor", dense=True)
 
 
-def _native_caller_ablation(strategy, dense=False, coin=False):
+def _native_caller_ablation(strategy, dense=False, coin=False, changing_budget=False):
     torch, reference = _device_reference(cuda_only=not coin)
     from optimization.gpu.runtime import compile_shader, gpu_device
     from optimization.gpu.mps_kernel import _hsl_native_cache_bytes
@@ -135,6 +135,16 @@ def _native_caller_ablation(strategy, dense=False, coin=False):
             out[o+6]=0.0f;
 #endif
 """)
+    if changing_budget:
+        assert coin
+        # Other coins can alter the shared balance on every observation while
+        # this owner's retained execution facts remain unchanged.
+        original = "if(t>0) observe_hsl(aggregate,budget,0.0f,0.0f,true,t,false);"
+        assert caller.count(original) == 1
+        caller = caller.replace(original, """if(t>0) {
+            budget += t%2==0 ? 0.125f : -0.25f;
+            observe_hsl(aggregate,budget,0.0f,0.0f,true,t,false);
+        }""", 1)
     if dense:
         schedule = "(t==0 || t%13==0 || t%17==0 || t%800==799)"
         assert caller.count(schedule) == 1

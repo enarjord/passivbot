@@ -141,3 +141,8 @@ def test_coin_fact_growth_drops_optional_cache_without_dropping_facts():
 def test_coin_native_owner_busy_wrap_rebudget_invalid_mark_and_cache_loss():
     from test_gpu_hsl_native_cache import _native_caller_ablation
     _native_caller_ablation("trailing_martingale", coin=True)
+
+
+def test_coin_owner_indexes_unchanged_facts_across_changing_budgets():
+    from test_gpu_hsl_native_cache import _native_caller_ablation
+    _native_caller_ablation("trailing_martingale", coin=True, changing_budget=True)
