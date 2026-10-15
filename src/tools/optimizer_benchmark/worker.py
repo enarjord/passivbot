@@ -497,6 +497,11 @@ def run(args):
             result = gpu_runs(entry, arrays, args.width, args.repeats, args.warmup,
                               args.tune_seconds, args.dispatch_budget)
     import importlib.metadata
+    versions = {name: importlib.metadata.version(name) for name in ("numpy", "pymoo", "psutil")}
+    try:
+        versions["torch"] = importlib.metadata.version("torch")
+    except importlib.metadata.PackageNotFoundError:
+        versions["torch"] = None  # CPU measurements do not require optional GPU dependencies.
     tracked = subprocess.check_output(["git", "ls-files", "-z", "src", "passivbot-rust" ]).decode().split("\0")
     import hashlib
     sources = hashlib.sha256()
@@ -505,7 +510,7 @@ def run(args):
         sources.update(Path(name).read_bytes())
     result.update(status="completed", runtime=runtime, resources=resources.report(),
                   implementation_sources_sha256=sources.hexdigest(),
-                  dependency_versions={name: importlib.metadata.version(name) for name in ("numpy", "torch", "pymoo", "psutil")},
+                  dependency_versions=versions,
                   measurement_seconds=time.perf_counter() - started,
                   workload_sha256=manifest["sha256"], candidate_id=entry["id"],
                   backend_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),

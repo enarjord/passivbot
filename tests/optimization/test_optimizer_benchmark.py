@@ -315,9 +315,17 @@ def test_cpu_worker_hashes_repetitions_without_latency_noise(frozen, monkeypatch
         return dict(metrics={"adg_strategy_eq": 1.0 + (variation and calls > len(entry["configs"]))},
                     liquidated=False, latency_seconds=calls / 1000)
     monkeypatch.setattr(worker, "cpu_candidate", candidate)
+    import importlib.metadata
+    version = importlib.metadata.version
+    def cpu_only_version(name):
+        if name == "torch":
+            raise importlib.metadata.PackageNotFoundError(name)
+        return version(name)
+    monkeypatch.setattr(importlib.metadata, "version", cpu_only_version)
     args = SimpleNamespace(harness_sha256=None, workload=directory, entry=entry["id"],
                            engine="cpu", workers=1, warmup=0, repeats=2)
     outcome = worker.run(args)
+    assert outcome["dependency_versions"]["torch"] is None
     hashes = [sample["results_sha256"] for sample in outcome["samples"]]
     assert (len(set(hashes)) > 1) == variation
     comparison = numerical_comparison(outcome, outcome, ["adg_strategy_eq"],
