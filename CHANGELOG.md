@@ -6,17 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Preserve aligned trailing-mode reentry prices and authored half-step reentry
-  quantity products when binary arithmetic strays across their rounding boundary.
-
 - Reduce GPU trailing-martingale entry quantities at strict exposure-cap boundaries
   without losing an extra venue step to binary rounding. Above float32's exact unit-count
   range, retain a representably smaller quantity so the reduction cannot round away.
 
-- Preserve valid tick-aligned trailing-martingale entry and close prices when floating-point
-  multiplication lands just above or below the tick. Genuine off-tick targets keep
-  their existing directional rounding. Round aligned reentry quantity products in
-  venue units so exact half-steps are not rounded down by physical-unit binary noise.
+- Preserve valid tick-aligned trailing-martingale grid/trailing entry and close prices
+  when floating-point multiplication lands just above or below the tick. Genuine
+  off-tick targets keep their existing directional rounding. Round aligned reentry
+  quantity products in venue units, recovering representation-only half-step noise.
   Preserve valid quantity steps when topping up partial initial entries.
 
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
