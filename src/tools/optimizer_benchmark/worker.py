@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ProcessPoolExecutor
 from copy import deepcopy
+from contextlib import contextmanager
 import json
 import math
 import multiprocessing
@@ -390,6 +391,38 @@ def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budg
                     "request completion including queueing" if native else "cohort latency only")
 
 
+@contextmanager
+def profile_search_host(enabled):
+    """Profile the production backend on its calling thread, outside verification."""
+    report = {}
+    if not enabled:
+        yield report
+        return
+    import cProfile
+    import pstats
+
+    if sys.getprofile() is not None:
+        raise RuntimeError("host profiling requires a worker without an active profiler")
+    profiler = cProfile.Profile()
+    started, cpu_started = time.perf_counter(), time.thread_time()
+    profiler.enable()
+    try:
+        yield report
+    finally:
+        profiler.disable()
+        report.update(
+            scope="production backend main thread; excludes independent CPU verification",
+            wall_seconds=time.perf_counter() - started,
+            main_thread_cpu_seconds=time.thread_time() - cpu_started,
+            timing="function times are instrumented wall time, including waits; overlapping calls are not additive",
+        )
+        rows = [dict(source=file, line=line, function=name, primitive_calls=primitive,
+                     calls=calls, self_seconds=own, cumulative_seconds=total)
+                for (file, line, name), (primitive, calls, own, total, _callers)
+                in pstats.Stats(profiler).stats.items()]
+        report["functions"] = sorted(rows, key=lambda row: row["self_seconds"], reverse=True)[:100]
+
+
 def search_run(entry, arrays, args):
     """Exercise the production backend, scoring, checkpoint and result persistence."""
     import optimize
@@ -402,7 +435,8 @@ def search_run(entry, arrays, args):
     backend = "gpu" if args.engine == "search-gpu" else "pymoo"
     config["optimize"].update(backend=backend, population_size=len(entry["configs"]),
         iters=args.search_iters, seed=entry["seed"], n_cpus=args.workers, write_all_results=True)
-    config["optimize"]["bounds"] = {spec["key"]: [spec["low"], spec["high"], spec["step"]]
+    config["optimize"]["bounds"] = {spec["key"]: [spec["low"], spec["high"]]
+                                      + ([spec["step"]] if spec["step"] is not None else [])
                                       for spec in entry["bounds"]}
     config["optimize"]["scoring"] = [dict(metric="adg_strategy_eq", goal="max"),
                                         dict(metric="drawdown_worst_strategy_eq", goal="min")]
@@ -430,18 +464,19 @@ def search_run(entry, arrays, args):
                 original(row)
             recorder.record = record
             try:
-                result = get_backend_runner(backend)(config=config, evaluator=base, evaluator_for_pool=base,
-                    recorder=recorder, overrides_list=[], duplicate_counter={"count": 0},
-                    starting_configs_path="frozen-population", constraint_fitness_cls=None,
-                    ignore_sigint_in_worker=optimize.ignore_sigint_in_worker,
-                    get_starting_configs=lambda _path: entry["configs"],
-                    configs_to_individuals=lambda configs, _bounds, _digits, **_kwargs: [[get_path(c, path)
-                        for _key, path in base.key_paths] for c in configs],
-                    record_individual_result=optimize._record_individual_result, run_evolution=None,
-                    build_config_fn=optimize.individual_to_config, overrides_fn=optimize.optimizer_overrides,
-                    checkpoint_path=str(Path(directory) / "checkpoint.pkl"), resume=False,
-                    **({"standalone_candle_coins": {exchange: tuple(config["backtest"]["coins"][exchange])}}
-                       if Path("src/optimization/gpu/native.py").exists() and backend == "gpu" else {}))
+                with profile_search_host(getattr(args, "host_profile", False)) as host_profile:
+                    result = get_backend_runner(backend)(config=config, evaluator=base, evaluator_for_pool=base,
+                        recorder=recorder, overrides_list=[], duplicate_counter={"count": 0},
+                        starting_configs_path="frozen-population", constraint_fitness_cls=None,
+                        ignore_sigint_in_worker=optimize.ignore_sigint_in_worker,
+                        get_starting_configs=lambda _path: entry["configs"],
+                        configs_to_individuals=lambda configs, _bounds, _digits, **_kwargs: [[get_path(c, path)
+                            for _key, path in base.key_paths] for c in configs],
+                        record_individual_result=optimize._record_individual_result, run_evolution=None,
+                        build_config_fn=optimize.individual_to_config, overrides_fn=optimize.optimizer_overrides,
+                        checkpoint_path=str(Path(directory) / "checkpoint.pkl"), resume=False,
+                        **({"standalone_candle_coins": {exchange: tuple(config["backtest"]["coins"][exchange])}}
+                           if Path("src/optimization/gpu/native.py").exists() and backend == "gpu" else {}))
                 pool = result.get("pool")
                 if pool is not None:
                     pool.close()
@@ -471,7 +506,7 @@ def search_run(entry, arrays, args):
             samples=[dict(seconds=seconds, completed=len(records), results=records)],
             first_result_seconds=records[0]["elapsed_seconds"] if records else None,
             persisted_bytes=disk_bytes, requested_iterations=args.search_iters,
-            rust_reference_verification=verification,
+            rust_reference_verification=verification, host_profile=host_profile,
             scope="prepared single-scenario production optimizer including scoring/checkpoint/persistence; excludes market preparation",
             correctness="saved objective values checked against CPU Rust outside timed search; trajectories may differ")
     finally:
@@ -566,6 +601,7 @@ def main():
     parser.add_argument("--dispatch-budget", type=int, default=50_000_000)
     parser.add_argument("--search-iters", type=int, default=64)
     parser.add_argument("--phase-profile", action="store_true")
+    parser.add_argument("--host-profile", action="store_true")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     sys.path.insert(0, str(Path(args.backend).resolve() / "src"))

@@ -73,6 +73,7 @@ def summary(result):
                 single_candidate_latency_median_seconds=statistics.median(latencies) if latencies else None,
                 single_candidate_latency_p95_seconds=p95(latencies),
                 request_latency_p95_seconds=p95(completion_latencies),
+                profiling_enabled=bool(result.get("phase_profile_enabled") or profiles or result.get("host_profile")),
                 profiled_evaluations=len(profiles), phase_seconds_total=phase_seconds,
                 outside_replay_seconds_total=sum(sample.get("outside_replay_seconds") or 0.0 for sample in samples)
                     if profiles else None)
@@ -199,9 +200,10 @@ def compare(report, manifest):
                 branch_ranking=ranking_assessment(first, second) if not mode.startswith("search") else None,
                 tuning=tuning,
                 equivalent_work_speedup=speedup if metrics["status"] == "passed" and
-                    all(p["status"] == "passed" for p in gpu_parity.values()) else None))
+                    all(p["status"] == "passed" for p in gpu_parity.values())
+                    and not any(s.get("profiling_enabled") for s in summaries) else None))
     return dict(labels=labels, rows=rows,
-                interpretation="speedup = first branch median time / second branch median time; >1 favors second; failed/incomplete correctness does not establish equivalent work speedup")
+                interpretation="speedup = first branch median time / second branch median time; >1 favors second; profiled runs are diagnostic; failed/incomplete correctness does not establish equivalent work speedup")
 
 
 def markdown(comparison):

@@ -95,6 +95,8 @@ def run(args):
     parsed_modes = modes(args.modes)
     if args.phase_profile and any(engine.startswith("search-") for _, engine, _ in parsed_modes):
         raise ValueError("--phase-profile supports frozen replay modes, not production search")
+    if getattr(args, "host_profile", False) and any(not engine.startswith("search-") for _, engine, _ in parsed_modes):
+        raise ValueError("--host-profile supports production search modes only")
     if len(args.backend) != 2 or len({item[0] for item in args.backend}) != 2:
         raise ValueError("supply two uniquely labelled --backend LABEL CHECKOUT PYTHON arguments")
     preflight = {}
@@ -160,6 +162,8 @@ def run(args):
                 command += ["--harness-sha256", fingerprint]
                 if args.phase_profile:
                     command.append("--phase-profile")
+                if getattr(args, "host_profile", False):
+                    command.append("--host-profile")
                 environment = dict(os.environ, PYTHONPATH=str(source.parent),
                     PASSIVBOT_RUST_VERIFY="1", OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1",
                     PASSIVBOT_GPU_PROFILE="1" if args.phase_profile else "0",
@@ -209,6 +213,7 @@ def main(argv=None):
     execute.add_argument("--search-workers", type=int, default=4)
     execute.add_argument("--dispatch-budget", type=int, default=50_000_000)
     execute.add_argument("--phase-profile", action="store_true", help="Diagnostic GPU phase timings; adds synchronization overhead")
+    execute.add_argument("--host-profile", action="store_true", help="Diagnostic production-search main-thread profile; adds overhead")
     execute.add_argument("--policies", help="Explicit per-metric numerical tolerance JSON")
     comparison = sub.add_parser("compare")
     comparison.add_argument("--report", required=True)

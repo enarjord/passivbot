@@ -395,3 +395,94 @@ def test_frozen_gpu_profiling_is_explicit():
     replay = SimpleNamespace(profile_enabled=True, runners={})
     instrument_replay(replay, [])
     assert replay.profile_enabled is False
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_search_host_profile_records_backend_work_and_restores_hook(raises):
+    before = sys.getprofile()
+    def backend_work():
+        return sum(x * x for x in range(100))
+    try:
+        with worker.profile_search_host(True) as profile:
+            backend_work()
+            if raises:
+                raise RuntimeError("backend failed")
+    except RuntimeError:
+        assert raises
+    assert sys.getprofile() is before
+    assert profile["wall_seconds"] >= 0
+    assert profile["main_thread_cpu_seconds"] >= 0
+    assert any(row["function"] == "backend_work" for row in profile["functions"])
+
+
+def test_disabled_search_host_profile_does_not_create_profiler(monkeypatch):
+    import cProfile
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("unprofiled acceptance must not create a profiler")
+    monkeypatch.setattr(cProfile, "Profile", forbidden)
+    with worker.profile_search_host(False) as profile:
+        pass
+    assert profile == {}
+
+
+def test_host_profile_rejects_frozen_replay(frozen):
+    from tools.optimizer_benchmark.__main__ import run
+    directory, _ = frozen
+    with pytest.raises(ValueError, match="production search modes only"):
+        run(SimpleNamespace(workload=directory, modes=["gpu:8"], phase_profile=False, host_profile=True))
+
+
+def test_host_profile_leaves_an_existing_profiler_intact():
+    def existing(_frame, _event, _arg):
+        pass
+    before = sys.getprofile()
+    sys.setprofile(existing)
+    try:
+        with pytest.raises(RuntimeError, match="without an active profiler"):
+            with worker.profile_search_host(True):
+                pass
+        assert sys.getprofile() is existing
+    finally:
+        sys.setprofile(before)
+
+
+def test_search_transports_continuous_bounds_without_null_step(frozen, monkeypatch, caplog):
+    from optimization import backends
+    from optimization.bounds import Bound
+    directory, manifest = frozen
+    entry = manifest["entries"][0]
+    assert any(spec["step"] is None for spec in entry["bounds"])
+    with np.load(directory / entry["data_file"]) as data:
+        arrays = tuple(data[key] for key in ("hlcvs", "btc", "timestamps"))
+    class BackendReached(Exception):
+        pass
+    def inspect_bounds(**kwargs):
+        transported = kwargs["config"]["optimize"]["bounds"]
+        for spec in entry["bounds"]:
+            bound = Bound.from_config(spec["key"], transported[spec["key"]])
+            assert bound.step == spec["step"]
+        raise BackendReached
+    monkeypatch.setattr(backends, "get_backend_runner", lambda _name: inspect_bounds)
+    args = SimpleNamespace(engine="search-cpu", workers=1, search_iters=64, width="8", dispatch_budget=100000)
+    with pytest.raises(BackendReached):
+        worker.search_run(entry, arrays, args)
+    assert not any("step is null" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("profiling", [None, "host_profile", "phase_profile_enabled"])
+def test_profiled_timings_cannot_establish_an_acceptance_speedup(profiling):
+    from tools.optimizer_benchmark.report import compare
+    names = ["adg_strategy_eq", "drawdown_worst_strategy_eq"]
+    result = dict(status="completed", samples=[dict(seconds=1.0, completed=1,
+        results=[dict(metrics=dict(zip(names, [0.01, 0.1])), liquidated=False)])])
+    other = deepcopy(result)
+    if profiling:
+        other[profiling] = {"wall_seconds": 1.0} if profiling == "host_profile" else True
+    manifest = dict(entries=[dict(id="case", case=dict(name="case"), seed=7, metrics=names)])
+    report = dict(backends={"before": {}, "after": {}},
+        policies={key: dict(absolute=1e-6, relative=1e-4) for key in names},
+        runs=[dict(entry="case", label=label, mode="cpu:1", result=row)
+              for label, row in (("before", result), ("after", other))])
+    row = compare(report, manifest)["rows"][0]
+    assert row["speedup_second_over_first"] == 1.0
+    assert row["equivalent_work_speedup"] == (None if profiling else 1.0)

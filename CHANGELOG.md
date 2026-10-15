@@ -8,7 +8,10 @@ since the latest release tag; these features may already be available when insta
 
 - Preserve unfilled native GPU TM entries through forager hysteresis, reduce
   coin-HSL replay scratch and Metal pipeline preparation cost, reuse immutable
-  TM rung settings, and expose opt-in phase profiling in the repeatable optimizer benchmark suite.
+  TM rung settings, and expose opt-in replay phase and production-search host profiling
+  in the repeatable optimizer benchmark suite. Preserve continuous search bounds without
+  null-step warnings. Reuse config templates and immutable Rust metadata projections
+  while retaining owned return values and metadata reload behavior.
 
 - Standardize `clean-config` numeric output by field type, including sparse coin overrides and optimizer bounds, so equivalent values such as `0` and `0.0` produce the same cleaned text. Preserve fractional values and lossless `--mode format` output.
 

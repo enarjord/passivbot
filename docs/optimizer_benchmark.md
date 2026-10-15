@@ -134,6 +134,12 @@ iteration counts do not by themselves establish equal search quality.
   spend most of its time creating a Metal pipeline after library compilation.
   Profiling adds synchronization overhead; use separate unprofiled runs for
   acceptance throughput. This option does not profile production search modes.
+- Search modes accept `run --host-profile` for a main-thread function profile of
+  the production backend, including its preparation, scoring and persistence.
+  Independent Rust verification runs after the profiler stops. Function times are
+  instrumented wall time and include waits; cumulative times overlap. The report
+  separately records main-thread CPU time. GPU-worker and CPU-pool threads are
+  outside this profile. Use separate unprofiled campaigns for speed comparisons.
 - Warm runs exclude setup and first use. First use may reuse on-disk Metal/CUDA
   compiler caches; it is not a cold-machine measurement.
 - Runner-call candidate counts are observed execution widths, not measured hardware
