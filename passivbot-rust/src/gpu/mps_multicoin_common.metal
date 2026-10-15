@@ -57,8 +57,17 @@ inline float floor_step(float value, float step) {
 
 // The caller already quantized quantity. Subtract in venue units so binary
 // subtraction followed by floor cannot accidentally remove a second increment.
+// Above float32's exact integer range, retain a representably smaller quantity;
+// the conservative reduction can span several venue steps.
 inline float decrement_aligned_qty_step(float quantity, float step) {
-    return fmax(rint(quantity / step) - 1.0f, 0.0f) * step;
+    float units = rint(quantity / step);
+    float previous_units = fmax(units - 1.0f, 0.0f);
+    if (previous_units >= units && units > 0.0f) {
+        previous_units = nextafter(units, 0.0f);
+    }
+    float result = previous_units * step;
+    // The multiply can round back up even when the unit count decreased.
+    return fmax(fmin(result, nextafter(quantity, 0.0f)), 0.0f);
 }
 
 inline float min_entry_qty(

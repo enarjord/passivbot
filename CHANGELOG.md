@@ -6,8 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Decrement GPU trailing-martingale entry quantities by exactly one venue step at
-  a strict exposure-cap boundary, avoiding a second step lost to binary rounding.
+- Preserve aligned trailing-mode reentry prices and authored half-step reentry
+  quantity products when binary arithmetic strays across their rounding boundary.
+
+- Reduce GPU trailing-martingale entry quantities at strict exposure-cap boundaries
+  without losing an extra venue step to binary rounding. Above float32's exact unit-count
+  range, retain a representably smaller quantity so the reduction cannot round away.
 
 - Preserve valid tick-aligned trailing-martingale entry and close prices when floating-point
   multiplication lands just above or below the tick. Genuine off-tick targets keep
