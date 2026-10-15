@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Standardize `clean-config` numeric output by field type, including sparse coin overrides and optimizer bounds, so equivalent values such as `0` and `0.0` produce the same cleaned text. Preserve fractional values and lossless `--mode format` output.
+
 - Add an offline optimizer benchmark suite with frozen random candidate populations,
   feature and pairwise case coverage, bounded CPU/GPU measurements, production-search
   timing, and correctness-aware comparisons between pinned checkouts.
