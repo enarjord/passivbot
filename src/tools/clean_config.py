@@ -39,6 +39,7 @@ def _reject_constant(value):
 
 def normalize_export_numbers(config: dict) -> dict:
     """Use schema numeric types without rounding values or hydrating sparse patches."""
+    from config.param_paths import resolve_dotted_config_path
     from config.schema import get_template_config
 
     template = get_template_config()
@@ -57,8 +58,29 @@ def normalize_export_numbers(config: dict) -> dict:
     )
     template["optimize"].update(population_size=0, seed=0)
     template["optimize"]["gpu"].update(batch_size=0, max_dispatch_candidate_bars=0)
+    market_float_fields = {
+        "price_step", "qty_step", "min_qty", "min_cost", "c_mult",
+        "maker", "taker", "maker_fee", "taker_fee",
+    }
 
     def schema_at(path):
+        # Dotted override paths may address a sparse coin patch. Its leaf types
+        # are the same as those of the corresponding root config fields.
+        if path[:1] == ("coin_overrides",):
+            path = path[2:]
+        if path and path[0] in {"bot", "long", "short"} and all(
+            isinstance(part, str) for part in path
+        ):
+            path = resolve_dotted_config_path(config, ".".join(path))
+        if (
+            path[:2] == ("backtest", "market_settings")
+            and path[-1] in market_float_fields
+            and (
+                (len(path) == 5 and path[2] == "overrides")
+                or (len(path) == 6 and path[2] == "overrides_by_exchange")
+            )
+        ):
+            return 0.0
         node = template
         for part in path:
             if isinstance(node, dict):
@@ -84,7 +106,7 @@ def normalize_export_numbers(config: dict) -> dict:
                 and path[-1] == "overrides"
             ):
                 return {
-                    key: normalize(item, tuple(key.split(".")))
+                    key: normalize(item, resolve_dotted_config_path(config, key))
                     for key, item in value.items()
                 }
             return {

@@ -218,6 +218,79 @@ def test_cli_check_and_in_place_standardize_numeric_spelling(tmp_path):
     assert main([str(source), "--check"]) == 0
 
 
+@pytest.mark.parametrize("mode", ["full", "backtest", "optimize"])
+@pytest.mark.parametrize(
+    "selector,value,expected_type",
+    [
+        ("bot.long.unstuck_ema_span_0", 60, float),
+        ("long.unstuck_ema_span_0", 60, float),
+        ("bot.long.n_positions", 7, int),
+        ("bot.long.strategy.trailing_martingale.ema_span_0", 60, float),
+        ("coin_overrides.BTC.bot.long.unstuck.ema_span_0", 60, float),
+        ("coin_overrides.BTC.live.leverage", 3, int),
+    ],
+)
+def test_cleanup_resolves_override_selector_numeric_types(
+    mode, selector, value, expected_type
+):
+    outputs = []
+    for number in (int, float):
+        cfg = get_template_config()
+        cfg["coin_overrides"] = {
+            "BTC": {
+                "bot": {"long": {"unstuck": {"ema_span_0": 60.25}}},
+                "live": {"leverage": 3},
+            }
+        }
+        cfg["optimize"]["fixed_runtime_overrides"] = {selector: number(value)}
+        cfg["backtest"]["scenarios"] = [
+            {"label": "base", "overrides": {selector: number(value)}}
+        ]
+        output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
+        result = json.loads(output)
+        exported_selector = selector.replace(
+            ".trailing_martingale.ema_span_0", ".trailing_martingale.entry.ema_span_0"
+        )
+        overrides = result["backtest"]["scenarios"][0]["overrides"]
+        assert type(overrides[exported_selector]) is expected_type
+        if "optimize" in result:
+            pins = result["optimize"]["fixed_runtime_overrides"]
+            assert type(pins[exported_selector]) is expected_type
+        assert render_source(output, source=Path("input.json"), mode=mode) == output
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
+@pytest.mark.parametrize("mode", ["full", "backtest", "optimize"])
+def test_cleanup_normalizes_dynamic_market_setting_numeric_types(mode):
+    outputs = []
+    fields = (
+        "price_step", "qty_step", "min_qty", "min_cost", "c_mult",
+        "maker", "taker", "maker_fee", "taker_fee",
+    )
+    for number in (int, float):
+        cfg = get_template_config()
+        settings = {field: number(1) for field in fields}
+        settings.update(exchange="binance", active=False, metadata={"price_step": 2})
+        cfg["backtest"]["market_settings"] = {
+            "overrides": {"BTC": settings},
+            "overrides_by_exchange": {"binance": {"BTC/USDT:USDT": settings}},
+        }
+        output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
+        market = json.loads(output)["backtest"]["market_settings"]
+        for result in (
+            market["overrides"]["BTC"],
+            market["overrides_by_exchange"]["binance"]["BTC/USDT:USDT"],
+        ):
+            assert all(type(result[field]) is float for field in fields)
+            assert result["active"] is False
+            assert result["exchange"] == "binance"
+            assert type(result["metadata"]["price_step"]) is int
+        assert render_source(output, source=Path("input.json"), mode=mode) == output
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
 def test_export_numeric_normalization_preserves_values_and_non_numeric_leaves():
     cfg = {
         "bot": {"long": {"unstuck": {"ema_span_0": 60.25, "enabled": False}}},

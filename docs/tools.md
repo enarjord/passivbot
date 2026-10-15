@@ -301,6 +301,8 @@ Cleanup modes standardize numeric output using schema defaults: float settings u
 and integer settings use `0`, including sparse coin patches, scenario overrides, runtime pins
 and optimizer bounds. Position counts use integers. Fractional values are never rounded to match
 an integer default, and converting an integer to a float must preserve its value exactly.
+Supported override selectors use their canonical field types. Numeric market-setting overrides
+such as `price_step`, `qty_step`, `min_qty`, `min_cost`, contract multipliers and fees use floats.
 Relative `override_config_path` values are kept verbatim and resolve relative to the exported
 config's directory. Keep the output beside the input or update those references when relocating it.
 
