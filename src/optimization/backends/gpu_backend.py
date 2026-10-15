@@ -938,6 +938,11 @@ def _minimum_rank_evidence_samples(halt: float) -> int:
     return math.floor((MIN_DRIFT_PROBES - 1) / float(halt)) + 1
 
 
+def _build_random_sampling(rng, population_size: int, n_params: int) -> np.ndarray:
+    """Sample every GPU population member without implicitly seeding the input bot."""
+    return rng.random((population_size, n_params))
+
+
 def _build_gpu_nsga2(
     config,
     *,
@@ -5207,8 +5212,7 @@ def run_backend(
         logging.info("GPU optimizer generated reproducible seed %d", seed)
     seed = int(seed)
     rng = np.random.default_rng(seed)
-    sampling = rng.random((population_size, len(active)))
-    sampling[0] = normalize_vector(base_vector)
+    sampling = _build_random_sampling(rng, population_size, len(active))
     seed_policy = options["seed_bootstrap"]
     objective_scale = _ObjectiveScale()
     initial_seed_proxy_rows = {}

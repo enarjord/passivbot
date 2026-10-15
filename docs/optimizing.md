@@ -614,6 +614,11 @@ For example, `-ltwel 0 -stwel 2,2` can switch a long-only input to short-only op
 when short positions and approved coins permit it. Each enabled GPU side must remain enabled
 across the entire search range; bounds that vary between disabled and enabled remain unsupported.
 
+Fresh GPU runs without `-t/--start` initialize every population member randomly, matching the
+CPU backends. The input config supplies fixed and non-optimized values but is not implicitly
+inserted as a candidate. Explicit starting configs remain supported, and `--resume` restores
+the saved population rather than starting a new one.
+
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the
 discrete anchor id alongside the selected tunable bounds. Anchor-fixed values are supplied to the
