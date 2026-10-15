@@ -8,7 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Preserve valid tick-aligned trailing-martingale reentry prices when floating-point
   multiplication lands just above or below the tick. Genuine off-tick targets keep
-  their existing directional rounding.
+  their existing directional rounding. Round aligned reentry quantity products in
+  venue units so exact half-steps are not rounded down by physical-unit binary noise.
 
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
