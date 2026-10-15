@@ -35,6 +35,23 @@ inline float decrement_aligned_qty_step(float quantity, float step) {
     return fmax(fmin(result, nextafter(quantity, 0.0f)), 0.0f);
 }
 
+// Quantities produced by venue rounding can recover their integer counts.
+// Require a unique round-trip before subtracting counts; otherwise preserve
+// physical-unit directional rounding for representations outside that domain.
+inline float aligned_qty_difference(float total, float held, float step) {
+    float total_count = rint(total / step);
+    float held_count = rint(held / step);
+    bool counts_resolvable = total_count >= 0.0f && total_count < 0x1p24f
+        && held_count >= 0.0f && held_count < 0x1p24f
+        && nextafter(total, INFINITY) - total <= step
+        && nextafter(held, INFINITY) - held <= step;
+    bool on_grid = total_count * step == total && held_count * step == held;
+    if (counts_resolvable && on_grid) {
+        return fmax(total_count - held_count, 0.0f) * step;
+    }
+    return fmax(floor_step(total - held, step), 0.0f);
+}
+
 inline float min_entry_qty(
     float price, float qty_step, float min_qty, float min_cost, float c_mult
 ) {

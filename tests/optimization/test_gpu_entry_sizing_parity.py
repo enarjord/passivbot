@@ -170,3 +170,101 @@ def test_flat_selection_tracks_readiness_without_fills(side):
     assert out["fill_count"].item() == 1
     size_key = "short_psize" if side == "short" else "psize"
     assert out[size_key].item() == pytest.approx(abs(float(fills[0][9])), abs=1e-5)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("coin_count", [1, 2])
+@pytest.mark.parametrize("retracement", [0.0, 0.001])
+@pytest.mark.parametrize("case", [
+    dict(price=70.62, balance=1102.0, wel=0.5, initial_pct=0.012,
+         close_pct=0.0035, threshold=0.002, close_low=70.55, close_high=70.69,
+         initial_qty=0.094, topup=0.028),
+    dict(price=100.0, balance=1000.0, wel=1.0, initial_pct=0.015,
+         close_pct=0.00615, threshold=0.002123, close_low=99.92, close_high=100.08,
+         initial_qty=0.15, topup=0.062),
+], ids=["94-minus-66-steps", "150-minus-88-steps"])
+def test_partial_initial_top_up_preserves_venue_steps(side, coin_count, retracement, case):
+    config, candles, mss, btc, timestamps = _fixture(side, coin_count, "initial")
+    config["backtest"].update(starting_balance=case["balance"],
+                             maker_fee_override=0.0, taker_fee_override=0.0)
+    config["bot"][side]["risk"]["total_wallet_exposure_limit"] = case["wel"] * coin_count
+    strategy = config["bot"][side]["strategy"]["trailing_martingale"]
+    strategy["entry"].update(initial_qty_pct=case["initial_pct"], threshold_base_pct=0.5,
+                             retracement_base_pct=retracement)
+    # Exposure-dependent close prices retain separate ladder rungs. A zero
+    # exposure weight would intentionally collapse to a full-position close.
+    strategy["close"].update(qty_pct=case["close_pct"], threshold_base_pct=case["threshold"],
+        retracement_base_pct=0.0, threshold_we_weight=-0.1,
+        threshold_volatility_1h_weight=0.0, threshold_volatility_1m_weight=0.0)
+    candles = np.tile(candles[:1], (12, 1, 1))
+    price = case["price"]
+    candles[:, :, :3] = price
+    short = side == "short"
+    # Trade after warmup: initial entry, one partial close, then a top-up.
+    candles[4, :, 0 if short else 1] = price + 0.01 if short else price - 0.01
+    candles[5, :, 1 if short else 0] = case["close_low"] if short else case["close_high"]
+    candles[6, :, 0 if short else 1] = price + 0.01 if short else price - 0.01
+    btc = np.full(12, 50_000.0)
+    timestamps = timestamps[0] + np.arange(12, dtype=np.int64) * 60_000
+    for coin, market in mss.items():
+        if coin != "__meta__":
+            market.update(qty_step=0.001, price_step=0.01, min_qty=0.001,
+                          min_cost=1.0, last_valid_index=11)
+
+    out, fills = _evaluate(side, (config, candles, mss, btc, timestamps))
+    assert len(fills) == 3 * coin_count, fills
+    topups = [fill for fill in fills if "entry_initial_partial" in fill[13]]
+    assert len(topups) == coin_count, fills
+    assert all(abs(float(fill[9])) == pytest.approx(case["topup"], abs=1e-12)
+               for fill in topups)
+    assert out["fill_count"].item() == len(fills)
+    size_key = "short_psize" if short else "psize"
+    assert out[size_key].item() == pytest.approx(case["initial_qty"] * coin_count, abs=1e-6)
+
+@pytest.mark.parametrize("source_name", [
+    "mps_trailing_martingale_source_py",
+    "mps_trailing_martingale_multicoin_source_py",
+])
+def test_partial_top_up_recovers_counts_without_snapping_off_grid(source_name):
+    import passivbot_rust
+    from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    source = getattr(passivbot_rust, source_name)()
+
+    def function(name):
+        start = source.index("inline float " + name + "(")
+        return source[start:source.index("\n}", start) + 2]
+
+    probe = """#include <metal_stdlib>
+using namespace metal;
+""" + function("floor_step") + "\n" + function("aligned_qty_difference") + """
+kernel void partial_top_up_probe(
+    constant float* cases, device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    output[b] = aligned_qty_difference(cases[3*b], cases[3*b+1], cases[3*b+2]);
+}
+"""
+    # Expected differences come from authored venue counts, including counts
+    # large enough for multiplication/subtraction to lose a small physical step.
+    rng = np.random.default_rng(43)
+    counts = [(94, 66), (150, 88), (65537, 65501), (1048575, 1048520)]
+    counts += [(int(total), int(held)) for total, held in zip(
+        rng.integers(1, 2**20, 64), rng.integers(0, 2**19, 64))]
+    cases, expected = [], []
+    for step in np.asarray([0.001, 0.25, 1e-8], dtype=np.float32):
+        for total, held in counts:
+            cases.append([np.float32(total) * step, np.float32(held) * step, step])
+            expected.append(np.float32(max(total - held, 0)) * step)
+    # Exact binary off-grid inputs must retain directional floor semantics.
+    # At/above 2**24 units, require the existing physical-unit floor behavior.
+    cases += [[10, 1.78125, 0.25], [10.03125, 1.75, 0.25],
+              [2**22, 2**22 - 0.5, 0.25], [2**24, 2**24 - 2, 1]]
+    expected += [8, 8.25, 0.5, 2]
+    packed = torch.tensor(np.asarray(cases, dtype=np.float32), device=gpu_device())
+    output = torch.empty(len(cases), dtype=torch.float32, device=gpu_device())
+    compile_shader(probe).partial_top_up_probe(packed, output, threads=len(cases))
+    synchronize()
+    np.testing.assert_array_equal(output.cpu().numpy(), np.asarray(expected, dtype=np.float32))
