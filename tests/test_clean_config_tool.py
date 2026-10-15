@@ -353,6 +353,22 @@ def test_cleanup_normalizes_numeric_limit_lists(mode, max_inline, reverse):
     assert outputs[0] == outputs[1]
 
 
+@pytest.mark.parametrize("mode", ["full", "optimize"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("field", ["score_weights_unilateralness", "score_weights_ema_readiness"])
+def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field):
+    outputs = []
+    for number in (int, float):
+        cfg = get_template_config()
+        cfg["optimize"]["bounds"][side]["forager"][field] = [number(0), number(1), 0.01]
+        output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
+        bound = json.loads(output)["optimize"]["bounds"][side]["forager"][field]
+        assert all(type(value) is float for value in bound)
+        assert render_source(output, source=Path("input.json"), mode=mode) == output
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
 def test_export_numeric_normalization_preserves_values_and_non_numeric_leaves():
     cfg = {
         "bot": {"long": {"unstuck": {"ema_span_0": 60.25, "enabled": False}}},

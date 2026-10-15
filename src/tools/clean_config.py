@@ -39,7 +39,8 @@ def _reject_constant(value):
 
 def normalize_export_numbers(config: dict) -> dict:
     """Use schema numeric types without rounding values or hydrating sparse patches."""
-    from config.param_paths import resolve_dotted_config_path
+    from config.optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY
+    from config.param_paths import resolve_dotted_config_path, resolve_optimizer_key_path
     from config.schema import get_template_config
 
     template = get_template_config()
@@ -126,7 +127,12 @@ def normalize_export_numbers(config: dict) -> dict:
             return [normalize(item, (*path, index)) for index, item in enumerate(value)]
         default = schema_at(path)
         if path[:2] == ("optimize", "bounds") and isinstance(path[-1], int):
-            parameter_default = schema_at(("bot", *path[2:-1]))
+            parameter_path = ("bot", *path[2:-1])
+            if len(path) == 6:
+                flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(path[3], {}).get(path[4])
+                if flat_key is not None:
+                    parameter_path = resolve_optimizer_key_path(config, f"{path[2]}_{flat_key}")
+            parameter_default = schema_at(parameter_path)
             if type(parameter_default) in (int, float):
                 default = parameter_default
         if type(default) is float and type(value) is int:
