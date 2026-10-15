@@ -20,6 +20,12 @@ inline float floor_step(float value, float step) {
     return floor(value / step + 1.0e-6f) * step;
 }
 
+// The caller already quantized quantity. Subtract in venue units so binary
+// subtraction followed by floor cannot accidentally remove a second increment.
+inline float decrement_aligned_qty_step(float quantity, float step) {
+    return fmax(rint(quantity / step) - 1.0f, 0.0f) * step;
+}
+
 inline float min_entry_qty(
     float price, float qty_step, float min_qty, float min_cost, float c_mult
 ) {

@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Decrement GPU trailing-martingale entry quantities by exactly one venue step at
+  a strict exposure-cap boundary, avoiding a second step lost to binary rounding.
+
 - Preserve valid tick-aligned trailing-martingale entry and close prices when floating-point
   multiplication lands just above or below the tick. Genuine off-tick targets keep
   their existing directional rounding. Round aligned reentry quantity products in
