@@ -71,6 +71,25 @@ def bounded_process(command, *, cwd, environment, log, timeout, max_rss, min_ava
                     wall_seconds=time.monotonic() - started)
 
 
+def read_worker_report(output, termination):
+    """Keep failed or interrupted writes from aborting the rest of a campaign."""
+    try:
+        result = json.loads(output.read_text())
+        if not isinstance(result, dict) or result.get("status") not in {
+            "completed", "unsupported", "bounded_stop", "error",
+        }:
+            raise ValueError("worker report is not a status-bearing object")
+    except (OSError, UnicodeError, ValueError) as error:
+        result = dict(status="error", error="worker produced no complete report",
+                      report_error=f"{type(error).__name__}: {error}")
+    if termination["termination_reason"]:
+        result.update(status="bounded_stop", reason=termination["termination_reason"])
+    elif termination["exit_code"] != 0 and result.get("status") == "completed":
+        result.update(status="error", error="worker exited unsuccessfully after writing its report")
+    result["process"] = termination
+    return result
+
+
 def run(args):
     manifest = load_manifest(args.workload)
     parsed_modes = modes(args.modes)
@@ -143,12 +162,7 @@ def run(args):
                 termination = bounded_process(command, cwd=root, environment=environment, log=log,
                     timeout=args.timeout, max_rss=args.max_rss_gib * 1024**3,
                     min_available=args.min_available_gib * 1024**3)
-                result = json.loads(output.read_text()) if output.exists() else dict(status="error", error="worker produced no complete report")
-                if termination["termination_reason"]:
-                    result.update(status="bounded_stop", reason=termination["termination_reason"])
-                elif termination["exit_code"] != 0 and result.get("status") == "completed":
-                    result.update(status="error", error="worker exited unsuccessfully after writing its report")
-                result["process"] = termination
+                result = read_worker_report(output, termination)
                 report["runs"].append(dict(entry=entry["id"], label=label, mode=mode, result=result,
                                            log_file=log.name, raw_file=output.name))
                 (destination / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")

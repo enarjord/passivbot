@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -16,8 +17,19 @@ from tools.optimizer_benchmark.catalogue import (Case, PAIRWISE_FLAGS, catalogue
     declared_gpu_support, pairwise_rows, select_cases)
 from tools.optimizer_benchmark.workloads import array_digest, digest, freeze, load_manifest
 from tools.optimizer_benchmark.report import numerical_comparison, summary, tuning_comparison, validate_policies
-from tools.optimizer_benchmark.__main__ import modes
-from tools.optimizer_benchmark.worker import strict_json, instrument_replay
+from tools.optimizer_benchmark.__main__ import modes, read_worker_report
+from tools.optimizer_benchmark.worker import strict_json, instrument_replay, cohort_digest
+from tools.optimizer_benchmark import worker
+
+
+@pytest.fixture(autouse=True)
+def restore_rng_states():
+    python_state, numpy_state = random.getstate(), np.random.get_state()
+    try:
+        yield
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
 
 
 def test_pairwise_covers_all_pairs_and_states():
@@ -229,3 +241,90 @@ def test_lazy_native_runner_is_observed_after_materialization():
 def test_invalid_tolerances_are_rejected(policy):
     with pytest.raises(ValueError):
         validate_policies(dict(metric=policy))
+
+
+@pytest.mark.parametrize("engine", ["gpu", "search-gpu"])
+@pytest.mark.parametrize("pattern", ["trailing_grid_v7/*", "ema_anchor/*/position_enforcer/*",
+                                    "trailing_martingale/*/btc_collateral/*"])
+def test_worker_rejects_unsupported_gpu_work_before_dispatch(tmp_path, real_runtime, monkeypatch, engine, pattern):
+    directory = tmp_path / "unsupported"
+    manifest = freeze(directory, profile="standard", patterns=[pattern], candidates=2, bars=128)
+    def forbidden(*args, **kwargs):
+        pytest.fail("unsupported GPU workload must not enter either GPU backend")
+    monkeypatch.setattr(worker, "search_run", forbidden)
+    monkeypatch.setattr(worker, "gpu_runs", forbidden)
+    args = SimpleNamespace(harness_sha256=None, workload=directory,
+                           entry=manifest["entries"][0]["id"], engine=engine)
+    assert worker.run(args)["status"] == "unsupported"
+
+
+@pytest.mark.parametrize("content", [None, '{"status":', "[]", "{}", b"\xff"])
+@pytest.mark.parametrize("reason", [None, "timeout", "process_tree_memory_limit"])
+def test_incomplete_worker_reports_keep_termination_evidence(tmp_path, content, reason):
+    path = tmp_path / "result.json"
+    if isinstance(content, bytes):
+        path.write_bytes(content)
+    elif content is not None:
+        path.write_text(content)
+    termination = dict(termination_reason=reason, exit_code=-15 if reason else 1)
+    outcome = read_worker_report(path, termination)
+    assert outcome["status"] == ("bounded_stop" if reason else "error")
+    assert outcome["process"] == termination
+    assert outcome["report_error"]
+    if reason:
+        assert outcome["reason"] == reason
+
+
+def test_report_read_failure_and_unsuccessful_exit_are_preserved(tmp_path, monkeypatch):
+    path = tmp_path / "result.json"
+    path.write_text('{"status": "completed"}')
+    termination = dict(termination_reason=None, exit_code=1)
+    assert read_worker_report(path, termination)["status"] == "error"
+    def unreadable(*args, **kwargs):
+        raise PermissionError("unreadable report")
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    outcome = read_worker_report(path, termination)
+    assert outcome["status"] == "error" and "PermissionError" in outcome["report_error"]
+
+
+def test_passive_baseline_and_trailing_variants_are_distinct(tmp_path, real_runtime):
+    manifest = freeze(tmp_path / "orders", profile="standard", bars=128, candidates=2,
+                      patterns=["trailing_martingale/both/forager/base/oscillating",
+                                "trailing_martingale/both/forager/entry_trailing/*",
+                                "trailing_martingale/both/forager/close_trailing/*"])
+    entries = {entry["case"]["features"][0] if entry["case"]["features"] else "base": entry
+               for entry in manifest["entries"]}
+    assert set(entries) == {"base", "entry_trailing", "close_trailing"}
+    for name, entry in entries.items():
+        for config in entry["configs"]:
+            for side in ("long", "short"):
+                strategy = config["bot"][side]["strategy"]["trailing_martingale"]
+                for leg in ("entry", "close"):
+                    assert (strategy[leg]["retracement_base_pct"] > 0) == (name == f"{leg}_trailing")
+    assert not any("passive" in case.features for case in catalogue())
+
+
+@pytest.mark.parametrize("variation", [False, True])
+def test_cpu_worker_hashes_repetitions_without_latency_noise(frozen, monkeypatch, variation):
+    directory, manifest = frozen
+    entry = manifest["entries"][0]
+    calls = 0
+    def candidate(_task):
+        nonlocal calls
+        calls += 1
+        return dict(metrics={"adg_strategy_eq": 1.0 + (variation and calls > len(entry["configs"]))},
+                    liquidated=False, latency_seconds=calls / 1000)
+    monkeypatch.setattr(worker, "cpu_candidate", candidate)
+    args = SimpleNamespace(harness_sha256=None, workload=directory, entry=entry["id"],
+                           engine="cpu", workers=1, warmup=0, repeats=2)
+    outcome = worker.run(args)
+    hashes = [sample["results_sha256"] for sample in outcome["samples"]]
+    assert (len(set(hashes)) > 1) == variation
+    comparison = numerical_comparison(outcome, outcome, ["adg_strategy_eq"],
+                                     {"adg_strategy_eq": dict(absolute=0, relative=0)})
+    assert comparison["status"] == ("repeat_variation_unassessed" if variation else "passed")
+
+
+def test_cohort_digest_covers_terminal_status():
+    rows = [dict(metrics={"adg_strategy_eq": 1.0}, liquidated=False)]
+    assert cohort_digest(rows) != cohort_digest([dict(metrics=rows[0]["metrics"], liquidated=True)])

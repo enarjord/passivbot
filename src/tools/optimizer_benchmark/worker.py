@@ -53,6 +53,12 @@ def strict_json(value):
     return value
 
 
+def cohort_digest(rows):
+    """Hash simulator outcomes, excluding nondeterministic per-call timings."""
+    return digest(strict_json([dict(metrics=row["metrics"], liquidated=row["liquidated"])
+                               for row in rows]))
+
+
 class Resources:
     """Sample process-tree RSS (shared pages can be counted more than once)."""
     def __init__(self):
@@ -309,7 +315,7 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
             sample = dict(seconds=seconds, completed=len(rows), results=rows,
                           dispatches=dispatches[dispatch_start:], completion_latencies_seconds=latencies,
                           elapsed_seconds=time.perf_counter() - started,
-                          results_sha256=digest(strict_json(rows)))
+                          results_sha256=cohort_digest(rows))
             if round_index == 0:
                 cold = sample
             if round_index >= warmup:
@@ -451,6 +457,8 @@ def run(args):
         raise RuntimeError("benchmark requires a source-verified Rust extension")
     manifest = load_manifest(args.workload)
     entry = next(e for e in manifest["entries"] if e["id"] == args.entry)
+    if args.engine in {"gpu", "search-gpu"} and entry["declared_gpu_limitation"]:
+        return dict(status="unsupported", reason=entry["declared_gpu_limitation"], runtime=runtime)
     with np.load(Path(args.workload) / entry["data_file"], allow_pickle=False) as data:
         arrays = tuple(data[key] for key in ("hlcvs", "btc", "timestamps"))
     if array_digest(*arrays) != entry["data_sha256"]:
@@ -472,7 +480,8 @@ def run(args):
                 for repeat in range(args.warmup + args.repeats):
                     tick = time.perf_counter()
                     rows = list(pool.map(cpu_config, entry["configs"])) if pool else [cpu_candidate(task) for task in tasks]
-                    sample = dict(seconds=time.perf_counter() - tick, completed=len(rows), results=rows)
+                    sample = dict(seconds=time.perf_counter() - tick, completed=len(rows), results=rows,
+                                  results_sha256=cohort_digest(rows))
                     if first is None:
                         first = sample
                     if repeat >= args.warmup:
@@ -485,8 +494,6 @@ def run(args):
                           transport="spawn workers over immutable shared market arrays; candidate serialization included" if pool else "serial",
                           latency_scope="payload preparation plus simulation")
         else:
-            if entry["declared_gpu_limitation"]:
-                return dict(status="unsupported", reason=entry["declared_gpu_limitation"], runtime=runtime)
             result = gpu_runs(entry, arrays, args.width, args.repeats, args.warmup,
                               args.tune_seconds, args.dispatch_budget)
     import importlib.metadata

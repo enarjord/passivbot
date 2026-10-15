@@ -76,7 +76,9 @@ to use an unchanged production search distribution.
 
 The catalogue includes the 18 strategy/direction/universe baselines, individual
 feature cases, a deterministic binary pairwise covering array, selected combined
-stress cases, and an explicit CPU-only v7 strategy case.
+stress cases, and an explicit CPU-only v7 strategy case. TM baselines use passive
+entry and close orders (zero retracement); the entry/close trailing cases enable
+retracement separately. There is no duplicate passive feature case.
 
 | Dimension | Declared variants |
 |---|---|
