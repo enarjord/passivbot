@@ -34,6 +34,26 @@ def _market():
     return ProxyMarket(0.001, 0.01, 0.001, 1.0, 1.0, 0.0002)
 
 
+def test_shared_account_packer_accepts_one_coin_and_preserves_validity(cpu_packer):
+    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, 1, 1))
+    values[:2] = np.nan
+    values[5:] = np.nan
+    original = values.copy()
+    packed = build_mps_multicoin_data(values, np.arange(6) * 60000, [_run(2, 4)], [_market()])
+    assert packed["n_coins"] == 1
+    assert packed["bars"].shape[:2] == (6, 1)
+    np.testing.assert_array_equal(packed["coin_settings"][:, 6:8], [[2, 4]])
+    np.testing.assert_array_equal(values, original)
+
+
+@pytest.mark.parametrize("coins", [0, 65])
+def test_shared_account_packer_rejects_out_of_range_coin_counts(cpu_packer, coins):
+    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, coins, 1))
+    with pytest.raises(ValueError, match="supports 1..64 coins"):
+        build_mps_multicoin_data(values, np.arange(6) * 60000, [_run()] * coins, [_market()] * coins)
+    assert cpu_packer == []
+
+
 @pytest.mark.parametrize("multicoin", [False, True])
 @pytest.mark.parametrize("bad_hlc", [
     [np.nan, np.nan, np.nan], [101.0, 99.0, np.nan], [np.inf, 99.0, 100.0],

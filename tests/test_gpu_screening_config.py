@@ -7,7 +7,7 @@ import pytest
 
 from config import get_template_config, load_prepared_config, prepare_config
 from config_utils import clean_config, format_config
-from optimization.backends.gpu_backend import GPU_DEFAULTS, _resolve_options
+from config.gpu import GPU_SCREENING_DEFAULTS, resolve_gpu_screening
 from passivbot_exceptions import GPUScreeningMigrationError
 
 
@@ -31,7 +31,7 @@ def test_disabled_legacy_migrates_without_enabling_screening(tmp_path, caplog, l
     assert source == original
 
 
-@pytest.mark.parametrize("prepare", [prepare_config, format_config, clean_config, _resolve_options])
+@pytest.mark.parametrize("prepare", [prepare_config, format_config, clean_config])
 def test_enabled_legacy_fails_actionably_even_with_new_screening(prepare):
     source = get_template_config()
     source["optimize"]["gpu"]["successive_halving"] = {
@@ -58,10 +58,10 @@ def test_disabled_legacy_preserves_explicit_new_policy(caplog):
 
 def test_screening_defaults_agree_across_schema_normalizer_cleaner_and_runtime():
     config = get_template_config()
-    expected = GPU_DEFAULTS["screening"]
+    expected = GPU_SCREENING_DEFAULTS
     for payload in (config, format_config(config, verbose=False), clean_config(config)):
         assert payload["optimize"]["gpu"]["screening"] == expected
-        assert _resolve_options(payload)["screening"] == expected
+        assert resolve_gpu_screening(payload["optimize"]["gpu"]["screening"]) == expected
         assert "successive_halving" not in payload["optimize"]["gpu"]
 
 

@@ -311,26 +311,10 @@ def test_gpu_runtime_settings_retain_documented_strict_resume_comparison():
     config = _config()
     config["optimize"]["backend"] = "gpu"
     old = _record(config)
-    config["optimize"]["gpu"]["exact_workers"] = 987
+    config["optimize"]["gpu"]["batch_size"] = 987
     assert any("gpu" in item for item in _resume_config_mismatches(old, config))
 
 
-@pytest.mark.parametrize("legacy_halt", [0.6, 0.8])
-def test_gpu_resume_accepts_missing_additive_drift_defaults(legacy_halt):
-    from optimize import _resume_config_mismatches
-
-    config = _config()
-    config["optimize"]["backend"] = "gpu"
-    config["optimize"]["gpu"]["drift_halt"] = legacy_halt
-    old = _record(config)
-    del old["optimize"]["gpu"]["drift_rank_halt"]
-    del old["optimize"]["gpu"]["drift_objective_tolerance"]
-    assert _resume_config_mismatches(old, config) == []
-    assert "drift_rank_halt" not in old["optimize"]["gpu"]
-    for key, value in (("drift_rank_halt", 0.5), ("drift_objective_tolerance", 0.1)):
-        changed = deepcopy(config)
-        changed["optimize"]["gpu"][key] = value
-        assert any("gpu" in item for item in _resume_config_mismatches(old, changed))
 
 
 @pytest.mark.parametrize("backend", ["deap", "pymoo"])
@@ -630,19 +614,10 @@ def test_empty_gpu_seed_scores_require_the_same_evaluation_identity(tmp_path, ch
         stored["prepared_data"] = {"version": 1, "digest": "older-data"}
     checkpoint = {
         CONTRACT_KEY: stored,
-        "seed_bootstrap_complete": False,
-        "seed_exact_done": 0,
-        "exact_done": 0,
-        "seed_bootstrap_contract": {"version": 1},
-        "seed_bootstrap_plan": {
-            "effective_mode": "screened",
-            "starting_vectors": [[0.1]],
-            "screen_complete": True,
-            "proxy_objectives": [[0.5]],
-        },
+        "backend": "gpu", "version": 3, "completed": 0,
     }
     (tmp_path / "all_results.bin").write_bytes(b"")
     path = tmp_path / "checkpoint.pkl"
     path.write_bytes(pickle.dumps(checkpoint))
-    with pytest.raises(ValueError, match="historical evaluation contract"):
+    with pytest.raises(ValueError, match="checkpoint evaluation contract changed"):
         _validate_resume_results(str(tmp_path), config, checkpoint_path=str(path))

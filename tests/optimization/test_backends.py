@@ -70,13 +70,11 @@ def test_format_config_accepts_gpu_backend():
     out = format_config(current, verbose=False)
 
     assert out["optimize"]["backend"] == "gpu"
-    assert out["optimize"]["gpu"]["population_size"] is None
     assert out["optimize"]["gpu"]["batch_size"] is None
     assert out["optimize"]["gpu"]["max_dispatch_candidate_bars"] is None
-    assert out["optimize"]["gpu"]["auto_lean_parallelism"] is True
-    assert out["optimize"]["gpu"]["seed_bootstrap"] == {
-        "max_exact": 128,
-        "mode": "auto",
+    assert set(out["optimize"]["gpu"]) == {
+        "batch_size", "max_dispatch_candidate_bars", "tuning_mode",
+        "checkpoint_interval_seconds", "screening",
     }
 
 
@@ -99,7 +97,30 @@ def test_optimizer_backend_cli_alias_updates_config():
     assert out["optimize"]["backend"] == "pymoo"
 
 
+@pytest.mark.parametrize("help_all", [False, True])
+def test_gpu_backend_help_names_both_supported_devices(help_all):
+    parser = argparse.ArgumentParser()
+    add_config_arguments(parser, get_template_config(), command="optimize", help_all=help_all)
+    help_text = " ".join(parser.format_help().split())
+    assert "NVIDIA/CUDA" in help_text
+    assert "experimental Apple Metal" in help_text
+
+
 def test_gpu_backend_registry_entry_is_lazy():
+    assert get_backend_runner("gpu") is run_gpu_backend
+
+
+def test_native_backend_config_and_registry_remain_lazy(monkeypatch):
+    import builtins
+    original = builtins.__import__
+    def guarded(name, *args, **kwargs):
+        if name in {"torch", "cupy", "optimization.backends.gpu_backend"}:
+            pytest.fail("CPU/config paths must not initialize optional native GPU runtime")
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["backend"] = "GPU"
+    assert format_config(current, verbose=False)["optimize"]["backend"] == "gpu"
     assert get_backend_runner("gpu") is run_gpu_backend
 
 

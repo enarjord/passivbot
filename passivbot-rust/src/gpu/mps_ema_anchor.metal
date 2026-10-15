@@ -3,7 +3,7 @@ using namespace metal;
 
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 15;
-constant int GAP_BINS = 128;
+constant int GAP_BINS = 512;
 
 inline float safe_div(float a, float b) {
     return a / fmax(fabs(b), 1.0e-12f);
@@ -62,7 +62,7 @@ inline void passivbot_single_coin_impl(
     const float starting_balance = settings[6];
     const float liq_floor = settings[7];
     const float interval_ms = settings[8];
-    const float log_bin_scale = 127.0f / log(4000001.0f);
+    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     const int po = int(b) * P;
     float ema0;
@@ -222,7 +222,7 @@ inline void passivbot_single_coin_impl(
             day_has_fill = 1.0f;
             if (last_fill_k >= 0.0f) {
                 float gap = float(k) - last_fill_k;
-                int bin = clamp(int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, 127);
+                int bin = clamp(int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, GAP_BINS - 1);
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
                 gap_max_min = fmax(gap_max_min, gap);
             }

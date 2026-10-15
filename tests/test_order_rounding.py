@@ -276,3 +276,30 @@ def test_single_trailing_close_matches_expanded_price_at_raw_touch(side):
     assert single[0] == expanded[0][0]
     # Strict fill tests must agree for a candle between the raw touch and tick.
     assert not (101.008 > single[1] if is_long else 98.992 < single[1])
+
+@requires_extension
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("retracement", [0.0, 0.001])
+@pytest.mark.parametrize("size,expected", [(0.066, 0.028), (0.066000001, 0.027)])
+def test_partial_initial_entries_preserve_quantity_steps(side, retracement, size, expected):
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    params = dict(
+        qty_step=0.001, price_step=0.01, min_qty=0.001, min_cost=1.0, c_mult=1.0,
+        entry_grid_double_down_factor=0.2, entry_grid_spacing_pct=0.001,
+        entry_initial_ema_dist=0.0, entry_initial_qty_pct=0.012,
+        entry_trailing_double_down_factor=0.2, entry_trailing_retracement_pct=retracement,
+        entry_trailing_threshold_pct=0.001, entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0, entry_we_weight=0.0, wallet_exposure_limit=0.5,
+        risk_we_excess_allowance_pct=0.0, balance=1102.0,
+        position_size=-size if side == "short" else size, position_price=99.85,
+        min_since_open=0.0, max_since_min=0.0, max_since_open=0.0, min_since_max=0.0,
+        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+    )
+    params["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 70.62
+    params["order_book_ask" if side == "short" else "order_book_bid"] = 70.62
+    order = getattr(pbr, f"calc_entries_{side}_py")(**params)[0]
+    assert order[0] == (-expected if side == "short" else expected)
+    assert order[1] == 70.62
+    assert order[2] == (12 if side == "short" else 1)

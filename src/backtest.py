@@ -963,6 +963,7 @@ def build_backtest_payload(
     coin_indices: list[int] | None = None,
     metrics_only: bool = False,
     skip_btc_analysis: bool = False,
+    calculate_legacy_w: bool = True,
     runtime_config: dict | None = None,
     execution_settings: BacktestExecutionSettings | None = None,
 ) -> BacktestPayload:
@@ -1000,6 +1001,7 @@ def build_backtest_payload(
     )
     backtest_params = dict(backtest_params)
     backtest_params["skip_btc_analysis"] = bool(skip_btc_analysis)
+    backtest_params["calculate_legacy_w"] = bool(calculate_legacy_w)
     coins_order = backtest_params.get("coins", [])
     effective_mss = _effective_backtest_market_settings(
         runtime_config,
@@ -2561,7 +2563,13 @@ def prep_backtest_args(
     metrics_only: bool = False,
 ):
     from config.hsl import engine
+    from config.ew import validate_ew_candle_interval, validate_ew_half_life_days
 
+    ew_half_life_days = validate_ew_half_life_days(
+        config.get("backtest", {}).get("ew_half_life_days")
+    )
+    if ew_half_life_days is not None:
+        validate_ew_candle_interval(config.get("backtest", {}).get("candle_interval_minutes", 1))
     engine(config)
 
     if not is_runtime_compiled:
@@ -2687,6 +2695,8 @@ def prep_backtest_args(
             for coin in coins
         ]
     if backtest_params is not None:
+        if backtest_params.get("ew_half_life_days") != ew_half_life_days:
+            raise ValueError("cached EW half-life differs from the effective config")
         supplied_hsl = backtest_params["equity_hard_stop_loss"]
         if supplied_hsl != _resolve_backtest_hsl(config, hsl_coin_policies):
             raise ValueError("cached HSL policies differ from the effective config")
@@ -2725,6 +2735,7 @@ def prep_backtest_args(
             "trade_start_indices": [],
             "global_warmup_bars": 0,
             "metrics_only": bool(metrics_only),
+            "ew_half_life_days": ew_half_life_days,
             "hsl_detailed_report": require_config_value(
                 config, "backtest.hsl_detailed_report"
             ),
@@ -2764,6 +2775,13 @@ def prep_backtest_args(
 def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     analysis_usd = dict(analysis_usd)
     analysis_btc = dict(analysis_btc)
+    ew_metadata = {}
+    for analysis in (analysis_usd, analysis_btc):
+        metadata = analysis.pop("_ew_metadata", None)
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                raise ValueError("Rust EW metadata must be a mapping")
+            ew_metadata.update(metadata)
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:
         twel = float(
@@ -2787,6 +2805,8 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
                 )
 
     result = {}
+    if ew_metadata:
+        result["ew_metadata"] = ew_metadata
 
     def _scalar_values_match(usd_val, btc_val) -> bool:
         if usd_val is None or btc_val is None:

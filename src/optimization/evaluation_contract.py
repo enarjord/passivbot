@@ -1,6 +1,7 @@
 """Machine-independent fixed simulation inputs used to validate saved fitness."""
 
 from copy import deepcopy
+import platform
 
 from config.overrides import parse_overrides
 from config.param_paths import resolve_optimizer_key_path
@@ -10,6 +11,7 @@ from optimization.fine_tune_anchors import get_anchor_plan
 from optimization.evaluation_implementation import evaluation_implementation_identity
 from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
+from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
 CONTRACT_VERSION = 2
 CONTRACT_KEY = "optimizer_evaluation_contract"
@@ -120,7 +122,7 @@ def build_evaluation_contract(config: dict) -> dict:
             "key_paths": [list(path) for path in plan.get("key_paths", [])],
             "anchors": anchors,
         }
-    return {
+    contract = {
         "version": CONTRACT_VERSION,
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),
@@ -134,6 +136,28 @@ def build_evaluation_contract(config: dict) -> dict:
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }
+    policy = resolve_prefilter(config.get("optimize", {}).get("prefilter"))
+    if prefilter_enabled(policy):
+        contract["prefilter"] = {"version": PREFILTER_VERSION, "policy": policy}
+    half_life = effective.get("backtest", {}).get("ew_half_life_days")
+    if half_life is not None:
+        from config.ew import EW_DEFINITION_VERSION
+        contract["exponential_weighting"] = {
+            "half_life_days": half_life,
+            "definition_version": EW_DEFINITION_VERSION,
+        }
+    if config.get("optimize", {}).get("backend") == "gpu":
+        # Authoritative GPU fitness must never inherit CPU/proxy-validation
+        # compatibility. Source and dependency identities above include the
+        # replay shader, CUDA lowering and host metric implementation.
+        metal = platform.system() == "Darwin" and platform.machine() == "arm64"
+        contract["execution"] = {
+            "engine": "metal_native" if metal else "cuda_native",
+            "version": 2,
+            "precision": ("f32_replay_integer_tick_boundaries_f32_ew_f64_compact_host"
+                          if metal else "f32_replay_integer_tick_boundaries_f64_host"),
+        }
+    return contract
 
 
 def recorded_evaluation_contract(template: dict) -> dict:

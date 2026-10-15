@@ -1,11 +1,14 @@
 mod analysis;
 mod backtest;
+mod exposure_rms;
 mod closes;
 mod coin_selection;
+mod config_prefilter;
 mod constants;
 mod dynamic;
 mod entries;
 mod entry_cooldown;
+mod ew;
 mod gpu;
 mod hsl;
 mod hsl_candle_free;
@@ -105,9 +108,15 @@ fn mps_strategy_eq_recovery_distribution_source_py() -> &'static str {
     gpu::mps_strategy_eq_recovery_distribution_source()
 }
 
+#[pyfunction]
+fn mps_weighted_volume_source_py() -> &'static str {
+    gpu::mps_weighted_volume_source()
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(config_prefilter::config_prefilter_metrics_json, m)?)?;
     m.add_class::<HlcvsBundlePy>()?;
     m.add_function(wrap_pyfunction!(
         unilateralness::calc_signed_unilateralness,
@@ -118,6 +127,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_ew_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(hsl::signal_py, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_controller::hsl_controller, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_trace::hsl_trace, m)?)?;
@@ -164,6 +174,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         mps_strategy_eq_recovery_distribution_source_py,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(mps_weighted_volume_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;

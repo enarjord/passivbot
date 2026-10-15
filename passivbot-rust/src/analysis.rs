@@ -1152,187 +1152,199 @@ pub fn analyze_backtest(
     timestamps_ms: &[u64],
     exposures_series: &[f64],
 ) -> Analysis {
+    analyze_backtest_with_options(fills, equities, timestamps_ms, exposures_series, true)
+}
+
+pub fn analyze_backtest_with_options(
+    fills: &[Fill],
+    equities: &Vec<f64>,
+    timestamps_ms: &[u64],
+    exposures_series: &[f64],
+    calculate_legacy_w: bool,
+) -> Analysis {
     let mut analysis = analyze_backtest_basic(fills, equities, timestamps_ms, exposures_series);
 
     if fills.is_empty() || equities.is_empty() {
         return analysis;
     }
 
-    let n = equities.len();
-    let mut subset_analyses = Vec::with_capacity(10);
-    subset_analyses.push(analysis.clone());
+    if calculate_legacy_w {
+        let n = equities.len();
+        let mut subset_analyses = Vec::with_capacity(10);
+        subset_analyses.push(analysis.clone());
 
-    for i in 1..10 {
-        // fraction of the data we want to keep:
-        //  i=1 => fraction = 0.5       => last half
-        //  i=2 => fraction = 0.3333    => last third
-        //  i=3 => fraction = 0.25      => last quarter
-        //  etc.
-        let fraction = 1.0 / (1.0 + i as f64);
+        for i in 1..10 {
+            // fraction of the data we want to keep:
+            //  i=1 => fraction = 0.5       => last half
+            //  i=2 => fraction = 0.3333    => last third
+            //  i=3 => fraction = 0.25      => last quarter
+            //  etc.
+            let fraction = 1.0 / (1.0 + i as f64);
 
-        // start index for slicing the 'last' fraction
-        let start_idx = (n as f64 - fraction * (n as f64)).round() as usize;
+            // start index for slicing the 'last' fraction
+            let start_idx = (n as f64 - fraction * (n as f64)).round() as usize;
 
-        // slice from start_idx to the end
-        let subset_equities = &equities[start_idx..];
-        if subset_equities.len() == 0 {
-            break;
+            // slice from start_idx to the end
+            let subset_equities = &equities[start_idx..];
+            if subset_equities.len() == 0 {
+                break;
+            }
+
+            // filter fills that happened after or at start_idx
+            let subset_start_ts = if timestamps_ms.len() == equities.len() && !timestamps_ms.is_empty()
+            {
+                timestamps_ms[start_idx]
+            } else {
+                fallback_timestamp_ms(start_idx)
+            };
+            let subset_timestamps = if timestamps_ms.len() == equities.len() {
+                &timestamps_ms[start_idx..]
+            } else {
+                &[]
+            };
+            let subset_exposures = if exposures_series.len() == equities.len() {
+                &exposures_series[start_idx..]
+            } else {
+                &[]
+            };
+
+            // Equity continues changing even without another fill. Carry the
+            // last actual balance into the suffix; do not invent a trade merely
+            // to make equity/balance metrics evaluable.
+            let subset_analysis = match select_contiguous_fill_suffix(fills, subset_start_ts, start_idx)
+            {
+                FillSuffixSelection::Empty => analyze_backtest_basic_with_starting_balance(
+                    &[],
+                    subset_equities,
+                    subset_timestamps,
+                    subset_exposures,
+                    fills.last().unwrap().usd_total_balance,
+                    fills.last().unwrap().twe_net,
+                    start_idx,
+                ),
+                FillSuffixSelection::Contiguous(fill_start_idx) => {
+                    let balance = fills[fill_start_idx.saturating_sub(1)].usd_total_balance;
+                    analyze_backtest_basic_with_starting_balance(
+                        &fills[fill_start_idx..],
+                        subset_equities,
+                        subset_timestamps,
+                        subset_exposures,
+                        balance,
+                        fills[fill_start_idx.saturating_sub(1)].twe_net,
+                        start_idx,
+                    )
+                }
+                FillSuffixSelection::NonContiguous => {
+                    let subset_fills: Vec<Fill> = fills
+                        .iter()
+                        .filter(|fill| {
+                            fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx)
+                        })
+                        .cloned()
+                        .collect();
+                    let previous_fill = fills
+                        .iter()
+                        .rev()
+                        .find(|fill| {
+                            !fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx)
+                        })
+                        .unwrap_or(&fills[0]);
+                    analyze_backtest_basic_with_starting_balance(
+                        &subset_fills,
+                        subset_equities,
+                        subset_timestamps,
+                        subset_exposures,
+                        previous_fill.usd_total_balance,
+                        previous_fill.twe_net,
+                        start_idx,
+                    )
+                }
+            };
+            subset_analyses.push(subset_analysis);
         }
 
-        // filter fills that happened after or at start_idx
-        let subset_start_ts = if timestamps_ms.len() == equities.len() && !timestamps_ms.is_empty()
-        {
-            timestamps_ms[start_idx]
-        } else {
-            fallback_timestamp_ms(start_idx)
-        };
-        let subset_timestamps = if timestamps_ms.len() == equities.len() {
-            &timestamps_ms[start_idx..]
-        } else {
-            &[]
-        };
-        let subset_exposures = if exposures_series.len() == equities.len() {
-            &exposures_series[start_idx..]
-        } else {
-            &[]
-        };
+        // Compute weighted metrics as the mean of subset analyses
+        let subset_count = subset_analyses.len() as f64;
+        analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / subset_count;
+        analysis.adg_pnl_w = subset_analyses.iter().map(|a| a.adg_pnl).sum::<f64>() / subset_count;
+        analysis.mdg_pnl_w = subset_analyses.iter().map(|a| a.mdg_pnl).sum::<f64>() / subset_count;
+        analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / subset_count;
+        analysis.sharpe_ratio_w =
+            subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / subset_count;
+        analysis.sortino_ratio_w =
+            subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / subset_count;
+        analysis.sharpe_ratio_pnl_w = subset_analyses
+            .iter()
+            .map(|a| a.sharpe_ratio_pnl)
+            .sum::<f64>()
+            / subset_count;
+        analysis.sortino_ratio_pnl_w = subset_analyses
+            .iter()
+            .map(|a| a.sortino_ratio_pnl)
+            .sum::<f64>()
+            / subset_count;
+        analysis.omega_ratio_w =
+            subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / subset_count;
+        analysis.calmar_ratio_w =
+            subset_analyses.iter().map(|a| a.calmar_ratio).sum::<f64>() / subset_count;
+        analysis.sterling_ratio_w = subset_analyses
+            .iter()
+            .map(|a| a.sterling_ratio)
+            .sum::<f64>()
+            / subset_count;
+        analysis.loss_profit_ratio_w = subset_analyses
+            .iter()
+            .map(|a| a.loss_profit_ratio)
+            .sum::<f64>()
+            / subset_count;
+        analysis.paper_loss_ratio_w = subset_analyses
+            .iter()
+            .map(|a| a.paper_loss_ratio)
+            .sum::<f64>()
+            / subset_count;
+        analysis.paper_loss_mean_ratio_w = subset_analyses
+            .iter()
+            .map(|a| a.paper_loss_mean_ratio)
+            .sum::<f64>()
+            / subset_count;
+        analysis.exposure_ratio_w = subset_analyses
+            .iter()
+            .map(|a| a.exposure_ratio)
+            .sum::<f64>()
+            / subset_count;
+        analysis.exposure_mean_ratio_w = subset_analyses
+            .iter()
+            .map(|a| a.exposure_mean_ratio)
+            .sum::<f64>()
+            / subset_count;
+        analysis.equity_choppiness_w = subset_analyses
+            .iter()
+            .map(|a| a.equity_choppiness)
+            .sum::<f64>()
+            / subset_count;
+        analysis.equity_jerkiness_w = subset_analyses
+            .iter()
+            .map(|a| a.equity_jerkiness)
+            .sum::<f64>()
+            / subset_count;
+        analysis.exponential_fit_error_w = subset_analyses
+            .iter()
+            .map(|a| a.exponential_fit_error)
+            .sum::<f64>()
+            / subset_count;
+        analysis.volume_pct_per_day_avg_w = subset_analyses
+            .iter()
+            .map(|a| a.volume_pct_per_day_avg)
+            .sum::<f64>()
+            / subset_count;
 
-        // Equity continues changing even without another fill. Carry the
-        // last actual balance into the suffix; do not invent a trade merely
-        // to make equity/balance metrics evaluable.
-        let subset_analysis = match select_contiguous_fill_suffix(fills, subset_start_ts, start_idx)
-        {
-            FillSuffixSelection::Empty => analyze_backtest_basic_with_starting_balance(
-                &[],
-                subset_equities,
-                subset_timestamps,
-                subset_exposures,
-                fills.last().unwrap().usd_total_balance,
-                fills.last().unwrap().twe_net,
-                start_idx,
-            ),
-            FillSuffixSelection::Contiguous(fill_start_idx) => {
-                let balance = fills[fill_start_idx.saturating_sub(1)].usd_total_balance;
-                analyze_backtest_basic_with_starting_balance(
-                    &fills[fill_start_idx..],
-                    subset_equities,
-                    subset_timestamps,
-                    subset_exposures,
-                    balance,
-                    fills[fill_start_idx.saturating_sub(1)].twe_net,
-                    start_idx,
-                )
-            }
-            FillSuffixSelection::NonContiguous => {
-                let subset_fills: Vec<Fill> = fills
-                    .iter()
-                    .filter(|fill| {
-                        fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx)
-                    })
-                    .cloned()
-                    .collect();
-                let previous_fill = fills
-                    .iter()
-                    .rev()
-                    .find(|fill| {
-                        !fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx)
-                    })
-                    .unwrap_or(&fills[0]);
-                analyze_backtest_basic_with_starting_balance(
-                    &subset_fills,
-                    subset_equities,
-                    subset_timestamps,
-                    subset_exposures,
-                    previous_fill.usd_total_balance,
-                    previous_fill.twe_net,
-                    start_idx,
-                )
-            }
-        };
-        subset_analyses.push(subset_analysis);
+        analysis.positions_held_per_day_w = subset_analyses
+            .iter()
+            .map(|a| a.positions_held_per_day)
+            .sum::<f64>()
+            / subset_count;
+        analysis.win_rate_w = subset_analyses.iter().map(|a| a.win_rate).sum::<f64>() / subset_count;
     }
-
-    // Compute weighted metrics as the mean of subset analyses
-    let subset_count = subset_analyses.len() as f64;
-    analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / subset_count;
-    analysis.adg_pnl_w = subset_analyses.iter().map(|a| a.adg_pnl).sum::<f64>() / subset_count;
-    analysis.mdg_pnl_w = subset_analyses.iter().map(|a| a.mdg_pnl).sum::<f64>() / subset_count;
-    analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / subset_count;
-    analysis.sharpe_ratio_w =
-        subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / subset_count;
-    analysis.sortino_ratio_w =
-        subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / subset_count;
-    analysis.sharpe_ratio_pnl_w = subset_analyses
-        .iter()
-        .map(|a| a.sharpe_ratio_pnl)
-        .sum::<f64>()
-        / subset_count;
-    analysis.sortino_ratio_pnl_w = subset_analyses
-        .iter()
-        .map(|a| a.sortino_ratio_pnl)
-        .sum::<f64>()
-        / subset_count;
-    analysis.omega_ratio_w =
-        subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / subset_count;
-    analysis.calmar_ratio_w =
-        subset_analyses.iter().map(|a| a.calmar_ratio).sum::<f64>() / subset_count;
-    analysis.sterling_ratio_w = subset_analyses
-        .iter()
-        .map(|a| a.sterling_ratio)
-        .sum::<f64>()
-        / subset_count;
-    analysis.loss_profit_ratio_w = subset_analyses
-        .iter()
-        .map(|a| a.loss_profit_ratio)
-        .sum::<f64>()
-        / subset_count;
-    analysis.paper_loss_ratio_w = subset_analyses
-        .iter()
-        .map(|a| a.paper_loss_ratio)
-        .sum::<f64>()
-        / subset_count;
-    analysis.paper_loss_mean_ratio_w = subset_analyses
-        .iter()
-        .map(|a| a.paper_loss_mean_ratio)
-        .sum::<f64>()
-        / subset_count;
-    analysis.exposure_ratio_w = subset_analyses
-        .iter()
-        .map(|a| a.exposure_ratio)
-        .sum::<f64>()
-        / subset_count;
-    analysis.exposure_mean_ratio_w = subset_analyses
-        .iter()
-        .map(|a| a.exposure_mean_ratio)
-        .sum::<f64>()
-        / subset_count;
-    analysis.equity_choppiness_w = subset_analyses
-        .iter()
-        .map(|a| a.equity_choppiness)
-        .sum::<f64>()
-        / subset_count;
-    analysis.equity_jerkiness_w = subset_analyses
-        .iter()
-        .map(|a| a.equity_jerkiness)
-        .sum::<f64>()
-        / subset_count;
-    analysis.exponential_fit_error_w = subset_analyses
-        .iter()
-        .map(|a| a.exponential_fit_error)
-        .sum::<f64>()
-        / subset_count;
-    analysis.volume_pct_per_day_avg_w = subset_analyses
-        .iter()
-        .map(|a| a.volume_pct_per_day_avg)
-        .sum::<f64>()
-        / subset_count;
-
-    analysis.positions_held_per_day_w = subset_analyses
-        .iter()
-        .map(|a| a.positions_held_per_day)
-        .sum::<f64>()
-        / subset_count;
-    analysis.win_rate_w = subset_analyses.iter().map(|a| a.win_rate).sum::<f64>() / subset_count;
 
     // Compute high-exposure duration metrics per side:
     // Mean and max continuous duration (hours) where twe exceeded the
@@ -1445,6 +1457,7 @@ pub fn analyze_backtest_pair(
         total_wallet_exposures,
         liquidated,
         false,
+        true,
     )
     .0
 }
@@ -1463,6 +1476,27 @@ pub fn analyze_backtest_pair_with_profile(
         total_wallet_exposures,
         liquidated,
         true,
+        true,
+    )
+}
+
+pub fn analyze_backtest_pair_with_options(
+    fills: &[Fill],
+    equities: &Equities,
+    use_btc_collateral: bool,
+    total_wallet_exposures: &[f64],
+    liquidated: bool,
+    profile_enabled: bool,
+    calculate_legacy_w: bool,
+) -> ((Analysis, Analysis), AnalysisPairProfile) {
+    analyze_backtest_pair_inner(
+        fills,
+        equities,
+        use_btc_collateral,
+        total_wallet_exposures,
+        liquidated,
+        profile_enabled,
+        calculate_legacy_w,
     )
 }
 
@@ -1472,14 +1506,16 @@ pub fn analyze_backtest_usd_with_profile(
     total_wallet_exposures: &[f64],
     liquidated: bool,
     profile_enabled: bool,
+    calculate_legacy_w: bool,
 ) -> (Analysis, AnalysisPairProfile) {
     let total_started = profile_start(profile_enabled);
     let usd_started = profile_start(profile_enabled);
-    let mut analysis_usd = analyze_backtest(
+    let mut analysis_usd = analyze_backtest_with_options(
         fills,
         &equities.usd_total_equity,
         &equities.timestamps_ms,
         total_wallet_exposures,
+        calculate_legacy_w,
     );
     let analysis_usd_ms = elapsed_ms(usd_started);
     let long_short_profit_ratio = calc_long_short_profit_ratio(fills);
@@ -1503,16 +1539,18 @@ fn analyze_backtest_pair_inner(
     total_wallet_exposures: &[f64],
     liquidated: bool,
     profile_enabled: bool,
+    calculate_legacy_w: bool,
 ) -> ((Analysis, Analysis), AnalysisPairProfile) {
     let total_started = profile_start(profile_enabled);
     let long_short_profit_ratio = calc_long_short_profit_ratio(fills);
 
     let usd_started = profile_start(profile_enabled);
-    let analysis_usd = analyze_backtest(
+    let analysis_usd = analyze_backtest_with_options(
         fills,
         &equities.usd_total_equity,
         &equities.timestamps_ms,
         total_wallet_exposures,
+        calculate_legacy_w,
     );
     let analysis_usd_ms = elapsed_ms(usd_started);
 
@@ -1533,11 +1571,12 @@ fn analyze_backtest_pair_inner(
     let btc_fill_prepare_ms = elapsed_ms(btc_fill_prepare_started);
 
     let btc_started = profile_start(profile_enabled);
-    let analysis_btc = analyze_backtest(
+    let analysis_btc = analyze_backtest_with_options(
         &btc_fills,
         &equities.btc_total_equity,
         &equities.timestamps_ms,
         total_wallet_exposures,
+        calculate_legacy_w,
     );
     let analysis_btc_ms = elapsed_ms(btc_started);
     let mut analysis_usd = analysis_usd;
@@ -2101,6 +2140,33 @@ mod tests {
             twe_short: if is_long { 0.0 } else { -0.1 },
             twe_net: if is_long { 0.1 } else { -0.1 },
         }
+    }
+
+    #[test]
+    fn skipping_legacy_weighting_preserves_full_history_metrics() {
+        let timestamps: Vec<u64> = (0..30).map(|i| i * MS_PER_DAY).collect();
+        let equities: Vec<f64> = (0..30).map(|i| 10000.0 + 100.0 * i as f64).collect();
+        let mut fills = vec![
+            make_trade_fill(0, 0, "BTC", 0.0, 0.1, 0.1, 10000.0, true),
+            make_trade_fill(1, MS_PER_DAY, "BTC", 0.0, 0.1, 0.2, 10100.0, true),
+            make_trade_fill(2, MS_PER_DAY + MS_PER_HOUR, "BTC", 0.0, 0.1, 0.3, 10200.0, true),
+            make_trade_fill(3, 2 * MS_PER_DAY, "BTC", 0.0, -0.1, 0.2, 10300.0, true),
+        ];
+        for (fill, exposure) in fills.iter_mut().zip([0.1, 0.5, 0.5, 0.1]) {
+            fill.twe_long = exposure;
+        }
+        let old = analyze_backtest(&fills, &equities, &timestamps, &[0.4; 30]);
+        let explicit = analyze_backtest_with_options(&fills, &equities, &timestamps, &[0.4; 30], true);
+        let skipped = analyze_backtest_with_options(&fills, &equities, &timestamps, &[0.4; 30], false);
+        let old = serde_json::to_value(old).unwrap();
+        assert_eq!(old, serde_json::to_value(explicit).unwrap());
+        let skipped = serde_json::to_value(skipped).unwrap();
+        for (key,value) in old.as_object().unwrap() {
+            if !key.ends_with("_w") { assert_eq!(value, &skipped[key], "changed {key}"); }
+        }
+        assert_eq!(skipped["adg_w"], 0.0);
+        assert_ne!(old["adg_w"], 0.0);
+        assert!(old["high_exposure_hours_max_long"].as_f64().unwrap() > 0.0);
     }
 
     #[test]

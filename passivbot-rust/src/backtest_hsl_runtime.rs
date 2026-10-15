@@ -331,6 +331,11 @@ impl Backtest<'_> {
                 exposure_budget.as_ref(),
             )?
         };
+        let rolling = if boundary {
+            None
+        } else {
+            self.rolling_hsl_window(&observed.snapshot)
+        };
         let mut result = evaluator::evaluate_for_simulator(evaluator::Input {
             snapshot: observed.snapshot,
             slots,
@@ -342,7 +347,7 @@ impl Backtest<'_> {
             restart: settings.restart,
         })?;
         result.reasons.extend(observed.reasons);
-        self.seed_hsl_trace((side, coin), &mut result);
+        self.seed_hsl_trace((side, coin), &mut result, rolling, budget, settings);
         Ok(Scope {
             timestamp,
             fill_count: self.fills.len(),

@@ -5,10 +5,61 @@ from __future__ import annotations
 import json
 
 import hjson
+from config.ew import EW_METRICS
+
+EXPONENTIAL_EQUITY_METRICS = EW_METRICS
+EXPONENTIAL_RAW_EQUITY_METRICS = frozenset(
+    name for name in EW_METRICS if name.endswith("_strategy_eq_ew")
+)
+EXPONENTIAL_BTC_EQUITY_METRICS = frozenset(
+    name for name in EW_METRICS if name.endswith("_ew_btc")
+)
 
 # Metric-name groups that toggle opt-in MPS proxy features. Keep this metadata
 # Torch-free so backend preflight and ordinary CPU-only installs can prove the
 # dispatch contract without importing the optional GPU runtime.
+RAW_STRATEGY_RISK_METRICS = frozenset({
+    "drawdown_worst_strategy_eq",
+    "drawdown_worst_mean_1pct_strategy_eq",
+    "strategy_eq_underwater_pct_mean",
+})
+
+RAW_STRATEGY_EQUITY_METRICS = frozenset({
+    f"{stem}_strategy_eq" for stem in (
+        "adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio",
+        "calmar_ratio", "sterling_ratio", "expected_shortfall_1pct",
+        "adg_rolling_hmean", "adg_time_integrated", "positive_gain_participation",
+    )
+}) | EXPONENTIAL_RAW_EQUITY_METRICS
+RAW_STRATEGY_DRAWDOWN_CONSUMERS = RAW_STRATEGY_RISK_METRICS | frozenset({
+    "calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq",
+})
+
+WEIGHTED_EQUITY_STEMS = (
+    "adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio",
+    "calmar_ratio", "sterling_ratio",
+)
+WEIGHTED_RAW_EQUITY_METRICS = frozenset(
+    f"{stem}_strategy_eq_w" for stem in WEIGHTED_EQUITY_STEMS
+)
+WEIGHTED_ACCOUNT_EQUITY_METRICS = frozenset(
+    f"{stem}_w_usd" for stem in WEIGHTED_EQUITY_STEMS
+)
+WEIGHTED_EQUITY_METRICS = WEIGHTED_RAW_EQUITY_METRICS | WEIGHTED_ACCOUNT_EQUITY_METRICS
+_WEIGHTED_ACCOUNT_EXPOSURE_SOURCES = {
+    f"{stem}_w_per_exposure_{side}_usd": f"{stem}_w_usd"
+    for stem in ("adg", "mdg") for side in ("long", "short")
+}
+
+
+def weighted_equity_capture_metrics(metrics):
+    """Factual curves needed by direct weighted metrics and account derivatives."""
+    metrics = set(metrics)
+    return frozenset(metrics & WEIGHTED_EQUITY_METRICS) | frozenset(
+        source for name, source in _WEIGHTED_ACCOUNT_EXPOSURE_SOURCES.items()
+        if name in metrics
+    )
+
 BTC_INTRADAY_RISK_METRICS = frozenset(
     {
         "calmar_ratio_btc",

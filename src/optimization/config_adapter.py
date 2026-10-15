@@ -12,6 +12,7 @@ from config.bot import validate_unstuck_ema_dist_value
 from config.param_paths import (
     OPTIMIZABLE_BOT_KEY_PATHS,
     canonical_optimizer_key,
+    iter_optimizer_key_paths,
     resolve_optimizer_key_path,
     require_existing_config_path,
 )
@@ -66,13 +67,12 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
     optimize_bounds = _flatten_bounds_for_config(config, optimize_bounds)
     strategy_path_map = _strategy_path_map(config)
     cooldown_ranges = {}
-    for bound_key in optimize_bounds:
-        if not isinstance(bound_key, str):
-            continue
+    for bound_key, resolved in iter_optimizer_key_paths(
+        config, (key for key in optimize_bounds if isinstance(key, str))
+    ):
         canonical_key = canonical_optimizer_key(bound_key)
         if canonical_key != bound_key and canonical_key in optimize_bounds:
             continue
-        resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
             raise KeyError(
                 f"optimize bound {bound_key} does not map to a known bot parameter"
@@ -218,17 +218,16 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
 
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
-    template = get_template_config()
     bot_config = config.get("bot")
     if bot_config is None:
-        bot_config = template["bot"]
+        bot_config = get_template_config()["bot"]
     strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
     strategy_path_map = _strategy_path_map(config)
     optimize_bounds = _flatten_required_optimize_bounds(config)
     validate_optimize_bounds_against_bot_config(config, optimize_bounds)
-    for bound_key in sorted(optimize_bounds):
-        if not isinstance(bound_key, str):
-            continue
+    for bound_key, resolved in iter_optimizer_key_paths(
+        config, (key for key in sorted(optimize_bounds) if isinstance(key, str))
+    ):
         canonical_key = canonical_optimizer_key(bound_key)
         if canonical_key != bound_key and canonical_key in optimize_bounds:
             continue
@@ -237,7 +236,6 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
             and canonical_key in COUPLED_UNSTUCK_EMA_BOUND_KEYS
         ):
             continue
-        resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
             continue
         if canonical_key in OPTIMIZABLE_BOT_KEY_PATHS or resolved[:2] == ("bot", "hsl"):

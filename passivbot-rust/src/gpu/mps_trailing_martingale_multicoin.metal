@@ -1,6 +1,28 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifndef PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+#define PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED 0
+#endif
+
+#ifndef PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+#define PASSIVBOT_RAW_STRATEGY_RISK_ENABLED 0
+#endif
+
+#ifndef PASSIVBOT_TM_LOSS_GATE_DISABLED
+#define PASSIVBOT_TM_LOSS_GATE_DISABLED 0
+#endif
+
+#ifndef PASSIVBOT_EXPOSURE_RMS_ENABLED
+#define PASSIVBOT_EXPOSURE_RMS_ENABLED 0
+#endif
+
+// CUDA may place each candidate's mutable side state in block-owned storage.
+// Metal and non-temporal replays retain their ordinary thread-local value.
+#ifndef PASSIVBOT_GPU_SIDE_STATE
+#define PASSIVBOT_GPU_SIDE_STATE(TYPE, NAME, SLOT) TYPE NAME
+#endif
+
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 64;
 constant int OVERRIDE_COLS = 49;
@@ -12,24 +34,24 @@ constant int GATE_REENTRY_OVERRIDE_COL = 41;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 42;
 constant int COIN_COLS = 13;
 #if PASSIVBOT_BTC_RISK_ENABLED
-constant int DAILY_COLS = 12;
+constant int DAILY_COLS = 12 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #else
-constant int DAILY_COLS = 9;
+constant int DAILY_COLS = 9 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-constant int SCALAR_COLS = 67;
-constant int FUSED_SCALAR_COLS = 72;
+constant int SCALAR_COLS = 68 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
+constant int FUSED_SCALAR_COLS = 73 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
 #elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-constant int SCALAR_COLS = 65;
-constant int FUSED_SCALAR_COLS = 70;
+constant int SCALAR_COLS = 66 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
+constant int FUSED_SCALAR_COLS = 71 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
 #elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-constant int SCALAR_COLS = 63;
-constant int FUSED_SCALAR_COLS = 68;
+constant int SCALAR_COLS = 64 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
+constant int FUSED_SCALAR_COLS = 69 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
 #else
-constant int SCALAR_COLS = 61;
-constant int FUSED_SCALAR_COLS = 66;
+constant int SCALAR_COLS = 62 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
+constant int FUSED_SCALAR_COLS = 67 + 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED;
 #endif
-constant int GAP_BINS = 128;
+constant int GAP_BINS = 512;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
@@ -47,60 +69,6 @@ constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 // PASSIVBOT_ENTRY_INTERVAL_COMMON
 
 // PASSIVBOT_MULTICOIN_COMMON
-
-inline bool realized_loss_proxy_allows_close(
-    float qty, float close_price, float pprice, bool short_side,
-    float c_mult, float maker_fee, bool gate_enabled
-) {
-    if (!gate_enabled) return true;
-    if (!(qty > 0.0f && close_price > 0.0f && pprice > 0.0f)) return false;
-    float gross_pnl = qty * c_mult * (short_side
-        ? pprice - close_price : close_price - pprice);
-    float fee = qty * close_price * c_mult * maker_fee;
-    float net_pnl = gross_pnl - fee;
-    // Enumerating and reserving every recursive TM close group across all
-    // independently dispatched coins and sides would make screening scale
-    // with the 500-rung exact bound. Use a conservative zero-loss envelope
-    // whenever Rust's configured loss gate is active.
-    float arithmetic_scale = fabs(gross_pnl) + fabs(fee)
-        + qty * fabs(c_mult) * (fabs(close_price) + fabs(pprice));
-    float margin = 1.220703125e-4f * arithmetic_scale;
-    return isfinite(net_pnl) && net_pnl > margin;
-}
-
-inline bool realized_loss_proxy_allows_reducer(
-    float qty, float close_price, float pprice, bool short_side,
-    float c_mult, float maker_fee, bool is_unstuck,
-    bool gate_enabled, float balance,
-    float realized_pnl_cumsum_last, float realized_pnl_cumsum_max,
-    float max_realized_loss_pct
-) {
-    if (!is_unstuck) {
-        return realized_loss_proxy_allows_close(
-            qty, close_price, pprice, short_side,
-            c_mult, maker_fee, gate_enabled
-        );
-    }
-    if (!(qty > 0.0f && close_price > 0.0f && pprice > 0.0f)) return false;
-    if (!gate_enabled) return true;
-    float gross_pnl = qty * c_mult * (short_side
-        ? pprice - close_price : close_price - pprice);
-    float net_pnl = gross_pnl - qty * close_price * c_mult * maker_fee;
-    if (!isfinite(net_pnl)) return false;
-    if (net_pnl >= 0.0f) return true;
-    float balance_peak = balance
-        + (realized_pnl_cumsum_max - realized_pnl_cumsum_last);
-    float allowed_loss_budget = float32_floor_nonnegative(
-        balance_peak * fmax(max_realized_loss_pct, 0.0f)
-    );
-    float current_realized_loss = fmax(
-        realized_pnl_cumsum_max - realized_pnl_cumsum_last, 0.0f
-    );
-    float remaining_loss_budget = float32_floor_nonnegative(
-        fmax(allowed_loss_budget - current_realized_loss, 0.0f)
-    );
-    return -net_pnl <= remaining_loss_budget;
-}
 
 inline float calc_close_qty(
     float psize, float pprice, float balance, float twel,
@@ -252,140 +220,171 @@ struct CloseGroup {
     bool market;
 };
 
-// Rebuild Rust's post-reducer recursive grid and return its number of
-// duplicate-merged price groups. Selecting one generated-order group at a
-// time keeps GPU memory bounded; the caller reorders positive-WE grids before
-// applying reachable fills, matching calc_closes_long/short.
-inline int recursive_grid_close_groups_after_reducer(
-    bool short_side,
-    float psize,
-    float pprice,
-    float generation_balance,
-    float allowed_wel,
-    int touch_down,
-    int touch_up,
-    int touch_nearest,
-    float touch_min_qty,
-    int touch_min_qty_relation,
-    float close_qty_pct,
-    float close_threshold_base,
-    float close_threshold_we,
-    float close_threshold_v1h,
-    float close_threshold_v1m,
-    float volatility_1h,
-    float volatility_1m,
-    float qty_step,
-    float price_step,
-    float min_qty,
-    float min_cost,
-    float c_mult,
-    int prefix_merge_tick,
-    float prefix_merge_qty,
-    int max_rungs,
-    int wanted_group,
-    float generation_market_price,
-    bool market_orders_allowed,
-    float market_order_near_touch_threshold,
-    float market_resize_psize,
-    thread CloseGroup& selected
+// Immutable recursive-close inputs shared by selection and streaming admission.
+// The iterator merges duplicate ticks in one pass without materializing 500 orders.
+struct TmCloseGridContext {
+    bool short_side;
+    float psize;
+    float pprice;
+    float generation_balance;
+    float allowed_wel;
+    int touch_down;
+    int touch_up;
+    int touch_nearest;
+    float touch_min_qty;
+    int touch_min_qty_relation;
+    float close_qty_pct;
+    float close_threshold_base;
+    float close_threshold_we;
+    float close_threshold_v1h;
+    float close_threshold_v1m;
+    float volatility_1h;
+    float volatility_1m;
+    float qty_step;
+    float price_step;
+    float min_qty;
+    float min_cost;
+    float c_mult;
+    int prefix_merge_tick;
+    float prefix_merge_qty;
+    int max_rungs;
+    float generation_market_price;
+    bool market_orders_allowed;
+    float market_order_near_touch_threshold;
+    float market_resize_psize;
+};
+
+struct TmCloseGridIterator {
+    float sim_psize;
+    int rung;
+    int group_index;
+    bool have_group;
+    CloseGroup pending;
+};
+
+inline TmCloseGridIterator tm_close_grid_iterator(
+    thread const TmCloseGridContext& context
 ) {
-    selected.ticks = 0;
-    selected.price = 0.0f;
-    selected.qty = 0.0f;
-    selected.market = false;
-    float sim_psize = psize;
-    bool have_group = false;
-    int group_count = 0;
-    int group_ticks = 0;
-    float group_price = 0.0f;
-    float group_qty = 0.0f;
-    for (int rung = 0; rung < max_rungs && sim_psize > 0.0f; ++rung) {
-        float we = sim_psize * pprice * c_mult
-            / fmax(generation_balance, 1.0e-9f);
-        float wer = we / fmax(allowed_wel, 1.0e-12f);
-        float threshold = close_threshold_base
-            + wer * close_threshold_we
-            + volatility_1h * close_threshold_v1h
-            + volatility_1m * close_threshold_v1m;
-        float target = pprice * (
-            short_side ? 1.0f - threshold : 1.0f + threshold
+    return {context.psize, 0, 0, false, {0, 0.0f, 0.0f, false}};
+}
+
+inline void merge_tm_close_grid_prefix(
+    thread const TmCloseGridContext& context,
+    int group_index,
+    thread CloseGroup& group
+) {
+    if (group_index == 0 && group.ticks == context.prefix_merge_tick) {
+        group.qty = round_step(group.qty + context.prefix_merge_qty, context.qty_step);
+    }
+}
+
+inline bool next_tm_close_grid_group(
+    thread const TmCloseGridContext& context,
+    thread TmCloseGridIterator& iterator,
+    thread CloseGroup& group
+) {
+    while (iterator.rung < context.max_rungs && iterator.sim_psize > 0.0f) {
+        ++iterator.rung;
+        float we = iterator.sim_psize * context.pprice * context.c_mult
+            / fmax(context.generation_balance, 1.0e-9f);
+        float wer = we / fmax(context.allowed_wel, 1.0e-12f);
+        float threshold = context.close_threshold_base
+            + wer * context.close_threshold_we
+            + context.volatility_1h * context.close_threshold_v1h
+            + context.volatility_1m * context.close_threshold_v1m;
+        float target = context.pprice * (
+            context.short_side ? 1.0f - threshold : 1.0f + threshold
         );
-        int target_tick = short_side
-            ? int(floor(target / price_step + 1.0e-6f))
-            : int(ceil(target / price_step - 1.0e-6f));
-        int close_touch = short_side ? touch_down : touch_up;
-        bool touch_controls = short_side
+        int target_tick = context.short_side
+            ? int(floor(target / context.price_step + 1.0e-6f))
+            : int(ceil(target / context.price_step - 1.0e-6f));
+        int close_touch = context.short_side ? context.touch_down : context.touch_up;
+        bool touch_controls = context.short_side
             ? close_touch < target_tick
             : close_touch > target_tick;
-        int order_tick = touch_controls ? touch_nearest : target_tick;
-        float order_price = float(order_tick) * price_step;
+        int order_tick = touch_controls ? context.touch_nearest : target_tick;
+        float order_price = float(order_tick) * context.price_step;
         float minimum_close = touch_controls
-            ? touch_min_qty
+            ? context.touch_min_qty
             : min_entry_qty(
-                order_price, qty_step, min_qty, min_cost, c_mult
+                order_price, context.qty_step, context.min_qty, context.min_cost, context.c_mult
             );
         int minimum_relation = touch_controls
-            ? touch_min_qty_relation : 0;
-        float close_pct = close_threshold_we == 0.0f
-            ? 1.0f : close_qty_pct;
+            ? context.touch_min_qty_relation : 0;
+        float close_pct = context.close_threshold_we == 0.0f
+            ? 1.0f : context.close_qty_pct;
         float order_qty = calc_close_qty(
-            sim_psize, pprice, generation_balance, allowed_wel,
+            iterator.sim_psize, context.pprice, context.generation_balance, context.allowed_wel,
             minimum_close, minimum_relation, close_pct,
-            qty_step, c_mult
+            context.qty_step, context.c_mult
         );
 
-        order_qty = round_step(order_qty, qty_step);
-        if (order_qty <= 0.0f || order_tick <= 0) break;
-        order_qty = fmin(order_qty, sim_psize);
-
-        if (!have_group) {
-            have_group = true;
-            group_ticks = order_tick;
-            group_price = order_price;
-            group_qty = order_qty;
-        } else if (order_tick == group_ticks) {
-            group_qty = round_step(group_qty + order_qty, qty_step);
+        order_qty = round_step(order_qty, context.qty_step);
+        if (order_qty <= 0.0f || order_tick <= 0) {
+            iterator.rung = context.max_rungs;
+            break;
+        }
+        order_qty = fmin(order_qty, iterator.sim_psize);
+        bool emit = iterator.have_group && order_tick != iterator.pending.ticks;
+        if (emit) group = iterator.pending;
+        if (!iterator.have_group || emit) {
+            iterator.pending = {order_tick, order_price, order_qty, false};
+            iterator.have_group = true;
         } else {
-            if (group_count == wanted_group) {
-                selected.ticks = group_ticks;
-                selected.price = group_price;
-                selected.qty = group_count == 0
-                        && group_ticks == prefix_merge_tick
-                    ? round_step(group_qty + prefix_merge_qty, qty_step)
-                    : group_qty;
-            }
-            ++group_count;
-            group_ticks = order_tick;
-            group_price = order_price;
-            group_qty = order_qty;
-        }
-        sim_psize = fmax(round_step(sim_psize - order_qty, qty_step), 0.0f);
-    }
-    if (have_group) {
-        if (group_count == wanted_group) {
-            selected.ticks = group_ticks;
-            selected.price = group_price;
-            selected.qty = group_count == 0
-                    && group_ticks == prefix_merge_tick
-                ? round_step(group_qty + prefix_merge_qty, qty_step)
-                : group_qty;
-        }
-        ++group_count;
-    }
-    if (selected.qty > 0.0f && selected.ticks > 0) {
-        selected.market = should_use_ordinary_market_execution(
-            selected.ticks, short_side, generation_market_price,
-            price_step, market_orders_allowed,
-            market_order_near_touch_threshold
-        );
-        if (selected.market) {
-            selected.qty = resize_market_close_qty(
-                selected.qty, market_resize_psize,
-                generation_market_price,
-                qty_step, min_qty, min_cost, c_mult
+            iterator.pending.qty = round_step(
+                iterator.pending.qty + order_qty, context.qty_step
             );
         }
+        iterator.sim_psize = fmax(
+            round_step(iterator.sim_psize - order_qty, context.qty_step), 0.0f
+        );
+        if (emit) {
+            merge_tm_close_grid_prefix(context, iterator.group_index++, group);
+            return true;
+        }
     }
+    if (!iterator.have_group) return false;
+    group = iterator.pending;
+    iterator.have_group = false;
+    merge_tm_close_grid_prefix(context, iterator.group_index++, group);
+    return true;
+}
+
+inline void finalize_tm_close_grid_group(
+    thread const TmCloseGridContext& context,
+    thread CloseGroup& group
+) {
+    if (!(group.qty > 0.0f && group.ticks > 0)) return;
+    group.market = should_use_ordinary_market_execution(
+        group.ticks, context.short_side, context.generation_market_price,
+        context.price_step, context.market_orders_allowed,
+        context.market_order_near_touch_threshold
+    );
+    if (group.market) {
+        group.qty = resize_market_close_qty(
+            group.qty, context.market_resize_psize,
+            context.generation_market_price, context.qty_step,
+            context.min_qty, context.min_cost, context.c_mult
+        );
+    }
+}
+
+// Select a generated-order group without changing its arithmetic or fill ordering.
+// Callers that need every group can stream the same iterator in linear rung time.
+inline int recursive_grid_close_groups_after_reducer(
+    thread const TmCloseGridContext& context,
+    int wanted_group,
+    thread CloseGroup& selected
+) {
+    selected = {0, 0.0f, 0.0f, false};
+    TmCloseGridIterator iterator = tm_close_grid_iterator(context);
+    CloseGroup group;
+    int group_count = 0;
+    while (next_tm_close_grid_group(context, iterator, group)) {
+        if (group_count == wanted_group) selected = group;
+        ++group_count;
+    }
+    finalize_tm_close_grid_group(context, selected);
     return group_count;
 }
 
@@ -469,17 +468,49 @@ inline bool recursive_grid_close_would_expand(
     return false;
 }
 
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+// Persist only one immutable strategy snapshot and compact admitted intent.
+// Full finalized order vectors are temporary, shared across coins and alternatives.
+struct TmCloseAdmission {
+    TmCloseGridContext context;
+    CloseGroup ordinary;
+    CloseGroup reducers[3]; // WEL, TWEL, auto-unstuck.
+    float finalized_reducer_qty[3];
+    uint admitted_groups[16];
+    int quantity_group[2];
+    float quantity_override[2];
+    int selected_reducer;
+    uint rejected_reducers;
+    bool valid;
+    bool trailing;
+    bool expanded;
+};
+
+struct TmFinalizedClose {
+    CloseGroup order;
+    float original_qty;
+    int group_index; // >=0: immutable grid group; -1: singleton; -2: reducer.
+};
+#endif
+
 // One complete directional Trailing Martingale portfolio. Keeping the mutable
 // per-coin state behind one thread-local value lets a future fused kernel own
 // long and short portfolios concurrently without changing the proven one-side
 // candle loop.
 struct TrailingMartingaleMulticoinSideState {
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
     UnstuckEmaBand unstuck_ema[MAX_COINS];
+#endif
     HslState hsl;
     HslState coin_hsl[MAX_COINS];
     HslStrategyEquityStats hsl_strategy_eq;
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float hsl_report_ema_max;
+    float hsl_portfolio_report_ema_max;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     HslDrawdownEmaTailStats hsl_ema_tail;
+    HslDrawdownEmaTailStats hsl_portfolio_ema_tail;
 #endif
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
@@ -504,7 +535,9 @@ struct TrailingMartingaleMulticoinSideState {
     float close_qty[MAX_COINS];
     float secondary_close_qty[MAX_COINS];
     float twel_close_qty[MAX_COINS];
+#if PASSIVBOT_UNSTUCK_ENABLED
     float unstuck_close_qty[MAX_COINS];
+#endif
     float close_gen_balance[MAX_COINS];
     float close_gen_allowed_wel[MAX_COINS];
     float close_gen_market_price[MAX_COINS];
@@ -531,16 +564,18 @@ struct TrailingMartingaleMulticoinSideState {
     int close_tick[MAX_COINS];
     int secondary_close_tick[MAX_COINS];
     int twel_close_tick[MAX_COINS];
+#if PASSIVBOT_UNSTUCK_ENABLED
     int unstuck_close_tick[MAX_COINS];
+#endif
     int close_grid_max_rungs[MAX_COINS];
     int close_grid_prefix_tick[MAX_COINS];
     bool selected[MAX_COINS];
     bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
     bool entry_candidate[MAX_COINS];
-    bool entry_recursive_market_mode[MAX_COINS];
+    bool entry_recursive_mode[MAX_COINS];
     bool close_reconstruct_after_reducer[MAX_COINS];
-    bool close_recursive_market_mode[MAX_COINS];
+    bool close_recursive_mode[MAX_COINS];
     bool filled_coin[MAX_COINS];
     bool entry_market[MAX_COINS];
     bool close_market[MAX_COINS];
@@ -556,7 +591,347 @@ struct TrailingMartingaleMulticoinSideState {
     float alpha_1h_coin[MAX_COINS];
     float alpha_1m_coin[MAX_COINS];
     float coin_realized_pnl[MAX_COINS];
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+    TmCloseAdmission close_admission[MAX_COINS];
+#endif
 };
+
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+inline int tm_reducer_order_type(int candidate, bool short_side) {
+    return candidate == 0 ? (short_side ? 25 : 24)
+        : candidate == 1 ? (short_side ? 21 : 10) : (short_side ? 20 : 9);
+}
+
+inline float tm_close_minimum(
+    thread const TmCloseGridContext& context, thread const CloseGroup& order
+) {
+    return min_entry_qty(
+        order.market ? context.generation_market_price : order.price,
+        context.qty_step, context.min_qty, context.min_cost, context.c_mult
+    );
+}
+
+inline float tm_close_total_quantity(
+    thread const TmCloseGridContext& context,
+    thread TmFinalizedClose* orders, int count
+) {
+    float units = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        units += rint(orders[i].order.qty / context.qty_step);
+    }
+    return round_step(units * context.qty_step, context.qty_step);
+}
+
+inline void reverse_tm_ordinary_closes(thread TmFinalizedClose* orders, int count) {
+    for (int i = 0; i < count / 2; ++i) {
+        TmFinalizedClose tmp = orders[i];
+        orders[i] = orders[count - i - 1];
+        orders[count - i - 1] = tmp;
+    }
+}
+
+// Build one candidate's executable vector, then match Rust's minimum, aggregate
+// and dust finalization. The returned order is also Rust's loss-admission order;
+// it can differ from the closest-first order used later by fills.
+inline int finalize_tm_admission_closes(
+    thread const TmCloseAdmission& source, int reducer_candidate,
+    thread TmFinalizedClose* orders
+) {
+    thread const TmCloseGridContext& context = source.context;
+    float position_size = context.market_resize_psize;
+    int count = 0;
+    if (source.expanded) {
+        TmCloseGridIterator iterator = tm_close_grid_iterator(context);
+        CloseGroup group;
+        while (next_tm_close_grid_group(context, iterator, group)) {
+            int index = iterator.group_index - 1;
+            finalize_tm_close_grid_group(context, group);
+            if (group.qty > 0.0f) orders[count++] = {group, group.qty, index};
+        }
+        if (context.close_threshold_we > 0.0f) {
+            reverse_tm_ordinary_closes(orders, count);
+        }
+    } else if (source.ordinary.qty > 0.0f) {
+        orders[count++] = {source.ordinary, source.ordinary.qty, -1};
+    }
+    if (reducer_candidate >= 0) {
+        CloseGroup reducer = source.reducers[reducer_candidate];
+        if (reducer.qty > 0.0f) orders[count++] = {reducer, reducer.qty, -2};
+    }
+    if (count == 0 || !(position_size > 0.0f)) return 0;
+    bool all_below_minimum = true;
+    for (int i = 0; i < count; ++i) {
+        all_below_minimum = all_below_minimum
+            && position_size * (1.0f + 1.0e-6f)
+                < tm_close_minimum(context, orders[i].order);
+    }
+    if (all_below_minimum) {
+        int keep = orders[count - 1].group_index == -2 ? count - 1 : 0;
+        orders[0] = orders[keep];
+        orders[0].order.qty = position_size;
+        return 1;
+    }
+    int kept = 0;
+    for (int i = 0; i < count; ++i) {
+        if (orders[i].order.qty * (1.0f + 1.0e-6f)
+            >= tm_close_minimum(context, orders[i].order)) {
+            orders[kept++] = orders[i];
+        }
+    }
+    count = kept;
+    if (count == 0) return 0;
+    float total = tm_close_total_quantity(context, orders, count);
+    bool far_first = false;
+    if (total > position_size + 4.76837158e-7f * fmax(total, position_size)) {
+        int ordinary_count = count - (orders[count - 1].group_index == -2 ? 1 : 0);
+        reverse_tm_ordinary_closes(orders, ordinary_count);
+        far_first = true;
+        float excess = round_step(total - position_size, context.qty_step);
+        kept = 0;
+        for (int i = 0; i < count; ++i) {
+            TmFinalizedClose item = orders[i];
+            if (excess > 0.0f) {
+                if (item.order.qty <= excess
+                    + 4.76837158e-7f * fmax(item.order.qty, excess)) {
+                    excess = fmax(round_step(excess - item.order.qty, context.qty_step), 0.0f);
+                    continue;
+                }
+                item.order.qty = round_step(item.order.qty - excess, context.qty_step);
+                excess = 0.0f;
+                if (!(item.order.qty > 0.0f)
+                    || item.order.qty * (1.0f + 1.0e-6f)
+                        < tm_close_minimum(context, item.order)) continue;
+            }
+            orders[kept++] = item;
+        }
+        count = kept;
+    }
+    if (count == 0) return 0;
+    total = tm_close_total_quantity(context, orders, count);
+    float remainder = fmax(round_step(position_size - total, context.qty_step), 0.0f);
+    float minimum = INFINITY;
+    for (int i = 0; i < count; ++i) {
+        minimum = fmin(minimum, tm_close_minimum(context, orders[i].order));
+    }
+    if (remainder > 0.0f && remainder < minimum) {
+        int ordinary_count = count - (orders[count - 1].group_index == -2 ? 1 : 0);
+        if (far_first) reverse_tm_ordinary_closes(orders, ordinary_count);
+        if (ordinary_count < count) {
+            // Rust sorts a protective reducer first, then ordinary closes by
+            // reachability. The furthest ordinary close receives the dust.
+            TmFinalizedClose reducer = orders[count - 1];
+            for (int i = count - 1; i > 0; --i) orders[i] = orders[i - 1];
+            orders[0] = reducer;
+        }
+        orders[count - 1].order.qty = round_step(
+            orders[count - 1].order.qty + remainder, context.qty_step
+        );
+    }
+    return count;
+}
+
+inline void prepare_tm_close_admission(
+    thread TmCloseAdmission& source,
+    constant float* bars, constant int* fill_ticks, constant float* coin_settings,
+    int k, int T, int C, int coin
+) {
+    thread TmCloseGridContext& context = source.context;
+    source.expanded = false;
+    if (!source.trailing && k + 1 < T
+        && k + 1 >= int(coin_settings[coin * COIN_COLS + 8])
+        && k + 1 <= int(coin_settings[coin * COIN_COLS + 7])) {
+        int offset = ((k + 1) * C + coin) * 4;
+        bool next_valid = finite_positive(bars[offset])
+            && finite_positive(bars[offset + 1]) && finite_positive(bars[offset + 2]);
+        if (next_valid) {
+            int ticks = ((k + 1) * C + coin) * 2;
+            CloseGroup wel = source.reducers[0];
+            source.expanded = wel.qty > 0.0f && (context.short_side
+                ? wel.ticks > fill_ticks[ticks + 1] : wel.ticks <= fill_ticks[ticks]);
+            TmCloseGridIterator iterator = tm_close_grid_iterator(context);
+            CloseGroup group;
+            while (!source.expanded && next_tm_close_grid_group(context, iterator, group)) {
+                source.expanded = context.short_side
+                    ? group.ticks > fill_ticks[ticks + 1] : group.ticks <= fill_ticks[ticks];
+            }
+        }
+    }
+    if (source.expanded) {
+        TmCloseGridIterator iterator = tm_close_grid_iterator(context);
+        CloseGroup first;
+        if (next_tm_close_grid_group(context, iterator, first)
+            && first.ticks == context.prefix_merge_tick) {
+            // Duplicate-merged WEL inherits the ordinary grid order type.
+            source.reducers[0].qty = 0.0f;
+        }
+    } else if (source.reducers[0].qty > 0.0f) {
+        // Without expansion the strategy exposes its WEL next-close alone.
+        source.ordinary.qty = 0.0f;
+    }
+    if (source.trailing && source.reducers[0].qty > 0.0f) source.ordinary.qty = 0.0f;
+    for (int candidate = 0; candidate < 3; ++candidate) {
+        thread CloseGroup& order = source.reducers[candidate];
+        if (order.qty > 0.0f && order.market) {
+            order.qty = resize_market_close_qty(
+                order.qty, context.market_resize_psize, context.generation_market_price,
+                context.qty_step, context.min_qty, context.min_cost, context.c_mult
+            );
+        }
+        source.finalized_reducer_qty[candidate] = 0.0f;
+    }
+    source.selected_reducer = -2;
+    source.rejected_reducers = 0u;
+}
+
+inline float tm_projected_close_pnl(
+    thread const TmCloseGridContext& context, thread const CloseGroup& order,
+    constant float* coin_settings, int coin, float slippage
+) {
+    float price = order.market
+        ? ordinary_market_fill_price(context.generation_market_price,
+            context.short_side, slippage, context.price_step) : order.price;
+    float fee = coin_settings[coin * COIN_COLS + (order.market ? 11 : 5)];
+    return order.qty * context.c_mult
+        * (context.short_side ? context.pprice - price : price - context.pprice)
+        - order.qty * price * context.c_mult * fee;
+}
+
+inline int next_tm_admission_reducer(thread const TmCloseAdmission& source) {
+    int best = -1;
+    for (int candidate = 0; candidate < 3; ++candidate) {
+        if ((source.rejected_reducers & (1u << uint(candidate))) != 0u
+            || !(source.finalized_reducer_qty[candidate] > 0.0f)) continue;
+        if (best < 0 || reducer_candidate_preferred(
+                source.finalized_reducer_qty[candidate], source.reducers[candidate].ticks,
+                tm_reducer_order_type(candidate, source.context.short_side),
+                source.finalized_reducer_qty[best], source.reducers[best].ticks,
+                tm_reducer_order_type(best, source.context.short_side),
+                !source.context.short_side)) best = candidate;
+    }
+    return best;
+}
+
+inline bool apply_tm_multicoin_close_admission(
+    thread TrailingMartingaleMulticoinSideState* long_side,
+    thread TrailingMartingaleMulticoinSideState* short_side,
+    thread const JointPortfolioAccount& account,
+    constant float* bars, constant int* fill_ticks, constant float* coin_settings,
+    int k, int T, int C, float max_loss_pct, float slippage
+) {
+    TmFinalizedClose orders[501];
+    float drawdown = effective_realized_pnl_drawdown(account);
+    float allowed = float32_floor_nonnegative(
+        (account.balance + drawdown) * fmax(max_loss_pct, 0.0f)
+    );
+    float remaining = float32_floor_nonnegative(fmax(allowed - drawdown, 0.0f));
+    for (int rank = 0; rank < 2; ++rank) {
+        thread TrailingMartingaleMulticoinSideState* side = rank == 0 ? long_side : short_side;
+        if (side == nullptr) continue;
+        for (int c = 0; c < C; ++c) {
+            thread TmCloseAdmission& source = side->close_admission[c];
+            if (!source.valid || side->close_is_hsl_panic[c]) continue;
+            prepare_tm_close_admission(source, bars, fill_ticks, coin_settings, k, T, C, c);
+            for (int candidate = 0; candidate < 3; ++candidate) {
+                if (!(source.reducers[candidate].qty > 0.0f)) continue;
+                int count = finalize_tm_admission_closes(source, candidate, orders);
+                for (int i = 0; i < count; ++i) {
+                    if (orders[i].group_index == -2) {
+                        source.finalized_reducer_qty[candidate] = orders[i].order.qty;
+                    }
+                }
+            }
+        }
+    }
+    // Each position exposes its current largest finalized alternative. A
+    // rejection advances only that position, before the next global ranking.
+    for (int attempt = 0; attempt < C * 6; ++attempt) {
+        int best_coin = -1, best_side = -1, best_candidate = -1;
+        float best_qty = 0.0f;
+        for (int rank = 0; rank < 2; ++rank) {
+            thread TrailingMartingaleMulticoinSideState* side = rank == 0 ? long_side : short_side;
+            if (side == nullptr) continue;
+            for (int c = 0; c < C; ++c) {
+                thread TmCloseAdmission& source = side->close_admission[c];
+                if (!source.valid || side->close_is_hsl_panic[c]
+                    || source.selected_reducer != -2) continue;
+                int candidate = next_tm_admission_reducer(source);
+                if (candidate < 0) { source.selected_reducer = -1; continue; }
+                float qty = source.finalized_reducer_qty[candidate];
+                if (best_coin < 0 || qty > best_qty
+                    || (qty == best_qty && (c < best_coin || (c == best_coin && rank < best_side)))) {
+                    best_coin = c; best_side = rank; best_candidate = candidate; best_qty = qty;
+                }
+            }
+        }
+        if (best_coin < 0) break;
+        thread TrailingMartingaleMulticoinSideState* side = best_side == 0 ? long_side : short_side;
+        thread TmCloseAdmission& source = side->close_admission[best_coin];
+        CloseGroup reducer = source.reducers[best_candidate];
+        reducer.qty = best_qty;
+        float net_pnl = tm_projected_close_pnl(source.context, reducer, coin_settings, best_coin, slippage);
+        if (!isfinite(net_pnl)) return false;
+        if (realized_loss_gate_allows(net_pnl, remaining, true)) {
+            source.selected_reducer = best_candidate;
+            if (net_pnl < 0.0f) remaining = float32_floor_nonnegative(fmax(remaining + net_pnl, 0.0f));
+        } else source.rejected_reducers |= 1u << uint(best_candidate);
+    }
+    for (int rank = 0; rank < 2; ++rank) {
+        thread TrailingMartingaleMulticoinSideState* side = rank == 0 ? long_side : short_side;
+        if (side == nullptr) continue;
+        for (int c = 0; c < C; ++c) {
+            thread TmCloseAdmission& source = side->close_admission[c];
+            if (!source.valid || side->close_is_hsl_panic[c]) continue;
+            if (source.selected_reducer == -2) source.selected_reducer = -1;
+            int count = finalize_tm_admission_closes(source, source.selected_reducer, orders);
+            for (int word = 0; word < 16; ++word) source.admitted_groups[word] = 0u;
+            source.quantity_group[0] = source.quantity_group[1] = -1;
+            int quantities = 0;
+            side->close_qty[c] = side->secondary_close_qty[c] = 0.0f;
+            side->close_market[c] = side->secondary_close_market[c] = false;
+            side->close_is_exposure_reducer[c] = side->close_is_unstuck_reducer[c] = false;
+            side->close_reconstruct_after_reducer[c] = source.expanded;
+            side->close_recursive_mode[c] = source.expanded;
+            side->close_gen_balance[c] = source.context.generation_balance;
+            side->close_gen_allowed_wel[c] = source.context.allowed_wel;
+            side->close_gen_market_price[c] = source.context.generation_market_price;
+            side->close_grid_gen_psize[c] = source.context.psize;
+            side->close_grid_prefix_qty[c] = source.context.prefix_merge_qty;
+            side->close_grid_prefix_tick[c] = source.context.prefix_merge_tick;
+            side->close_grid_max_rungs[c] = source.context.max_rungs;
+            for (int i = 0; i < count; ++i) {
+                thread TmFinalizedClose& item = orders[i];
+                bool reducer = item.group_index == -2;
+                if (!reducer) {
+                    float net_pnl = tm_projected_close_pnl(source.context, item.order, coin_settings, c, slippage);
+                    if (!isfinite(net_pnl)) return false;
+                    if (!realized_loss_gate_allows(net_pnl, remaining, true)) continue;
+                    if (net_pnl < 0.0f) remaining = float32_floor_nonnegative(fmax(remaining + net_pnl, 0.0f));
+                }
+                if (item.group_index >= 0) {
+                    int group = item.group_index;
+                    source.admitted_groups[group / 32] |= 1u << uint(group % 32);
+                    if (item.order.qty != item.original_qty) {
+                        if (quantities >= 2) return false;
+                        source.quantity_group[quantities] = group;
+                        source.quantity_override[quantities++] = item.order.qty;
+                    }
+                } else if (reducer || source.selected_reducer < 0) {
+                    side->close_qty[c] = item.order.qty;
+                    side->close_tick[c] = item.order.ticks;
+                    side->close_market[c] = item.order.market;
+                    side->close_is_exposure_reducer[c] = reducer;
+                    side->close_is_unstuck_reducer[c] = reducer && source.selected_reducer == 2;
+                } else {
+                    side->secondary_close_qty[c] = item.order.qty;
+                    side->secondary_close_tick[c] = item.order.ticks;
+                    side->secondary_close_market[c] = item.order.market;
+                }
+            }
+        }
+    }
+    return true;
+}
+#endif
 
 // Immutable decoded parameters for one directional TM portfolio. A fused
 // kernel can load this twice from adjacent parameter rows while sharing only
@@ -691,7 +1066,13 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
         : int(floor(
             band * (1.0f - initial_ema_dist) / price_step + 1.0e-6f
         ));
-    float initial_price = generation_initial_price;
+    // Rust's recursive ladder advances the simulated book after each rung.
+    // Reprice its initial-quantity floor at that touch while keeping the
+    // original raw sizing price when it still controls (including EMA gating).
+    float touch_price = float(generation_touch_tick) * price_step;
+    float initial_price = short_side
+        ? fmax(generation_initial_price, touch_price)
+        : fmin(generation_initial_price, touch_price);
     float min_iq = min_entry_qty(
         initial_price, qty_step, min_qty, min_cost, c_mult
     );
@@ -828,6 +1209,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
     int k,
     int C,
     bool short_side,
+    bool market_orders_allowed,
     float market_order_near_touch_threshold
 ) {
     if (!side.entry_deferred_twel_gate) return;
@@ -872,7 +1254,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
         sim_pprice[c] = side.entry_gen_pprice[c];
         sim_touch_tick[c] = side.entry_gen_touch_tick[c];
         previous_tick[c] = first[c].ticks;
-        if (!first_pending[c] || !side.entry_recursive_market_mode[c]) {
+        if (!first_pending[c] || !side.entry_recursive_mode[c]) {
             continue;
         }
         // Exact Rust retains the already generated next entry in the global
@@ -915,7 +1297,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             coin_settings[coin_offset + 0],
             coin_settings[coin_offset + 1],
             coin_settings[coin_offset + 2],
-            coin_settings[coin_offset + 3], c_mult, true,
+            coin_settings[coin_offset + 3], c_mult, market_orders_allowed,
             market_order_near_touch_threshold
         );
         suffix_valid[c] = suffix[c].ticks > 1
@@ -1047,7 +1429,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             sim_touch_tick[best_coin],
             side.entry_gen_market_price[best_coin],
             qty_step, coin_settings[coin_offset + 1], min_qty, min_cost,
-            c_mult, true, market_order_near_touch_threshold
+            c_mult, market_orders_allowed, market_order_near_touch_threshold
         );
         suffix_valid[best_coin] = suffix[best_coin].ticks > 1
             && suffix[best_coin].ticks != previous_tick[best_coin]
@@ -1070,6 +1452,9 @@ struct TrailingMartingaleMulticoinFillState {
     float profit_sum_short;
     float loss_sum_short;
     float fill_count;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    int hsl_fill_sequence;
+#endif
     float fill_count_entry;
     float fill_count_long;
     float held_max_min;
@@ -1079,6 +1464,10 @@ struct TrailingMartingaleMulticoinFillState {
     float position_unchanged_max_min;
     float day_volume;
     float day_fill_count;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    float step_volume;
+    float step_has_fill;
+#endif
 };
 
 inline TrailingMartingaleMulticoinFillState
@@ -1094,6 +1483,9 @@ init_trailing_martingale_multicoin_fill_state() {
     fills.profit_sum_short = 0.0f;
     fills.loss_sum_short = 0.0f;
     fills.fill_count = 0.0f;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    fills.hsl_fill_sequence = 0;
+#endif
     fills.fill_count_entry = 0.0f;
     fills.fill_count_long = 0.0f;
     fills.held_max_min = 0.0f;
@@ -1103,7 +1495,23 @@ init_trailing_martingale_multicoin_fill_state() {
     fills.position_unchanged_max_min = 0.0f;
     fills.day_volume = 0.0f;
     fills.day_fill_count = 0.0f;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    fills.step_volume = 0.0f;
+    fills.step_has_fill = 0.0f;
+#endif
     return fills;
+}
+
+inline void record_tm_multicoin_volume(
+    thread TrailingMartingaleMulticoinFillState& fills, float qty, float price, float balance
+) {
+    // Match analysis.rs: fill quantities are not contract-multiplier scaled.
+    const float normalized = fabs(qty) * price / balance;
+    fills.day_volume += normalized;
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    fills.step_volume += normalized;
+    fills.step_has_fill = 1.0f;
+#endif
 }
 
 inline void record_tm_multicoin_gross_pnl(
@@ -1135,6 +1543,9 @@ inline void record_tm_multicoin_close_fill(
     float gross_pnl,
     float net_pnl,
     float qty,
+    float fill_price,
+    float fill_fee,
+    float actual_size_after,
     float position_price,
     float mark_price,
     float c_mult,
@@ -1158,6 +1569,16 @@ inline void record_tm_multicoin_close_fill(
             );
         }
     }
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslPairFact fact;
+    fact.delta = short_side ? qty : -qty;
+    fact.price = fill_price;
+    fact.realized = gross_pnl;
+    fact.fee = -fill_fee;
+    hsl_pair_ring_capture(side.coin_hsl[coin].facts, fact, k,
+        fills.hsl_fill_sequence++, short_side ? -actual_size_after : actual_size_after,
+        actual_size_after == 0.0f ? 0.0f : position_price, short_side);
+#endif
     record_tm_multicoin_gross_pnl(gross_pnl, fills, short_side);
     record_realized_net(
         net_pnl, account,
@@ -1262,7 +1683,7 @@ inline void finalize_tm_multicoin_close_position(
     side.close_market[coin] = false;
     side.secondary_close_market[coin] = false;
     side.close_reconstruct_after_reducer[coin] = false;
-    side.close_recursive_market_mode[coin] = false;
+    side.close_recursive_mode[coin] = false;
     side.close_grid_prefix_qty[coin] = 0.0f;
     side.close_grid_prefix_tick[coin] = 0;
     side.close_is_exposure_reducer[coin] = false;
@@ -1280,7 +1701,9 @@ inline void apply_tm_multicoin_entry_position(
     float fill_price,
     float qty_step,
     float c_mult,
-    float balance
+    float balance,
+    float fee,
+    bool short_side
 ) {
     bool was_flat = side.psize[coin] <= 0.0f;
     float new_size = round_step(side.psize[coin] + qty, qty_step);
@@ -1291,8 +1714,17 @@ inline void apply_tm_multicoin_entry_position(
     if (was_flat) side.position_open_k[coin] = float(k);
     side.psize[coin] = new_size;
     side.pprice[coin] = new_price;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslPairFact fact;
+    fact.delta = short_side ? -qty : qty;
+    fact.price = fill_price;
+    fact.realized = 0.0f;
+    fact.fee = -fee;
+    hsl_pair_ring_capture(side.coin_hsl[coin].facts, fact, k,
+        fills.hsl_fill_sequence++, short_side ? -new_size : new_size, new_price, short_side);
+#endif
     side.last_increase_k[coin] = float(k);
-    fills.day_volume += fabs(qty) * fill_price * c_mult / balance;
+    record_tm_multicoin_volume(fills, qty, fill_price, balance);
     side.entry_qty[coin] = 0.0f;
     side.entry_market[coin] = false;
     side.filled_coin[coin] = true;
@@ -1332,12 +1764,14 @@ inline void clear_tm_multicoin_coin_orders(
     side.entry_gen_initial_price[coin] = 0;
     side.entry_gen_touch_tick[coin] = 0;
     side.entry_order_type[coin] = 0;
-    side.entry_recursive_market_mode[coin] = false;
+    side.entry_recursive_mode[coin] = false;
     side.entry_market[coin] = false;
     side.close_qty[coin] = 0.0f;
     side.secondary_close_qty[coin] = 0.0f;
     side.twel_close_qty[coin] = 0.0f;
+#if PASSIVBOT_UNSTUCK_ENABLED
     side.unstuck_close_qty[coin] = 0.0f;
+#endif
     side.close_gen_balance[coin] = 0.0f;
     side.close_gen_allowed_wel[coin] = 0.0f;
     side.close_gen_market_price[coin] = 0.0f;
@@ -1346,11 +1780,13 @@ inline void clear_tm_multicoin_coin_orders(
     side.close_tick[coin] = 0;
     side.secondary_close_tick[coin] = 0;
     side.twel_close_tick[coin] = 0;
+#if PASSIVBOT_UNSTUCK_ENABLED
     side.unstuck_close_tick[coin] = 0;
+#endif
     side.close_grid_max_rungs[coin] = 500;
     side.close_grid_prefix_tick[coin] = 0;
     side.close_reconstruct_after_reducer[coin] = false;
-    side.close_recursive_market_mode[coin] = false;
+    side.close_recursive_mode[coin] = false;
     side.close_market[coin] = false;
     side.secondary_close_market[coin] = false;
     side.close_is_exposure_reducer[coin] = false;
@@ -1403,7 +1839,8 @@ inline bool force_close_tm_multicoin_delisted_position(
     record_tm_multicoin_close_fill(
         side, account, fills, coin_fill_counts,
         candidate_index, coin_count, coin, k, pnl, net_pnl,
-        close_qty, position_price, close, c_mult, short_side,
+        close_qty, close_price, close_qty * close_price * c_mult * taker_fee,
+        0.0f, position_price, close, c_mult, short_side,
         true, collect_coin_fill_counts, hsl_equity_before_close,
         opposite_hsl, opposite_has_position
     );
@@ -1415,7 +1852,7 @@ inline bool force_close_tm_multicoin_delisted_position(
         );
     }
     side.psize[coin] = 0.0f;
-    fills.day_volume += close_qty * close_price * c_mult / account.balance;
+    record_tm_multicoin_volume(fills, close_qty, close_price, account.balance);
     finalize_tm_multicoin_close_position(side, fills, coin, k);
     update_tm_multicoin_position_fill_timestamp(side, fills, coin, k);
     return true;
@@ -1519,6 +1956,9 @@ inline bool process_tm_multicoin_side_fills(
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
     device float* entry_interval_stats,
     device int* entry_interval_counts,
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+    int entry_interval_bins,
+#endif
 #endif
     int b,
     int k,
@@ -1528,6 +1968,7 @@ inline bool process_tm_multicoin_side_fills(
     bool collect_coin_fill_counts,
     bool loss_gate_enabled,
     float max_realized_loss_pct,
+    bool market_orders_allowed,
     float market_order_slippage_pct,
     float market_order_near_touch_threshold,
     bool hsl_panic_market,
@@ -1568,11 +2009,11 @@ inline bool process_tm_multicoin_side_fills(
     thread int* close_grid_prefix_tick = side.close_grid_prefix_tick;
     thread bool* close_reconstruct_after_reducer =
         side.close_reconstruct_after_reducer;
-    thread bool* close_recursive_market_mode =
-        side.close_recursive_market_mode;
+    thread bool* close_recursive_mode =
+        side.close_recursive_mode;
     thread bool* filled_coin = side.filled_coin;
-    thread bool* entry_recursive_market_mode =
-        side.entry_recursive_market_mode;
+    thread bool* entry_recursive_mode =
+        side.entry_recursive_mode;
     thread bool* entry_market = side.entry_market;
     thread bool* close_market = side.close_market;
     thread bool* secondary_close_market = side.secondary_close_market;
@@ -1582,14 +2023,13 @@ inline bool process_tm_multicoin_side_fills(
         side.close_is_unstuck_reducer;
     thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
     thread float& balance = account.balance;
-    thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
-    thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
     thread float& day_volume = fills.day_volume;
     bool any_fill = false;
     for (int c = 0; c < C; ++c) filled_coin[c] = false;
     apply_tm_multicoin_recursive_entry_twel_gate(
         side, config, bars, fill_ticks, coin_settings, coin_overrides,
-        k, C, short_side, market_order_near_touch_threshold
+        k, C, short_side, market_orders_allowed,
+        market_order_near_touch_threshold
     );
     for (int c = 0; c < C; ++c) {
         const int coin_offset = c * COIN_COLS;
@@ -1630,8 +2070,14 @@ inline bool process_tm_multicoin_side_fills(
             && (secondary_close_market[c] || (short_side
                 ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
                 : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]));
-        bool recursive_market_expand = psize[c] > 0.0f
-            && close_recursive_market_mode[c]
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        bool recursive_expand = loss_gate_enabled
+            ? side.close_admission[c].valid && side.close_admission[c].expanded
+            : psize[c] > 0.0f
+#else
+        bool recursive_expand = psize[c] > 0.0f
+#endif
+            && close_recursive_mode[c]
             && !close_is_hsl_panic[c]
             && recursive_grid_close_would_expand(
                 short_side,
@@ -1668,9 +2114,9 @@ inline bool process_tm_multicoin_side_fills(
             );
         bool rebuild_grid = psize[c] > 0.0f
             && close_reconstruct_after_reducer[c]
-            && (!close_recursive_market_mode[c] || recursive_market_expand)
+            && (!close_recursive_mode[c] || recursive_expand)
             && !close_is_hsl_panic[c];
-        if (recursive_market_expand && !close_is_exposure_reducer[c]) {
+        if (recursive_expand && !close_is_exposure_reducer[c]) {
             filled_close = false;
         }
         if (filled_close || filled_secondary_close || rebuild_grid) {
@@ -1681,7 +2127,7 @@ inline bool process_tm_multicoin_side_fills(
                 )
                 : float(close_tick[c]) * price_step;
             float reducer_qty = rebuild_grid
-                    && close_recursive_market_mode[c]
+                    && close_recursive_mode[c]
                     && !close_is_exposure_reducer[c]
                 ? 0.0f
                 : fmin(round_step(close_qty[c], qty_step), psize[c]);
@@ -1693,6 +2139,7 @@ inline bool process_tm_multicoin_side_fills(
             float coin_close_threshold_v1h = 0.0f;
             float coin_close_threshold_v1m = 0.0f;
             CloseGroup group;
+            TmCloseGridContext grid_context;
             int group_count = 0;
             bool reverse = false;
             bool reducer_executed = false;
@@ -1715,7 +2162,11 @@ inline bool process_tm_multicoin_side_fills(
                 coin_close_threshold_v1m = coin_override_or(
                     coin_overrides, c, 19, close_threshold_v1m
                 );
-                group_count = recursive_grid_close_groups_after_reducer(
+                grid_context =
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+                    loss_gate_enabled ? side.close_admission[c].context :
+#endif
+                    TmCloseGridContext{
                     short_side,
                     grid_gen_psize,
                     pprice[c],
@@ -1741,13 +2192,12 @@ inline bool process_tm_multicoin_side_fills(
                     close_grid_prefix_tick[c],
                     close_grid_prefix_qty[c],
                     close_grid_max_rungs[c],
-                    -1,
                     close_gen_market_price[c],
-                    close_recursive_market_mode[c],
+                    market_orders_allowed,
                     market_order_near_touch_threshold,
-                    grid_gen_psize,
-                    group
-                );
+                    grid_gen_psize
+                };
+                group_count = recursive_grid_close_groups_after_reducer(grid_context, -1, group);
                 reverse = coin_close_threshold_we > 0.0f;
             }
 
@@ -1769,162 +2219,119 @@ inline bool process_tm_multicoin_side_fills(
                 qty_step, min_qty, min_cost, c_mult
             );
             int last_kept_rank = -1;
-            bool all_groups_below_min = close_recursive_market_mode[c]
+            bool all_groups_below_min = close_recursive_mode[c]
                 && group_count > 0;
-            for (int trim_rank = 0; trim_rank < group_count; ++trim_rank) {
-                int wanted = reverse
-                    ? group_count - trim_rank - 1 : trim_rank;
-                recursive_grid_close_groups_after_reducer(
-                    short_side,
-                    grid_gen_psize,
-                    pprice[c],
-                    close_gen_balance[c],
-                    close_gen_allowed_wel[c],
-                    touch_ticks[gen_tick_offset + 0],
-                    touch_ticks[gen_tick_offset + 1],
-                    touch_nearest_ticks[(k - 1) * C + c],
-                    as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
-                    touch_min_qty_relation[(k - 1) * C + c],
-                    coin_close_qty_pct,
-                    coin_close_threshold_base,
-                    coin_close_threshold_we,
-                    coin_close_threshold_v1h,
-                    coin_close_threshold_v1m,
-                    volatility_1h[c],
-                    volatility_1m[c],
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    close_grid_prefix_tick[c],
-                    close_grid_prefix_qty[c],
-                    close_grid_max_rungs[c],
-                    wanted,
-                    close_gen_market_price[c],
-                    close_recursive_market_mode[c],
-                    market_order_near_touch_threshold,
-                    grid_gen_psize,
-                    group
-                );
-                float trimmed_qty = fmin(group.qty, remaining_budget);
-                float group_min = min_entry_qty(
-                    group.market ? close_gen_market_price[c] : group.price,
-                    qty_step, min_qty, min_cost, c_mult
-                );
-                all_groups_below_min = all_groups_below_min
-                    && psize[c] * (1.0f + 1.0e-6f) < group_min;
-                bool partial_trim = trimmed_qty * (1.0f + 1.0e-6f)
-                    < group.qty;
-                if (trimmed_qty * (1.0f + 1.0e-6f) < group_min) {
-                    trimmed_qty = 0.0f;
-                    if (partial_trim) remaining_budget = 0.0f;
-                }
-                if (trimmed_qty > 0.0f) {
-                    kept_ordinary += trimmed_qty;
-                    remaining_budget = fmax(
-                        round_step(
-                            remaining_budget - trimmed_qty, qty_step
-                        ),
-                        0.0f
-                    );
-                    minimum_any = fmin(minimum_any, group_min);
-                    last_kept_rank = trim_rank;
-                }
-            }
             int collapse_ordinary_rank = -1;
-            if (all_groups_below_min && reducer_qty <= 0.0f) {
-                // Rust preserves one closest-to-fill close at the full
-                // remaining position when every recursive group is below
-                // the executable minimum. This includes market-promoted
-                // groups whose resize already retained that exception.
-                collapse_ordinary_rank = 0;
-                kept_ordinary = psize[c];
-                last_kept_rank = 0;
-            }
-            float dust_remainder = fmax(
-                round_step(
-                    psize[c] - reducer_qty - kept_ordinary, qty_step
-                ),
-                0.0f
-            );
-            if (dust_remainder > 0.0f && dust_remainder < minimum_any
-                && last_kept_rank < 0) {
-                reducer_qty = fmin(
-                    psize[c],
-                    round_step(reducer_qty + dust_remainder, qty_step)
+            float dust_remainder = 0.0f;
+            if (!loss_gate_enabled) {
+                for (int trim_rank = 0; trim_rank < group_count; ++trim_rank) {
+                    int wanted = reverse
+                        ? group_count - trim_rank - 1 : trim_rank;
+                    recursive_grid_close_groups_after_reducer(grid_context, wanted, group);
+                    float trimmed_qty = fmin(group.qty, remaining_budget);
+                    float group_min = min_entry_qty(
+                        group.market ? close_gen_market_price[c] : group.price,
+                        qty_step, min_qty, min_cost, c_mult
+                    );
+                    all_groups_below_min = all_groups_below_min
+                        && psize[c] * (1.0f + 1.0e-6f) < group_min;
+                    bool partial_trim = trimmed_qty * (1.0f + 1.0e-6f)
+                        < group.qty;
+                    if (trimmed_qty * (1.0f + 1.0e-6f) < group_min) {
+                        trimmed_qty = 0.0f;
+                        if (partial_trim) remaining_budget = 0.0f;
+                    }
+                    if (trimmed_qty > 0.0f) {
+                        kept_ordinary += trimmed_qty;
+                        remaining_budget = fmax(
+                            round_step(
+                                remaining_budget - trimmed_qty, qty_step
+                            ),
+                            0.0f
+                        );
+                        minimum_any = fmin(minimum_any, group_min);
+                        last_kept_rank = trim_rank;
+                    }
+                }
+                if (all_groups_below_min && reducer_qty <= 0.0f) {
+                    // Rust preserves one closest-to-fill close at the full
+                    // remaining position when every recursive group is below
+                    // the executable minimum. This includes market-promoted
+                    // groups whose resize already retained that exception.
+                    collapse_ordinary_rank = 0;
+                    kept_ordinary = psize[c];
+                    last_kept_rank = 0;
+                }
+                dust_remainder = fmax(
+                    round_step(
+                        psize[c] - reducer_qty - kept_ordinary, qty_step
+                    ),
+                    0.0f
                 );
-                dust_remainder = 0.0f;
+                if (dust_remainder > 0.0f && dust_remainder < minimum_any
+                    && last_kept_rank < 0) {
+                    reducer_qty = fmin(
+                        psize[c],
+                        round_step(reducer_qty + dust_remainder, qty_step)
+                    );
+                    dust_remainder = 0.0f;
+                }
+
             }
 
             remaining_budget = ordinary_budget;
             for (int rank = 0; rank < group_count; ++rank) {
                 int wanted = reverse ? group_count - rank - 1 : rank;
-                recursive_grid_close_groups_after_reducer(
-                    short_side,
-                    grid_gen_psize,
-                    pprice[c],
-                    close_gen_balance[c],
-                    close_gen_allowed_wel[c],
-                    touch_ticks[gen_tick_offset + 0],
-                    touch_ticks[gen_tick_offset + 1],
-                    touch_nearest_ticks[(k - 1) * C + c],
-                    as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
-                    touch_min_qty_relation[(k - 1) * C + c],
-                    coin_close_qty_pct,
-                    coin_close_threshold_base,
-                    coin_close_threshold_we,
-                    coin_close_threshold_v1h,
-                    coin_close_threshold_v1m,
-                    volatility_1h[c],
-                    volatility_1m[c],
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    close_grid_prefix_tick[c],
-                    close_grid_prefix_qty[c],
-                    close_grid_max_rungs[c],
-                    wanted,
-                    close_gen_market_price[c],
-                    close_recursive_market_mode[c],
-                    market_order_near_touch_threshold,
-                    grid_gen_psize,
-                    group
-                );
+                recursive_grid_close_groups_after_reducer(grid_context, wanted, group);
                 if (group.qty <= 0.0f) break;
                 float group_min = min_entry_qty(
                     group.market ? close_gen_market_price[c] : group.price,
                     qty_step, min_qty, min_cost, c_mult
                 );
                 float trimmed_group_qty = 0.0f;
-                if (collapse_ordinary_rank >= 0) {
-                    trimmed_group_qty = rank == collapse_ordinary_rank
-                        ? ordinary_budget : 0.0f;
-                } else {
-                    trimmed_group_qty = fmin(group.qty, remaining_budget);
-                    bool partial_trim = trimmed_group_qty
-                        * (1.0f + 1.0e-6f) < group.qty;
-                    if (trimmed_group_qty * (1.0f + 1.0e-6f)
-                        < group_min) {
-                        trimmed_group_qty = 0.0f;
-                        if (partial_trim) remaining_budget = 0.0f;
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+                if (loss_gate_enabled) {
+                    thread const TmCloseAdmission& source = side.close_admission[c];
+                    bool admitted = (source.admitted_groups[wanted / 32]
+                        & (1u << uint(wanted % 32))) != 0u;
+                    if (admitted) {
+                        trimmed_group_qty = group.qty;
+                        for (int adjustment = 0; adjustment < 2; ++adjustment) {
+                            if (source.quantity_group[adjustment] == wanted) {
+                                trimmed_group_qty = source.quantity_override[adjustment];
+                            }
+                        }
                     }
-                    if (trimmed_group_qty > 0.0f) {
-                        remaining_budget = fmax(
-                            round_step(
-                                remaining_budget - trimmed_group_qty,
-                                qty_step
-                            ),
-                            0.0f
-                        );
-                        if (rank == last_kept_rank
-                            && dust_remainder > 0.0f
-                            && dust_remainder < minimum_any) {
-                            trimmed_group_qty = round_step(
-                                trimmed_group_qty + dust_remainder, qty_step
+                } else
+#endif
+                {
+                    if (collapse_ordinary_rank >= 0) {
+                        trimmed_group_qty = rank == collapse_ordinary_rank
+                            ? ordinary_budget : 0.0f;
+                    } else {
+                        trimmed_group_qty = fmin(group.qty, remaining_budget);
+                        bool partial_trim = trimmed_group_qty
+                            * (1.0f + 1.0e-6f) < group.qty;
+                        if (trimmed_group_qty * (1.0f + 1.0e-6f)
+                            < group_min) {
+                            trimmed_group_qty = 0.0f;
+                            if (partial_trim) remaining_budget = 0.0f;
+                        }
+                        if (trimmed_group_qty > 0.0f) {
+                            remaining_budget = fmax(
+                                round_step(
+                                    remaining_budget - trimmed_group_qty,
+                                    qty_step
+                                ),
+                                0.0f
                             );
+                            if (rank == last_kept_rank
+                                && dust_remainder > 0.0f
+                                && dust_remainder < minimum_any) {
+                                trimmed_group_qty = round_step(
+                                    trimmed_group_qty + dust_remainder, qty_step
+                                );
+                            }
                         }
                     }
                 }
@@ -1940,29 +2347,23 @@ inline bool process_tm_multicoin_side_fills(
                     float pnl = qty * c_mult * (short_side
                         ? pprice[c] - fill_price
                         : fill_price - pprice[c]);
-                    if (realized_loss_proxy_allows_reducer(
-                            qty, fill_price, pprice[c], short_side,
-                            c_mult, reducer_fee_rate,
-                            close_is_unstuck_reducer[c], loss_gate_enabled,
-                            balance, realized_pnl_cumsum_last,
-                            realized_pnl_cumsum_max, max_realized_loss_pct
-                        )) {
-                        float net_pnl = pnl
-                            - qty * fill_price * c_mult * reducer_fee_rate;
-                        record_tm_multicoin_close_fill(
-                            side, account, fills, coin_fill_counts,
-                            int(b), C, c, k, pnl, net_pnl, qty,
-                            pprice[c], close, c_mult, short_side,
-                            false, collect_coin_fill_counts,
-                            hsl_equity_before_fills, opposite_hsl, opposite_has_position
-                        );
-                        psize[c] = fmax(
-                            round_step(psize[c] - qty, qty_step), 0.0f
-                        );
-                        day_volume += qty * fill_price * c_mult / balance;
-                        reducer_executed = true;
-                        executed_close = true;
-                    }
+                    float net_pnl = pnl
+                        - qty * fill_price * c_mult * reducer_fee_rate;
+                    record_tm_multicoin_close_fill(
+                        side, account, fills, coin_fill_counts,
+                        int(b), C, c, k, pnl, net_pnl, qty,
+                        fill_price, qty * fill_price * c_mult * reducer_fee_rate,
+                        fmax(round_step(psize[c] - qty, qty_step), 0.0f),
+                        pprice[c], close, c_mult, short_side,
+                        false, collect_coin_fill_counts,
+                        hsl_equity_before_fills, opposite_hsl, opposite_has_position
+                    );
+                    psize[c] = fmax(
+                        round_step(psize[c] - qty, qty_step), 0.0f
+                    );
+                    record_tm_multicoin_volume(fills, qty, fill_price, balance);
+                    reducer_executed = true;
+                    executed_close = true;
                 }
                 bool reachable = group.market || (short_side
                     ? group.ticks > fill_ticks[tick_offset + 1]
@@ -1983,25 +2384,22 @@ inline bool process_tm_multicoin_side_fills(
                 float grid_pnl = grid_qty * c_mult * (short_side
                     ? pprice[c] - group_fill_price
                     : group_fill_price - pprice[c]);
-                if (!realized_loss_proxy_allows_close(
-                        grid_qty, group_fill_price, pprice[c], short_side,
-                        c_mult, group_fee_rate, loss_gate_enabled
-                    )) {
-                    continue;
-                }
+
                 float grid_net_pnl = grid_pnl
                     - grid_qty * group_fill_price * c_mult * group_fee_rate;
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, grid_pnl, grid_net_pnl,
-                    grid_qty, pprice[c], close, c_mult, short_side,
+                    grid_qty, group_fill_price, grid_qty * group_fill_price * c_mult * group_fee_rate,
+                    fmax(round_step(psize[c] - grid_qty, qty_step), 0.0f),
+                    pprice[c], close, c_mult, short_side,
                     false, collect_coin_fill_counts,
                     hsl_equity_before_fills, opposite_hsl, opposite_has_position
                 );
                 psize[c] = fmax(
                     round_step(psize[c] - grid_qty, qty_step), 0.0f
                 );
-                day_volume += grid_qty * group_fill_price * c_mult / balance;
+                record_tm_multicoin_volume(fills, grid_qty, group_fill_price, balance);
                 executed_close = true;
                 if (psize[c] <= 0.0f) break;
             }
@@ -2040,18 +2438,13 @@ inline bool process_tm_multicoin_side_fills(
                 bool market_execution = use_secondary
                     ? secondary_close_market[c] : primary_market;
                 float fee_rate = market_execution ? taker_fee : maker_fee;
-                if (!is_hsl_panic && !realized_loss_proxy_allows_reducer(
-                        qty, price, pprice[c], short_side,
-                        c_mult, fee_rate, is_unstuck, loss_gate_enabled,
-                        balance, realized_pnl_cumsum_last,
-                        realized_pnl_cumsum_max, max_realized_loss_pct
-                    )) {
-                    continue;
-                }
+
                 float net_pnl = pnl - qty * price * c_mult * fee_rate;
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, pnl, net_pnl, qty,
+                    price, qty * price * c_mult * fee_rate,
+                    fmax(round_step(psize[c] - qty, qty_step), 0.0f),
                     pprice[c], close, c_mult, short_side,
                     is_hsl_panic, collect_coin_fill_counts,
                     hsl_equity_before_fills, opposite_hsl, opposite_has_position
@@ -2059,7 +2452,7 @@ inline bool process_tm_multicoin_side_fills(
                 psize[c] = fmax(
                     round_step(psize[c] - qty, qty_step), 0.0f
                 );
-                day_volume += qty * price * c_mult / balance;
+                record_tm_multicoin_volume(fills, qty, price, balance);
                 if (!use_secondary) reducer_executed = true;
                 executed_close = true;
             }
@@ -2079,7 +2472,7 @@ inline bool process_tm_multicoin_side_fills(
         bool filled_entry = entry_qty[c] > 0.0f
             && (entry_market[c] || first_entry_passive_reachable);
         bool gated_recursive_plan = side.entry_deferred_twel_gate
-            && entry_recursive_market_mode[c]
+            && entry_recursive_mode[c]
             && (entry_qty[c] > 0.0f
                 || side.entry_gate_suffix_keep_count[c] > 0);
         if (gated_recursive_plan) {
@@ -2108,7 +2501,7 @@ inline bool process_tm_multicoin_side_fills(
                         entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
-                        true, market_order_near_touch_threshold
+                        market_orders_allowed, market_order_near_touch_threshold
                     );
                     int suffix_index = rung - 1;
                     if (suffix_index == suffix_partial_rank) {
@@ -2140,6 +2533,9 @@ inline bool process_tm_multicoin_side_fills(
                         record_initial_entry_interval(
                             entry_interval_stats, entry_interval_counts, b,
                             side.last_initial_entry_k[c], float(k)
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+                            , entry_interval_bins
+#endif
                         );
                     }
 #endif
@@ -2152,7 +2548,7 @@ inline bool process_tm_multicoin_side_fills(
                     );
                     apply_tm_multicoin_entry_position(
                         side, fills, c, k, adjusted, fill_price,
-                        qty_step, c_mult, balance
+                        qty_step, c_mult, balance, fee, short_side
                     );
                     any_fill = true;
                 } else if (rung > 0 && selected) {
@@ -2177,7 +2573,7 @@ inline bool process_tm_multicoin_side_fills(
                     : min(sim_touch_tick, candidate.ticks);
             }
             entry_qty[c] = 0.0f;
-        } else if (filled_entry && entry_recursive_market_mode[c]) {
+        } else if (filled_entry && entry_recursive_mode[c]) {
             float sim_psize = entry_gen_psize[c];
             float sim_pprice = entry_gen_pprice[c];
             int sim_touch_tick = entry_gen_touch_tick[c];
@@ -2198,7 +2594,7 @@ inline bool process_tm_multicoin_side_fills(
                         entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
-                        true, market_order_near_touch_threshold
+                        market_orders_allowed, market_order_near_touch_threshold
                     );
                 }
                 if (!(candidate.strategy_qty > 0.0f
@@ -2226,6 +2622,9 @@ inline bool process_tm_multicoin_side_fills(
                     record_initial_entry_interval(
                         entry_interval_stats, entry_interval_counts, b,
                         side.last_initial_entry_k[c], float(k)
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+                        , entry_interval_bins
+#endif
                     );
                 }
 #endif
@@ -2237,7 +2636,7 @@ inline bool process_tm_multicoin_side_fills(
                 );
                 apply_tm_multicoin_entry_position(
                     side, fills, c, k, adjusted, fill_price,
-                    qty_step, c_mult, balance
+                    qty_step, c_mult, balance, fee, short_side
                 );
                 any_fill = true;
 
@@ -2277,6 +2676,9 @@ inline bool process_tm_multicoin_side_fills(
                 record_initial_entry_interval(
                     entry_interval_stats, entry_interval_counts, b,
                     side.last_initial_entry_k[c], float(k)
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+                    , entry_interval_bins
+#endif
                 );
             }
 #endif
@@ -2288,7 +2690,7 @@ inline bool process_tm_multicoin_side_fills(
             );
             apply_tm_multicoin_entry_position(
                 side, fills, c, k, adjusted, fill_price,
-                qty_step, c_mult, balance
+                qty_step, c_mult, balance, fee, short_side
             );
             any_fill = true;
         }
@@ -2354,7 +2756,7 @@ load_trailing_martingale_multicoin_side_config(
         config.w_ready = 1.0f;
         config.w_volatility = 0.0f;
     }
-    config.n_positions = max(1, int(rint(params[po + 33])));
+    config.n_positions = max(0, int(rint(params[po + 33])));
     config.allowance_pct = params[po + 34];
     config.scale_hsl_budget = params[po + 35] > 0.5f;
     config.twel_entry_gate_enabled = params[po + 36] > 0.5f;
@@ -2389,8 +2791,13 @@ inline void init_trailing_martingale_multicoin_side_state(
 ) {
     side.hsl = config.hsl_template;
     side.hsl_strategy_eq = init_hsl_strategy_equity_stats();
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    side.hsl_report_ema_max = 0.0f;
+    side.hsl_portfolio_report_ema_max = 0.0f;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     side.hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
+    side.hsl_portfolio_ema_tail = init_hsl_drawdown_ema_tail_stats();
 #endif
     side.entry_deferred_twel_gate = false;
     side.max_tradable_seen = 0;
@@ -2399,11 +2806,13 @@ inline void init_trailing_martingale_multicoin_side_state(
             ? coin_settings[c * COIN_COLS + 9] : 0.0f;
         float seed_volume = c < coin_count
             ? coin_settings[c * COIN_COLS + 10] : 0.0f;
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
         side.unstuck_ema[c] = init_unstuck_ema_band(
             c < coin_count ? coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START, config.unstuck_span0) : config.unstuck_span0,
             c < coin_count ? coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START + 1, config.unstuck_span1) : config.unstuck_span1,
             seed_close
         );
+#endif
         side.ema0[c] = seed_close;
         side.ema1[c] = seed_close;
         side.ema2[c] = seed_close;
@@ -2430,10 +2839,16 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.entry_gen_psize[c] = 0.0f;
         side.entry_gen_pprice[c] = 0.0f;
         side.entry_gate_suffix_partial_qty[c] = 0.0f;
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        side.close_admission[c].valid = false;
+        side.close_admission[c].expanded = false;
+#endif
         side.close_qty[c] = 0.0f;
         side.secondary_close_qty[c] = 0.0f;
         side.twel_close_qty[c] = 0.0f;
+#if PASSIVBOT_UNSTUCK_ENABLED
         side.unstuck_close_qty[c] = 0.0f;
+#endif
         side.close_gen_balance[c] = 0.0f;
         side.close_gen_allowed_wel[c] = 0.0f;
         side.close_gen_market_price[c] = 0.0f;
@@ -2460,16 +2875,18 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.close_tick[c] = 0;
         side.secondary_close_tick[c] = 0;
         side.twel_close_tick[c] = 0;
+#if PASSIVBOT_UNSTUCK_ENABLED
         side.unstuck_close_tick[c] = 0;
+#endif
         side.close_grid_max_rungs[c] = 500;
         side.close_grid_prefix_tick[c] = 0;
         side.selected[c] = false;
         side.incumbent[c] = false;
         side.survivor[c] = false;
         side.entry_candidate[c] = false;
-        side.entry_recursive_market_mode[c] = false;
+        side.entry_recursive_mode[c] = false;
         side.close_reconstruct_after_reducer[c] = false;
-        side.close_recursive_market_mode[c] = false;
+        side.close_recursive_mode[c] = false;
         side.filled_coin[c] = false;
         side.entry_market[c] = false;
         side.close_market[c] = false;
@@ -2583,7 +3000,9 @@ inline void update_tm_multicoin_side_indicators(
         if (!valid) continue;
         update_adaptive_rms(side.adaptive[c], bars, k, first_valid, coin_count * 4, c * 4 + 2);
         float log_range = log(high / low);
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
         update_unstuck_ema_band(side.unstuck_ema[c], close);
+#endif
         side.ema0[c] = fma(
             side.alpha0_coin[c], close - side.ema0[c], side.ema0[c]
         );
@@ -2730,11 +3149,10 @@ inline bool tm_multicoin_side_has_blocking_orders(
     return false;
 }
 
-// Advance the complete dual-side HSL topology after both directional order
-// phases have run against the same account. Unified and pside modes use the
-// shared account controller. Coin mode keeps one controller per coin/pside,
-// while its sampled tier is the maximum across the full portfolio, matching
-// exact Rust reporting. Mixed signal modes fail closed.
+// Advance the complete dual-side HSL topology after both directional fill
+// phases and before either side constructs the next orders. Unified and pside
+// modes use the shared account controller; coin mode has one per coin/pside.
+// Mixed signal modes fail closed. Reporting is sampled separately after delisting.
 inline bool update_tm_multicoin_dual_side_hsl(
     thread TrailingMartingaleMulticoinSideState& long_side,
     thread const TrailingMartingaleMulticoinSideConfig& long_config,
@@ -2748,15 +3166,10 @@ inline bool update_tm_multicoin_dual_side_hsl(
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
     int k,
-    int day_index,
     int coin_count,
     float starting_balance,
-    float interval_ms,
-    thread bool& sample_enabled,
-    thread int& sampled_tier
+    float interval_ms
 ) {
-    sample_enabled = false;
-    sampled_tier = 0;
     if (long_side.hsl.signal_mode != short_side.hsl.signal_mode) return false;
     if (long_config.coin_hsl_mode != short_config.coin_hsl_mode) return false;
     if (!tm_multicoin_side_held_marks_are_valid(
@@ -2789,15 +3202,6 @@ inline bool update_tm_multicoin_dual_side_hsl(
     if (long_config.coin_hsl_mode) {
         const bool long_active = long_effective_n_positions > 0;
         const bool short_active = short_effective_n_positions > 0;
-        bool long_strategy_eq_enabled = false;
-        bool short_strategy_eq_enabled = false;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-        float long_drawdown_ema_sample = 0.0f;
-        float short_drawdown_ema_sample = 0.0f;
-#endif
-        float portfolio_equity = joint_portfolio_equity(
-            account, long_unrealized, short_unrealized
-        );
         for (int c = 0; c < coin_count; ++c) {
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * coin_count + c) * 4;
@@ -2841,26 +3245,11 @@ inline bool update_tm_multicoin_dual_side_hsl(
                     long_effective_n_positions, long_coin_overrides, c,
                     24, 25, long_config.allowance_pct
                 );
-                update_hsl(
-                    long_side.coin_hsl[c], account.balance, starting_balance,
+                update_coin_hsl(
+                    long_side.coin_hsl[c], account.balance,
                     long_side.coin_realized_pnl[c], long_coin_unrealized,
                     long_side.psize[c] > 0.0f,
-                    long_coin_has_blocking_orders, float(k), interval_ms
-                );
-                sample_enabled = sample_enabled
-                    || long_side.coin_hsl[c].enabled;
-                long_strategy_eq_enabled = long_strategy_eq_enabled
-                    || long_side.coin_hsl[c].enabled;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                if (long_side.coin_hsl[c].enabled) {
-                    long_drawdown_ema_sample = fmax(
-                        long_drawdown_ema_sample,
-                        fabs(long_side.coin_hsl[c].drawdown_ema)
-                    );
-                }
-#endif
-                sampled_tier = max(
-                    sampled_tier, long_side.coin_hsl[c].tier
+                    long_side.position_last_fill_k[c], k
                 );
             }
             if (short_active) {
@@ -2872,79 +3261,18 @@ inline bool update_tm_multicoin_dual_side_hsl(
                     short_effective_n_positions, short_coin_overrides, c,
                     24, 25, short_config.allowance_pct
                 );
-                update_hsl(
-                    short_side.coin_hsl[c], account.balance, starting_balance,
+                update_coin_hsl(
+                    short_side.coin_hsl[c], account.balance,
                     short_side.coin_realized_pnl[c], short_coin_unrealized,
                     short_side.psize[c] > 0.0f,
-                    short_coin_has_blocking_orders, float(k), interval_ms
-                );
-                sample_enabled = sample_enabled
-                    || short_side.coin_hsl[c].enabled;
-                short_strategy_eq_enabled = short_strategy_eq_enabled
-                    || short_side.coin_hsl[c].enabled;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                if (short_side.coin_hsl[c].enabled) {
-                    short_drawdown_ema_sample = fmax(
-                        short_drawdown_ema_sample,
-                        fabs(short_side.coin_hsl[c].drawdown_ema)
-                    );
-                }
-#endif
-                sampled_tier = max(
-                    sampled_tier, short_side.coin_hsl[c].tier
+                    short_side.position_last_fill_k[c], k
                 );
             }
         }
-        if (long_strategy_eq_enabled) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-            update_hsl_drawdown_ema_tail_stats(
-                long_side.hsl_ema_tail, long_drawdown_ema_sample
-            );
-#endif
-            update_hsl_strategy_equity_stats(
-                long_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_long + long_unrealized,
-                day_index
-            );
-        }
-        if (short_strategy_eq_enabled) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-            update_hsl_drawdown_ema_tail_stats(
-                short_side.hsl_ema_tail, short_drawdown_ema_sample
-            );
-#endif
-            update_hsl_strategy_equity_stats(
-                short_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_short + short_unrealized,
-                day_index
-            );
-        }
-        return true;
+        return valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, coin_count)
+            && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, coin_count);
     }
 
-    const bool unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
-    const bool long_strategy_eq_enabled = long_side.hsl.enabled
-        && !long_side.hsl.halted;
-    const bool short_strategy_eq_enabled = short_side.hsl.enabled
-        && !short_side.hsl.halted;
-    if (long_strategy_eq_enabled) {
-        update_hsl_strategy_equity_stats(
-            long_side.hsl_strategy_eq,
-            starting_balance + (
-                unified ? account.realized_pnl_total : account.realized_pnl_long
-            ) + (unified ? long_unrealized + short_unrealized : long_unrealized),
-            day_index
-        );
-    }
-    if (short_strategy_eq_enabled) {
-        update_hsl_strategy_equity_stats(
-            short_side.hsl_strategy_eq,
-            starting_balance + (
-                unified ? account.realized_pnl_total : account.realized_pnl_short
-            ) + (unified ? long_unrealized + short_unrealized : short_unrealized),
-            day_index
-        );
-    }
     if (!update_joint_pside_hsl(
             long_side.hsl, short_side.hsl, account, starting_balance,
             long_unrealized, short_unrealized,
@@ -2954,23 +3282,8 @@ inline bool update_tm_multicoin_dual_side_hsl(
         )) {
         return false;
     }
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-    if (long_strategy_eq_enabled) {
-        update_hsl_drawdown_ema_tail_stats(
-            long_side.hsl_ema_tail, long_side.hsl.drawdown_ema
-        );
-    }
-    if (short_strategy_eq_enabled) {
-        update_hsl_drawdown_ema_tail_stats(
-            short_side.hsl_ema_tail, short_side.hsl.drawdown_ema
-        );
-    }
-#endif
-    sample_enabled = long_side.hsl.enabled || short_side.hsl.enabled;
-    sampled_tier = joint_pside_hsl_global_tier(
-        long_side.hsl, short_side.hsl
-    );
-    return true;
+    return valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, coin_count)
+        && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, coin_count);
 }
 
 inline void update_tm_multicoin_side_selection(
@@ -2987,7 +3300,7 @@ inline void update_tm_multicoin_side_selection(
     float score_hysteresis,
     ulong one_way_initial_blocked_mask,
     bool filter_by_min_effective_cost,
-    float guaranteed_balance_lower
+    float balance
 ) {
     thread HslState* coin_hsl = side.coin_hsl;
     ulong coin_hsl_entry_blocked_mask = 0ul;
@@ -3050,8 +3363,8 @@ inline void update_tm_multicoin_side_selection(
             coin_overrides, c, 6, config.initial_qty_pct
         );
         bool min_cost_eligible = passes_multicoin_min_effective_cost(
-            filter_by_min_effective_cost, guaranteed_balance_lower,
-            allowed_wel, initial_qty_pct, coin_settings[coin_offset + 12]
+            filter_by_min_effective_cost, balance,
+            allowed_wel, initial_qty_pct, bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
         );
         bool base_eligible = k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
@@ -3260,10 +3573,11 @@ inline int select_tm_multicoin_unstuck_coin(
     thread float& selected_diff
 ) {
     selected_diff = INFINITY;
+#if PASSIVBOT_UNSTUCK_ENABLED
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
         / fmax(float(effective_n_positions), 1.0f);
-    const float balance_peak = account.balance + unstuck_pnl_drawdown(account);
+    const float balance_peak = account.balance + effective_realized_pnl_drawdown(account);
     if (!(balance_peak > 0.0f)) return -1;
 
     int selected_coin = -1;
@@ -3327,6 +3641,7 @@ inline int select_tm_multicoin_unstuck_coin(
             && wallet_exposure / allowed_coin_wel > coin_threshold)) {
             continue;
         }
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
         if (coin_ema_gate) {
             const float lower = unstuck_ema_lower(side.unstuck_ema[c]);
             const float upper = unstuck_ema_upper(side.unstuck_ema[c]);
@@ -3344,6 +3659,7 @@ inline int select_tm_multicoin_unstuck_coin(
                 : touch_ticks[tick_offset + 0] >= trigger_tick;
             if (!triggered) continue;
         }
+#endif
         const float pprice_diff = short_side
             ? price_now / side.pprice[c] - 1.0f
             : 1.0f - price_now / side.pprice[c];
@@ -3355,6 +3671,9 @@ inline int select_tm_multicoin_unstuck_coin(
         }
     }
     return selected_coin;
+#else
+    return -1;
+#endif
 }
 
 // Match exact Rust's per-symbol one-way eligibility before Forager selection
@@ -3379,7 +3698,7 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
     bool long_can_generate,
     bool short_can_generate,
     bool filter_by_min_effective_cost,
-    float guaranteed_balance_lower,
+    float balance,
     thread ulong& long_selection_blocked_mask,
     thread ulong& short_selection_blocked_mask,
     thread ulong& long_order_blocked_mask,
@@ -3437,21 +3756,21 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
             ));
         const bool long_min_cost_eligible =
             passes_multicoin_min_effective_cost(
-                filter_by_min_effective_cost, guaranteed_balance_lower,
+                filter_by_min_effective_cost, balance,
                 long_allowed_wel,
                 coin_override_or(
                     long_coin_overrides, c, 6, long_config.initial_qty_pct
                 ),
-                coin_settings[coin_offset + 12]
+                bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
             );
         const bool short_min_cost_eligible =
             passes_multicoin_min_effective_cost(
-                filter_by_min_effective_cost, guaranteed_balance_lower,
+                filter_by_min_effective_cost, balance,
                 short_allowed_wel,
                 coin_override_or(
                     short_coin_overrides, c, 6, short_config.initial_qty_pct
                 ),
-                coin_settings[coin_offset + 12]
+                bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
             );
         const int long_coin_mode = long_config.coin_hsl_mode
             ? hsl_mode(long_side.coin_hsl[c], false) : long_hsl_mode;
@@ -3591,7 +3910,9 @@ inline void generate_tm_multicoin_side_orders(
     thread float* close_qty = side.close_qty;
     thread float* secondary_close_qty = side.secondary_close_qty;
     thread float* twel_close_qty = side.twel_close_qty;
+#if PASSIVBOT_UNSTUCK_ENABLED
     thread float* unstuck_close_qty = side.unstuck_close_qty;
+#endif
     thread float* close_gen_balance = side.close_gen_balance;
     thread float* close_gen_allowed_wel = side.close_gen_allowed_wel;
     thread float* close_gen_market_price = side.close_gen_market_price;
@@ -3612,17 +3933,19 @@ inline void generate_tm_multicoin_side_orders(
     thread int* close_tick = side.close_tick;
     thread int* secondary_close_tick = side.secondary_close_tick;
     thread int* twel_close_tick = side.twel_close_tick;
+#if PASSIVBOT_UNSTUCK_ENABLED
     thread int* unstuck_close_tick = side.unstuck_close_tick;
+#endif
     thread int* close_grid_max_rungs = side.close_grid_max_rungs;
     thread int* close_grid_prefix_tick = side.close_grid_prefix_tick;
     thread bool* selected = side.selected;
     thread bool* entry_candidate = side.entry_candidate;
-    thread bool* entry_recursive_market_mode =
-        side.entry_recursive_market_mode;
+    thread bool* entry_recursive_mode =
+        side.entry_recursive_mode;
     thread bool* close_reconstruct_after_reducer =
         side.close_reconstruct_after_reducer;
-    thread bool* close_recursive_market_mode =
-        side.close_recursive_market_mode;
+    thread bool* close_recursive_mode =
+        side.close_recursive_mode;
     thread bool* entry_market = side.entry_market;
     thread bool* close_market = side.close_market;
     thread bool* secondary_close_market = side.secondary_close_market;
@@ -3632,8 +3955,6 @@ inline void generate_tm_multicoin_side_orders(
         side.close_is_unstuck_reducer;
     thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
     thread float& balance = account.balance;
-    thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
-    thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
 
     const float effective_wel = twel / fmax(float(effective_n_positions), 1.0f);
     float current_twe = 0.0f;
@@ -3768,11 +4089,16 @@ inline void generate_tm_multicoin_side_orders(
     // One directional thread owns every coin on this side, allowing
     // the exact one-global-intent least-stuck selector across coins.
     for (int c = 0; c < C; ++c) {
+#if PASSIVBOT_UNSTUCK_ENABLED
         unstuck_close_qty[c] = 0.0f;
+#endif
+#if PASSIVBOT_UNSTUCK_ENABLED
         unstuck_close_tick[c] = 0;
+#endif
         close_is_unstuck_reducer[c] = false;
     }
-    float balance_peak = balance + unstuck_pnl_drawdown(account);
+#if PASSIVBOT_UNSTUCK_ENABLED
+    float balance_peak = balance + effective_realized_pnl_drawdown(account);
     int unstuck_coin = -1;
     float best_unstuck_diff = INFINITY;
     float selected_unstuck_qty = 0.0f;
@@ -3843,6 +4169,7 @@ inline void generate_tm_multicoin_side_orders(
             && wallet_exposure / allowed_coin_wel > coin_threshold)) {
             continue;
         }
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
         if (coin_ema_gate) {
             float lower = unstuck_ema_lower(side.unstuck_ema[c]);
             float upper = unstuck_ema_upper(side.unstuck_ema[c]);
@@ -3860,6 +4187,7 @@ inline void generate_tm_multicoin_side_orders(
                 : touch_ticks[tick_offset + 0] >= trigger_tick;
             if (!triggered) continue;
         }
+#endif
         int reducer_tick = max(
             short_side
                 ? touch_ticks[tick_offset + 0]
@@ -3906,10 +4234,11 @@ inline void generate_tm_multicoin_side_orders(
         unstuck_close_qty[unstuck_coin] = selected_unstuck_qty;
         unstuck_close_tick[unstuck_coin] = selected_unstuck_tick;
     }
+#endif
     for (int c = 0; c < C; ++c) {
         entry_qty[c] = 0.0f;
         entry_strategy_qty[c] = 0.0f;
-        entry_recursive_market_mode[c] = false;
+        entry_recursive_mode[c] = false;
         entry_gen_balance[c] = 0.0f;
         entry_gen_allowed_wel[c] = 0.0f;
         entry_gen_market_price[c] = 0.0f;
@@ -3921,6 +4250,10 @@ inline void generate_tm_multicoin_side_orders(
         side.entry_gate_suffix_keep_count[c] = 0;
         side.entry_gate_suffix_partial_rank[c] = -1;
         side.entry_gate_suffix_partial_qty[c] = 0.0f;
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        side.close_admission[c].valid = false;
+        side.close_admission[c].expanded = false;
+#endif
         close_qty[c] = 0.0f;
         secondary_close_qty[c] = 0.0f;
         entry_market[c] = false;
@@ -3929,7 +4262,7 @@ inline void generate_tm_multicoin_side_orders(
         close_is_exposure_reducer[c] = false;
         secondary_close_tick[c] = 0;
         close_reconstruct_after_reducer[c] = false;
-        close_recursive_market_mode[c] = false;
+        close_recursive_mode[c] = false;
         close_is_hsl_panic[c] = false;
         close_grid_gen_psize[c] = 0.0f;
         close_grid_prefix_qty[c] = 0.0f;
@@ -4033,6 +4366,9 @@ inline void generate_tm_multicoin_side_orders(
                 ? psize[c] * pprice[c] * c_mult / balance / fmax(coin_wel, 1.0e-12f) : 0.0f,
             short_side);
         side.effective_cooldown[c] = coin_cooldown_min;
+        // Old orders were cleared above. A flat unselected coin has no entry
+        // intent or protective close; keep its cooldown current for future picks.
+        if (!selected[c] && psize[c] <= 0.0f) continue;
         int touch_down = touch_ticks[tick_offset + 0];
         int touch_up = touch_ticks[tick_offset + 1];
         int entry_touch = short_side ? touch_up : touch_down;
@@ -4235,9 +4571,8 @@ inline void generate_tm_multicoin_side_orders(
             entry_gen_initial_price[c] = initial_sizing_price;
             entry_gen_touch_tick[c] = entry_touch;
         }
-        if (coin_entry_retracement_base <= 0.0f && quantity > 0.0f
-            && market_orders_allowed) {
-            entry_recursive_market_mode[c] = true;
+        if (coin_entry_retracement_base <= 0.0f && quantity > 0.0f) {
+            entry_recursive_mode[c] = true;
         }
         minimum_entry[c] = executable_entry_min;
         entry_candidate[c] = quantity > 0.0f;
@@ -4288,8 +4623,13 @@ inline void generate_tm_multicoin_side_orders(
                 market_orders_allowed, market_order_near_touch_threshold
             );
         float wel_reducer_exec_price = float(wel_reducer_tick) * price_step;
+#if PASSIVBOT_UNSTUCK_ENABLED
         float raw_unstuck_reducer_qty = unstuck_close_qty[c];
         int raw_unstuck_reducer_tick = unstuck_close_tick[c];
+#else
+        float raw_unstuck_reducer_qty = 0.0f;
+        int raw_unstuck_reducer_tick = 0;
+#endif
         float unstuck_reducer_price =
             float(raw_unstuck_reducer_tick) * price_step;
         bool unstuck_reducer_market = raw_unstuck_reducer_qty > 0.0f
@@ -4374,13 +4714,12 @@ inline void generate_tm_multicoin_side_orders(
                 && (!trailing_close || close_triggered)
             ? clip : 0.0f;
         close_tick[c] = candidate_close_tick;
-        if (!trailing_close && close_qty[c] > 0.0f
-            && market_orders_allowed) {
+        if (!trailing_close && close_qty[c] > 0.0f) {
             // Preserve the passive recursive strategy snapshot. On the next
             // candle it alone decides whether the full suffix is emitted;
             // ordinary market promotion is applied only after that decision.
             close_reconstruct_after_reducer[c] = true;
-            close_recursive_market_mode[c] = true;
+            close_recursive_mode[c] = true;
             close_gen_balance[c] = balance;
             close_gen_allowed_wel[c] = allowed_coin_wel;
             close_gen_market_price[c] = price_now;
@@ -4402,34 +4741,39 @@ inline void generate_tm_multicoin_side_orders(
             );
             minimum_close_relation = 0;
         }
-        float projected_close_price = close_market[c]
-            ? ordinary_market_fill_price(
-                price_now, short_side,
-                market_order_slippage_pct, price_step
-            )
-            : close_price;
-        float projected_close_fee = close_market[c]
-            ? coin_settings[coin_offset + 11]
-            : coin_settings[coin_offset + 5];
-        if (!realized_loss_proxy_allows_close(
-                close_qty[c], projected_close_price, pprice[c], short_side,
-                c_mult, projected_close_fee,
-                loss_gate_enabled
-            )) {
-            if (!trailing_close && close_qty[c] > 0.0f) {
-                // Exact Rust builds the complete immutable recursive
-                // grid before filtering each close independently.  A
-                // loss-making first rung must therefore not hide later
-                // profitable rungs generated from lower exposure.
-                close_reconstruct_after_reducer[c] = true;
-                close_gen_balance[c] = balance;
-                close_gen_allowed_wel[c] = allowed_coin_wel;
-                close_grid_gen_psize[c] = psize[c];
-                close_grid_max_rungs[c] = 500;
-            }
-            close_qty[c] = 0.0f;
-            close_market[c] = false;
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        if (loss_gate_enabled) {
+            thread TmCloseAdmission& source = side.close_admission[c];
+            source.valid = psize[c] > 0.0f;
+            source.trailing = trailing_close;
+            source.expanded = false;
+            source.context = TmCloseGridContext{
+                short_side,
+                fmax(round_step(psize[c] - strategy_wel_reducer_qty, qty_step), 0.0f),
+                pprice[c], balance, allowed_coin_wel,
+                touch_down, touch_up, touch_nearest_ticks[k * C + c],
+                as_type<float>(touch_min_qty_bits[k * C + c]),
+                touch_min_qty_relation[k * C + c],
+                coin_close_qty_pct, coin_close_threshold_base, coin_close_threshold_we,
+                coin_close_threshold_v1h, coin_close_threshold_v1m,
+                volatility_1h[c], volatility_1m[c],
+                qty_step, price_step, min_qty, min_cost, c_mult,
+                strategy_wel_reducer_qty > 0.0f ? wel_reducer_tick : 0,
+                strategy_wel_reducer_qty, strategy_wel_reducer_qty > 0.0f ? 499 : 500,
+                price_now, market_orders_allowed, market_order_near_touch_threshold, psize[c]
+            };
+            source.ordinary = {close_tick[c], float(close_tick[c]) * price_step,
+                close_qty[c], close_market[c]};
+            source.reducers[0] = {wel_reducer_tick, float(wel_reducer_tick) * price_step,
+                strategy_wel_reducer_qty, wel_reducer_market};
+            source.reducers[1] = {twel_reducer_tick, twel_reducer_price,
+                raw_twel_reducer_qty, twel_reducer_market};
+            source.reducers[2] = {raw_unstuck_reducer_tick, unstuck_reducer_price,
+                raw_unstuck_reducer_qty, unstuck_reducer_market};
+            // The account-wide stage owns all enabled-gate selection and sizing.
+            continue;
         }
+#endif
 
         // calc_closes_long/short generates WEL as the first strategy close,
         // then merges the following recursive group when both quantize to
@@ -4450,7 +4794,7 @@ inline void generate_tm_multicoin_side_orders(
         if (!trailing_close && strategy_wel_reducer_qty > 0.0f
             && strategy_grid_psize > 0.0f) {
             int strategy_group_count =
-                recursive_grid_close_groups_after_reducer(
+                recursive_grid_close_groups_after_reducer(TmCloseGridContext{
                     short_side,
                     strategy_grid_psize,
                     pprice[c],
@@ -4476,13 +4820,11 @@ inline void generate_tm_multicoin_side_orders(
                     wel_reducer_tick,
                     strategy_wel_reducer_qty,
                     strategy_grid_rung_limit,
-                    0,
                     price_now,
                     market_orders_allowed,
                     market_order_near_touch_threshold,
-                    psize[c],
-                    strategy_first_group
-                );
+                    psize[c]
+                }, 0, strategy_first_group);
             strategy_wel_merged = strategy_group_count > 0
                 && strategy_first_group.ticks == wel_reducer_tick;
         }
@@ -4497,7 +4839,7 @@ inline void generate_tm_multicoin_side_orders(
             close_tick[c] = strategy_first_group.ticks;
             close_market[c] = strategy_first_group.market;
             close_reconstruct_after_reducer[c] = true;
-            close_recursive_market_mode[c] = true;
+            close_recursive_mode[c] = true;
             close_gen_balance[c] = balance;
             close_gen_allowed_wel[c] = allowed_coin_wel;
             close_gen_market_price[c] = price_now;
@@ -4543,40 +4885,6 @@ inline void generate_tm_multicoin_side_orders(
                 unstuck_reducer_exec_price, qty_step, min_qty, min_cost,
                 c_mult
             );
-        float twel_gate_price = twel_reducer_market
-            ? ordinary_market_fill_price(
-                price_now, short_side,
-                market_order_slippage_pct, price_step
-            )
-            : twel_reducer_price;
-        float twel_gate_fee = twel_reducer_market
-            ? coin_settings[coin_offset + 11]
-            : coin_settings[coin_offset + 5];
-        if (!realized_loss_proxy_allows_close(
-                finalized_twel_reducer_qty, twel_gate_price, pprice[c],
-                short_side, c_mult, twel_gate_fee, loss_gate_enabled
-            )) {
-            raw_twel_reducer_qty = 0.0f;
-            finalized_twel_reducer_qty = 0.0f;
-            twel_reducer_market = false;
-        }
-        float wel_gate_price = wel_reducer_market
-            ? ordinary_market_fill_price(
-                price_now, short_side,
-                market_order_slippage_pct, price_step
-            )
-            : float(wel_reducer_tick) * price_step;
-        float wel_gate_fee = wel_reducer_market
-            ? coin_settings[coin_offset + 11]
-            : coin_settings[coin_offset + 5];
-        if (!realized_loss_proxy_allows_close(
-                finalized_wel_reducer_qty, wel_gate_price, pprice[c],
-                short_side, c_mult, wel_gate_fee, loss_gate_enabled
-            )) {
-            wel_reducer_qty = 0.0f;
-            finalized_wel_reducer_qty = 0.0f;
-            wel_reducer_market = false;
-        }
         bool use_twel = finalized_twel_reducer_qty
             > finalized_wel_reducer_qty;
         float exposure_reducer_qty = use_twel
@@ -4600,28 +4908,6 @@ inline void generate_tm_multicoin_side_orders(
         bool reducer_market = use_unstuck
             ? unstuck_reducer_market
             : (use_twel ? twel_reducer_market : wel_reducer_market);
-        float unstuck_gate_price = unstuck_reducer_market
-            ? ordinary_market_fill_price(
-                price_now, short_side,
-                market_order_slippage_pct, price_step
-            )
-            : float(raw_unstuck_reducer_tick) * price_step;
-        float unstuck_gate_fee = unstuck_reducer_market
-            ? coin_settings[coin_offset + 11]
-            : coin_settings[coin_offset + 5];
-        if (use_unstuck && !realized_loss_proxy_allows_reducer(
-                finalized_unstuck_reducer_qty,
-                unstuck_gate_price, pprice[c], short_side,
-                c_mult, unstuck_gate_fee, true,
-                loss_gate_enabled, balance, realized_pnl_cumsum_last,
-                realized_pnl_cumsum_max, max_realized_loss_pct
-            )) {
-            use_unstuck = false;
-            reducer_qty = exposure_reducer_qty;
-            reducer_tick = exposure_reducer_tick;
-            reducer_market = use_twel
-                ? twel_reducer_market : wel_reducer_market;
-        }
         if (reducer_qty > 0.0f && reducer_tick > 0) {
             float reducer_price = float(reducer_tick) * price_step;
             float reducer_exec_price = reducer_market
@@ -4714,7 +5000,7 @@ inline void generate_tm_multicoin_side_orders(
     side.entry_deferred_twel_gate = false;
     if (twel_entry_gate_enabled) {
         for (int c = 0; c < C; ++c) {
-            if (entry_candidate[c] && entry_recursive_market_mode[c]) {
+            if (entry_candidate[c] && entry_recursive_mode[c]) {
                 side.entry_deferred_twel_gate = true;
                 break;
             }
@@ -4815,7 +5101,7 @@ inline void generate_tm_multicoin_side_orders(
             secondary_close_market[c] = false;
             close_is_exposure_reducer[c] = false;
             close_reconstruct_after_reducer[c] = false;
-            close_recursive_market_mode[c] = false;
+            close_recursive_mode[c] = false;
             close_grid_gen_psize[c] = 0.0f;
             close_grid_prefix_qty[c] = 0.0f;
             close_gen_market_price[c] = 0.0f;
@@ -4847,6 +5133,85 @@ inline float tm_multicoin_entry_initial_balance_pct(
     return allowed_wallet_exposure_limit(
         base_limit, config.twel, allowance_pct) * initial_qty_pct;
 }
+
+// A temporal dispatch boundary preserves the entire candidate replay. Output
+// finalization runs only at its actual end step; partial chunks never become scores.
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+struct TrailingMartingaleMulticoinReplayState {
+    TrailingMartingaleMulticoinSideState side;
+    JointPortfolioAccount account;
+    TrailingMartingaleMulticoinFillState fills;
+    float fills_active_days_count;
+    int last_active_fill_day;
+    bool alive;
+    bool equity_started;
+    float run_peak;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+    float raw_strategy_peak;
+    float raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+    float raw_strategy_day_end;
+    float raw_strategy_day_min;
+#endif
+    float max_dd;
+    float total_wallet_exposure_max;
+    float total_wallet_exposure_mean;
+    float total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    ExposureRmsState exposure_rms;
+#endif
+    float first_fill_k;
+    float last_fill_k;
+    float gap_max_min;
+    float gap_sum_squared_hours;
+    float last_high_k;
+    float recovery_max_min;
+    float account_peak;
+    float account_peak_k;
+    float account_recovery_max_min;
+    float first_eq_k;
+    float last_eq_k;
+    int liquidation_day;
+#if !PASSIVBOT_HSL_DISABLED
+    HslTimeObservation hsl_time;
+#endif
+    int current_day;
+    bool day_touched;
+    float day_end;
+    float day_min;
+    float day_dd;
+    float day_has_fill;
+    float day_min_balance;
+    float day_start_balance;
+#if PASSIVBOT_BTC_RISK_ENABLED
+    BtcRiskState btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    EquityBalanceDiffState equity_balance_diff_state;
+#endif
+#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
+    int recovery_start_k;
+#endif
+};
+kernel void passivbot_tm_multicoin_replay_state_bytes(device uint* result) {
+    result[0] = sizeof(TrailingMartingaleMulticoinReplayState);
+}
+struct TrailingMartingaleMulticoinFusedReplayState {
+    TrailingMartingaleMulticoinReplayState common;
+    TrailingMartingaleMulticoinSideState short_side;
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float portfolio_hsl_report_ema_max;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    HslDrawdownEmaTailStats portfolio_hsl_ema_tail;
+#endif
+};
+kernel void passivbot_tm_multicoin_fused_replay_state_bytes(device uint* result) {
+    result[0] = sizeof(TrailingMartingaleMulticoinFusedReplayState);
+}
+
+#endif
 
 inline void passivbot_trailing_martingale_multicoin_fused_impl(
     constant float* bars,
@@ -4880,11 +5245,24 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     device float2* unstuck_pnl_values,
     device int2* unstuck_pnl_indices,
+#endif
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    device TrailingMartingaleMulticoinFusedReplayState* replay_states,
+    constant int* replay_range,
 #endif
     uint b
 ) {
@@ -4901,16 +5279,31 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
     if (b >= uint(B)) return;
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    if (replay_range[0] == 1)
+#endif
     init_entry_interval_output(
         entry_interval_stats, entry_interval_counts, b
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+        , T + 1
+#endif
     );
 #endif
     const int stop_k = clamp(end_steps[b], 1, T - 1);
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    const int begin_k = replay_range[0];
+    const int chunk_stop_k = min(replay_range[1], stop_k);
+    if (begin_k >= stop_k && begin_k > 1) return;
+    if (begin_k > 1 && scalars[int(b) * FUSED_SCALAR_COLS + 9] < -1.0f) return;
+#else
+    const int begin_k = 1;
+    const int chunk_stop_k = stop_k;
+#endif
     const int scalar_offset = int(b) * FUSED_SCALAR_COLS;
-    for (int j = 0; j < FUSED_SCALAR_COLS; ++j) {
+    for (int j = 0; begin_k == 1 && j < FUSED_SCALAR_COLS; ++j) {
         scalars[scalar_offset + j] = 0.0f;
     }
-    for (int j = 0; j < GAP_BINS; ++j) {
+    for (int j = 0; begin_k == 1 && j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
     }
     if (C < 1 || C > MAX_COINS) {
@@ -4923,7 +5316,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         return;
     }
     const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
-    if (collect_coin_fill_counts) {
+    if (collect_coin_fill_counts && begin_k == 1) {
         for (int c = 0; c < C; ++c) {
             coin_fill_counts[int(b) * C + c] = 0.0f;
         }
@@ -4952,8 +5345,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         return;
     }
 
-    TrailingMartingaleMulticoinSideState long_side;
-    TrailingMartingaleMulticoinSideState short_side;
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, long_side, 0);
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, short_side, 1);
     init_trailing_martingale_multicoin_side_state(
         long_side, long_config, coin_settings,
         long_coin_overrides, C
@@ -4967,7 +5360,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
-    const bool loss_gate_enabled = run_settings[5] < 1.0f;
+    const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        && run_settings[5] < 1.0f;
     const float max_realized_loss_pct = run_settings[5];
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
@@ -4977,7 +5371,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const float market_order_near_touch_threshold =
         fmax(run_settings[12], 0.0f);
     const bool filter_by_min_effective_cost = run_settings[13] > 0.5f;
-    const float log_bin_scale = 127.0f / log(4000001.0f);
+    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
         starting_balance
@@ -4986,14 +5380,24 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         init_trailing_martingale_multicoin_fill_state();
     bool alive = true;
     bool equity_started = false;
-    bool min_cost_exact_open_uncertain = false;
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
     float run_peak = -INFINITY;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+    float raw_strategy_peak = -INFINITY;
+    float raw_strategy_day_dd = 0.0f;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+    float raw_strategy_day_end = 0.0f;
+    float raw_strategy_day_min = INFINITY;
+#endif
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    ExposureRmsState exposure_rms = init_exposure_rms();
+#endif
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float gap_max_min = 0.0f;
@@ -5016,10 +5420,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     int recovery_start_k = -1;
 #endif
     int liquidation_day = -1;
-    float hsl_tier_samples_total = 0.0f;
-
-
-    float hsl_tier_samples_red = 0.0f;
+    HslTimeObservation hsl_time = init_hsl_time_observation();
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float portfolio_hsl_report_ema_max = 0.0f;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    HslDrawdownEmaTailStats portfolio_hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
+#endif
 
     int current_day = 0;
     bool day_touched = false;
@@ -5030,19 +5437,104 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     float day_min_balance = INFINITY;
     float day_start_balance = account.balance;
 
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    if (begin_k > 1) {
+        long_side = replay_states[b].common.side;
+        short_side = replay_states[b].short_side;
+        account = replay_states[b].common.account;
+        fills = replay_states[b].common.fills;
+        fills_active_days_count = replay_states[b].common.fills_active_days_count;
+        last_active_fill_day = replay_states[b].common.last_active_fill_day;
+        alive = replay_states[b].common.alive;
+        equity_started = replay_states[b].common.equity_started;
+        run_peak = replay_states[b].common.run_peak;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+        raw_strategy_peak = replay_states[b].common.raw_strategy_peak;
+        raw_strategy_day_dd = replay_states[b].common.raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        raw_strategy_day_end = replay_states[b].common.raw_strategy_day_end;
+        raw_strategy_day_min = replay_states[b].common.raw_strategy_day_min;
+#endif
+        max_dd = replay_states[b].common.max_dd;
+        total_wallet_exposure_max = replay_states[b].common.total_wallet_exposure_max;
+        total_wallet_exposure_mean = replay_states[b].common.total_wallet_exposure_mean;
+        total_wallet_exposure_samples = replay_states[b].common.total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        exposure_rms = replay_states[b].common.exposure_rms;
+#endif
+        first_fill_k = replay_states[b].common.first_fill_k;
+        last_fill_k = replay_states[b].common.last_fill_k;
+        gap_max_min = replay_states[b].common.gap_max_min;
+        gap_sum_squared_hours = replay_states[b].common.gap_sum_squared_hours;
+        last_high_k = replay_states[b].common.last_high_k;
+        recovery_max_min = replay_states[b].common.recovery_max_min;
+        account_peak = replay_states[b].common.account_peak;
+        account_peak_k = replay_states[b].common.account_peak_k;
+        account_recovery_max_min = replay_states[b].common.account_recovery_max_min;
+        first_eq_k = replay_states[b].common.first_eq_k;
+        last_eq_k = replay_states[b].common.last_eq_k;
+        liquidation_day = replay_states[b].common.liquidation_day;
+#if !PASSIVBOT_HSL_DISABLED
+        hsl_time = replay_states[b].common.hsl_time;
+#endif
+        current_day = replay_states[b].common.current_day;
+        day_touched = replay_states[b].common.day_touched;
+        day_end = replay_states[b].common.day_end;
+        day_min = replay_states[b].common.day_min;
+        day_dd = replay_states[b].common.day_dd;
+        day_has_fill = replay_states[b].common.day_has_fill;
+        day_min_balance = replay_states[b].common.day_min_balance;
+        day_start_balance = replay_states[b].common.day_start_balance;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        btc_risk = replay_states[b].common.btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        equity_balance_diff_state = replay_states[b].common.equity_balance_diff_state;
+#endif
+#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
+        recovery_start_k = replay_states[b].common.recovery_start_k;
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        portfolio_hsl_report_ema_max = replay_states[b].portfolio_hsl_report_ema_max;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+        portfolio_hsl_ema_tail = replay_states[b].portfolio_hsl_ema_tail;
+#endif
+    }
+#endif
+
     const bool hsl_long_owner = long_config.twel > 0.0f && long_config.n_positions > 0;
     const bool hsl_unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
     bind_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl,
-        hsl_trees, hsl_rows, int(b) * 2 * (C + 1), C, true,
-        !hsl_unified || hsl_long_owner);
+        hsl_trees, hsl_rows, int(b) * 2 * (C + 1), C, begin_k <= 1,
+        !hsl_unified || hsl_long_owner
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[14])
+#endif
+    );
     bind_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl,
-        hsl_trees, hsl_rows, int(b) * 2 * (C + 1) + C + 1, C, true,
-        !hsl_unified || !hsl_long_owner);
+        hsl_trees, hsl_rows, int(b) * 2 * (C + 1) + C + 1, C, begin_k <= 1,
+        !hsl_unified || !hsl_long_owner
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[14])
+#endif
+    );
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslReplayContext factual_context = hsl_replay_context(
+        bars, coin_settings, C, COIN_COLS, run_settings[15] > 0.5f);
+    attach_hsl_replay_side(factual_context, long_side.hsl, long_side.coin_hsl, 0, false);
+    attach_hsl_replay_side(factual_context, short_side.hsl, short_side.coin_hsl, 1, true);
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     if (scalars[int(b) * FUSED_SCALAR_COLS + 9] == -3.0f) return;
     bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
 #endif
-    for (int k = 1; k < stop_k; ++k) {
+    for (int k = begin_k; k < chunk_stop_k; ++k) {
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        fills.step_volume = 0.0f;
+        fills.step_has_fill = 0.0f;
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
@@ -5062,6 +5554,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 daily[output + 0] = day_end;
                 daily[output + 1] = day_min;
                 daily[output + 2] = day_dd;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+                daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+#endif
                 daily[output + 3] = fills.day_volume;
                 daily[output + 4] = day_has_fill;
                 daily[output + 5] = day_min_balance;
@@ -5077,6 +5576,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             day_end = 0.0f;
             day_min = INFINITY;
             day_dd = 0.0f;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+            raw_strategy_day_dd = 0.0f;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+            raw_strategy_day_end = 0.0f;
+            raw_strategy_day_min = INFINITY;
+#endif
             fills.day_volume = 0.0f;
             day_has_fill = 0.0f;
             day_min_balance = INFINITY;
@@ -5120,10 +5626,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+            T + 1,
+#endif
 #endif
             int(b), k, C, false, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_order_slippage_pct,
+            max_realized_loss_pct, market_orders_allowed,
+            market_order_slippage_pct,
             market_order_near_touch_threshold,
             long_hsl_panic_market, long_hsl_equity_before_fills,
             &short_side.hsl, tm_multicoin_side_has_position(short_side, C)
@@ -5147,10 +5657,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+            T + 1,
+#endif
 #endif
             int(b), k, C, true, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_order_slippage_pct,
+            max_realized_loss_pct, market_orders_allowed,
+            market_order_slippage_pct,
             market_order_near_touch_threshold,
             short_hsl_panic_market, short_hsl_equity_before_fills,
             &long_side.hsl, tm_multicoin_side_has_position(long_side, C)
@@ -5192,24 +5706,69 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_config.n_positions, short_side.max_tradable_seen
             );
         const bool long_can_generate = alive
+            && long_config.twel > 0.0f
             && long_effective_n_positions > 0
             && long_side.max_tradable_seen > 0 && past_activation_guard;
         const bool short_can_generate = alive
+            && short_config.twel > 0.0f
             && short_effective_n_positions > 0
             && short_side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started
             || long_can_generate || short_can_generate;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        if (alive && !post_fill_balance_depleted && past_activation_guard) {
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, long_coin_overrides,
+                k, C, long_effective_n_positions, false, long_config.twel, 24);
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, short_coin_overrides,
+                k, C, short_effective_n_positions, true, short_config.twel, 24);
+        }
+#endif
+
+        // Observe current HSL before its consumers construct the next orders.
+#if !PASSIVBOT_HSL_DISABLED
+        const float hsl_equity = joint_portfolio_equity(
+            account,
+            accumulate_tm_multicoin_side_unrealized_pnl(
+                long_side, bars, coin_settings, k, C, false, 0.0f),
+            accumulate_tm_multicoin_side_unrealized_pnl(
+                short_side, bars, coin_settings, k, C, true, 0.0f)
+        );
+        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
+            || (any_fill && hsl_equity <= liquidation_floor);
+        // Held positions have valid valuation candles; unavailable tails are unheld.
+        // Missing held-position prices were rejected before this bar's fills.
+        bool can_sample_hsl = (long_can_generate || short_can_generate)
+            && alive && (joint_portfolio_can_generate(
+                account, hsl_equity, liquidation_floor)
+                || hsl_mark_terminal_observation_eligible(
+                    account.balance, hsl_equity, liquidation_floor,
+                    hsl_report_at_fill_boundary));
+        const bool long_hsl_ema_eligible =
+            long_side.hsl.enabled && !long_side.hsl.halted;
+        const bool short_hsl_ema_eligible =
+            short_side.hsl.enabled && !short_side.hsl.halted;
+        if (can_sample_hsl) {
+            bool hsl_valid = update_tm_multicoin_dual_side_hsl(
+                long_side, long_config, long_effective_n_positions,
+                short_side, short_config, short_effective_n_positions,
+                account, bars, coin_settings,
+                long_coin_overrides, short_coin_overrides, k, C,
+                starting_balance, interval_ms
+            );
+            if (!hsl_valid) {
+                scalars[int(b) * FUSED_SCALAR_COLS + 9] = fmin(
+                    hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C),
+                    hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C));
+                return;
+            }
+        }
+
+#endif
 
         const bool long_has_position =
             tm_multicoin_side_has_position(long_side, C);
         const bool short_has_position =
             tm_multicoin_side_has_position(short_side, C);
-        if (long_has_position || short_has_position) {
-            min_cost_exact_open_uncertain = true;
-        }
-        float min_cost_balance_lower =
-            min_cost_exact_open_uncertain
-            ? 0.0f : liquidation_floor;
         int long_hsl_mode = long_config.coin_hsl_mode ? 0
             : hsl_mode(
                 long_side.hsl,
@@ -5220,33 +5779,6 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_side.hsl,
                 short_has_position
             );
-        if (filter_by_min_effective_cost
-            && !min_cost_exact_open_uncertain
-            && (
-                (long_can_generate
-                    && multicoin_min_cost_rejection_possible(
-                        long_side.psize, long_side.coin_hsl,
-                        long_config.coin_hsl_mode, long_hsl_mode,
-                        long_config.twel, long_config.allowance_pct,
-                        long_config.initial_qty_pct,
-                        bars, coin_settings, long_coin_overrides, 24, 25, 6,
-                        k, C, long_effective_n_positions,
-                        min_cost_balance_lower
-                    ))
-                || (short_can_generate
-                    && multicoin_min_cost_rejection_possible(
-                        short_side.psize, short_side.coin_hsl,
-                        short_config.coin_hsl_mode, short_hsl_mode,
-                        short_config.twel, short_config.allowance_pct,
-                        short_config.initial_qty_pct,
-                        bars, coin_settings, short_coin_overrides, 24, 25, 6,
-                        k, C, short_effective_n_positions,
-                        min_cost_balance_lower
-                    ))
-            )) {
-            min_cost_exact_open_uncertain = true;
-            min_cost_balance_lower = 0.0f;
-        }
         ulong long_one_way_selection_blocked_mask = 0ul;
         ulong short_one_way_selection_blocked_mask = 0ul;
         ulong long_one_way_order_blocked_mask = 0ul;
@@ -5260,7 +5792,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 long_effective_n_positions,
                 short_effective_n_positions,
                 long_can_generate, short_can_generate,
-                filter_by_min_effective_cost, min_cost_balance_lower,
+                filter_by_min_effective_cost, account.balance,
                 long_one_way_selection_blocked_mask,
                 short_one_way_selection_blocked_mask,
                 long_one_way_order_blocked_mask,
@@ -5308,10 +5840,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             update_tm_multicoin_side_selection(
                 long_side, long_config, bars, coin_settings,
                 long_coin_overrides, k, C, false,
-                any_fill || min_cost_exact_open_uncertain,
+                any_fill,
                 long_effective_n_positions, score_hysteresis,
                 long_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost, min_cost_balance_lower
+                filter_by_min_effective_cost, account.balance
             );
             generate_tm_multicoin_side_orders(
                 long_side, long_config, account,
@@ -5331,10 +5863,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             update_tm_multicoin_side_selection(
                 short_side, short_config, bars, coin_settings,
                 short_coin_overrides, k, C, true,
-                any_fill || min_cost_exact_open_uncertain,
+                any_fill,
                 short_effective_n_positions, score_hysteresis,
                 short_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost, min_cost_balance_lower
+                filter_by_min_effective_cost, account.balance
             );
             generate_tm_multicoin_side_orders(
                 short_side, short_config, account,
@@ -5350,10 +5882,18 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
-        if (filter_by_min_effective_cost
-            && (long_can_generate || short_can_generate)) {
-            min_cost_exact_open_uncertain = true;
+
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        if (loss_gate_enabled && (long_can_generate || short_can_generate)
+            && !apply_tm_multicoin_close_admission(
+                long_can_generate ? &long_side : nullptr,
+                short_can_generate ? &short_side : nullptr,
+                account, bars, fill_ticks, coin_settings,
+                k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -5.0f;
+            return;
         }
+#endif
 
         float forced_delist_equity = account.balance;
         forced_delist_equity =
@@ -5382,7 +5922,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 float gap = float(k) - last_fill_k;
                 int bin = clamp(
                     int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale),
-                    0, 127
+                    0, GAP_BINS - 1
                 );
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
                 const float gap_hours = gap * interval_ms / 3600000.0f;
@@ -5396,6 +5936,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         float long_unrealized = 0.0f;
         float short_unrealized = 0.0f;
         float net_position_cost = 0.0f;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        float rms_exposure[2] = {0.0f, 0.0f};
+        float rms_position[2] = {0.0f, 0.0f};
+#endif
         for (int c = 0; c < C; ++c) {
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
@@ -5408,6 +5952,12 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 && isfinite(close);
             float c_mult = coin_settings[coin_offset + 4];
             if (long_side.psize[c] > 0.0f) {
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                const float e = long_side.psize[c] * long_side.pprice[c] * c_mult / account.balance;
+                rms_exposure[0] += e;
+                rms_position[0] += exposure_rms_position_moment(e,
+                    exposure_rms.base_wel[0 * MAX_COINS + c], long_config.twel);
+#endif
                 net_position_cost += long_side.psize[c]
                     * long_side.pprice[c] * c_mult;
                 if (mark_valid) {
@@ -5416,6 +5966,12 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 }
             }
             if (short_side.psize[c] > 0.0f) {
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                const float e = short_side.psize[c] * short_side.pprice[c] * c_mult / account.balance;
+                rms_exposure[1] += e;
+                rms_position[1] += exposure_rms_position_moment(e,
+                    exposure_rms.base_wel[1 * MAX_COINS + c], short_config.twel);
+#endif
                 net_position_cost -= short_side.psize[c]
                     * short_side.pprice[c] * c_mult;
                 if (mark_valid) {
@@ -5427,41 +5983,77 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         float equity = joint_portfolio_equity(
             account, long_unrealized, short_unrealized
         );
-        // Held positions have valid valuation candles; unavailable tails are unheld.
-        // Missing held-position prices were rejected before this bar's fills.
-        bool can_sample_hsl = (long_can_generate || short_can_generate)
-            && alive
-            && joint_portfolio_can_generate(
-                account, equity, liquidation_floor
+#if !PASSIVBOT_HSL_DISABLED
+        if (can_sample_hsl && (joint_portfolio_can_generate(
+                account, equity, liquidation_floor) || hsl_mark_terminal_observation_eligible(
+                    account.balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
+            int long_tier = record_multicoin_hsl_report(
+                long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions,
+                long_hsl_ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+                , long_side.hsl_report_ema_max
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                , long_side.hsl_ema_tail
+#endif
             );
-        bool hsl_validation_failed = false;
-        if (can_sample_hsl) {
-            bool sample_enabled = false;
-            int sampled_tier = 0;
-            bool hsl_valid = update_tm_multicoin_dual_side_hsl(
-                long_side, long_config, long_effective_n_positions,
-                short_side, short_config, short_effective_n_positions,
-                account, bars, coin_settings,
-                long_coin_overrides, short_coin_overrides, k, day_index, C,
-                starting_balance, interval_ms,
-                sample_enabled, sampled_tier
+            int short_tier = record_multicoin_hsl_report(
+                short_side.hsl, short_side.coin_hsl, C, short_effective_n_positions,
+                short_hsl_ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+                , short_side.hsl_report_ema_max
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                , short_side.hsl_ema_tail
+#endif
             );
-            if (!hsl_valid) {
-                account.balance = 0.0f;
-                alive = false;
-                liquidation_day = day_index;
-                hsl_validation_failed = true;
-            } else if (sample_enabled) {
-                hsl_tier_samples_total += 1.0f;
-
-
-                hsl_tier_samples_red +=
-                    sampled_tier == 3 ? 1.0f : 0.0f;
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            portfolio_hsl_report_ema_max = fmax(portfolio_hsl_report_ema_max, fmax(
+                observed_multicoin_hsl_ema(long_side.hsl, long_side.coin_hsl,
+                    C, long_effective_n_positions),
+                observed_multicoin_hsl_ema(short_side.hsl, short_side.coin_hsl,
+                    C, short_effective_n_positions)));
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+            portfolio_hsl_ema_tail.last_sample = NAN;
+#endif
+            update_hsl_drawdown_ema_tail_stats(portfolio_hsl_ema_tail, fmax(
+                observed_multicoin_hsl_ema(long_side.hsl, long_side.coin_hsl,
+                    C, long_effective_n_positions),
+                observed_multicoin_hsl_ema(short_side.hsl, short_side.coin_hsl,
+                    C, short_effective_n_positions)));
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+            hsl_ema_tail_samples[(int(b) * 3) * T + k] = long_side.hsl_ema_tail.last_sample;
+            hsl_ema_tail_samples[(int(b) * 3 + 1) * T + k] = short_side.hsl_ema_tail.last_sample;
+            hsl_ema_tail_samples[(int(b) * 3 + 2) * T + k] = portfolio_hsl_ema_tail.last_sample;
+#endif
+#endif
+            if (long_tier >= 0 || short_tier >= 0) {
+                record_hsl_time_observation(hsl_time, float(k), max(long_tier, short_tier));
             }
         }
-
-        bool active = equity_started && (alive || hsl_validation_failed);
+#endif
+        bool active = equity_started && alive;
         if (active) {
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            update_hsl_strategy_equity_stats(long_side.hsl_strategy_eq,
+                starting_balance + account.realized_pnl_long + long_unrealized, day_index);
+            update_hsl_strategy_equity_stats(short_side.hsl_strategy_eq,
+                starting_balance + account.realized_pnl_short + short_unrealized, day_index);
+#endif
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED || defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
+            const float raw_strategy_equity = starting_balance + account.realized_pnl_long
+                + account.realized_pnl_short + long_unrealized + short_unrealized;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+            update_raw_strategy_risk(
+                raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+            raw_strategy_day_end = raw_strategy_equity;
+            raw_strategy_day_min = fmin(raw_strategy_day_min, raw_strategy_equity);
+#endif
+#endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
             if (any_fill) {
@@ -5477,11 +6069,23 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 || equity <= liquidation_floor;
             float effective_equity = liquidated
                 ? liquidation_floor : equity;
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+            record_weighted_equity_sample(
+                weighted_equity_samples, int(b), T, k - int(first_eq_k),
+#if PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
+                raw_strategy_equity,
+#else
+                0.0f,
+#endif
+                effective_equity);
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
             if (recovery_stride > 0 && recovery_start_k < 0) {
                 recovery_start_k = k;
+                // Strategy recovery retains factual PnL/UPNL, including losses
+                // below the separately clamped account liquidation floor.
                 recovery_samples[int(b) * recovery_sample_count]
-                    = effective_equity;
+                    = raw_strategy_equity;
             } else if (recovery_stride > 0) {
                 const int recovery_elapsed = k - recovery_start_k;
                 const bool recovery_terminal = liquidated || k == stop_k - 1;
@@ -5495,7 +6099,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                     if (sample_index < recovery_sample_count) {
                         recovery_samples[
                             int(b) * recovery_sample_count + sample_index
-                        ] = effective_equity;
+                        ] = raw_strategy_equity;
                     }
                 }
             }
@@ -5548,6 +6152,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             day_touched = true;
             if (!liquidated) {
                 float twe_abs = fabs(net_position_cost / account.balance);
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                record_exposure_rms(exposure_rms, rms_exposure[0], rms_exposure[1],
+                    rms_position[0], rms_position[1], long_config.twel, short_config.twel);
+#endif
                 total_wallet_exposure_samples += 1.0f;
                 total_wallet_exposure_mean += (
                     twe_abs - total_wallet_exposure_mean
@@ -5557,21 +6165,109 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 );
             }
             if (liquidated) {
+#if !PASSIVBOT_HSL_DISABLED
+                // Normal bar reports are at k+1 in CPU time; a terminal fill
+                // is at k. Our relative clock therefore uses k or k-1.
+                advance_hsl_time_observation(
+                    hsl_time, float(k) - (hsl_report_at_fill_boundary ? 1.0f : 0.0f));
+#endif
                 alive = false;
                 liquidation_day = day_index;
             }
         }
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples[int(b) * T + k] = float2(
+            fills.step_volume, fills.step_has_fill
+        );
+#endif
         if (!(valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = fmin(
+                    hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C),
+                    hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C));
             return;
         }
 }
+
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    if (chunk_stop_k < stop_k) {
+        replay_states[b].common.side = long_side;
+        replay_states[b].short_side = short_side;
+        replay_states[b].common.account = account;
+        replay_states[b].common.fills = fills;
+        replay_states[b].common.fills_active_days_count = fills_active_days_count;
+        replay_states[b].common.last_active_fill_day = last_active_fill_day;
+        replay_states[b].common.alive = alive;
+        replay_states[b].common.equity_started = equity_started;
+        replay_states[b].common.run_peak = run_peak;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+        replay_states[b].common.raw_strategy_peak = raw_strategy_peak;
+        replay_states[b].common.raw_strategy_day_dd = raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        replay_states[b].common.raw_strategy_day_end = raw_strategy_day_end;
+        replay_states[b].common.raw_strategy_day_min = raw_strategy_day_min;
+#endif
+        replay_states[b].common.max_dd = max_dd;
+        replay_states[b].common.total_wallet_exposure_max = total_wallet_exposure_max;
+        replay_states[b].common.total_wallet_exposure_mean = total_wallet_exposure_mean;
+        replay_states[b].common.total_wallet_exposure_samples = total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        replay_states[b].common.exposure_rms = exposure_rms;
+#endif
+        replay_states[b].common.first_fill_k = first_fill_k;
+        replay_states[b].common.last_fill_k = last_fill_k;
+        replay_states[b].common.gap_max_min = gap_max_min;
+        replay_states[b].common.gap_sum_squared_hours = gap_sum_squared_hours;
+        replay_states[b].common.last_high_k = last_high_k;
+        replay_states[b].common.recovery_max_min = recovery_max_min;
+        replay_states[b].common.account_peak = account_peak;
+        replay_states[b].common.account_peak_k = account_peak_k;
+        replay_states[b].common.account_recovery_max_min = account_recovery_max_min;
+        replay_states[b].common.first_eq_k = first_eq_k;
+        replay_states[b].common.last_eq_k = last_eq_k;
+        replay_states[b].common.liquidation_day = liquidation_day;
+#if !PASSIVBOT_HSL_DISABLED
+        replay_states[b].common.hsl_time = hsl_time;
+#endif
+        replay_states[b].common.current_day = current_day;
+        replay_states[b].common.day_touched = day_touched;
+        replay_states[b].common.day_end = day_end;
+        replay_states[b].common.day_min = day_min;
+        replay_states[b].common.day_dd = day_dd;
+        replay_states[b].common.day_has_fill = day_has_fill;
+        replay_states[b].common.day_min_balance = day_min_balance;
+        replay_states[b].common.day_start_balance = day_start_balance;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        replay_states[b].common.btc_risk = btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        replay_states[b].common.equity_balance_diff_state = equity_balance_diff_state;
+#endif
+#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
+        replay_states[b].common.recovery_start_k = recovery_start_k;
+#endif
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        replay_states[b].portfolio_hsl_report_ema_max = portfolio_hsl_report_ema_max;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+        replay_states[b].portfolio_hsl_ema_tail = portfolio_hsl_ema_tail;
+#endif
+        return;
+    }
+#endif
 
     if (day_touched && current_day >= 0 && current_day < D) {
         int output = (int(b) * D + current_day) * DAILY_COLS;
         daily[output + 0] = day_end;
         daily[output + 1] = day_min;
         daily[output + 2] = day_dd;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+        daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+#endif
         daily[output + 3] = fills.day_volume;
         daily[output + 4] = day_has_fill;
         daily[output + 5] = day_min_balance;
@@ -5655,8 +6351,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         ? last_high_k * interval_ms : -1.0f;
     scalars[scalar_offset + 7] = first_eq_k >= 0.0f
         ? first_eq_k * interval_ms : -1.0f;
+    #if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Candle indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 8] = last_eq_k;
+#else
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
+#endif
     scalars[scalar_offset + 9] = float(liquidation_day);
     scalars[scalar_offset + 10] = account.balance;
     scalars[scalar_offset + 11] = long_total_size;
@@ -5690,9 +6391,16 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         fills.pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = fills.held_count;
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 2] = fills.held_sum_sq_min *
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 3] =
+        hsl_drawdown_ema_mean_worst_1pct(portfolio_hsl_ema_tail);
+#endif
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 2] = fills.held_sum_sq_min *
         (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 1] = gap_sum_squared_hours;
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 1] = gap_sum_squared_hours;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    finish_exposure_rms(exposure_rms, scalars, scalar_offset + FUSED_SCALAR_COLS - 7);
+#endif
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k
@@ -5702,18 +6410,28 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     if (long_config.coin_hsl_mode) {
         write_dual_side_coin_hsl_outputs(
             long_side.coin_hsl, short_side.coin_hsl, C,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
-            last_eq_k, scalars, scalar_offset + 32
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
+            hsl_report_end_step(hsl_time), scalars, scalar_offset + 32
         );
     } else {
         write_dual_side_hsl_outputs(
             long_side.hsl, short_side.hsl,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
-            last_eq_k, scalars, scalar_offset + 32
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
+            hsl_report_end_step(hsl_time), scalars, scalar_offset + 32
         );
     }
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    scalars[scalar_offset + 17] = 0.0f;
+    scalars[scalar_offset + 55] = 0.0f;
+    scalars[scalar_offset + 56] = 0.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    scalars[scalar_offset + 17] = portfolio_hsl_report_ema_max;
+    scalars[scalar_offset + 55] = long_side.hsl_report_ema_max;
+    scalars[scalar_offset + 56] = short_side.hsl_report_ema_max;
+#endif
+#endif
     scalars[scalar_offset + 57] = tm_multicoin_entry_initial_balance_pct(
         short_config, short_coin_overrides,
         wallet_exposure_denominator_n_positions(
@@ -5795,14 +6513,32 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     device float2* unstuck_pnl_values,
     device int2* unstuck_pnl_indices,
 #endif
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    device char* replay_state_bytes,
+    constant int* replay_range,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device TrailingMartingaleMulticoinFusedReplayState* replay_states = reinterpret_cast<device TrailingMartingaleMulticoinFusedReplayState*>(replay_state_bytes);
+#endif
     passivbot_trailing_martingale_multicoin_fused_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
@@ -5822,69 +6558,27 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+        weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+        hsl_ema_tail_samples,
+#endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         unstuck_pnl_values, unstuck_pnl_indices,
+#endif
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+        replay_states, replay_range,
 #endif
         b
     );
 }
 
-// A temporal dispatch boundary preserves the entire candidate replay. Output
-// finalization runs only at its actual end step; partial chunks never become scores.
-#if PASSIVBOT_TM_MULTICOIN_CHUNKED
-struct TrailingMartingaleMulticoinReplayState {
-    TrailingMartingaleMulticoinSideState side;
-    JointPortfolioAccount account;
-    TrailingMartingaleMulticoinFillState fills;
-    float fills_active_days_count;
-    int last_active_fill_day;
-    bool alive;
-    bool equity_started;
-    bool min_cost_exact_open_uncertain;
-    float run_peak;
-    float max_dd;
-    float total_wallet_exposure_max;
-    float total_wallet_exposure_mean;
-    float total_wallet_exposure_samples;
-    float first_fill_k;
-    float last_fill_k;
-    float gap_max_min;
-    float gap_sum_squared_hours;
-    float last_high_k;
-    float recovery_max_min;
-    float account_peak;
-    float account_peak_k;
-    float account_recovery_max_min;
-    float first_eq_k;
-    float last_eq_k;
-    int liquidation_day;
-    float hsl_tier_samples_total;
 
-
-    float hsl_tier_samples_red;
-    int current_day;
-    bool day_touched;
-    float day_end;
-    float day_min;
-    float day_dd;
-    float day_has_fill;
-    float day_min_balance;
-    float day_start_balance;
-#if PASSIVBOT_BTC_RISK_ENABLED
-    BtcRiskState btc_risk;
-#endif
-#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
-    EquityBalanceDiffState equity_balance_diff_state;
-#endif
-#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
-    int recovery_start_k;
-#endif
-};
-kernel void passivbot_tm_multicoin_replay_state_bytes(device uint* result) {
-    result[0] = sizeof(TrailingMartingaleMulticoinReplayState);
-}
-#endif
 
 inline void passivbot_trailing_martingale_multicoin_impl(
     constant float* bars,
@@ -5917,6 +6611,15 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -5948,6 +6651,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
     init_entry_interval_output(
         entry_interval_stats, entry_interval_counts, b
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+        , T + 1
+#endif
     );
 #endif
     const int stop_k = clamp(end_steps[b], 1, T - 1);
@@ -5974,7 +6680,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_pct = config.allowance_pct;
-    TrailingMartingaleMulticoinSideState side;
+    PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, side, 0);
     init_trailing_martingale_multicoin_side_state(
         side, config, coin_settings, coin_overrides, C
     );
@@ -5985,7 +6691,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
-    const bool loss_gate_enabled = run_settings[5] < 1.0f;
+    const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        && run_settings[5] < 1.0f;
     const float max_realized_loss_pct = run_settings[5];
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
@@ -5993,7 +6700,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float market_order_near_touch_threshold =
         fmax(run_settings[10], 0.0f);
     const bool filter_by_min_effective_cost = run_settings[11] > 0.5f;
-    const float log_bin_scale = 127.0f / log(4000001.0f);
+    const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     thread float* psize = side.psize;
     thread float* pprice = side.pprice;
@@ -6025,13 +6732,23 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     int last_active_fill_day = -1;
     bool alive = true;
     bool equity_started = false;
-    bool min_cost_exact_open_uncertain = false;
     thread int& max_tradable_seen = side.max_tradable_seen;
     float run_peak = -INFINITY;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+    float raw_strategy_peak = -INFINITY;
+    float raw_strategy_day_dd = 0.0f;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+    float raw_strategy_day_end = 0.0f;
+    float raw_strategy_day_min = INFINITY;
+#endif
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    ExposureRmsState exposure_rms = init_exposure_rms();
+#endif
     thread float& held_max_min = fills.held_max_min;
     thread float& held_sum_min = fills.held_sum_min;
     thread float& held_sum_sq_min = fills.held_sum_sq_min;
@@ -6060,10 +6777,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     int recovery_start_k = -1;
 #endif
     int liquidation_day = -1;
-    float hsl_tier_samples_total = 0.0f;
-
-
-    float hsl_tier_samples_red = 0.0f;
+    HslTimeObservation hsl_time = init_hsl_time_observation();
 
     int current_day = 0;
     bool day_touched = false;
@@ -6085,12 +6799,22 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         last_active_fill_day = replay_states[b].last_active_fill_day;
         alive = replay_states[b].alive;
         equity_started = replay_states[b].equity_started;
-        min_cost_exact_open_uncertain = replay_states[b].min_cost_exact_open_uncertain;
         run_peak = replay_states[b].run_peak;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+        raw_strategy_peak = replay_states[b].raw_strategy_peak;
+        raw_strategy_day_dd = replay_states[b].raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        raw_strategy_day_end = replay_states[b].raw_strategy_day_end;
+        raw_strategy_day_min = replay_states[b].raw_strategy_day_min;
+#endif
         max_dd = replay_states[b].max_dd;
         total_wallet_exposure_max = replay_states[b].total_wallet_exposure_max;
         total_wallet_exposure_mean = replay_states[b].total_wallet_exposure_mean;
         total_wallet_exposure_samples = replay_states[b].total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        exposure_rms = replay_states[b].exposure_rms;
+#endif
         first_fill_k = replay_states[b].first_fill_k;
         last_fill_k = replay_states[b].last_fill_k;
         gap_max_min = replay_states[b].gap_max_min;
@@ -6103,10 +6827,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         first_eq_k = replay_states[b].first_eq_k;
         last_eq_k = replay_states[b].last_eq_k;
         liquidation_day = replay_states[b].liquidation_day;
-        hsl_tier_samples_total = replay_states[b].hsl_tier_samples_total;
-
-
-        hsl_tier_samples_red = replay_states[b].hsl_tier_samples_red;
+#if !PASSIVBOT_HSL_DISABLED
+        hsl_time = replay_states[b].hsl_time;
+#endif
         current_day = replay_states[b].current_day;
         day_touched = replay_states[b].day_touched;
         day_end = replay_states[b].day_end;
@@ -6128,12 +6851,25 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
 
     bind_hsl_multicoin_hsl(side.hsl, side.coin_hsl,
-        hsl_trees, hsl_rows, int(b) * (C + 1), C, begin_k <= 1, true);
+        hsl_trees, hsl_rows, int(b) * (C + 1), C, begin_k <= 1, true
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+        , int(run_settings[12])
+#endif
+    );
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    HslReplayContext factual_context = hsl_replay_context(
+        bars, coin_settings, C, COIN_COLS, run_settings[13] > 0.5f);
+    attach_hsl_replay_side(factual_context, side.hsl, side.coin_hsl, 0, short_side);
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     if (scalars[int(b) * SCALAR_COLS + 9] == -3.0f) return;
     bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
 #endif
     for (int k = begin_k; k < chunk_stop_k; ++k) {
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        fills.step_volume = 0.0f;
+        fills.step_has_fill = 0.0f;
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
@@ -6152,6 +6888,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 daily[output + 0] = day_end;
                 daily[output + 1] = day_min;
                 daily[output + 2] = day_dd;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+                daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+                daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+#endif
                 daily[output + 3] = day_volume;
                 daily[output + 4] = day_has_fill;
                 daily[output + 5] = day_min_balance;
@@ -6167,6 +6910,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             day_end = 0.0f;
             day_min = INFINITY;
             day_dd = 0.0f;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+            raw_strategy_day_dd = 0.0f;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+            raw_strategy_day_end = 0.0f;
+            raw_strategy_day_min = INFINITY;
+#endif
             day_volume = 0.0f;
             day_has_fill = 0.0f;
             day_min_balance = INFINITY;
@@ -6194,10 +6944,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             coin_settings, coin_overrides, coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
+#if PASSIVBOT_ENTRY_INTERVAL_EXACT
+            T + 1,
+#endif
 #endif
             int(b), k, C, short_side, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_order_slippage_pct,
+            max_realized_loss_pct, market_orders_allowed,
+            market_order_slippage_pct,
             market_order_near_touch_threshold,
             hsl_panic_market, hsl_equity_before_fills
         );
@@ -6221,28 +6975,87 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         const bool can_generate = alive && effective_n_positions > 0
             && max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started || can_generate;
-        bool has_hsl_position = tm_multicoin_side_has_position(side, C);
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        if (alive && !post_fill_balance_depleted && past_activation_guard)
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, coin_overrides,
+                k, C, effective_n_positions, short_side, twel, 24);
+#endif
+        // Refresh HSL after fills, before forager selection and next orders.
+#if !PASSIVBOT_HSL_DISABLED
+        const bool hsl_ema_eligible = hsl.enabled && !hsl.halted;
+        const float hsl_unrealized = accumulate_tm_multicoin_side_unrealized_pnl(
+            side, bars, coin_settings, k, C, short_side, 0.0f
+        );
+        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
+            || (any_fill && balance + hsl_unrealized <= liquidation_floor);
+        const bool has_hsl_position = tm_multicoin_side_has_position(side, C);
+        const bool hsl_has_blocking_orders = tm_multicoin_side_has_blocking_orders(
+            side, config, bars, coin_settings, k, C
+        );
+#endif
+#if !PASSIVBOT_HSL_DISABLED
+        // Held positions have valid valuation candles; unavailable tails are unheld.
+        // Missing held-position prices were rejected before this bar's fills.
+        if (can_generate && alive && balance > 0.0f
+            && (balance + hsl_unrealized > liquidation_floor
+                || hsl_mark_terminal_observation_eligible(
+                    balance, balance + hsl_unrealized, liquidation_floor,
+                    hsl_report_at_fill_boundary))) {
+            if (coin_hsl_mode) {
+                for (int c = 0; c < C; ++c) {
+                    int coin_offset = c * COIN_COLS;
+                    int bar_offset = (k * C + c) * 4;
+                    float close = bars[bar_offset + 2];
+                    bool valid = k >= int(coin_settings[coin_offset + 6])
+                        && k <= int(coin_settings[coin_offset + 7])
+                        && finite_positive(close);
+                    bool mark_valid = k >= int(coin_settings[coin_offset + 6])
+                        && k <= int(coin_settings[coin_offset + 7])
+                        && isfinite(close);
+                    float coin_hsl_unrealized = psize[c] > 0.0f
+                        && mark_valid
+                        ? psize[c] * coin_settings[coin_offset + 4]
+                            * (short_side ? pprice[c] - close : close - pprice[c])
+                        : 0.0f;
+                    int coin_mode = hsl_mode(coin_hsl[c], psize[c] > 0.0f);
+                    bool coin_hsl_has_blocking_orders = valid && coin_mode != 3 && (
+                        entry_qty[c] > 0.0f || close_qty[c] > 0.0f
+                            || secondary_close_qty[c] > 0.0f
+                    );
+                    coin_hsl[c].slot_count = float(effective_n_positions);
+                    coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
+                        config.scale_hsl_budget, config.twel, effective_n_positions,
+                        coin_overrides, c, 24, 25, config.allowance_pct
+                    );
+                    update_coin_hsl(
+                        coin_hsl[c], balance,
+                        coin_realized_pnl[c], coin_hsl_unrealized,
+                        psize[c] > 0.0f, position_last_fill_k[c], k
+                    );
+                }
+            } else {
+                update_hsl(
+                    hsl, balance, starting_balance,
+                    realized_pnl_cumsum_last, hsl_unrealized,
+                    has_hsl_position, hsl_has_blocking_orders,
+                    float(k), interval_ms
+                );
+            }
+
+        }
+#endif
+#if !PASSIVBOT_HSL_DISABLED
+        if (!valid_hsl_multicoin_hsl(hsl, coin_hsl, C)) {
+            scalars[int(b) * SCALAR_COLS + 9] = hsl_multicoin_failure_status(side.hsl, side.coin_hsl, C);
+            return;
+        }
+#endif
+#if PASSIVBOT_HSL_DISABLED
+        int current_hsl_mode = 0;
+#else
         int current_hsl_mode = coin_hsl_mode
             ? 0 : hsl_mode(hsl, has_hsl_position);
-        // A proxy position or filter rejection can leave exact Rust in a
-        // different open/cash state. Once that can happen,
-        // never reuse the equity-derived liquidation floor as a cash bound,
-        // even if the proxy later looks flat.
-        if (has_hsl_position) min_cost_exact_open_uncertain = true;
-        float min_cost_balance_lower = min_cost_exact_open_uncertain
-            ? 0.0f : liquidation_floor;
-        if (filter_by_min_effective_cost && can_generate
-            && !min_cost_exact_open_uncertain
-            && multicoin_min_cost_rejection_possible(
-                side.psize, side.coin_hsl, config.coin_hsl_mode,
-                current_hsl_mode, config.twel, config.allowance_pct, config.initial_qty_pct,
-                bars, coin_settings, coin_overrides, 24, 25, 6,
-                k, C, effective_n_positions,
-                min_cost_balance_lower
-            )) {
-            min_cost_exact_open_uncertain = true;
-            min_cost_balance_lower = 0.0f;
-        }
+#endif
 
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         if (!refresh_unstuck_pnl_window(account)) {
@@ -6254,10 +7067,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             update_tm_multicoin_side_selection(
                 side, config, bars, coin_settings, coin_overrides,
                 k, C, short_side,
-                any_fill || min_cost_exact_open_uncertain,
+                any_fill,
                 effective_n_positions,
                 score_hysteresis, 0ul,
-                filter_by_min_effective_cost, min_cost_balance_lower
+                filter_by_min_effective_cost, account.balance
             );
 
             generate_tm_multicoin_side_orders(
@@ -6273,10 +7086,17 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 market_order_slippage_pct,
                 -2, 0ul
             );
-            if (filter_by_min_effective_cost) {
-                min_cost_exact_open_uncertain = true;
-            }
         }
+
+#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        if (loss_gate_enabled && can_generate && !apply_tm_multicoin_close_admission(
+                short_side ? nullptr : &side, short_side ? &side : nullptr,
+                account, bars, fill_ticks, coin_settings,
+                k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
+            scalars[int(b) * SCALAR_COLS + 9] = -5.0f;
+            return;
+        }
+#endif
 
         float forced_delist_equity =
             accumulate_tm_multicoin_side_unrealized_pnl(
@@ -6297,7 +7117,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             if (last_fill_k >= 0.0f) {
                 float gap = float(k) - last_fill_k;
                 int bin = clamp(
-                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, 127
+                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, GAP_BINS - 1
                 );
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
                 const float gap_hours = gap * interval_ms / 3600000.0f;
@@ -6310,20 +7130,24 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
         float unrealized = 0.0f;
         float position_cost = 0.0f;
-        bool has_open_position = false;
-        bool has_blocking_orders = false;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        float rms_exposure[2] = {0.0f, 0.0f};
+        float rms_position[2] = {0.0f, 0.0f};
+#endif
         for (int c = 0; c < C; ++c) {
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
             float close = bars[bar_offset + 2];
-            bool valid = k >= int(coin_settings[coin_offset + 6])
-                && k <= int(coin_settings[coin_offset + 7])
-                && finite_positive(close);
             bool mark_valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
                 && isfinite(close);
             if (psize[c] > 0.0f) {
-                has_open_position = true;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                const float e = psize[c] * pprice[c] * coin_settings[coin_offset + 4] / balance;
+                rms_exposure[int(short_side)] += e;
+                rms_position[int(short_side)] += exposure_rms_position_moment(e,
+                    exposure_rms.base_wel[int(short_side) * MAX_COINS + c], twel);
+#endif
                 position_cost += psize[c] * pprice[c]
                     * coin_settings[coin_offset + 4];
                 if (mark_valid) {
@@ -6331,110 +7155,62 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         * (short_side ? pprice[c] - close : close - pprice[c]);
                 }
             }
-            int coin_mode = coin_hsl_mode
-                ? hsl_mode(coin_hsl[c], psize[c] > 0.0f)
-                : current_hsl_mode;
-            if (valid && coin_mode != 3 && (
-                    entry_qty[c] > 0.0f || close_qty[c] > 0.0f
-                        || secondary_close_qty[c] > 0.0f
-                )) {
-                has_blocking_orders = true;
-            }
         }
         float equity = balance + unrealized;
-        // Held positions have valid valuation candles; unavailable tails are unheld.
-        // Missing held-position prices were rejected before this bar's fills.
-        if (can_generate && alive
-            && balance > 0.0f && equity > liquidation_floor) {
-            int sampled_hsl_tier = 0;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-            float sampled_hsl_drawdown_ema = 0.0f;
+#if !PASSIVBOT_HSL_DISABLED
+        if (can_generate && alive && balance > 0.0f
+            && (equity > liquidation_floor || hsl_mark_terminal_observation_eligible(
+                balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
+            int sampled_tier = record_multicoin_hsl_report(
+                hsl, coin_hsl, C, effective_n_positions, hsl_ema_eligible
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+                , side.hsl_report_ema_max
 #endif
-            bool hsl_sample_enabled = !coin_hsl_mode && hsl.enabled;
-            const bool hsl_strategy_eq_sample_enabled = coin_hsl_mode
-                ? false : hsl.enabled && !hsl.halted;
-            if (coin_hsl_mode) {
-                for (int c = 0; c < C; ++c) {
-                    hsl_sample_enabled = hsl_sample_enabled || coin_hsl[c].enabled;
-                    int coin_offset = c * COIN_COLS;
-                    int bar_offset = (k * C + c) * 4;
-                    float close = bars[bar_offset + 2];
-                    bool valid = k >= int(coin_settings[coin_offset + 6])
-                        && k <= int(coin_settings[coin_offset + 7])
-                        && finite_positive(close);
-                    bool mark_valid = k >= int(coin_settings[coin_offset + 6])
-                        && k <= int(coin_settings[coin_offset + 7])
-                        && isfinite(close);
-                    float coin_unrealized = psize[c] > 0.0f
-                        && mark_valid
-                        ? psize[c] * coin_settings[coin_offset + 4]
-                            * (short_side ? pprice[c] - close : close - pprice[c])
-                        : 0.0f;
-                    int coin_mode = hsl_mode(coin_hsl[c], psize[c] > 0.0f);
-                    bool coin_has_blocking_orders = valid && coin_mode != 3 && (
-                        entry_qty[c] > 0.0f || close_qty[c] > 0.0f
-                            || secondary_close_qty[c] > 0.0f
-                    );
-                    coin_hsl[c].slot_count = float(effective_n_positions);
-                    coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
-                        config.scale_hsl_budget, config.twel, effective_n_positions,
-                        coin_overrides, c, 24, 25, config.allowance_pct
-                    );
-                    update_hsl(
-                        coin_hsl[c], balance, starting_balance,
-                        coin_realized_pnl[c], coin_unrealized,
-                        psize[c] > 0.0f, coin_has_blocking_orders,
-                        float(k), interval_ms
-                    );
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                    if (coin_hsl[c].enabled) {
-                        sampled_hsl_drawdown_ema = fmax(
-                            sampled_hsl_drawdown_ema,
-                            fabs(coin_hsl[c].drawdown_ema)
-                        );
-                    }
+                , side.hsl_ema_tail
 #endif
-                    sampled_hsl_tier = max(sampled_hsl_tier, coin_hsl[c].tier);
-                }
-            } else {
-                update_hsl(
-                    hsl, balance, starting_balance,
-                    realized_pnl_cumsum_last, unrealized,
-                    has_open_position, has_blocking_orders,
-                    float(k), interval_ms
-                );
-                sampled_hsl_tier = hsl.tier;
+            );
+#if PASSIVBOT_HSL_FACTUAL_ONLY && PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            side.hsl_portfolio_report_ema_max = fmax(side.hsl_portfolio_report_ema_max,
+                observed_multicoin_hsl_ema(hsl, coin_hsl, C, effective_n_positions));
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                sampled_hsl_drawdown_ema = fabs(hsl.drawdown_ema);
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+            side.hsl_portfolio_ema_tail.last_sample = NAN;
 #endif
-            }
-            if ((coin_hsl_mode && effective_n_positions > 0 && hsl_sample_enabled)
-                || hsl_strategy_eq_sample_enabled) {
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
-                update_hsl_drawdown_ema_tail_stats(
-                    side.hsl_ema_tail, sampled_hsl_drawdown_ema
-                );
+            update_hsl_drawdown_ema_tail_stats(side.hsl_portfolio_ema_tail,
+                observed_multicoin_hsl_ema(hsl, coin_hsl, C, effective_n_positions));
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+            hsl_ema_tail_samples[int(b) * 2 * T + k] = side.hsl_ema_tail.last_sample;
+            hsl_ema_tail_samples[(int(b) * 2 + 1) * T + k]
+                = side.hsl_portfolio_ema_tail.last_sample;
 #endif
-                update_hsl_strategy_equity_stats(
-                    side.hsl_strategy_eq,
-                    starting_balance + realized_pnl_cumsum_last + unrealized,
-                    day_index
-                );
-            }
-            if (hsl_sample_enabled) {
-                hsl_tier_samples_total += 1.0f;
-
-
-                hsl_tier_samples_red += sampled_hsl_tier == 3 ? 1.0f : 0.0f;
-            }
-            if (coin_hsl_mode) {
-                for (int c = 0; c < C; ++c) {
-                }
-            } else {
+#endif
+            if (sampled_tier >= 0) {
+                record_hsl_time_observation(hsl_time, float(k), sampled_tier);
             }
         }
+#endif
         bool active = equity_started && alive;
         if (active) {
+            // Ordinary side-equity statistics share the factual equity clock,
+            // independent of HSL mode, permission and protection specialization.
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            update_hsl_strategy_equity_stats(side.hsl_strategy_eq,
+                starting_balance + realized_pnl_cumsum_last + unrealized, day_index);
+#endif
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED || PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED || PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED || defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
+            const float raw_strategy_equity = starting_balance
+                + realized_pnl_cumsum_last + unrealized;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+            update_raw_strategy_risk(
+                raw_strategy_equity, raw_strategy_peak, raw_strategy_day_dd);
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+            raw_strategy_day_end = raw_strategy_equity;
+            raw_strategy_day_min = fmin(raw_strategy_day_min, raw_strategy_equity);
+#endif
+#endif
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
             if (any_fill) {
@@ -6448,11 +7224,23 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             }
             bool liquidated = balance <= 0.0f || equity <= liquidation_floor;
             float effective_equity = liquidated ? liquidation_floor : equity;
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+            record_weighted_equity_sample(
+                weighted_equity_samples, int(b), T, k - int(first_eq_k),
+#if PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
+                raw_strategy_equity,
+#else
+                0.0f,
+#endif
+                effective_equity);
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
             if (recovery_stride > 0 && recovery_start_k < 0) {
                 recovery_start_k = k;
+                // Strategy recovery retains factual PnL/UPNL, including losses
+                // below the separately clamped account liquidation floor.
                 recovery_samples[int(b) * recovery_sample_count]
-                    = effective_equity;
+                    = raw_strategy_equity;
             } else if (recovery_stride > 0) {
                 const int recovery_elapsed = k - recovery_start_k;
                 const bool recovery_terminal = liquidated || k == stop_k - 1;
@@ -6466,7 +7254,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     if (sample_index < recovery_sample_count) {
                         recovery_samples[
                             int(b) * recovery_sample_count + sample_index
-                        ] = effective_equity;
+                        ] = raw_strategy_equity;
                     }
                 }
             }
@@ -6516,6 +7304,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             day_touched = true;
             if (!liquidated) {
                 float twe_abs = position_cost / balance;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+                record_exposure_rms(exposure_rms, rms_exposure[0], rms_exposure[1],
+                    rms_position[0], rms_position[1], short_side ? 0.0f : twel, short_side ? twel : 0.0f);
+#endif
                 total_wallet_exposure_samples += 1.0f;
                 total_wallet_exposure_mean += (
                     twe_abs - total_wallet_exposure_mean
@@ -6525,12 +7317,23 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 );
             }
             if (liquidated) {
+#if !PASSIVBOT_HSL_DISABLED
+                // Normal bar reports are at k+1 in CPU time; a terminal fill
+                // is at k. Our relative clock therefore uses k or k-1.
+                advance_hsl_time_observation(
+                    hsl_time, float(k) - (hsl_report_at_fill_boundary ? 1.0f : 0.0f));
+#endif
                 alive = false;
                 liquidation_day = day_index;
             }
         }
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples[int(b) * T + k] = float2(
+            fills.step_volume, fills.step_has_fill
+        );
+#endif
         if (!(valid_hsl_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
-            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+            scalars[int(b) * SCALAR_COLS + 9] = hsl_multicoin_failure_status(side.hsl, side.coin_hsl, C);
             return;
         }
 }
@@ -6544,12 +7347,22 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         replay_states[b].last_active_fill_day = last_active_fill_day;
         replay_states[b].alive = alive;
         replay_states[b].equity_started = equity_started;
-        replay_states[b].min_cost_exact_open_uncertain = min_cost_exact_open_uncertain;
         replay_states[b].run_peak = run_peak;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+        replay_states[b].raw_strategy_peak = raw_strategy_peak;
+        replay_states[b].raw_strategy_day_dd = raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        replay_states[b].raw_strategy_day_end = raw_strategy_day_end;
+        replay_states[b].raw_strategy_day_min = raw_strategy_day_min;
+#endif
         replay_states[b].max_dd = max_dd;
         replay_states[b].total_wallet_exposure_max = total_wallet_exposure_max;
         replay_states[b].total_wallet_exposure_mean = total_wallet_exposure_mean;
         replay_states[b].total_wallet_exposure_samples = total_wallet_exposure_samples;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+        replay_states[b].exposure_rms = exposure_rms;
+#endif
         replay_states[b].first_fill_k = first_fill_k;
         replay_states[b].last_fill_k = last_fill_k;
         replay_states[b].gap_max_min = gap_max_min;
@@ -6562,10 +7375,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         replay_states[b].first_eq_k = first_eq_k;
         replay_states[b].last_eq_k = last_eq_k;
         replay_states[b].liquidation_day = liquidation_day;
-        replay_states[b].hsl_tier_samples_total = hsl_tier_samples_total;
-
-
-        replay_states[b].hsl_tier_samples_red = hsl_tier_samples_red;
+#if !PASSIVBOT_HSL_DISABLED
+        replay_states[b].hsl_time = hsl_time;
+#endif
         replay_states[b].current_day = current_day;
         replay_states[b].day_touched = day_touched;
         replay_states[b].day_end = day_end;
@@ -6592,6 +7404,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         daily[output + 0] = day_end;
         daily[output + 1] = day_min;
         daily[output + 2] = day_dd;
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+        daily[output + DAILY_COLS - 1] = raw_strategy_day_dd;
+#endif
+#if PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED
+        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 2] = raw_strategy_day_end;
+        daily[output + DAILY_COLS - PASSIVBOT_RAW_STRATEGY_RISK_ENABLED - 1] = raw_strategy_day_min;
+#endif
         daily[output + 3] = day_volume;
         daily[output + 4] = day_has_fill;
         daily[output + 5] = day_min_balance;
@@ -6643,8 +7462,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         ? last_high_k * interval_ms : -1.0f;
     scalars[scalar_offset + 7] = first_eq_k >= 0.0f
         ? first_eq_k * interval_ms : -1.0f;
+    #if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Candle indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 8] = last_eq_k;
+#else
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
+#endif
     scalars[scalar_offset + 9] = float(liquidation_day);
     scalars[scalar_offset + 10] = balance;
     scalars[scalar_offset + 11] = short_side ? 0.0f : total_size;
@@ -6679,9 +7503,16 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
-    scalars[scalar_offset + SCALAR_COLS - 2] = held_sum_sq_min *
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 3] =
+        hsl_drawdown_ema_mean_worst_1pct(side.hsl_portfolio_ema_tail);
+#endif
+    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 2] = held_sum_sq_min *
         (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
-    scalars[scalar_offset + SCALAR_COLS - 1] = gap_sum_squared_hours;
+    scalars[scalar_offset + SCALAR_COLS - 7 * PASSIVBOT_EXPOSURE_RMS_ENABLED - 1] = gap_sum_squared_hours;
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+    finish_exposure_rms(exposure_rms, scalars, scalar_offset + SCALAR_COLS - 7);
+#endif
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k
@@ -6691,27 +7522,43 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     if (coin_hsl_mode) {
         write_one_side_coin_hsl_outputs(
             coin_hsl, C, short_side,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
-            last_eq_k,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
+            hsl_report_end_step(hsl_time),
             scalars,
             scalar_offset + 32
         );
     } else {
         write_one_side_hsl_outputs(
             hsl, short_side,
-            hsl_tier_samples_total,
-            hsl_tier_samples_red,
-            last_eq_k,
+            hsl_time.observed_steps,
+            hsl_time.red_steps,
+            hsl_report_end_step(hsl_time),
             scalars,
             scalar_offset + 32
         );
     }
-    scalars[scalar_offset + 57] = short_side ? 0.0f
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Native metric maxima use the same bar observations as CPU analysis,
+    // independently of controller refreshes at fill/terminal boundaries.
+    scalars[scalar_offset + 17] = 0.0f;
+    scalars[scalar_offset + 55] = 0.0f;
+    scalars[scalar_offset + 56] = 0.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    scalars[scalar_offset + 17] = side.hsl_portfolio_report_ema_max;
+    scalars[scalar_offset + 55] = short_side ? 0.0f : side.hsl_report_ema_max;
+    scalars[scalar_offset + 56] = short_side ? side.hsl_report_ema_max : 0.0f;
+#endif
+#endif
+    // The untraded opposite side is a constant curve over the same equity
+    // horizon. Strict new-peak recovery includes that entire unrecovered tail.
+    const float inactive_recovery_ms = first_eq_k >= 0.0f && last_eq_k >= 0.0f
+        ? fmax(last_eq_k - first_eq_k, 0.0f) * interval_ms : 0.0f;
+    scalars[scalar_offset + 57] = short_side ? inactive_recovery_ms
         : hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms;
     scalars[scalar_offset + 58] = short_side
         ? hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms
-        : 0.0f;
+        : inactive_recovery_ms;
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     scalars[scalar_offset + 59] = short_side ? 0.0f
         : hsl_drawdown_ema_mean_worst_1pct(side.hsl_ema_tail);
@@ -6769,6 +7616,15 @@ kernel void passivbot_trailing_martingale_multicoin(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -6776,12 +7632,21 @@ kernel void passivbot_trailing_martingale_multicoin(
     device int2* unstuck_pnl_indices,
 #endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
-    device TrailingMartingaleMulticoinReplayState* replay_states,
+    device char* replay_state_bytes,
     constant int* replay_range,
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device TrailingMartingaleMulticoinReplayState* replay_states = reinterpret_cast<device TrailingMartingaleMulticoinReplayState*>(replay_state_bytes);
+#endif
+#ifdef PASSIVBOT_MULTICOIN_SHORT_SIDE
+    const bool short_side = PASSIVBOT_MULTICOIN_SHORT_SIDE != 0;
+#else
     const bool short_side = run_settings[3] > 0.5f;
+#endif
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
@@ -6800,6 +7665,15 @@ kernel void passivbot_trailing_martingale_multicoin(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+        weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+        hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -6843,6 +7717,15 @@ kernel void passivbot_trailing_martingale_multicoin_long(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+    device float2* volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+    device float* weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+    device float* hsl_ema_tail_samples,
+#endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
@@ -6850,11 +7733,16 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     device int2* unstuck_pnl_indices,
 #endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
-    device TrailingMartingaleMulticoinReplayState* replay_states,
+    device char* replay_state_bytes,
     constant int* replay_range,
 #endif
     uint b [[thread_position_in_grid]]
 ) {
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    // Metal kernel buffers cannot expose structs containing thread pointers.
+    // Rebind transient HSL context pointers after loading each temporal chunk.
+    device TrailingMartingaleMulticoinReplayState* replay_states = reinterpret_cast<device TrailingMartingaleMulticoinReplayState*>(replay_state_bytes);
+#endif
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
@@ -6873,6 +7761,15 @@ kernel void passivbot_trailing_martingale_multicoin_long(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
+        volume_samples,
+#endif
+#if PASSIVBOT_WEIGHTED_EQUITY_COLS > 0
+        weighted_equity_samples,
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_SAMPLES_ENABLED
+        hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0

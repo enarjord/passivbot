@@ -10,6 +10,40 @@ from __future__ import annotations
 import math
 
 import torch
+from config.ew import validate_ew_half_life_days
+from config.metrics import EXPOSURE_RMS_METRICS
+from optimization.gpu.entry_intervals import ENTRY_INTERVAL_NAMES
+from optimization.gpu.exponential_equity import exponential_equity_metrics
+
+from optimization.gpu.model import GAP_BINS
+
+
+def _backtest_completion_ratio(out, run, data, has_equity):
+    """Coverage from the authoritative native candle endpoint, without epsilon.
+
+    Legacy replay retains its timestamp contract. Native replay must not infer
+    full coverage from alive status: an explicit end step can truncate a survivor.
+    """
+    origin = int(data["ts0"])
+    count = int(data["n"])
+    interval = int(run.interval_ms)
+    start = int(run.requested_start_ts_ms)
+    requested_end = getattr(run, "requested_end_ts_ms", None)
+    end = int(requested_end) if requested_end is not None else origin + count * interval
+    if end <= start:
+        return has_equity.to(torch.float64)
+    if "last_eq_step" in out:
+        step = out["last_eq_step"]
+        if (step.dtype not in {torch.int32, torch.int64} or step.shape != has_equity.shape
+                or bool(((step < -1) | (step >= count)).any())):
+            raise RuntimeError("Invalid native GPU completion candle endpoint")
+        covered = (origin + (step.to(torch.int64) + 1) * interval).clamp(max=end)
+        ratio = (covered - start).to(torch.float64) / max(end - start, 1)
+        return torch.where(has_equity & (step >= 0), ratio.clamp(0.0, 1.0), torch.zeros_like(ratio))
+    last = out["last_eq_ts"]
+    covered = torch.minimum(torch.full_like(last, float(end)), last + float(interval))
+    ratio = ((covered - float(start)) / max(end - start, 1)).clamp(0.0, 1.0)
+    return torch.where(has_equity, ratio, torch.zeros_like(last))
 
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
@@ -19,6 +53,10 @@ from optimization.gpu.metric_registry import (
     HARD_STOP_LIFECYCLE_METRICS,
     HARD_STOP_PANIC_LOSS_METRICS,
     HARD_STOP_PROXY_METRICS,
+    WEIGHTED_RAW_EQUITY_METRICS,
+    WEIGHTED_ACCOUNT_EQUITY_METRICS,
+    RAW_STRATEGY_EQUITY_METRICS,
+    EXPONENTIAL_EQUITY_METRICS,
     reject_exact_only_gpu_metric_names,
 )
 
@@ -93,6 +131,7 @@ BTC_ACCOUNT_METRICS = frozenset(_BTC_ACCOUNT_METRICS | _BTC_PER_EXPOSURE_METRICS
 # still emit the normal complete metric set; this list governs only which
 # metrics may guide Metal screening or proxy-side limits.
 _GPU_PROXY_METRIC_CANDIDATES = (
+    *sorted(EXPONENTIAL_EQUITY_METRICS),
     "adg_rolling_hmean_strategy_eq",
     "adg_strategy_eq",
     "adg_strategy_eq_w",
@@ -182,6 +221,13 @@ _GPU_PROXY_METRIC_CANDIDATES = (
     "strategy_eq_underwater_pct_mean",
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
+    "total_wallet_exposure_rms_long",
+    "total_wallet_exposure_rms_short",
+    "total_wallet_exposure_rms_gross",
+    "total_wallet_exposure_utilization_rms_long",
+    "total_wallet_exposure_utilization_rms_short",
+    "position_exposure_utilization_rms_long",
+    "position_exposure_utilization_rms_short",
     "volume_pct_per_day_avg",
     "volume_pct_per_day_avg_w",
     *_USD_STRATEGY_EQ_ALIASES,
@@ -201,8 +247,10 @@ SUPPORTED_METRICS = tuple(
 assert not set(SUPPORTED_METRICS) & GPU_EXACT_ONLY_METRICS
 
 
-def validate_gpu_metric_names(metric_names) -> frozenset[str]:
-    """Return canonical proxy metrics, rejecting exact-only names before aliases."""
+def validate_gpu_metric_names(
+    metric_names, *, native_replay: bool = True, device: str | None = None,
+) -> frozenset[str]:
+    """Validate the metric surface and optional replay/device capabilities."""
 
     from config.metrics import canonicalize_metric_name
 
@@ -213,6 +261,12 @@ def validate_gpu_metric_names(metric_names) -> frozenset[str]:
         raise ValueError(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
+        )
+    rms = sorted(canonical & EXPOSURE_RMS_METRICS)
+    if rms and (not native_replay or device not in {None, "cuda"}):
+        raise ValueError(
+            f"Exposure RMS metrics {rms} require native NVIDIA/CUDA replay; "
+            "use native CUDA replay or CPU backtests"
         )
     return canonical
 
@@ -258,7 +312,7 @@ _FILL_ACTIVITY_METRICS = {
 }
 
 
-_GAP_HIST_BINS = 128
+_GAP_HIST_BINS = GAP_BINS
 _GAP_HIST_LOG_MAX = math.log(4_000_001.0)
 _FILL_GAP_HISTOGRAM_METRICS = {
     "fills_gap_mean_hours",
@@ -349,17 +403,24 @@ def _directional_pnl_metrics(out: dict) -> dict:
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
 # this minimizing proxy optimistic.
 _GAP_HIST_EDGE_MARGIN = 1.220703125e-4
-_GAP_HIST_UPPER_STEPS = tuple(
-    max(
-        0,
-        math.ceil(
-            (math.exp((index + 1) * _GAP_HIST_LOG_MAX / 127.0) - 1.0)
-            * (1.0 + _GAP_HIST_EDGE_MARGIN)
+
+
+def _histogram_upper_steps(bins):
+    return tuple(
+        max(
+            0,
+            math.ceil(
+                (math.exp((index + 1) * _GAP_HIST_LOG_MAX / (bins - 1)) - 1.0)
+                * (1.0 + _GAP_HIST_EDGE_MARGIN)
+            ) - 1,
         )
-        - 1,
-    )
-    for index in range(_GAP_HIST_BINS - 1)
-) + (float("inf"),)
+        for index in range(bins - 1)
+    ) + (float("inf"),)
+
+
+_GAP_HIST_UPPER_STEPS = _histogram_upper_steps(_GAP_HIST_BINS)
+# Initial-entry intervals retain their independent 128-bin shader/output ABI.
+_ENTRY_INTERVAL_HIST_UPPER_STEPS = _histogram_upper_steps(128)
 
 
 def _daily_series_masks(day_min_eq):
@@ -769,7 +830,7 @@ def _weighted_percentile(values, counts, percentile):
 
 
 def _fill_gap_metrics(out, run):
-    """Reduce streamed gap moments and conservative percentile log bins."""
+    """Reduce per-fill gaps from candle gaps, fill multiplicity and log bins."""
 
     interval_ms = max(float(run.interval_ms), 1.0)
     first_eq_ts = out["first_eq_ts"].to(torch.float64)
@@ -806,6 +867,23 @@ def _fill_gap_metrics(out, run):
     gap_counts = torch.where(
         has_fill.unsqueeze(1), gap_counts, torch.zeros_like(gap_counts)
     )
+    fill_count = out["fill_count"].to(torch.float64)
+    rounded_fill_count = torch.round(fill_count)
+    if bool((
+        ~torch.isfinite(fill_count)
+        | (fill_count < 0.0)
+        | ((fill_count - rounded_fill_count).abs() > 1.0e-4)
+    ).any()):
+        raise RuntimeError("GPU fill-gap output contains an invalid fill count")
+    # Replay records one gap per filled candle. Rust's percentile population
+    # includes every fill, so additional fills in a candle contribute zero gaps.
+    # Recover that multiplicity from existing summaries without exporting fills
+    # or changing the time-weighted moment, for which zero gaps add nothing.
+    filled_candles = gap_counts.sum(dim=1) + has_fill.to(torch.long)
+    extra_fills = rounded_fill_count.to(torch.long) - filled_candles
+    if bool((has_fill & (extra_fills < 0)).any()):
+        raise RuntimeError("GPU fill-gap histogram exceeds the fill count")
+    extra_fills = torch.where(has_fill, extra_fills, torch.zeros_like(extra_fills))
 
     lead_hours = torch.where(
         has_fill,
@@ -825,8 +903,8 @@ def _fill_gap_metrics(out, run):
         ),
         dim=1,
     )
-    values = torch.cat((gap_values, boundary_values), dim=1)
-    counts = torch.cat((gap_counts, boundary_counts), dim=1)
+    values = torch.cat((gap_values, boundary_values, torch.zeros_like(span_ms).unsqueeze(1)), dim=1)
+    counts = torch.cat((gap_counts, boundary_counts, extra_fills.unsqueeze(1)), dim=1)
     total = counts.sum(dim=1).clamp(min=1).to(torch.float64)
     weighted_values = torch.where(counts > 0, values, torch.zeros_like(values))
     mean = (weighted_values * counts.to(values.dtype)).sum(dim=1) / total
@@ -869,6 +947,13 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
         )
     if strategy_kind != "trailing_martingale":
         return {name: zeros for name in ENTRY_INTERVAL_METRICS}
+
+    if "entry_interval_native_metrics" in out:
+        values = out["entry_interval_native_metrics"]
+        if (values.dtype not in (torch.float32, torch.float64) or values.shape != (len(zeros), len(ENTRY_INTERVAL_NAMES))
+                or not bool(torch.isfinite(values).all()) or bool((values < 0).any())):
+            raise RuntimeError("native entry interval compact metrics are malformed")
+        return {name: values[:, column] for column, name in enumerate(ENTRY_INTERVAL_NAMES)}
 
     required = (
         "entry_interval_sum_steps",
@@ -920,7 +1005,7 @@ def _entry_interval_metrics(out, run, strategy_kind: str):
 
     interval_hours = max(float(run.interval_ms), 1.0) / 3_600_000.0
     upper_steps = torch.tensor(
-        _GAP_HIST_UPPER_STEPS,
+        _ENTRY_INTERVAL_HIST_UPPER_STEPS,
         dtype=torch.float64,
         device=total_steps.device,
     ).unsqueeze(0)
@@ -1147,8 +1232,9 @@ def _weighted_daily_series_metrics(
                 )
                 # Daily volume cannot distinguish fills before and after an
                 # intra-day cutoff. Exclude that ambiguous boundary day rather
-                # than admitting pre-cutoff fills; exact Rust validation owns
-                # the partial-day contribution.
+                # than admitting pre-cutoff fills. This approximation is retained
+                # only for legacy raw daily summaries; shared replay supplies its
+                # compact GPU-reduced weighted-volume metric instead.
                 volume_fill_mask = day_has_fill & subset & complete_day_mask
             fill_days = volume_fill_mask.sum(dim=1)
             value = torch.where(
@@ -1481,6 +1567,14 @@ def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
     restarts_short = value("hsl_restarts_short")
     triggers = triggers_long + triggers_short
     restarts = restarts_long + restarts_short
+    # Unified events use one owner lane in the packed shader output, but that
+    # lane is storage ownership, not a directional event. Keep portfolio totals.
+    if "hsl_unified_scope" in out:
+        unified = out["hsl_unified_scope"].to(device=reference.device, dtype=torch.bool)
+        triggers_long = torch.where(unified, zeros, triggers_long)
+        triggers_short = torch.where(unified, zeros, triggers_short)
+        restarts_long = torch.where(unified, zeros, restarts_long)
+        restarts_short = torch.where(unified, zeros, restarts_short)
     sample_count = value("hsl_tier_samples_total")
     first_eq_ts = out["first_eq_ts"].to(torch.float64)
     last_eq_ts = out["last_eq_ts"].to(torch.float64)
@@ -1554,8 +1648,10 @@ def _hard_stop_panic_loss_metrics(out: dict, run) -> dict:
 
     drawdown_count = value("hsl_panic_loss_drawdown_count")
     return {
+        # Rust Report::metrics normalizes all panic-close loss, including an
+        # unfinished halt. The legacy halt-loss scalar has no kernel producer.
         "hard_stop_halt_to_restart_equity_loss_pct": value(
-            "hsl_halt_to_restart_equity_loss"
+            "hsl_panic_close_loss_sum"
         )
         / max(float(run.starting_balance), 1.0e-12),
         "hard_stop_panic_close_loss_sum": value("hsl_panic_close_loss_sum"),
@@ -1575,7 +1671,7 @@ def _hard_stop_panic_loss_metrics(out: dict, run) -> dict:
 
 
 def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
-    """Reduce per-side HSL EMA maxima using Rust's public metric contract."""
+    """Expose observed native scopes; preserve legacy directional reductions."""
 
     required = {
         "hsl_drawdown_ema_max_long",
@@ -1589,7 +1685,11 @@ def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
     long_ema_max = out["hsl_drawdown_ema_max_long"].to(torch.float64)
     short_ema_max = out["hsl_drawdown_ema_max_short"].to(torch.float64)
     return {
-        "drawdown_worst_ema_strategy_eq": long_ema_max.maximum(short_ema_max),
+        "drawdown_worst_ema_strategy_eq": (
+            out["hsl_drawdown_ema_max_portfolio"].to(torch.float64)
+            if "hsl_drawdown_ema_max_portfolio" in out
+            else long_ema_max.maximum(short_ema_max)
+        ),
         "drawdown_worst_ema_strategy_eq_long": long_ema_max,
         "drawdown_worst_ema_strategy_eq_short": short_ema_max,
     }
@@ -1626,7 +1726,7 @@ def _hard_stop_raw_drawdown_metrics(out: dict) -> dict:
 
 
 def _hard_stop_ema_tail_metrics(out: dict) -> dict:
-    """Reduce bounded per-side HSL EMA tails using Rust's public contract."""
+    """Expose observed portfolio and side EMA tails from compact replay outputs."""
 
     required = {
         "hsl_drawdown_ema_mean_worst_1pct_long",
@@ -1640,7 +1740,13 @@ def _hard_stop_ema_tail_metrics(out: dict) -> dict:
     long_tail = out["hsl_drawdown_ema_mean_worst_1pct_long"].to(torch.float64)
     short_tail = out["hsl_drawdown_ema_mean_worst_1pct_short"].to(torch.float64)
     return {
-        "drawdown_worst_mean_1pct_ema_strategy_eq": long_tail.maximum(short_tail),
+        # Retained directional single-coin proxy lacks a joint observation.
+        # Native service requires the portfolio output at its replay boundary.
+        "drawdown_worst_mean_1pct_ema_strategy_eq": (
+            out["hsl_drawdown_ema_mean_worst_1pct_portfolio"].to(torch.float64)
+            if "hsl_drawdown_ema_mean_worst_1pct_portfolio" in out
+            else long_tail.maximum(short_tail)
+        ),
         "drawdown_worst_mean_1pct_ema_strategy_eq_long": long_tail,
         "drawdown_worst_mean_1pct_ema_strategy_eq_short": short_tail,
     }
@@ -2025,6 +2131,23 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     day_has_fill = out["day_has_fill"]
     active = _daily_series_masks(out["day_min_eq"])
     requested = set(SUPPORTED_METRICS if needed is None else needed)
+    if needed is None and data.get("ew_half_life_days") is None:
+        requested -= EXPONENTIAL_EQUITY_METRICS
+    exponential_requested = requested & EXPONENTIAL_EQUITY_METRICS
+    exponential_metrics = {}
+    if exponential_requested:
+        if validate_ew_half_life_days(data.get("ew_half_life_days")) is None:
+            raise ValueError("Exponential metrics require backtest.ew_half_life_days")
+        supplied = exponential_requested & set(out)
+        for name in supplied:
+            value = out[name].to(torch.float64)
+            if value.shape != (day_end_eq.shape[0],) or bool(torch.isnan(value).any()):
+                raise RuntimeError(f"EW supplied metric {name} is malformed")
+            exponential_metrics[name] = value
+        missing = exponential_requested - supplied
+        if missing:
+            reduced, _metadata = exponential_equity_metrics(out, run, data, missing)
+            exponential_metrics.update(reduced)
     requested_sources = (
         requested
         | {
@@ -2047,6 +2170,20 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     daily_min_changes, min_change_mask = _pct_change(day_min_eq, active)
     sharpe, sortino = _sharpe_sortino(daily_min_changes, min_change_mask, adg)
     expected_shortfall = _mean_worst_one_pct_abs(daily_min_changes, min_change_mask)
+    supplied_account_sources = {
+        _USD_STRATEGY_EQ_ALIASES[name]
+        for name in WEIGHTED_ACCOUNT_EQUITY_METRICS if name in out
+    }
+    account_sources_needed = {
+        _USD_STRATEGY_EQ_ALIASES[name]
+        for name in WEIGHTED_ACCOUNT_EQUITY_METRICS if name in requested
+    } | {
+        source for name, (source, _side) in _USD_PER_EXPOSURE_METRICS.items()
+        if name in requested
+    }
+    weighted_requested = requested_sources - supplied_account_sources - (
+        (set(out) & WEIGHTED_RAW_EQUITY_METRICS) - account_sources_needed
+    )
     weighted_metrics = _weighted_strategy_eq_metrics(
         day_end_eq,
         day_min_eq,
@@ -2056,22 +2193,32 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         out["last_eq_ts"],
         data["ts0"],
         run.interval_ms,
-        requested_sources,
-    )
+        weighted_requested,
+    ) if weighted_requested & WEIGHTED_STRATEGY_EQ_METRICS else {}
     weighted_daily_series_metrics = {}
-    if requested & WEIGHTED_DAILY_SERIES_METRICS:
-        weighted_daily_series_metrics = _weighted_daily_series_metrics(
-            day_end_eq,
-            day_volume,
-            day_has_fill,
-            active,
-            out["fill_count"],
-            out["last_fill_ts"],
-            out["first_eq_ts"],
-            out["last_eq_ts"],
-            data["ts0"],
-            run.interval_ms,
-            requested,
+    weighted_daily_requested = requested & WEIGHTED_DAILY_SERIES_METRICS
+    if "volume_pct_per_day_avg_w" in requested and "volume_pct_per_day_avg_w" in out:
+        # Shared replay reduced exact fill suffixes on device. Daily summaries
+        # remain sufficient for the other weighted equity-series families.
+        weighted_daily_requested = weighted_daily_requested - {"volume_pct_per_day_avg_w"}
+        weighted_daily_series_metrics["volume_pct_per_day_avg_w"] = out[
+            "volume_pct_per_day_avg_w"
+        ].to(torch.float64)
+    if weighted_daily_requested:
+        weighted_daily_series_metrics.update(
+            _weighted_daily_series_metrics(
+                day_end_eq,
+                day_volume,
+                day_has_fill,
+                active,
+                out["fill_count"],
+                out["last_fill_ts"],
+                out["first_eq_ts"],
+                out["last_eq_ts"],
+                data["ts0"],
+                run.interval_ms,
+                weighted_daily_requested,
+            )
         )
     shape_metric_names = {
         "equity_choppiness_usd",
@@ -2270,20 +2417,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         else {}
     )
 
-    requested_start = float(run.requested_start_ts_ms)
-    first_timestamp = data["ts0"]
-    candle_count = int(data["n"])
-    requested_end = float(first_timestamp + candle_count * run.interval_ms)
-    covered_end = torch.minimum(
-        torch.full_like(last_eq_ts, requested_end),
-        last_eq_ts + float(max(1, run.interval_ms // 60_000) * 60_000),
-    )
-    requested_span = max(requested_end - requested_start, 1.0)
-    completion = torch.where(
-        has_equity,
-        ((covered_end - requested_start) / requested_span).clamp(0.0, 1.0),
-        torch.zeros_like(last_eq_ts),
-    )
+    completion = _backtest_completion_ratio(out, run, data, has_equity)
 
     objectives = {
         "adg_pnl": adg_pnl,
@@ -2363,7 +2497,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
                 if name in requested
             }
         )
-    for name in ("total_wallet_exposure_max", "total_wallet_exposure_mean"):
+    for name in ("total_wallet_exposure_max", "total_wallet_exposure_mean", *EXPOSURE_RMS_METRICS):
         if name in requested:
             objectives[name] = out[name].to(torch.float64)
     exposure_ratio_denominators = {
@@ -2393,6 +2527,12 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(weighted_pnl_metrics)
     objectives.update(equity_shape_metrics)
     objectives.update(gain_quality_metrics)
+    # The retained internal strategy names also back USD account aliases. Install
+    # corrected account reductions before exposure normalization/aliasing; raw
+    # strategy results replace only their explicit names after those consumers.
+    for name in WEIGHTED_ACCOUNT_EQUITY_METRICS:
+        if name in out:
+            objectives[_USD_STRATEGY_EQ_ALIASES[name]] = out[name].to(torch.float64)
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
         if name not in requested:
             continue
@@ -2407,7 +2547,77 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     for alias, source in _USD_STRATEGY_EQ_ALIASES.items():
         if alias in requested:
             objectives[alias] = objectives[source]
+    for name in WEIGHTED_RAW_EQUITY_METRICS:
+        if name in out:
+            objectives[name] = out[name].to(torch.float64)
+    # USD names retain account analysis above. Explicit strategy risk consumes
+    # the unclamped raw curve; these are distinct at liquidation.
+    if "raw_strategy_day_max_dd" in out:
+        raw_daily_dd = out["raw_strategy_day_max_dd"].to(torch.float64)
+        raw_daily_dd = torch.where(active, raw_daily_dd, torch.zeros_like(raw_daily_dd))
+        objectives["drawdown_worst_strategy_eq"] = raw_daily_dd.max(dim=1).values
+        objectives["drawdown_worst_mean_1pct_strategy_eq"] = (
+            _mean_worst_one_pct_largest(raw_daily_dd, active)
+        )
+        objectives["strategy_eq_underwater_pct_mean"] = (
+            raw_daily_dd.sum(dim=1) / active.sum(dim=1).clamp(min=1)
+        )
+    # Account aliases/exposure normalization above keep their account curve.
+    # Explicit strategy growth consumes independently captured raw daily equity.
+    if requested & RAW_STRATEGY_EQUITY_METRICS and "raw_strategy_day_end_eq" in out:
+        objectives.update(_raw_strategy_equity_metrics(out, requested))
     objectives.update(_btc_account_metrics(out, run, data, requested))
+    objectives.update(exponential_metrics)
     if needed is None:
         return objectives
     return {key: value for key, value in objectives.items() if key in requested}
+
+
+def _raw_strategy_equity_metrics(out, requested):
+    """Reduce factual raw daily closes/minima without a per-step history."""
+    names = (set(requested) & RAW_STRATEGY_EQUITY_METRICS) - EXPONENTIAL_EQUITY_METRICS
+    if not names:
+        return {}
+    ends = out["raw_strategy_day_end_eq"].to(torch.float64)
+    minima = out["raw_strategy_day_min_eq"].to(torch.float64)
+    active = torch.isfinite(minima)
+    result = {}
+    growth_names = names - {
+        "mdg_strategy_eq", "omega_ratio_strategy_eq", "expected_shortfall_1pct_strategy_eq",
+        "adg_rolling_hmean_strategy_eq", "adg_time_integrated_strategy_eq",
+        "positive_gain_participation_strategy_eq",
+    }
+    if growth_names:
+        adg = _smoothed_adg(ends, active)
+        if "adg_strategy_eq" in names:
+            result["adg_strategy_eq"] = adg
+    if names & {"mdg_strategy_eq", "omega_ratio_strategy_eq"}:
+        returns, return_mask = _pct_change(ends, active)
+        if "mdg_strategy_eq" in names:
+            result["mdg_strategy_eq"] = _masked_median(returns, return_mask)
+        if "omega_ratio_strategy_eq" in names:
+            result["omega_ratio_strategy_eq"] = _omega_ratio(returns, return_mask)
+    if names & {"sharpe_ratio_strategy_eq", "sortino_ratio_strategy_eq",
+                "expected_shortfall_1pct_strategy_eq"}:
+        changes, change_mask = _pct_change(minima, active)
+        if names & {"sharpe_ratio_strategy_eq", "sortino_ratio_strategy_eq"}:
+            sharpe, sortino = _sharpe_sortino(changes, change_mask, adg)
+            if "sharpe_ratio_strategy_eq" in names:
+                result["sharpe_ratio_strategy_eq"] = sharpe
+            if "sortino_ratio_strategy_eq" in names:
+                result["sortino_ratio_strategy_eq"] = sortino
+        if "expected_shortfall_1pct_strategy_eq" in names:
+            result["expected_shortfall_1pct_strategy_eq"] = _mean_worst_one_pct_abs(
+                changes, change_mask
+            )
+    if names & {"calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq"}:
+        dd = out["raw_strategy_day_max_dd"].to(torch.float64)
+        dd = torch.where(active, dd, torch.zeros_like(dd))
+        if "calmar_ratio_strategy_eq" in names:
+            result["calmar_ratio_strategy_eq"] = adg / dd.max(dim=1).values.clamp(min=1e-12)
+        if "sterling_ratio_strategy_eq" in names:
+            result["sterling_ratio_strategy_eq"] = adg / _mean_worst_one_pct_largest(
+                dd, active
+            ).clamp(min=1e-12)
+    result.update(_gain_quality_metrics(ends, active, names))
+    return result

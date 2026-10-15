@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "backtest_weighted_equity_reference.rs"]
+mod weighted_equity_reference;
+
 #[path = "backtest_hsl_analysis.rs"]
 mod hsl_analysis;
 #[path = "backtest_hsl_cache.rs"]
@@ -601,6 +605,7 @@ pub struct Backtest<'a> {
     last_increase_fill_timestamp_long: Vec<Option<u64>>,
     last_increase_fill_timestamp_short: Vec<Option<u64>>,
     pub total_wallet_exposures: Vec<f64>,
+    pub exposure_rms: crate::exposure_rms::ExposureRms,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
     debug_writer: Option<DebugOrderWriter>,
@@ -1620,14 +1625,6 @@ impl<'a> Backtest<'a> {
 
             sym.long.mode = mode_long;
             sym.short.mode = mode_short;
-            if self.hsl_enabled() {
-                let long = self.hsl_order_params(LONG, idx);
-                let short = self.hsl_order_params(SHORT, idx);
-                sym.long.bot_params.hsl_enabled = long.hsl_enabled;
-                sym.long.bot_params.hsl_panic_close_order_type = long.hsl_panic_close_order_type;
-                sym.short.bot_params.hsl_enabled = short.hsl_enabled;
-                sym.short.bot_params.hsl_panic_close_order_type = short.hsl_panic_close_order_type;
-            }
 
             sym.emas.m1.signed_unilateralness = self.unilateralness_at(idx, k);
             sym.unilateralness_warmup_spans = self.unilateralness_warmup_spans(idx, k);
@@ -2045,12 +2042,16 @@ impl<'a> Backtest<'a> {
                     let mut trackers = Vec::new();
                     for (bp, enabled) in [&pair.long, &pair.short].iter().zip(enabled) {
                         if *enabled
-                            && !trackers.iter().any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
+                            && !trackers
+                                .iter()
+                                .any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
                         {
                             trackers.push((
                                 bp.unilateralness_ema_span_1m,
-                                crate::unilateralness::RollingRms::new(bp.unilateralness_ema_span_1m)
-                                    .expect("validated unilateralness span"),
+                                crate::unilateralness::RollingRms::new(
+                                    bp.unilateralness_ema_span_1m,
+                                )
+                                .expect("validated unilateralness span"),
                             ));
                         }
                     }
@@ -2133,6 +2134,7 @@ impl<'a> Backtest<'a> {
             last_increase_fill_timestamp_long: vec![None; n_coins],
             last_increase_fill_timestamp_short: vec![None; n_coins],
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
+            exposure_rms: Default::default(),
             equity_tracking_active: false,
             debug_writer: if DEBUG_DUMP_ORDERS {
                 DebugOrderWriter::new_for_mode()
@@ -2880,8 +2882,26 @@ impl<'a> Backtest<'a> {
 
     fn record_total_wallet_exposure(&mut self) {
         // For analysis time series we record the net TWE (long + short, where short is negative).
-        let (_, _, twe_net) = self.compute_twe_components();
-        self.total_wallet_exposures.push(twe_net);
+        let limits = [
+            self.bot_params_master.long.total_wallet_exposure_limit,
+            self.bot_params_master.short.total_wallet_exposure_limit,
+        ];
+        let mut exposure = [0.0; 2];
+        let mut position_moments = [0.0; 2];
+        for (side, positions) in [&self.positions.long, &self.positions.short].iter().enumerate() {
+            for (idx, position) in positions.iter().enumerate() {
+                if position.size == 0.0 {
+                    continue;
+                }
+                let e = position.size.abs() * position.price
+                    * self.exchange_params_list[idx].c_mult / self.balance.usd_total_balance;
+                let wel = self.runtime_budget(idx, side).effective_wallet_exposure_limit;
+                exposure[side] += e;
+                position_moments[side] += crate::exposure_rms::position_moment(e, wel, limits[side]);
+            }
+        }
+        self.total_wallet_exposures.push(exposure[0] - exposure[1]);
+        self.exposure_rms.record_moments(exposure, position_moments, limits);
     }
 
     fn compute_twe_components(&self) -> (f64, f64, f64) {
@@ -3668,54 +3688,45 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_open_orders_all_orchestrator(&mut self, k: usize) -> Result<(), String> {
-        let total_t0 = Instant::now();
+        let profiling = self.orch_profile.is_some();
+        let total_t0 = profiling.then(Instant::now);
         if let Some(p) = self.orch_profile.as_mut() {
             p.steps = p.steps.saturating_add(1);
         }
 
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         let forager_hysteresis = self.forager_hysteresis_state_from_open_orders();
         self.open_orders.clear_all();
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.clear_orders_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.clear_orders_ns, started.elapsed());
         }
 
         // Backtest-only peek: if next order will fill next candle, expand the full grid.
         // The orchestrator can do this internally when provided `next_candle` in the input.
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         let peek_hints: Option<EntryPeekHints> = None;
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.peek_hints_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.peek_hints_ns, started.elapsed());
         }
 
         // Debug: dump exact unstuck calculation inputs/components for parity investigations.
-        let long_position_keys: Vec<usize> = self
-            .positions
-            .long
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, position)| (position.size != 0.0).then_some(idx))
-            .collect();
-        for idx in long_position_keys {
-            self.debug_dump_unstuck_calc(k, idx, LONG);
+        for idx in 0..self.positions.long.len() {
+            if self.positions.long[idx].size != 0.0 {
+                self.debug_dump_unstuck_calc(k, idx, LONG);
+            }
         }
-        let short_position_keys: Vec<usize> = self
-            .positions
-            .short
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, position)| (position.size != 0.0).then_some(idx))
-            .collect();
-        for idx in short_position_keys {
-            self.debug_dump_unstuck_calc(k, idx, SHORT);
+        for idx in 0..self.positions.short.len() {
+            if self.positions.short[idx].size != 0.0 {
+                self.debug_dump_unstuck_calc(k, idx, SHORT);
+            }
         }
 
         let (res, input_update_elapsed, compute_elapsed) = {
-            let t0 = Instant::now();
+            let t0 = profiling.then(Instant::now);
             let input = self.get_orchestrator_input_cached(k, peek_hints, Some(forager_hysteresis));
-            let input_update_elapsed = t0.elapsed();
+            let input_update_elapsed = t0.map(|started| started.elapsed());
 
-            let t1 = Instant::now();
+            let t1 = profiling.then(Instant::now);
             let mut res = orchestrator::compute_ideal_orders_with_workspace(
                 &input,
                 &mut self.orchestrator_workspace,
@@ -3732,16 +3743,20 @@ impl<'a> Backtest<'a> {
                 });
                 res.orders.extend(self.hsl_protective_orders(k)?);
             }
-            let compute_elapsed = t1.elapsed();
+            let compute_elapsed = t1.map(|started| started.elapsed());
             self.orchestrator_input_cache = Some(input);
             (res, input_update_elapsed, compute_elapsed)
         };
-        if let Some(p) = self.orch_profile.as_mut() {
+        if let (Some(p), Some(input_update_elapsed), Some(compute_elapsed)) = (
+            self.orch_profile.as_mut(),
+            input_update_elapsed,
+            compute_elapsed,
+        ) {
             OrchProfile::add_ns(&mut p.input_update_ns, input_update_elapsed);
             OrchProfile::add_ns(&mut p.compute_ns, compute_elapsed);
         }
 
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         for o in res.orders {
             let order = Order {
                 qty: o.qty,
@@ -3771,8 +3786,8 @@ impl<'a> Backtest<'a> {
                 }
             }
         }
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.distribute_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.distribute_ns, started.elapsed());
         }
 
         // The orchestrator guarantees deterministic per-symbol entry/close ordering; we preserve
@@ -3780,8 +3795,8 @@ impl<'a> Backtest<'a> {
 
         self.record_debug_orders_stage(k, "orch_final");
 
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.total_ns, total_t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), total_t0) {
+            OrchProfile::add_ns(&mut p.total_ns, started.elapsed());
         }
         Ok(())
     }
@@ -4336,6 +4351,9 @@ impl<'a> Backtest<'a> {
             peak_recovery_days_strategy_eq,
             ..full
         });
+        if self.backtest_params.metrics_only && !self.backtest_params.calculate_legacy_w {
+            return subset_metrics[0];
+        }
         for i in 1..10 {
             let fraction = 1.0 / (1.0 + i as f64);
             let start_idx = (n as f64 - fraction * (n as f64)).round() as usize;
@@ -4851,6 +4869,8 @@ mod tests {
             btc_collateral_cap: 0.9,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -4927,6 +4947,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -4991,6 +5013,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5092,6 +5116,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5174,6 +5200,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5257,6 +5285,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5349,6 +5379,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5429,6 +5461,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5521,6 +5555,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5661,6 +5697,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -5788,6 +5826,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6050,6 +6090,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6137,6 +6179,42 @@ mod tests {
 
         assert!((actual.drawdown_worst_mean_1pct_strategy_eq - 0.85).abs() < 1e-9);
         assert!((legacy_tail_aligned.drawdown_worst_mean_1pct_strategy_eq - 0.50).abs() < 1e-9);
+
+        bt.backtest_params.calculate_legacy_w = false;
+        let skipped = bt.strategy_equity_metrics_from_series(&series, None, Some(&actual_timestamps));
+        assert_eq!(skipped.adg_strategy_eq, actual.adg_strategy_eq);
+        assert_eq!(skipped.drawdown_worst_strategy_eq, actual.drawdown_worst_strategy_eq);
+        assert_eq!(skipped.strategy_eq_recovery_days_max, actual.strategy_eq_recovery_days_max);
+        assert_eq!(skipped.adg_strategy_eq_w, 0.0);
+        bt.backtest_params.metrics_only = false;
+        let standalone = bt.strategy_equity_metrics_from_series(&series, None, Some(&actual_timestamps));
+        assert_eq!(standalone.adg_strategy_eq_w, actual.adg_strategy_eq_w);
+        bt.backtest_params.metrics_only = true;
+        bt.backtest_params.calculate_legacy_w = true;
+
+        // Public overall EMA tails retain simultaneous signal observations.
+        // The two largest stresses occur on different sides and different bars:
+        // tail(max(long, short)) = 0.9, but max(tail(long), tail(short)) = 0.6.
+        bt.equities.timestamps_ms = (0..200).map(|k| k * 60_000).collect();
+        bt.strategy_equity_series = vec![100.0; 200];
+        for side in [LONG, SHORT] {
+            bt.strategy_equity_series_pside[side] = vec![100.0; 200];
+            bt.strategy_equity_timestamps_ms_pside[side] = bt.equities.timestamps_ms.clone();
+        }
+        bt.hsl_report.signal_emas = [vec![0.0; 200], vec![0.0; 200], vec![0.0; 200]];
+        bt.hsl_report.signal_emas[1][0] = 1.0;
+        bt.hsl_report.signal_emas[1][1] = 0.2;
+        bt.hsl_report.signal_emas[2][2] = 0.8;
+        bt.hsl_report.signal_emas[2][3] = 0.1;
+        for k in 0..200 {
+            bt.hsl_report.signal_emas[0][k] = bt.hsl_report.signal_emas[1][k]
+                .max(bt.hsl_report.signal_emas[2][k]);
+        }
+        let observed = bt.hsl_strategy_metrics();
+        assert!((observed.overall.drawdown_worst_mean_1pct_ema_strategy_eq - 0.9).abs() < 1e-12);
+        assert!((observed.long.drawdown_worst_mean_1pct_ema_strategy_eq - 0.6).abs() < 1e-12);
+        assert!((observed.short.drawdown_worst_mean_1pct_ema_strategy_eq - 0.45).abs() < 1e-12);
+
     }
 
     #[test]
@@ -6165,6 +6243,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6225,6 +6305,8 @@ mod tests {
                 btc_collateral_cap: 0.0,
                 btc_collateral_ltv_cap: None,
                 metrics_only: true,
+                ew_half_life_days: None,
+                calculate_legacy_w: true,
                 hsl_detailed_report: false,
                 skip_btc_analysis: false,
                 filter_by_min_effective_cost: false,
@@ -6293,6 +6375,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6365,6 +6449,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6443,6 +6529,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6516,6 +6604,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6596,6 +6686,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6691,6 +6783,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6791,6 +6885,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6868,6 +6964,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -6979,6 +7077,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7060,6 +7160,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7143,6 +7245,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7231,6 +7335,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7284,6 +7390,18 @@ mod tests {
             "k=4 expected wel to remain 1.5/3 after B delists"
         );
         assert_eq!(bt.effective_n_positions.long, 3);
+
+        // Exposure diagnostics read the retained runtime budget for a held,
+        // nontradable coin, independently of cached order-generation inputs.
+        bt.runtime_budget[1].long.effective_wallet_exposure_limit = 0.75;
+        bt.positions.long[1] = Position { size: 5.0, price: 100.0 };
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
+        bt.record_total_wallet_exposure();
+        let mut analysis = crate::types::Analysis::default();
+        bt.exposure_rms.apply(&mut analysis);
+        assert!((analysis.total_wallet_exposure_rms_long - 0.5).abs() < 1e-12);
+        assert!((analysis.position_exposure_utilization_rms_long
+            - (0.25_f64 / (1.5 * 0.75)).sqrt()).abs() < 1e-12);
     }
 
     #[test]
@@ -7330,6 +7448,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7405,6 +7525,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7483,6 +7605,8 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,

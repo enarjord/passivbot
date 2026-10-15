@@ -786,6 +786,7 @@ def clean_config(config: dict) -> dict:
     """
     from config.hsl import FIELDS, normalization_template
     from config.migrations.gpu_screening import migrate_gpu_screening
+    from config.migrations.gpu_population import migrate_gpu_population
     from config.migrations.excess_allowance import retire_excess_allowance_mode
 
     source = deepcopy(config or {})
@@ -796,6 +797,8 @@ def clean_config(config: dict) -> dict:
     )
     if isinstance(legacy_gpu, dict) and "successive_halving" in legacy_gpu:
         migrate_gpu_screening(source)
+    if isinstance(legacy_gpu, dict) and "population_size" in legacy_gpu:
+        migrate_gpu_population(source)
     template = normalization_template(get_template_config(), source)
     if "hsl" in source.get("bot", {}):
         portfolio = source["bot"]["hsl"]
@@ -1500,7 +1503,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "BACKEND",
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
-        "help": "Optimizer backend to use. Supported values: deap, gpu or pymoo.",
+        "help": "Optimizer backend: deap, pymoo, or gpu (authoritative NVIDIA/CUDA or experimental Apple Metal simulations).",
     },
     "optimize.limits": {
         "visible": ["--limits"],
@@ -2100,7 +2103,10 @@ def add_config_arguments(
 
 def _gpu_sizing_cli_value(value):
     """Keep automatic intent when overriding an explicitly numeric input config."""
-    return "auto" if value.strip().lower() == "auto" else float(value)
+    if value.strip().lower() == "auto":
+        return "auto"
+    number = float(value)
+    return int(number) if number.is_integer() else number
 
 
 def add_arguments_recursively(
@@ -2184,8 +2190,9 @@ def add_arguments_recursively(
         else:
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
-            nullable_cooldown_ceiling = full_name in {
-                f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")
+            nullable_float_override = full_name in {
+                *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
+                "backtest.ew_half_life_days",
             }
             type_ = type(value)
             if "bounds" in full_name:
@@ -2206,10 +2213,7 @@ def add_arguments_recursively(
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
             elif full_name in {
                 "optimize.gpu.batch_size",
-                "optimize.gpu.population_size",
                 "optimize.gpu.max_dispatch_candidate_bars",
-                "optimize.gpu.exact_workers",
-                "optimize.gpu.max_pending_exact",
             }:
                 type_ = _gpu_sizing_cli_value
             elif full_name == "optimize.gpu.screening.scenarios":
@@ -2219,7 +2223,7 @@ def add_arguments_recursively(
                 )
             elif isinstance(value, list) and "bounds" not in full_name:
                 type_ = comma_separated_values
-            elif nullable_cooldown_ceiling:
+            elif nullable_float_override:
                 type_ = optional_float
             elif value is None:
                 if full_name == "backtest.btc_collateral_ltv_cap":
@@ -2274,8 +2278,8 @@ def add_arguments_recursively(
                 type=type_,
                 dest=full_name,
                 required=False,
-                # Omitted nullable ceilings must differ from an explicit null.
-                default=argparse.SUPPRESS if nullable_cooldown_ceiling else None,
+                # Omitted nullable settings must differ from an explicit null.
+                default=argparse.SUPPRESS if nullable_float_override else None,
                 metavar=_argument_metavar(type_, full_name, value),
                 help=(
                     _argument_help_text(full_name, appendix)
@@ -2356,11 +2360,12 @@ def update_config_with_args(
     transform_root = config
     config = effective_config_payload(config)
     from config.hsl import validate_override_paths
-    nullable_cooldown_ceilings = {
-        f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")
+    nullable_float_overrides = {
+        *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
+        "backtest.ew_half_life_days",
     }
     supplied = {key: value for key, value in vars(args).items()
-                if (value is not None or key in nullable_cooldown_ceilings)
+                if (value is not None or key in nullable_float_overrides)
                 and (key in allowed_keys if allowed_keys is not None else "." in key)}
     if "config_version" in supplied:
         raise ValueError(
@@ -2371,7 +2376,7 @@ def update_config_with_args(
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
-        if value is None and key not in nullable_cooldown_ceilings:
+        if value is None and key not in nullable_float_overrides:
             continue
         if allowed_keys is not None:
             if key not in allowed_keys:

@@ -10,6 +10,7 @@
         "compress_cache": true,
         "dynamic_wel_by_tradability": true,
         "end_date": "now",
+        "ew_half_life_days": null,
         "exchanges": ["binance", "bybit"],
         "filter_by_min_effective_cost": false,
         "gap_tolerance_ohlcvs_minutes": 120,
@@ -660,6 +661,15 @@
         "n_cpus": 4,
         "offspring_multiplier": 1,
         "pareto_max_size": 1000,
+        "prefilter": {
+            "checks": [],
+            "exposure_ratios": [0.25, 0.5, 0.8, 0.95],
+            "volatility_ema_1m": 0.0,
+            "volatility_ema_1h": 0.0,
+            "adverse_directionality": 0.0,
+            "grid_max_entries": 1024,
+            "penalty_weight": 1000000.0
+        },
         "population_size": null,
         "pymoo": {
             "algorithm": "auto",

@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from .gpu import GPU_SCREENING_DEFAULTS
+from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
 
@@ -136,6 +137,7 @@ def get_template_config():
                 "compress_cache": True,
                 "dynamic_wel_by_tradability": True,
                 "end_date": "now",
+                "ew_half_life_days": None,
                 "exchanges": ["binance", "bybit"],
                 "filter_by_min_effective_cost": False,
                 "gap_tolerance_ohlcvs_minutes": 120,
@@ -481,6 +483,7 @@ def get_template_config():
                     "crossover_eta": 20,
                     "crossover_probability": 0.64,
                     "enable_overrides": [],
+                    "prefilter": deepcopy(PREFILTER_DEFAULTS),
                     "fixed_params": [],
                     "fixed_runtime_overrides": {
                         "bot.long.hsl.restart_after_red_policy": "always",
@@ -498,25 +501,10 @@ def get_template_config():
                     "seed": None,
                     "gpu": {
                         "tuning_mode": "auto",
-                        "auto_lean_parallelism": True,
                         "batch_size": None,
                         "max_dispatch_candidate_bars": None,
                         "checkpoint_interval_seconds": 5.0,
-                        "drift_halt": 0.6,
-                        "drift_rank_halt": None,
-                        "drift_objective_tolerance": 1.0e-6,
-                        "drift_min_samples": 32,
-                        "drift_probes": 4,
-                        "drift_window": 128,
-                        "exact_workers": None,
-                        "max_pending_exact": None,
-                        "population_size": None,
-                        "seed_bootstrap": {
-                            "max_exact": 128,
-                            "mode": "auto",
-                        },
                         "screening": deepcopy(GPU_SCREENING_DEFAULTS),
-                        "validate_per_generation": 8,
                     },
                     "pymoo": {
                         "algorithm": "auto",

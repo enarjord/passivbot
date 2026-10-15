@@ -1,3 +1,15 @@
+#ifndef PASSIVBOT_HSL_FACTUAL_ONLY
+#define PASSIVBOT_HSL_FACTUAL_ONLY 0
+#endif
+
+#ifndef PASSIVBOT_HSL_FACTS_ENABLED
+#define PASSIVBOT_HSL_FACTS_ENABLED 0
+#endif
+
+#ifndef PASSIVBOT_HSL_NATIVE_CACHE_ENABLED
+#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED 0
+#endif
+
 // HSL arithmetic over factual PNL + UPNL samples. No trading state or
 // episode inference lives here. Both Metal and CUDA consume this scalar source.
 // A candidate owns a bounded ring of compact samples and a tree over 64-sample
@@ -13,6 +25,21 @@ struct HslNode {
     int rising;
 };
 
+inline int hsl_storage_nodes(int capacity, int tree_size, int fact_capacity = 0) {
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Native replay owns only factual headers, records and disposable events.
+    return fact_capacity > 0 ? 2 + fact_capacity + (fact_capacity + 1) / 2 : 0;
+#else
+    // Four two-float samples fit in one 32-byte node-sized allocation.
+    int nodes = 2 * tree_size + (capacity + 3) / 4;
+#if PASSIVBOT_HSL_FACTS_ENABLED > 0
+    nodes += 2 + fact_capacity + (fact_capacity + 1) / 2;
+#endif
+    return nodes;
+#endif
+}
+
+#if !PASSIVBOT_HSL_FACTUAL_ONLY
 struct HslWindow {
     int head;
     int count;
@@ -49,10 +76,6 @@ inline HslNode hsl_join(HslNode l, HslNode r) {
     return n;
 }
 
-inline int hsl_storage_nodes(int capacity, int tree_size) {
-    // Four two-float samples fit in one 32-byte node-sized allocation.
-    return 2 * tree_size + (capacity + 3) / 4;
-}
 
 inline device float2* hsl_samples(device HslNode* tree, int tree_size) {
     return reinterpret_cast<device float2*>(tree + 2 * tree_size);
@@ -232,6 +255,31 @@ inline float2 hsl_signal(
     return hsl_signal_peak(w, tree, offset, entry_reference, peak);
 }
 
+#endif // Legacy observation window.
+
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+// Reporting/control state shared with fresh factual reconstruction. No window,
+// retained observation caches or device pointers belong to this controller.
+struct HslController {
+    float raw;
+    float ema;
+    int last_observed;
+    int flat_minute;
+    int action;
+    bool exposed;
+};
+
+inline HslController hsl_controller_init(
+    device HslNode* tree, int capacity, int tree_size, float span
+) {
+    HslController h;
+    h.raw = h.ema = 0.0f;
+    h.last_observed = h.flat_minute = -1;
+    h.action = 0;
+    h.exposed = false;
+    return h;
+}
+#else
 // Simulator policy over the latest factual episode. Storage is caller-owned so
 // temporal replay can rebind buffers without retaining device pointers in state.
 struct HslController {
@@ -241,8 +289,13 @@ struct HslController {
     float raw;
     float ema;
     int last_observed;
+    int mark_head;
+    int mark_count;
+    int mark_observed;
     int episode_seed;
     int flat_minute;
+    float completed_entry_reference;
+    int completed_reference_minute;
     int action; // 0 normal, 1 cooldown, 3 current panic
     bool exposed;
     bool completed;
@@ -262,6 +315,10 @@ inline HslController hsl_controller_init(
     h.window = hsl_init(tree, capacity, tree_size, span);
     h.origin = h.last_realized = h.raw = h.ema = 0.0f;
     h.last_observed = h.episode_seed = h.flat_minute = -1;
+    h.mark_head = h.mark_count = 0;
+    h.mark_observed = -1;
+    h.completed_entry_reference = -INFINITY;
+    h.completed_reference_minute = -1;
     h.action = 0;
     h.exposed = h.completed = h.scalar_ready = false;
     h.scalar_offset = h.scalar_peak = h.scalar_raw = h.scalar_ema = h.scalar_baseline = 0.0f;
@@ -286,10 +343,49 @@ inline bool hsl_observe(
     int minute, int lookback, float budget, float realized, float upnl,
     bool exposed, bool terminal, float threshold, float cooldown, bool never_restart
 ) {
-    if (minute < h.last_observed || !(budget > 0.0f) || !isfinite(budget)
+    if (!(budget > 0.0f) || !isfinite(budget)
         || !isfinite(realized) || !isfinite(upnl) || (terminal && exposed)
         || !(threshold > 0.0f && threshold <= 1.0f) || !isfinite(cooldown)
         || cooldown < 0.0f || lookback < 1 || !(h.window.alpha > 0.0f)) return false;
+    if (minute < h.last_observed) {
+        // Forced delisting follows order construction. Its factual fill is at
+        // the bar start, before the mark used to construct those orders.
+        // Retract only that latest provisional observation, including coarser
+        // candle intervals, before observing the terminal
+        // fill; ordinary out-of-order observations remain invalid. The caller's
+        // lookback + 2 capacity preserves the preceding window during append.
+        if (!(terminal && !exposed && h.exposed
+                && minute >= h.mark_observed
+                && h.window.last_minute == h.last_observed
+                && h.mark_count < h.window.capacity)) return false;
+        h.window.head = h.mark_head;
+        h.window.count = h.mark_count;
+        h.last_observed = h.mark_observed;
+        h.scalar_ready = false;
+        int last = (h.window.head + h.window.count - 1) % h.window.capacity;
+        if (h.window.count == 0 || times[last] > minute) {
+            // First observed exposure: its flat seed and closing fill share
+            // this factual minute, without an invented preceding EMA step.
+            h.window.count = 0;
+            h.window.last_minute = -1;
+            h.window.block_prefix = hsl_empty_node();
+            h.episode_seed = minute;
+            if (!hsl_record(h, tree, times, realized_rows,
+                    minute, h.origin, 0.0f)) return false;
+        } else {
+            h.window.last_minute = times[last];
+            h.window.block_prefix = hsl_empty_node();
+            device float2* rows = hsl_samples(tree, h.window.tree_size);
+            for (int slot = (last / 64) * 64; slot < last; ++slot) {
+                h.window.block_prefix = hsl_join(h.window.block_prefix,
+                    hsl_sample(rows[slot], h.window.alpha));
+            }
+            HslNode block = hsl_join(h.window.block_prefix,
+                hsl_sample(rows[last], h.window.alpha));
+            tree[h.window.tree_size + last / 64] = block;
+            if (last % 64 == 63) hsl_set(tree, h.window.tree_size, last / 64, block);
+        }
+    }
     int start = minute - lookback;
     if ((exposed || terminal) && !h.exposed) {
         // A new exposure, even during cooldown, discards the completed episode.
@@ -298,11 +394,18 @@ inline bool hsl_observe(
         h.window.last_minute = -1;
         h.origin = h.last_realized;
         h.completed = false;
+        h.completed_entry_reference = -INFINITY;
+        h.completed_reference_minute = -1;
         h.scalar_ready = false;
         h.flat_minute = -1;
         h.episode_seed = max(start, h.last_observed >= 0 ? h.last_observed : minute);
         if (!hsl_record(h, tree, times, realized_rows,
                 h.episode_seed, h.origin, 0.0f)) return false;
+    }
+    if (minute > h.last_observed) {
+        h.mark_head = h.window.head;
+        h.mark_count = h.window.count;
+        h.mark_observed = h.last_observed;
     }
     bool clipped = h.window.count > 0 && times[h.window.head] < start;
     hsl_expire(h.window, tree, times, start);
@@ -316,10 +419,24 @@ inline bool hsl_observe(
     h.action = 0;
     h.raw = h.ema = 0.0f;
     if (exposed || terminal || (h.completed && h.flat_minute >= start)) {
-        // Once the opening leaves the bounded tape, its synthetic entry basis
-        // contributes a peak reference but never an extra EMA time step.
-        float reference = start > h.episode_seed && h.window.count > 0
-            ? realized_rows[h.window.head] : -INFINITY;
+        // An active incomplete episode needs its estimated entry-loss peak.
+        // At flattening, bind that reference to the first retained observation,
+        // like Rust's initial entry_reference_delta. Budget changes or rebuilding
+        // the scalar cache preserve it, but expiration of that observation drops
+        // it. Never synthesize a new reference for a completed flat episode.
+        float reference = -INFINITY;
+        if (exposed || terminal) {
+            if (start > h.episode_seed && h.window.count > 0) {
+                reference = realized_rows[h.window.head];
+            }
+            if (terminal) {
+                h.completed_entry_reference = reference;
+                h.completed_reference_minute = isfinite(reference)
+                    ? times[h.window.head] : -1;
+            }
+        } else if (h.completed_reference_minute >= start) {
+            reference = h.completed_entry_reference;
+        }
         float offset = budget - (realized - h.origin);
         float2 score;
         if (h.scalar_ready && !clipped && offset == h.scalar_offset) {
@@ -354,9 +471,13 @@ inline bool hsl_observe(
             : (red && (never_restart || float(minute) < float(h.flat_minute) + cooldown) ? 1 : 0);
     } else if (h.completed && h.flat_minute < start) {
         h.completed = false;
+        h.completed_entry_reference = -INFINITY;
+        h.completed_reference_minute = -1;
     }
     h.last_observed = minute;
     h.last_realized = realized;
     h.exposed = exposed;
     return true;
 }
+
+#endif // Legacy observation controller.
