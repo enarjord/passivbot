@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Build one contiguous timestamp index per synchronous unknown-gap coverage check instead of repeatedly copying the retained candle history for each gap. Preserve full missing-span widths, synthetic-candle exclusion and exact candle/EMA results; never reuse the index across mutable reads.
+
 - Index owned historical candle-gap metadata by range and mutation revision, avoiding full-history normalization and candle copies on unrelated recent reads and warm EMA projection hits. Preserve overlapping coverage, retry clocks, legacy timestamp defaults and external-writer invalidation.
 
 - Reuse unchanged parsed candle shards with bounded memory and file-identity invalidation, and avoid sorting the full retained history when overlapping source rows are identical. Partial reads that lose either a legacy shard or its primary overlay remain retryable. Native Windows keeps ordinary disk reads because its file creation clock cannot safely invalidate in-place corrections. Corrections, strict audits, mutable consumer arrays and restart reconstruction retain their existing behavior.

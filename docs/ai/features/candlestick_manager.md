@@ -489,3 +489,10 @@ synthetic candles when determining real coverage. A window without unknown gaps
 skips copying/sorting the retained candle history. This optimization neither
 deletes stale historical gaps nor changes fetch, synthesis, retry or trading policy.
 Full metadata reads and index serialization still scale with total history.
+
+Unknown-gap coverage checks build one contiguous timestamp index after copying,
+sorting and excluding provisional synthetic candles. All gap slices in that
+synchronous cohort share the index, avoiding NumPy's repeated materialization of
+the strided structured-array timestamp field. The index is never retained across
+calls: corrections, RAM eviction/replacement and synthetic-set changes remain
+visible immediately. Full outage widths and candle/EMA policies are unchanged.

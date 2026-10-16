@@ -4144,16 +4144,17 @@ class CandlestickManager:
                     )
                 ]
 
+        # One contiguous index for this synchronous read cohort. Searching the
+        # strided structured-array field per gap makes NumPy repeatedly copy
+        # the entire timestamp history. Never retain it across mutable reads.
+        timestamps = np.ascontiguousarray(_ts_index(cached))
         missing: List[Tuple[int, int]] = []
         for gap in gaps:
             gap_start = int(gap["start_ts"])
             gap_end = int(gap["end_ts"])
-            gap_rows = self._slice_ts_range(
-                cached,
-                gap_start,
-                gap_end,
-                assume_sorted=True,
-            )
+            left = int(np.searchsorted(timestamps, gap_start, side="left"))
+            right = int(np.searchsorted(timestamps, gap_end, side="right"))
+            gap_rows = cached[left:right]
             missing.extend(self._missing_spans(gap_rows, gap_start, gap_end))
 
         merged: List[Tuple[int, int]] = []
