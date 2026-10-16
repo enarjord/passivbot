@@ -138,7 +138,6 @@ impl DecimalParts {
         (numerator % denominator == 0).then_some(numerator / denominator)
     }
 
-
     fn rounded_ratio(self, other: Self, mode: RoundingMode) -> Option<i128> {
         if other.coefficient <= 0 {
             return None;
@@ -182,7 +181,6 @@ impl DecimalParts {
     }
 }
 
-
 // The smallest exact decimal scale keeps ordinary venue steps on a cheap
 // integer path. Equality here is required; a tolerance cannot prove a step.
 fn exact_step_scale(step: f64) -> Option<(f64, f64)> {
@@ -198,6 +196,22 @@ fn exact_step_scale(step: f64) -> Option<(f64, f64)> {
         multiplier *= 10.0;
     }
     None
+}
+
+// Below this integer scale, a canonical decimal value and its adjacent
+// decimals have distinct f64 representations. This is an equality proof,
+// not a numerical band around a venue increment.
+fn small_decimal_units(value: f64, scale: (f64, f64)) -> Option<i128> {
+    let (coefficient, multiplier) = scale;
+    let integer = (value * multiplier).round();
+    if integer.abs() < (1_u64 << 50) as f64
+        && value == integer / multiplier
+        && integer % coefficient == 0.0
+    {
+        Some((integer / coefficient) as i128)
+    } else {
+        None
+    }
 }
 
 // Convert the chosen integer count once. Multiplying a physical value back
@@ -240,14 +254,11 @@ fn round_at_venue_step(value: f64, step: f64, mode: RoundingMode) -> f64 {
     };
     // Only the exact decimal ratio decides a near-boundary result.
     if boundary_distance <= 4.0 * f64::EPSILON * units.abs() {
-        if let Some((coefficient, multiplier)) = scale {
-            let integer = (value * multiplier).round();
-            if integer.abs() < (1_u64 << 50) as f64
-                && value == integer / multiplier
-                && integer % coefficient == 0.0
-            {
-                return value;
-            }
+        if scale
+            .and_then(|scale| small_decimal_units(value, scale))
+            .is_some()
+        {
+            return value;
         }
         if let Some(exact) = DecimalParts::from_float(value).and_then(|value| {
             let step = DecimalParts::from_float(step)?;
@@ -292,6 +303,13 @@ pub(crate) fn canonical_qty_units(quantity: f64, step: f64) -> Option<f64> {
     if !(quantity.next_up() - quantity <= step && quantity - quantity.next_down() <= step) {
         return None;
     }
+    if quantity >= 0.0 {
+        if let Some(count) =
+            exact_step_scale(step).and_then(|scale| small_decimal_units(quantity, scale))
+        {
+            return Some(count as f64);
+        }
+    }
     decimal_unit_count(quantity, DecimalParts::from_float(step)?).map(|count| count as f64)
 }
 
@@ -299,6 +317,16 @@ pub(crate) fn floor_qty_difference(total: f64, held: f64, step: f64) -> f64 {
     // Decreasing total and increasing held both decrease this difference. At
     // a power-of-two boundary, the opposite neighbors have different spacing.
     if total - total.next_down() <= step && held.next_up() - held <= step {
+        if total >= 0.0 && held >= 0.0 {
+            if let Some(scale) = exact_step_scale(step) {
+                if let (Some(total), Some(held)) = (
+                    small_decimal_units(total, scale),
+                    small_decimal_units(held, scale),
+                ) {
+                    return venue_value((total - held).max(0) as f64, step, Some(scale));
+                }
+            }
+        }
         let recover = || {
             let exact_step = DecimalParts::from_float(step)?;
             let total_units = decimal_unit_count(total, exact_step)?;
@@ -777,6 +805,16 @@ mod tests {
         assert_eq!(round_up(1.000000000001, 3e-12), 1.000000000002);
     }
 
+    #[test]
+    fn canonical_quantity_proof_does_not_accept_adjacent_inputs() {
+        use super::canonical_qty_units;
+        for (value, step, count) in [(0.477_f64, 0.001, 477.0), (1.25, 0.25, 5.0)] {
+            assert_eq!(canonical_qty_units(value, step), Some(count));
+            assert_eq!(canonical_qty_units(value.next_up(), step), None);
+            assert_eq!(canonical_qty_units(value.next_down(), step), None);
+        }
+        assert_eq!(canonical_qty_units(9045.269825510173, 3e-12), None);
+    }
 
     #[test]
     fn large_venue_counts_keep_the_chosen_decimal_increment() {
@@ -809,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_decimal_target_residuals_preserve_aligned_ticks() {
+    fn decimal_target_residuals_preserve_aligned_ticks() {
         use super::{round_price_distance, RoundingMode};
         for mode in [RoundingMode::Floor, RoundingMode::Ceil] {
             assert_eq!(round_price_distance(11.2, -0.00625, 0.01, mode), 11.13);
