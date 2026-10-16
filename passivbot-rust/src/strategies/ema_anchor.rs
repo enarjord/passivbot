@@ -3,7 +3,7 @@ use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
 use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance_from_base};
 use crate::types::{BotParams, ExchangeParams, Order, OrderType, StateParams};
 use crate::utils::{
-    cost_to_qty, qty_to_cost, round_, tolerant_round_dn_preserve_step,
+    close_remainder_meets_minimum, cost_to_qty, qty_to_cost, round_, tolerant_round_dn_preserve_step,
     tolerant_round_up_preserve_step,
 };
 
@@ -209,11 +209,10 @@ fn calc_close_qty(
     if clip_qty <= 0.0 {
         return 0.0;
     }
-    if position_size_abs - clip_qty < min_qty {
-        position_size_abs
-    } else {
-        clip_qty
+    if !close_remainder_meets_minimum(position_size_abs, clip_qty, min_qty, exchange.qty_step) {
+        return position_size_abs;
     }
+    clip_qty
 }
 
 fn typed_params<'a>(request: &'a StrategyRequest<'a>) -> &'a EmaAnchorParams {
@@ -404,6 +403,375 @@ mod tests {
             offset: 0.01,
             offset_psize_weight: 0.1,
             ..Default::default()
+        }
+    }
+
+    fn close_minimum_exchange() -> ExchangeParams {
+        ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.001,
+            min_cost: 1.0,
+            c_mult: 1.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn close_clip_preserves_minimum_remainder_despite_binary_noise() {
+        let exchange = close_minimum_exchange();
+        let minimum = calc_min_entry_qty(114.63, &exchange);
+        // Clip and remainder are both nine valid steps. Binary noise must
+        // not turn this partial close into a full-position close.
+        assert!(0.018 - minimum < minimum);
+        let close = calc_close_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            1000.0,
+            114.63,
+            0.018,
+            0.04,
+        );
+        assert_eq!(close, minimum);
+        assert_eq!(round_(close, exchange.qty_step), 0.009);
+    }
+
+    #[test]
+    fn close_clip_preserves_tiny_minimum_remainders_after_large_subtraction() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-8,
+            min_qty: 1e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let minimum = calc_min_entry_qty(1.0, &exchange);
+        assert!((1.0 + minimum) - 1.0 < minimum);
+        for clip in [1.0, 10.0, 1000.0] {
+            let position = clip + minimum;
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &base_params(),
+                    clip * 100.0,
+                    1.0,
+                    position,
+                    1.0,
+                ),
+                clip
+            );
+            // A real deficit much larger than subtraction noise still consumes
+            // the remainder, even at the same position/clip magnitudes.
+            let undersized = clip + minimum * 0.5;
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &base_params(),
+                    clip * 100.0,
+                    1.0,
+                    undersized,
+                    1.0,
+                ),
+                undersized
+            );
+        }
+    }
+
+    #[test]
+    fn close_clip_does_not_absorb_a_real_quantity_step_deficit() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-8,
+            min_qty: 2e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let balance = 1_300_000_000.0;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        let undersized = clip + exchange.qty_step;
+        let minimum = calc_min_entry_qty(1.0, &exchange);
+        assert!(undersized - clip < minimum);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                undersized,
+                1.0,
+            ),
+            undersized
+        );
+        // Adjacent steps remain distinguishable at this scale. Valid minimum
+        // remainders still retain the clip under the same producer inputs.
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                clip + minimum,
+                1.0,
+            ),
+            clip
+        );
+    }
+
+    #[test]
+    fn close_clip_retains_minimum_at_large_operand_crossover() {
+        let mut exchange = ExchangeParams {
+            qty_step: 1e-8,
+            min_qty: 1e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let balance = 4_000_000_000.0;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        assert_eq!(clip, 40_000_000.0);
+        let position = clip + exchange.qty_step;
+        assert!(position > clip);
+        assert!(exchange.min_qty - (position - clip) > exchange.qty_step * 0.25);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            clip
+        );
+        // A full step below a two-step minimum is still undersized at the
+        // same operand scale; accepting subtraction noise must not hide it.
+        exchange.min_qty = 2e-8;
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            position
+        );
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                clip + exchange.min_qty,
+                1.0,
+            ),
+            clip
+        );
+    }
+
+    #[test]
+    fn close_clip_rejects_a_countable_step_deficit_after_cancellation() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-12,
+            min_qty: 4e-12,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let balance = 572237.8299375748;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        let clip_steps = (clip / exchange.qty_step).round();
+        assert_eq!(clip_steps, 5_722_378_299_375_748.0);
+        let position = (clip_steps + 3.0) * exchange.qty_step;
+        let remainder = position - clip;
+        assert!(remainder < exchange.min_qty);
+        assert!(exchange.min_qty - remainder < exchange.qty_step * 0.5);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            position
+        );
+    }
+
+    #[test]
+    fn close_clip_does_not_infer_steps_below_quantity_resolution() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-12,
+            min_qty: 2e-12,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let balance = 864102.4116158515;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        assert_eq!(clip, 8641.024116158515);
+        let position = 8641.024116158516;
+        assert!(position > clip);
+        assert!(position - clip < exchange.min_qty);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            position
+        );
+    }
+
+    #[test]
+    fn close_clip_corrects_division_rounding_when_steps_are_resolvable() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-8,
+            min_qty: 2e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let clip_steps = 4_000_000_000_000_006.0;
+        let balance = clip_steps * exchange.qty_step * 100.0;
+        let clip = calc_base_clip_qty(
+            &exchange,
+            &BotParams::default(),
+            &base_params(),
+            balance,
+            1.0,
+            1.0,
+        );
+        assert_eq!(clip, clip_steps * exchange.qty_step);
+        let position = (clip_steps + 1.0) * exchange.qty_step;
+        assert!(f64::from_bits(position.to_bits() + 1) - position < exchange.qty_step);
+        assert_eq!(
+            (position / exchange.qty_step).round() - (clip / exchange.qty_step).round(),
+            2.0
+        );
+        assert!(position - clip < exchange.min_qty);
+        assert_eq!(
+            calc_close_qty(
+                &exchange,
+                &BotParams::default(),
+                &base_params(),
+                balance,
+                1.0,
+                position,
+                1.0,
+            ),
+            position
+        );
+    }
+
+    #[test]
+    fn close_clip_resolves_steps_towards_the_subtraction_operands() {
+        let position = 8192.0_f64;
+        let clip = f64::from_bits(position.to_bits() - 1);
+        let mut params = base_params();
+        params.base_qty_pct = 1.0;
+        for step in [1e-12, 2.0_f64.powi(-40)] {
+            let mut exchange = ExchangeParams {
+                qty_step: step,
+                min_qty: step,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            assert_eq!(
+                calc_base_clip_qty(&exchange, &BotParams::default(), &params, clip, 1.0, 1.0),
+                clip
+            );
+            assert!(f64::from_bits(position.to_bits() + 1) - position > step);
+            assert!(position - clip <= step);
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &params,
+                    clip,
+                    1.0,
+                    position,
+                    1.0
+                ),
+                clip
+            );
+            // A two-step minimum still rejects the same one-step remainder.
+            exchange.min_qty = 2.0 * step;
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &params,
+                    clip,
+                    1.0,
+                    position,
+                    1.0
+                ),
+                position
+            );
+        }
+    }
+
+    #[test]
+    fn close_clip_still_consumes_genuinely_subminimum_remainders() {
+        let exchange = close_minimum_exchange();
+        for position in [0.004, 0.009, 0.017, 0.018 - 1e-12] {
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &base_params(),
+                    1000.0,
+                    114.63,
+                    position,
+                    0.04,
+                ),
+                position
+            );
         }
     }
 

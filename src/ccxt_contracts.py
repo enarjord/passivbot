@@ -319,6 +319,8 @@ async def capture_contract_snapshot(
                 "symbols": symbols,
             }
         }
+        if getattr(bot, "is_portfolio_margin", False):
+            snapshot["meta"]["account_type"] = "portfolio_margin"
         section_set = set(sections)
 
         if "markets" in section_set:

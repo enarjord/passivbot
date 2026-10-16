@@ -56,10 +56,12 @@ def test_dump_snapshot_writes_json_file(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_capture_contract_snapshot_normalizes_from_single_fetch(monkeypatch):
+@pytest.mark.parametrize("portfolio_margin", [False, True])
+async def test_capture_contract_snapshot_normalizes_from_single_fetch(monkeypatch, portfolio_margin):
     counts = {"balance": 0, "positions": 0, "open_orders": []}
 
     class FakeBot:
+        is_portfolio_margin = portfolio_margin
         exchange = "fake"
         quote = "USDT"
 
@@ -131,6 +133,7 @@ async def test_capture_contract_snapshot_normalizes_from_single_fetch(monkeypatc
         symbols=("BTC/USDT:USDT",),
     )
 
+    assert snapshot["meta"].get("account_type") == ("portfolio_margin" if portfolio_margin else None)
     assert counts["balance"] == 1
     assert counts["positions"] == 1
     assert counts["open_orders"] == [None, "BTC/USDT:USDT"]
