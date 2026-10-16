@@ -1072,7 +1072,8 @@ def test_cuda_completion_keeps_short_wait_active(monkeypatch):
 @pytest.mark.parametrize("device", ["cuda", "mps"])
 @pytest.mark.parametrize("weighted_volume", [False, True])
 @pytest.mark.parametrize("fused", [False, True])
-def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, weighted_volume, fused):
+@pytest.mark.parametrize("batch_size", [1, 65])
+def test_tm_unchunked_dispatch_uses_backend_launch_options(monkeypatch, device, weighted_volume, fused, batch_size):
     pytest.importorskip("torch")
     from optimization.gpu import mps_kernel
 
@@ -1108,21 +1109,26 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, w
         unstuck_pnl_capacity=0,
     )))
     calls = []
-    library = SimpleNamespace(**{
-        runner.replay_kernel_name: lambda *args, **kwargs: calls.append((args, kwargs))
-    })
+    def kernel(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    kernel.max_threads_per_threadgroup = 1024
+    kernel.thread_execution_width = 32
+    library = SimpleNamespace(**{runner.replay_kernel_name: kernel})
     buffers = [object() for _ in range(12)]
     runner._dispatch(
         library, *buffers, weighted_equity_samples=None,
-        hsl_ema_tail_samples=None, batch_size=65
+        hsl_ema_tail_samples=None, batch_size=batch_size
     )
     assert len(calls) == 1
     assert len(calls[0][0]) == 17 + int(fused) + int(weighted_volume)
     if weighted_volume:
         assert calls[0][0][-1] is buffers[-1]
-    expected = {"threads": (65, 1, 1)}
+    expected = {"threads": (batch_size, 1, 1)}
     if device == "cuda" and not fused:
         expected["group_size"] = (32, 1, 1)
+    if device == "mps":
+        expected["group_size"] = (min(batch_size, 32), 1, 1)
     assert calls[0][1] == expected
 
 
