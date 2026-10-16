@@ -1,14 +1,14 @@
 # Organillo historical eligibility implementation plan
 
-Status: implementation authorized. Acceptance evidence is tracked separately; do not merge before required gates pass.
+This historical design plan describes the optional eligibility input. The current behavior is
+specified in the [feature contract](../ai/features/organillo.md) and
+[user guide](../organillo.md).
 
 Target branch: `codex/gpu-native-optimizer`.
 
-Implementation base: `27610e9c6f180cc78d18c829b20ab8c7b893241d`, including native GPU
-completion accounting. Initial implementation checks used `4b18ef3eb7fff63e0b888718c34db8ffb5838465`.
-The initial architecture review used `2c01c166623c86cea3ae7193be6a5e7a11aa7a2d`.
-Local acceptance uses the newly supported Apple Metal backend. CUDA hardware qualification remains
-separate; no CUDA machine is available for this implementation task.
+The design began at public base `27610e9c6f180cc78d18c829b20ab8c7b893241d`, which included
+native GPU completion accounting. Metal and CUDA hardware qualification are separate: results
+on one backend do not establish parity on the other.
 
 ## Goal and scope
 
@@ -122,8 +122,8 @@ Relevant target-branch integration points:
   schedule descriptors, mapping, ownership, and registration.
 - `src/optimization/gpu/service.py`, `src/optimization/gpu/mps_kernel.py`, and their shared
   shader sources: native GPU replay transport and compile-time ablation. Current file names
-  retain MPS terminology. This task qualifies the Apple Metal execution path; CUDA hardware
-  qualification remains outstanding until a CUDA machine is available.
+  retain MPS terminology. The Apple Metal and CUDA execution paths require separate hardware
+  qualification.
 - `src/optimization/prepared_dataset_identity.py` and evaluation-contract consumers: replay
   and saved-fitness identity.
 - Existing `passivbot tool gpu-parity`: offline development comparison; never called by normal
@@ -132,9 +132,9 @@ Relevant target-branch integration points:
 ## Correctness and CPU/GPU parity acceptance
 
 Use identical immutable candles, metadata, timestamps, resolved configs, and schedules for both
-engines. Rebuild and fingerprint-verify the Rust extension. Run the authorized native Metal backend through the actual
+engines. Rebuild and fingerprint-verify the Rust extension. Run the native Metal backend through the actual
 GPU service, not a retained legacy diagnostic path. Repeat hardware qualification on CUDA
-when available; local Metal results do not establish CUDA hardware parity.
+when available; Metal results do not establish CUDA hardware parity.
 
 Required fixtures cover:
 
@@ -203,7 +203,7 @@ zero cost. Literal zero slowdown cannot be established from one timing run.
 Measure enabled overhead separately: one-time validation/preparation, schedule memory and device
 upload, and replay cost. These measurements must not substitute for disabled-path acceptance.
 
-## Evidence to retain when implementation is authorized
+## Validation evidence
 
 Record baseline/change SHAs, runtime and Rust fingerprints, fixture/data/schedule identities,
 resolved public test configurations, test and parity results, compiled-path ablation evidence,
