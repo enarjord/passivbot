@@ -484,6 +484,48 @@ def _decimal_boundary_inputs(side, coin_count, *, price, balance, initial_pct, q
     return config, candles, markets, np.full(12, 50_000.0), timestamps
 
 
+def _compound_boundary_inputs(side, coin_count, kind, offset, coin_pin):
+    inputs = _decimal_boundary_inputs(side, coin_count, price=43.2, balance=1000.0,
+        initial_pct=.1, qty_step=.001, factor=1., threshold=.9, low=43.19, high=43.21)
+    config, candles, markets, _, _ = inputs
+    values = dict(threshold_base_pct=.1 + offset, retracement_base_pct=.09375,
+        retracement_volatility_1h_weight=0., retracement_volatility_1m_weight=0.)
+    target = config["bot"][side]["strategy"]["trailing_martingale"][kind]
+    target.update(values)
+    if kind == "entry":
+        target["retracement_we_weight"] = 0.
+    else:
+        target["qty_pct"] = 1.
+    if coin_pin != "none":
+        fields = ("threshold_base_pct", "retracement_base_pct") if coin_pin == "both" else (coin_pin + "_base_pct",)
+        patch = {key: values[key] for key in fields}
+        for key in fields:
+            target[key] = .2 if key == "threshold_base_pct" else .01
+        config["coin_overrides"] = {
+            coin: {"bot": {side: {"strategy": {"trailing_martingale": {kind: patch.copy()}}}}}
+            for coin in markets if coin != "__meta__"
+        }
+    if (kind == "close") != (side == "short"):
+        candles[5, :, :3] = [50., 49., 49.]
+        candles[6:, :, :3] = [43.475, 43., 43.47]
+    else:
+        candles[5, :, :3] = [38.6, 38.5, 38.55]
+        candles[6:, :, :3] = [42.95, 42.925, 42.935]
+    return inputs
+
+
+@pytest.mark.parametrize("kind", ["entry", "close"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("coin_count", [1, 2])
+@pytest.mark.parametrize("offset", [0., -1e-12, 1e-12])
+@pytest.mark.parametrize("coin_pin", ["none", "both", "threshold", "retracement"])
+def test_compound_trailing_replay_preserves_authored_decimal_ticks(kind, side, coin_count, offset, coin_pin):
+    out, fills = _evaluate(side, _compound_boundary_inputs(side, coin_count, kind, offset, coin_pin))
+    assert out["fill_count"].item() == len(fills)
+    exact = abs(sum(float(fill[9]) for fill in fills))
+    assert out["short_psize" if side == "short" else "psize"].item() == pytest.approx(exact, abs=3e-6)
+
+
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("coin_count", [1, 2])
 @pytest.mark.parametrize("coin_pin", [False, True])

@@ -5,7 +5,8 @@ import pytest
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("coins", [1, 2])
-@pytest.mark.parametrize("case", ["half", "below_half", "tick", "off_tick", "sub_ulp_tick"])
+@pytest.mark.parametrize("case", ["half", "below_half", "tick", "off_tick", "sub_ulp_tick",
+                                  "compound_entry", "compound_close", "compound_offgrid_close"])
 @pytest.mark.parametrize("eligibility", [False, True])
 def test_native_decimal_boundaries_match_rust_without_cpu_substitution(
         monkeypatch, tmp_path, side, coins, case, eligibility):
@@ -29,6 +30,12 @@ def test_native_decimal_boundaries_match_rust_without_cpu_substitution(
         inputs = _decimal_boundary_inputs(side, coins, price=6532.59, balance=100000.0,
             initial_pct=.025, qty_step=.001, factor=1.0,
             threshold=.025626895304925, low=6365.175, high=6700.005)
+    elif case.startswith("compound_"):
+        from test_gpu_entry_sizing_parity import _compound_boundary_inputs
+        kind = "entry" if case == "compound_entry" else "close"
+        offset = 1e-12 if case == "compound_offgrid_close" else 0.0
+        pin = "none" if kind == "entry" else ("threshold" if offset else "both")
+        inputs = _compound_boundary_inputs(side, coins, kind, offset, pin)
     else:
         inputs = _decimal_boundary_inputs(side, coins, price=2.5, balance=100.0,
             initial_pct=.025, qty_step=.001, factor=1.0,
