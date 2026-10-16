@@ -391,6 +391,51 @@ def test_gpu_instrumentation_hooks_are_restored_after_failed_setup(monkeypatch):
     assert MpsMulticoinProxy.__init__ is original_init
 
 
+def test_tuning_and_cohort_clocks_exclude_the_same_setup(monkeypatch, tmp_path):
+    from collections import deque
+    torch = pytest.importorskip("torch")
+    from optimization.gpu import autotune, runtime, service
+
+    # Exercise the legacy replay path without a device. Preparation and setup
+    # deliberately dwarf replay so an inconsistent origin cannot pass.
+    monkeypatch.chdir(tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr(worker.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(runtime, "gpu_device", lambda *_: "mps")
+    monkeypatch.setattr(runtime, "synchronize", lambda: None)
+    for name in ("current_allocated_memory", "driver_allocated_memory", "recommended_max_memory"):
+        monkeypatch.setattr(torch.mps, name, lambda: 0)
+    monkeypatch.setattr(worker, "instrument_replay", lambda *_args, **_kwargs: None)
+
+    def parameters(*_args):
+        clock[0] += 100.0
+        return {}
+
+    monkeypatch.setattr(worker, "legacy_parameters", parameters)
+    monkeypatch.setattr(autotune, "configure_batch_tuning", lambda *_args: None, raising=False)
+    monkeypatch.setattr(autotune.BatchController, "observe", lambda *_args, **_kwargs: True)
+    controller = SimpleNamespace(width=1, samples=deque(maxlen=24), baseline=None)
+
+    class Replay:
+        def __init__(self, **_kwargs):
+            clock[0] += 200.0
+
+        def evaluate(self, _parameters):
+            clock[0] += 2.0
+            autotune.BatchController.observe(controller, 1, 2.0)
+            return [{"score": 1.0}]
+
+    monkeypatch.setattr(service, "MpsSingleCoinProxy", Replay)
+    arrays = (np.zeros((2, 1, 4)), np.ones(2), np.arange(2))
+    entry = dict(configs=[{"optimize": {"gpu": {}}}], metrics=["score"], markets={}, exchange="fake")
+    report = worker.gpu_runs(entry, arrays, "auto", 1, 0, 0, 100)
+    assert report["parameter_seconds"] == 100.0
+    assert report["setup_seconds"] == 200.0
+    assert report["first_tuning_window_seconds"] == 2.0
+    assert report["first_use"]["elapsed_seconds"] == 2.0
+    assert report["samples"][0]["elapsed_seconds"] == 2.0
+
+
 def test_frozen_gpu_profiling_is_explicit():
     replay = SimpleNamespace(profile_enabled=True, runners={})
     instrument_replay(replay, [])

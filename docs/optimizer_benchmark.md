@@ -168,6 +168,10 @@ experiments on an otherwise idle machine.
 
 ## Autotuning
 
+Tuning windows and cohort completion times share an origin immediately after
+parameter preparation and service setup. First-use compilation and replay remain
+inside that clock; preparation and setup are reported separately.
+
 Use a sufficiently large backlog and sustained run, separately from smoke:
 
 ```sh

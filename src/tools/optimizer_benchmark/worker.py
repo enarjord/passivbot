@@ -245,13 +245,12 @@ def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budg
     dispatches, samples, tuning, tuning_windows, profiles = [], [], [], [], []
     from optimization.gpu.autotune import BatchController
     original_observe = BatchController.observe
-    tuning_started = time.perf_counter()
     def observed_window(controller, count, seconds, **kwargs):
         previous_width = controller.width
         rates = [*controller.samples, count / seconds][-controller.samples.maxlen:] if seconds > 0 else []
         completed = original_observe(controller, count, seconds, **kwargs)
         if completed:
-            tuning_windows.append(dict(elapsed_seconds=time.perf_counter() - tuning_started,
+            tuning_windows.append(dict(elapsed_seconds=time.perf_counter() - started,
                 previous_width=previous_width, next_width=controller.width,
                 candidates_per_second=statistics.median(rates), baseline=controller.baseline))
         return completed

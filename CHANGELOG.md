@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Use the same elapsed-time origin for optimizer benchmark tuning windows and
+  cohort completions, reporting parameter preparation and service setup separately.
+
 - Bound whole-history multicoin Metal dispatch groups by the candidate batch and
   pipeline execution width, preventing zeroed replay results on large coin-state layouts.
 
