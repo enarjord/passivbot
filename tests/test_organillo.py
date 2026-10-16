@@ -247,6 +247,161 @@ def test_exclusive_end_lookahead_preserves_disabled_results(tmp_path, strategy, 
                 assert enabled.metrics["backtest_completion_ratio"] == 1.0
 
 
+def idle_clock_inputs(strategy, sides="both"):
+    """A short replay spanning four UTC dates and an explicit lookahead."""
+    config, candles, markets, btc, stamps = fixture_inputs(strategy, sides, bars=512)
+    endpoint = int(stamps[-1]) + 60_000
+    candles = np.concatenate((candles, candles[-1:]), axis=0)
+    btc = np.concatenate((btc, btc[-1:]))
+    stamps = endpoint - (512 - np.arange(513)) * 600_000
+    config["backtest"].update(candle_interval_minutes=10,
+        dynamic_wel_by_tradability=True,
+        start_date=datetime.fromtimestamp(int(stamps[0])/1000, timezone.utc).isoformat(),
+        end_date=datetime.fromtimestamp(endpoint/1000, timezone.utc).isoformat())
+    markets["__meta__"].update(requested_start_ts=int(stamps[0]), data_interval_minutes=10)
+    for coin in config["backtest"]["coins"]["binance"]:
+        markets[coin]["last_valid_index"] = 5120
+    return config, candles, markets, btc, stamps
+
+
+def native_clock_metrics(inputs, metrics, monkeypatch):
+    torch = pytest.importorskip("torch")
+    if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
+        pytest.skip("native GPU runtime unavailable")
+    from tools.gpu_parity import _native_dataset
+    from optimization.gpu.native import NativeBacktestService
+    from optimization.gpu.executor import BacktestRequest
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("native eligibility cannot invoke CPU simulation")
+    with monkeypatch.context() as isolated:
+        isolated.setattr("backtest.execute_backtest", forbidden)
+        with _native_dataset(inputs, "binance", metrics) as dataset:
+            with NativeBacktestService(batch_size=1, tuning_mode="off") as service:
+                service.register_dataset("clock", dataset)
+                result = service.submit(BacktestRequest("clock", "clock", {})).result(timeout=180)
+                assert not result.liquidated
+                return result.metrics
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "short", "both"])
+@pytest.mark.parametrize("policy", ["zero", "delayed"])
+@pytest.mark.parametrize("backend", ["cpu", "native"])
+def test_initial_idle_schedule_keeps_full_accounting_period(tmp_path, strategy, sides, policy,
+        backend, monkeypatch, require_real_passivbot_rust_module):
+    from backtest import build_backtest_payload, execute_backtest
+    inputs = idle_clock_inputs(strategy, sides)
+    config, candles, markets, btc, stamps = inputs
+    write_schedule(tmp_path / "clock.csv", inputs,
+                   [[0, 0]] if policy == "zero" else [[0, 0], [1, 1]])
+    payload = build_backtest_payload(candles, markets, config, "binance", btc, stamps)
+    fills, equities, analysis = execute_backtest(payload, config)
+    # Mask-aware preparation omits future-only admissions from global warmup.
+    # Accounting still waits for ordinary raw candle/warmup readiness, which can
+    # precede the disabled global guard by one candle in this fixture.
+    params = payload.backtest_params
+    ready = min((markets[coin]["first_valid_index"] + markets[coin]["warmup_minutes"]) // 10
+                for coin in config["backtest"]["coins"]["binance"])
+    assert min(params["trade_start_indices"]) == ready
+    first = max(max(params["global_warmup_bars"], 1) + 1, ready)
+    expected_stamps = stamps[first:-1]
+    expected_stamps = expected_stamps[expected_stamps >= params["requested_start_timestamp_ms"]]
+    expected_duration = (expected_stamps[-1] - expected_stamps[0]) / DAY_MS
+    if backend == "cpu":
+        np.testing.assert_array_equal(equities[:, 0], expected_stamps)
+        first_admission = (int(stamps[0]) // DAY_MS + 1) * DAY_MS
+        idle = equities if policy == "zero" else equities[equities[:, 0] < first_admission]
+        assert len(idle) > 0
+        np.testing.assert_array_equal(idle[:, 1], np.full(len(idle), 1000.0))
+        if policy == "zero":
+            assert len(fills) == 0
+        else:
+            assert len(fills) > 0
+            assert min(float(fill[1]) for fill in fills) >= first_admission
+        daily = list({int(row[0]) // DAY_MS: float(row[1]) for row in equities}.values())
+        expected_adg = (np.mean(daily[-3:]) / daily[0]) ** (1.0 / len(daily)) - 1.0
+        assert analysis["adg_strategy_eq"] == pytest.approx(expected_adg, abs=1e-12)
+        observed = analysis
+    else:
+        metrics = ("adg_strategy_eq", "fills_per_day", "backtest_completion_ratio")
+        observed = native_clock_metrics(inputs, metrics, monkeypatch)
+        for name, atol in (("adg_strategy_eq", 1e-7), ("fills_per_day", 1e-6)):
+            assert observed[name] == pytest.approx(analysis[name], abs=atol, rel=1e-4)
+    if backend == "cpu":
+        assert observed["fills_analysis_duration_days"] == pytest.approx(expected_duration)
+    assert observed["fills_per_day"] == pytest.approx(len(fills) / expected_duration, abs=1e-6)
+    assert observed["backtest_completion_ratio"] == 1.0
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("condition", ["zero_slots", "zero_wel", "delayed_readiness"])
+@pytest.mark.parametrize("backend", ["cpu", "native"])
+def test_idle_clock_preserves_unmasked_capacity_and_readiness(tmp_path, strategy, condition,
+        backend, monkeypatch, require_real_passivbot_rust_module):
+    from copy import deepcopy
+    from backtest import build_backtest_payload, execute_backtest
+    inputs = idle_clock_inputs(strategy)
+    config, candles, markets, btc, stamps = inputs
+    if condition == "delayed_readiness":
+        for coin in config["backtest"]["coins"]["binance"]:
+            markets[coin]["first_valid_index"] = 120
+    else:
+        key = "n_positions" if condition == "zero_slots" else "total_wallet_exposure_limit"
+        for side in ("long", "short"):
+            config["bot"][side]["risk"][key] = 0
+    ones = deepcopy(config)
+    write_schedule(tmp_path / "ones-clock.csv", (ones, candles, markets, btc, stamps), [[1, 1]])
+    if backend == "cpu":
+        baseline = execute_backtest(build_backtest_payload(
+            candles, markets, config, "binance", btc, stamps), config)
+        enabled = execute_backtest(build_backtest_payload(
+            candles, markets, ones, "binance", btc, stamps), ones)
+        np.testing.assert_array_equal(baseline[0], enabled[0])
+        np.testing.assert_array_equal(baseline[1], enabled[1])
+        assert baseline[2] == enabled[2]
+        if condition == "delayed_readiness":
+            assert baseline[1][0, 0] > stamps[0] + 120 * 60_000
+    else:
+        metrics = ("adg_strategy_eq", "fills_per_day", "backtest_completion_ratio")
+        if condition != "delayed_readiness":
+            # The native backend rejects a configuration with no enabled side.
+            for current in (inputs, (ones, candles, markets, btc, stamps)):
+                with pytest.raises(ValueError, match="requires one or two enabled sides"):
+                    native_clock_metrics(current, metrics, monkeypatch)
+        else:
+            assert native_clock_metrics(inputs, metrics, monkeypatch) == native_clock_metrics(
+                (ones, candles, markets, btc, stamps), metrics, monkeypatch)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "both"])
+@pytest.mark.parametrize("hsl", ["coin", "unified"])
+@pytest.mark.parametrize("policy", ["zero", "delayed"])
+def test_idle_prefix_hsl_observations_follow_accounting_clock(tmp_path, strategy, sides,
+        hsl, policy, monkeypatch, require_real_passivbot_rust_module):
+    from backtest import build_backtest_payload, execute_backtest
+    from tools.gpu_parity import build_parser, fixture_inputs as prepare
+    config, candles, markets, btc, stamps = prepare(build_parser().parse_args([
+        "--fixture", strategy, "--sides", sides, "--coins", "2", "--bars", "2880",
+        "--hsl", hsl, "--hsl-red-threshold", "0.002"]))
+    candles = np.concatenate((candles, candles[-1:]), axis=0)
+    btc = np.concatenate((btc, btc[-1:]))
+    stamps = np.concatenate((stamps, stamps[-1:] + 60_000))
+    for coin in config["backtest"]["coins"]["binance"]:
+        markets[coin]["last_valid_index"] = len(stamps) - 1
+    inputs = config, candles, markets, btc, stamps
+    write_schedule(tmp_path / "hsl-clock.csv", inputs,
+                   [[0, 0]] if policy == "zero" else [[0, 0], [1, 1]])
+    _fills, _equities, analysis = execute_backtest(build_backtest_payload(
+        candles, markets, config, "binance", btc, stamps), config)
+    metrics = ("adg_strategy_eq", "hard_stop_time_in_red_pct",
+               "hard_stop_triggers_per_year", "drawdown_worst_mean_1pct_ema_strategy_eq",
+               "backtest_completion_ratio")
+    observed = native_clock_metrics(inputs, metrics, monkeypatch)
+    assert observed["backtest_completion_ratio"] == 1.0
+    for name in metrics:
+        assert observed[name] == pytest.approx(analysis[name], abs=1e-5, rel=1e-4), name
+
 def test_payload_subset_preserves_physical_column_mapping(tmp_path, require_real_passivbot_rust_module):
     from backtest import build_backtest_payload, subset_backtest_payload
     inputs = fixture_inputs()

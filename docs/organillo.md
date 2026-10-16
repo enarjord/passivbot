@@ -45,6 +45,9 @@ Preparation records `backtest.organillo_sha256`. Reusing saved fitness with diff
 is rejected. To intentionally select a new source (including a scenario override), clear the old
 hash to `null` and prepare again. Inputs are immutable for the run and shared across candidates;
 eligibility is not an optimizer gene. Keep a supplied file available during preparation.
+Initially ineligible days still count toward equity, growth, fill-rate and HSL observation periods
+once ordinary candle readiness and configured position capacity are available. An all-zero schedule
+therefore produces an empty-trading replay over that period rather than dropping its equity ledger.
 Set the input on `backtest` or a scenario; optimizer `fixed_runtime_overrides` cannot replace it.
 
 Native GPU scenarios retain the existing limit of 64 distinct loaded coins. Organillo does not

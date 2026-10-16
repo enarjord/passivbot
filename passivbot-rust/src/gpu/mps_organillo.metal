@@ -6,8 +6,10 @@ using uchar = unsigned char;
 #define ORGANILLO_ARGS , constant uchar* organillo_values, constant int* organillo_rows
 #define ORGANILLO_PASS , organillo_values, organillo_rows
 #define ORGANILLO_ALLOWED(k, c, coins) (organillo_values[organillo_rows[k] * (coins) + (c)] != 0)
+#define ORGANILLO_ACCOUNTING_GATE(ordinary, ready) ready
 #else
 #define ORGANILLO_ARGS
 #define ORGANILLO_PASS
 #define ORGANILLO_ALLOWED(k, c, coins) true
+#define ORGANILLO_ACCOUNTING_GATE(ordinary, ready) ordinary
 #endif

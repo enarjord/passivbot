@@ -56,6 +56,12 @@ by effective slots, with existing zero-count handling. Rotation never counts dis
 coins cumulatively. Retired held coins retain current budgets; explicit WEL overrides remain
 explicit. With the option false, the configured denominator remains fixed.
 
+An initial zero mask does not shorten performance measurement. Once the ordinary unmasked
+configuration has ready candle history and positive side capacity, record flat equity and HSL
+observations throughout the ineligible prefix. Entry permission and dynamic-WEL counts remain
+mask-dependent. Preserve ordinary no-capacity and candle-readiness behavior; enabling an all-ones
+schedule must not start accounting earlier than the same replay without a schedule.
+
 The disabled Rust engine uses a const-generic specialization. Disabled GPU preprocessing removes
 all eligibility arguments, reads and instructions and preserves replay state layout. No schedule
 parsing, hashing, shared segments or device transfers occur without a CSV. Native replay has the

@@ -3176,6 +3176,9 @@ inline int count_tm_multicoin_tradable_coins(
     constant float* coin_overrides,
     int k,
     int coin_count
+#ifdef PASSIVBOT_ORGANILLO
+    , bool apply_eligibility = true
+#endif
 ) {
     int tradable_count = 0;
     for (int c = 0; c < coin_count; ++c) {
@@ -3188,7 +3191,7 @@ inline int count_tm_multicoin_tradable_coins(
             && finite_positive(close) && coin_wel != 0.0f
 
 #ifdef PASSIVBOT_ORGANILLO
-            && ORGANILLO_ALLOWED(k, c, coin_count)
+            && (!apply_eligibility || ORGANILLO_ALLOWED(k, c, coin_count))
 #endif
         ) {
             tradable_count += 1;
@@ -5862,6 +5865,16 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             && short_side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started
             || long_can_generate || short_can_generate;
+#ifdef PASSIVBOT_ORGANILLO
+        if (!equity_started && alive && past_activation_guard) {
+            equity_started = (long_config.n_positions > 0 && long_config.twel > 0.0f
+                && count_tm_multicoin_tradable_coins(
+                    bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C, false) > 0)
+                || (short_config.n_positions > 0 && short_config.twel > 0.0f
+                && count_tm_multicoin_tradable_coins(
+                    bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C, false) > 0);
+        }
+#endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         if (alive && !post_fill_balance_depleted && past_activation_guard) {
             update_exposure_rms_budgets(exposure_rms, bars, coin_settings ORGANILLO_PASS, long_coin_overrides,
@@ -5893,7 +5906,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         }
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
-        bool can_sample_hsl = (long_can_generate || short_can_generate)
+        bool can_sample_hsl = ORGANILLO_ACCOUNTING_GATE(
+            (long_can_generate || short_can_generate), (equity_started && past_activation_guard))
             && alive && (joint_portfolio_can_generate(
                 account, hsl_equity, liquidation_floor)
                 || hsl_mark_terminal_observation_eligible(
@@ -7132,6 +7146,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         const bool can_generate = alive && effective_n_positions > 0
             && max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started || can_generate;
+#ifdef PASSIVBOT_ORGANILLO
+        // Account for flat ineligible days once the ordinary side is ready.
+        // The sticky clock avoids rescanning after its first ready candle.
+        if (!equity_started && alive && past_activation_guard && n_positions > 0) {
+            equity_started = count_tm_multicoin_tradable_coins(
+                bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C, false) > 0;
+        }
+#endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         if (alive && !post_fill_balance_depleted && past_activation_guard)
             update_exposure_rms_budgets(exposure_rms, bars, coin_settings ORGANILLO_PASS, coin_overrides,
@@ -7159,7 +7181,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #if !PASSIVBOT_HSL_DISABLED
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
-        if (can_generate && alive && balance > 0.0f
+        if (ORGANILLO_ACCOUNTING_GATE(can_generate, (equity_started && past_activation_guard))
+            && alive && balance > 0.0f
             && (balance + hsl_unrealized > liquidation_floor
                 || hsl_mark_terminal_observation_eligible(
                     balance, balance + hsl_unrealized, liquidation_floor,
@@ -7321,7 +7344,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         }
         float equity = balance + unrealized;
 #if !PASSIVBOT_HSL_DISABLED
-        if (can_generate && alive && balance > 0.0f
+        if (ORGANILLO_ACCOUNTING_GATE(can_generate, (equity_started && past_activation_guard))
+            && alive && balance > 0.0f
             && (equity > liquidation_floor || hsl_mark_terminal_observation_eligible(
                 balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
             int sampled_tier = record_multicoin_hsl_report(

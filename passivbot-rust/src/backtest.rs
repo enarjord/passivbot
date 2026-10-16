@@ -2468,9 +2468,15 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.configured_n_positions.short
         };
 
-        // avoid division by zero (possible directly after a delisting)
+        // A zero eligibility mask pauses entries, not the accounting clock.
+        // Preserve ordinary no-capacity behavior when the mask is not the cause.
         if self.effective_n_positions.long == 0 && self.effective_n_positions.short == 0 {
-            return false;
+            if !ORGANILLO
+                || ((self.configured_n_positions.long == 0 || eligible_long.is_empty())
+                    && (self.configured_n_positions.short == 0 || eligible_short.is_empty()))
+            {
+                return false;
+            }
         }
 
         // ---------- 3. dynamic WELs ----------
@@ -7455,8 +7461,27 @@ mod tests {
             &backtest_params,
         );
 
-        bt.eligibility = Some(eligibility.view());
+        let initial_zero = ndarray::Array2::<u8>::zeros((6, 4));
+        bt.eligibility = Some(initial_zero.view());
         bt.eligibility_rows = Some(rows.view());
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert_eq!(bt.effective_n_positions.long, 0);
+        assert_eq!(bt.effective_n_positions.short, 0);
+        assert_eq!(bt.runtime_budget[1].short.effective_wallet_exposure_limit, 0.0);
+        assert_eq!(bt.runtime_budget[0].long.effective_wallet_exposure_limit, 0.2);
+        let configured = (
+            bt.configured_n_positions.long,
+            bt.configured_n_positions.short,
+        );
+        bt.configured_n_positions.long = 0;
+        bt.configured_n_positions.short = 0;
+        assert!(!bt.update_n_positions_and_wallet_exposure_limits(0));
+        (bt.configured_n_positions.long, bt.configured_n_positions.short) = configured;
+        bt.coin_trade_start_idx.fill(2);
+        assert!(!bt.update_n_positions_and_wallet_exposure_limits(0));
+        bt.coin_trade_start_idx.fill(0);
+
+        bt.eligibility = Some(eligibility.view());
         for (k, long, short) in [(0, 1, 1), (1, 1, 1), (2, 3, 4), (3, 3, 4), (4, 3, 4)] {
             bt.update_n_positions_and_wallet_exposure_limits(k);
             assert_eq!(bt.effective_n_positions.long, long);
