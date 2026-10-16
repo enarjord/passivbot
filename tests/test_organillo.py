@@ -181,6 +181,44 @@ def test_disabled_preparation_never_reads_csv(monkeypatch):
     assert prepare_selection(config, [], None) is None
 
 
+def test_disabled_cpu_and_native_preparation_allocate_no_schedule(
+        monkeypatch, require_real_passivbot_rust_module):
+    from backtest import build_backtest_payload
+    from optimization.native_datasets import NativeDatasetRegistry
+    from shared_arrays import SharedArrayManager
+    from optimize import Evaluator
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("disabled preparation accessed an eligibility schedule")
+    for name in ("read_csv", "freeze_config", "prepare_selection", "share_selection"):
+        monkeypatch.setattr("organillo." + name, unexpected)
+    config, candles, markets, btc, timestamps = fixture_inputs(bars=512)
+    config["optimize"].update(scoring=[{"metric": "adg_strategy_eq", "goal": "max"}], limits=[])
+    payload = build_backtest_payload(candles, markets, config, "binance", btc, timestamps)
+    assert payload.bundle.eligibility is None
+    manager = SharedArrayManager()
+    base = None
+    try:
+        specs = [manager.create_from(array)[0] for array in (candles, btc)]
+        base = Evaluator({"binance": specs[0]}, {"binance": specs[1]}, {"binance": markets},
+                         config, timestamps={"binance": timestamps}, shared_array_manager=manager)
+        assert not base.selection_specs
+        with NativeDatasetRegistry(base, standalone_candle_coins={"binance": ("COIN00", "COIN01")}) as registry:
+            assert not registry._selections
+            for binding in registry.bindings:
+                assert binding.dataset.eligibility is None
+                assert binding.dataset.eligibility_rows is None
+                with binding.dataset.attach_selection() as selection:
+                    assert selection is None
+    finally:
+        if base is not None:
+            for group in base._attachments.values():
+                for attachment in group.values():
+                    attachment.close()
+            base._attachments.clear()
+        manager.cleanup()
+
+
 def test_canonical_config_roundtrip_preserves_optional_input(tmp_path):
     import json
     from config import get_template_config, prepare_config
