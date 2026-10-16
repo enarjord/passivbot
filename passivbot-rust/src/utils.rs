@@ -35,77 +35,129 @@ fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool 
     (value - aligned_value).abs() <= f64::EPSILON * scale * 4.0
 }
 
-/// Whether subtracting a close leaves at least the effective minimum quantity.
-/// Recover only representation noise confirmed by resolvable venue-step counts;
-/// a genuine deficit or an unresolvable quantity remains below the minimum.
+// Convert an integer venue count through the step's canonical decimal value.
+// A raw binary product or decimal cleanup can land on an adjacent float at
+// large magnitudes; accept the canonical decimal representation as well.
+fn canonical_step_value(count: f64, step: f64) -> Option<f64> {
+    if count < 0.0 || count.fract() != 0.0 {
+        return None;
+    }
+    let text = step.to_string();
+    let (mantissa, exponent) = match text.split_once('e') {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (text.as_str(), 0),
+    };
+    let places = mantissa
+        .split_once('.')
+        .map_or(0, |(_, tail)| tail.len() as i32);
+    let digits = mantissa.replace('.', "");
+    let trimmed = digits.trim_end_matches('0');
+    let coefficient = trimmed.parse::<u128>().ok()?.checked_mul(count as u128)?;
+    let exponent = exponent - places + (digits.len() - trimmed.len()) as i32;
+    format!("{}e{}", coefficient, exponent).parse::<f64>().ok()
+}
+
+/// Recover a venue count only when the quantity uniquely round-trips in the
+/// direction which could make a remaining position smaller.
+fn close_operand_step_count(quantity: f64, step: f64, upward: bool) -> Option<u64> {
+    if !quantity.is_finite() || quantity <= 0.0 || !step.is_finite() || step <= 0.0 {
+        return None;
+    }
+    let bits = if upward {
+        quantity.to_bits() + 1
+    } else {
+        quantity.to_bits() - 1
+    };
+    if (quantity - f64::from_bits(bits)).abs() > step {
+        return None;
+    }
+    let nearest = (quantity / step).round();
+    // Division can round before integer rounding at large counts.
+    let residual = (-nearest).mul_add(step, quantity);
+    let count = if residual >= step * 0.5 {
+        nearest + 1.0
+    } else if residual < -step * 0.5 {
+        nearest - 1.0
+    } else {
+        nearest
+    };
+    const MAX_EXACT_STEPS: f64 = 9_007_199_254_740_992.0;
+    if !count.is_finite() || count < 0.0 || count > MAX_EXACT_STEPS {
+        return None;
+    }
+    let matches = |count: f64| {
+        let raw = count * step;
+        quantity == raw
+            || quantity == round_to_step_decimal_places(raw, step)
+            || canonical_step_value(count, step) == Some(quantity)
+    };
+    // Only the neighbor which can reduce the remainder must be unique. At a
+    // binade boundary the opposite neighbor can alias without hiding a deficit.
+    let neighbor = count + if upward { 1.0 } else { -1.0 };
+    (matches(count) && neighbor != count && !matches(neighbor)).then_some(count as u64)
+}
+
+/// Whether a close wave leaves the effective minimum. Near that boundary,
+/// compare proven per-leg venue counts before accepting subtraction/sum noise.
+pub fn close_wave_remainder_meets_minimum<I>(
+    position_size_abs: f64,
+    clips: I,
+    min_qty: f64,
+    qty_step: f64,
+) -> bool
+where
+    I: Iterator<Item = f64> + ExactSizeIterator + Clone,
+{
+    let total_abs: f64 = clips.clone().sum();
+    let remainder = position_size_abs - total_abs;
+    // This selects the proof path; it never grants a quantity tolerance.
+    // Include every addition in the naive close-wave sum's error bound.
+    let representation_tolerance = f64::EPSILON
+        * position_size_abs
+            .abs()
+            .max(total_abs.abs())
+            .max(min_qty.abs())
+        * (clips.len() as f64 + 3.0);
+    if (min_qty - remainder).abs() > representation_tolerance {
+        return remainder >= min_qty;
+    }
+    let Some(position_steps) = close_operand_step_count(position_size_abs, qty_step, false) else {
+        return false;
+    };
+    let Some(minimum_steps) = close_operand_step_count(min_qty, qty_step, true) else {
+        return false;
+    };
+    // Do not reconstruct cardinality from an already rounded aggregate: several
+    // individually aligned legs can accumulate an error of whole venue steps.
+    let mut total_steps = 0_u64;
+    for clip in clips {
+        let Some(steps) = close_operand_step_count(clip, qty_step, true) else {
+            return false;
+        };
+        let Some(sum) = total_steps.checked_add(steps) else {
+            return false;
+        };
+        total_steps = sum;
+    }
+    position_steps
+        .checked_sub(total_steps)
+        .is_some_and(|steps| steps >= minimum_steps)
+}
+
+/// The strategy's single clip and the final order wave use the same minimum
+/// remainder contract.
 pub fn close_remainder_meets_minimum(
     position_size_abs: f64,
     clip_qty: f64,
     min_qty: f64,
     qty_step: f64,
 ) -> bool {
-    let remainder = position_size_abs - clip_qty;
-    if remainder >= min_qty {
-        return true;
-    }
-    // Only repair subtraction noise, not genuinely undersized remainders.
-    let representation_tolerance = f64::EPSILON
-        * position_size_abs
-            .abs()
-            .max(clip_qty.abs())
-            .max(min_qty.abs())
-        * 4.0;
-    if min_qty - remainder > representation_tolerance {
-        return false;
-    }
-    // Compare aligned cardinalities before accepting a near-minimum
-    // remainder. A fractional-step allowance can hide a real grid deficit
-    // at large operand ratios. Each quantity must resolve adjacent steps;
-    // otherwise keep the ordinary full-close decision.
-    let step = qty_step.abs();
-    let quantities = [position_size_abs, clip_qty, min_qty];
-    // Position decreases and clip increases when testing a smaller
-    // remainder. At a power-of-two boundary those neighbor gaps differ.
-    if !quantities
-        .iter()
-        .zip([false, true, true])
-        .all(|(qty, upward)| {
-            if !qty.is_finite() || *qty <= 0.0 {
-                return false;
-            }
-            let bits = if upward {
-                qty.to_bits() + 1
-            } else {
-                qty.to_bits() - 1
-            };
-            (*qty - f64::from_bits(bits)).abs() <= step
-        })
-    {
-        return false;
-    }
-    let steps = quantities.map(|qty| {
-        let nearest = (qty / step).round();
-        // Division can round before integer rounding at large counts.
-        // A fused residual corrects that double rounding without losing
-        // the low bits again in nearest * step.
-        let residual = (-nearest).mul_add(step, qty);
-        if residual >= step * 0.5 {
-            nearest + 1.0
-        } else if residual < -step * 0.5 {
-            nearest - 1.0
-        } else {
-            nearest
-        }
-    });
-    const MAX_EXACT_STEPS: f64 = 9_007_199_254_740_992.0;
-    if !steps
-        .iter()
-        .all(|value| value.is_finite() && value.abs() <= MAX_EXACT_STEPS)
-        || steps[0] - steps[1] < steps[2]
-    {
-        return false;
-    }
-    true
+    close_wave_remainder_meets_minimum(
+        position_size_abs,
+        std::iter::once(clip_qty),
+        min_qty,
+        qty_step,
+    )
 }
 
 /// Directionally quantize without truncating valid increments below ten decimals.
@@ -521,6 +573,48 @@ pub fn calc_ema_price_ask(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn close_remainder_requires_unique_operand_grid_roundtrips() {
+        let step = 0.001;
+        let minimum = 9.0 * step;
+        let large_clip = (10_000_000_000_000.0 - 9.0) * step;
+        assert!(super::close_remainder_meets_minimum(
+            1e10, large_clip, minimum, step
+        ));
+        for position in [f64::from_bits(1e10_f64.to_bits() - 1), 1e10 - 5e-6] {
+            assert!(!super::close_remainder_meets_minimum(
+                position, large_clip, minimum, step
+            ));
+        }
+        let clip = 32767.991_f64;
+        assert!(super::close_remainder_meets_minimum(
+            32768.0, clip, minimum, step
+        ));
+        for (position, clip, minimum) in [
+            (f64::from_bits(32768.0_f64.to_bits() - 1), clip, minimum),
+            (32768.0, f64::from_bits(clip.to_bits() + 1), minimum),
+            (32768.0, clip, f64::from_bits(minimum.to_bits() + 1)),
+        ] {
+            assert!(!super::close_remainder_meets_minimum(
+                position, clip, minimum, step
+            ));
+        }
+        // A raw product and its next count's canonical decimal value can
+        // alias while physical float neighbors remain within one venue step.
+        let count = 8_000_000_000_000_014.0;
+        let quantity = count * step;
+        assert_eq!(super::canonical_step_value(count + 1.0, step), Some(quantity));
+        assert_eq!(super::close_operand_step_count(quantity, step, true), None);
+        // Large count resolution does not justify an off-grid minimum.
+        let position = (1_u64 << 53) as f64;
+        assert!(!super::close_remainder_meets_minimum(
+            position,
+            position - 1.0,
+            1.5,
+            1.0
+        ));
+    }
+
     use super::{
         ema_last_f64, round_, round_dn, round_up, tolerant_round_dn_preserve_step,
         tolerant_round_up_preserve_step,

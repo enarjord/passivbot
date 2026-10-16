@@ -1929,10 +1929,16 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
         (32768.0 - 1e-6, 32767.991, 0.001, 0.009, False),
         (40_000_000.0 + 1e-8, 40_000_000.0, 1e-8, 2e-8, False),
         (8641.024116158516, 8641.024116158515, 1e-12, 2e-12, False),
+        (1e10, 9999999999.991, 0.001, 0.009, True),
+        (math.nextafter(1e10, 0.0), 9999999999.991, 0.001, 0.009, False),
+        (1e10 - 5e-6, 9999999999.991, 0.001, 0.009, False),
+        (math.nextafter(32768.0, 0.0), 32767.991, 0.001, 0.009, False),
     ],
     ids=[
         "ordinary-minimum", "large-position", "large-step-ratio", "one-step-deficit",
         "off-grid-deficit", "large-ratio-step-deficit", "unresolvable-steps",
+        "large-canonical-grid", "large-off-grid-neighbor", "large-off-grid-deficit",
+        "ordinary-off-grid-neighbor",
     ],
 )
 def test_ema_anchor_final_close_preserves_only_valid_minimum_remainders(
@@ -1982,7 +1988,7 @@ def test_ema_anchor_final_close_preserves_only_valid_minimum_remainders(
     ]
     assert len(close) == 1
     expected = (
-        max(clip, pbr.calc_min_entry_qty_py(1.0, 1.0, step, minimum, 0.0))
+        max(pbr.round_(clip, step), pbr.calc_min_entry_qty_py(1.0, 1.0, step, minimum, 0.0))
         if retain_partial else position
     )
     assert close[0]["qty"] == (-expected if pside == "long" else expected)

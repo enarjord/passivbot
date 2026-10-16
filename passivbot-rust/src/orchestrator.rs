@@ -60,7 +60,7 @@ mod core {
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
         calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure,
-        close_remainder_meets_minimum, qty_to_cost, round_,
+        close_wave_remainder_meets_minimum, qty_to_cost, round_,
         round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
     };
     use serde::{Deserialize, Serialize};
@@ -1457,7 +1457,12 @@ mod core {
             if remainder <= 0.0 {
                 return;
             }
-            if close_remainder_meets_minimum(pos_abs, total_abs, min_req, exchange.qty_step) {
+            if close_wave_remainder_meets_minimum(
+                pos_abs,
+                closes.iter().map(|order| order.qty.abs()),
+                min_req,
+                exchange.qty_step,
+            ) {
                 return;
             }
             // Absorb into furthest-from-fill close (largest diff).
@@ -7666,6 +7671,73 @@ mod core {
                     );
                     assert_eq!(closes.len(), 1);
                     assert_eq!(closes[0].qty, sign * expected);
+                }
+            }
+        }
+
+        #[test]
+        fn close_finalization_sums_per_leg_counts_before_accepting_minimum() {
+            let ob = OrderBook { bid: 1.0, ask: 1.0 };
+            let exchange = ExchangeParams {
+                qty_step: 1e-8,
+                price_step: 0.01,
+                min_qty: 3e-8,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let quantities = [
+                2955942.72954005,
+                10226164.90640897,
+                21518605.19847049,
+                1889206.4590048,
+                444062.744128,
+                1451086.96633448,
+            ];
+            let total_steps = 3_848_506_900_388_679_u64;
+            for pside in [PositionSide::Long, PositionSide::Short] {
+                let sign = if pside == PositionSide::Long {
+                    -1.0
+                } else {
+                    1.0
+                };
+                for remainder_steps in [1_u64, 3] {
+                    let position = (total_steps + remainder_steps) as f64 * exchange.qty_step;
+                    let mut closes: Vec<IdealOrder> = quantities
+                        .iter()
+                        .map(|qty| IdealOrder {
+                            symbol_idx: 0,
+                            pside,
+                            qty: sign * qty,
+                            price: 1.0,
+                            order_type: if pside == PositionSide::Long {
+                                OrderType::CloseGridLong
+                            } else {
+                                OrderType::CloseGridShort
+                            },
+                        })
+                        .collect();
+                    let original: Vec<f64> = closes.iter().map(|order| order.qty).collect();
+                    trim_closes_to_position(
+                        pside,
+                        &mut closes,
+                        -sign * position,
+                        &ob,
+                        &exchange,
+                        None,
+                        None,
+                    );
+                    if remainder_steps == 3 {
+                        assert_eq!(
+                            closes.iter().map(|order| order.qty).collect::<Vec<_>>(),
+                            original
+                        );
+                    } else {
+                        assert_ne!(
+                            closes.iter().map(|order| order.qty).collect::<Vec<_>>(),
+                            original
+                        );
+                    }
                 }
             }
         }
