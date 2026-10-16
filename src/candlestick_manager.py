@@ -2779,6 +2779,10 @@ class CandlestickManager:
 
     def _disk_rows_signature(self, load_keys, day_ctx, symbol, tf_norm):
         """Identify every selected shard and index, including atomic replacements."""
+        if sys.platform.startswith("win"):
+            # Windows ctime is creation time on supported Python versions. It
+            # cannot invalidate same-size corrections with restored mtime.
+            return None
         paths = [self._index_path(symbol, tf=tf_norm)]
         for day, path in load_keys:
             paths.append(path)
