@@ -6,6 +6,13 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Build one contiguous timestamp index per synchronous unknown-gap coverage check instead of repeatedly copying the retained candle history for each gap. Preserve full missing-span widths, synthetic-candle exclusion and exact candle/EMA results; never reuse the index across mutable reads.
+
+- Index owned historical candle-gap metadata by range and mutation revision, avoiding full-history normalization and candle copies on unrelated recent reads and warm EMA projection hits. Preserve overlapping coverage, retry clocks, legacy timestamp defaults and external-writer invalidation.
+
+- Reuse unchanged parsed candle shards with bounded memory and file-identity invalidation, and avoid sorting the full retained history when overlapping source rows are identical. Partial reads that lose either a legacy shard or its primary overlay remain retryable. Native Windows keeps ordinary disk reads because its file creation clock cannot safely invalidate in-place corrections. Corrections, strict audits, mutable consumer arrays and restart reconstruction retain their existing behavior.
+- Avoid a second HSL history reconstruction when a complete native minute grid lacks only the non-minute current endpoint. Preserve current-fact validation, decisions, lifecycle events and estimator diagnostics in live and simulator evaluation.
+
 - Initialize every member of a fresh GPU optimizer population randomly, matching the CPU backends, instead of implicitly inserting the input bot as the first candidate. Explicit `--start` configs and checkpoint resume remain supported.
 
 - Preserve valid minimum-sized close remainders through EMA Anchor sizing and final
@@ -16,6 +23,8 @@ since the latest release tag; these features may already be available when insta
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
 - Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
+
+- Add opt-in Binance Portfolio Margin support for debt-free USDT collateral and USDT-settled UM perpetuals. Preserve wallet balance separately from unrealized PnL, validate unsupported collateral and COIN-M exposure, route native positions and income through PAPI, and retain Binance broker attribution with REST order polling. See [the PM guide](docs/exchanges/binance_portfolio_margin.md).
 
 - Fix historical candle-resolution seams when retained 1m history begins inside a higher-timeframe bucket. A straddling coarse bucket may now reconstruct the missing pre-boundary minutes when the overlapping exact 1m interval is complete, preserving extrema known to belong to the missing prefix and leaving exact rows unchanged. Genuine internal 1m gaps remain unavailable.
 

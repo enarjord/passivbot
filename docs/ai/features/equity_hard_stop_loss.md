@@ -97,3 +97,16 @@ HSL-disabled trace parity. GPU values are screening estimates; exact Rust valida
 retained candidates. Cache loss/rebuild must preserve intent. Performance acceptance compares
 trading traces before timings and includes disabled HSL. Live trials require separate approval;
 offline tests do not establish exchange execution correctness.
+
+### Evaluation-local minute-prefix reuse
+
+A complete minute-aligned source grid may omit only the non-minute current cut.
+The reconciler already appends that cut using the current observed position and
+mark. After ordinary snapshot validation, evaluation may reuse this call's
+prepared history if every selected pair has the exact dense positive minute
+prefix at the current observation cut. Preserve the full normalizer's endpoint
+diagnostic. Empty, sparse, off-grid, invalid or differently observed price inputs
+retain full normalization. No result is reused across evaluations; current
+balance, fills, positions, marks, policies and admission checks remain authority.
+Regression coverage compares full outputs and simulator cursors against forced
+normalization and reconstruction.
