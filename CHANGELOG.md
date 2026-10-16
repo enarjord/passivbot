@@ -19,6 +19,8 @@ since the latest release tag; these features may already be available when insta
 
 - Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
 
+- Add opt-in Binance Portfolio Margin support for debt-free USDT collateral and USDT-settled UM perpetuals. Preserve wallet balance separately from unrealized PnL, validate unsupported collateral and COIN-M exposure, route native positions and income through PAPI, and retain Binance broker attribution with REST order polling. See [the PM guide](docs/exchanges/binance_portfolio_margin.md).
+
 - Fix historical candle-resolution seams when retained 1m history begins inside a higher-timeframe bucket. A straddling coarse bucket may now reconstruct the missing pre-boundary minutes when the overlapping exact 1m interval is complete, preserving extrema known to belong to the missing prefix and leaving exact rows unchanged. Genuine internal 1m gaps remain unavailable.
 
 - Reject individual GPU suite candidates with invalid aggregated metrics, matching the CPU optimizer, instead of terminating the entire optimization batch.

@@ -2991,8 +2991,10 @@ class BinanceFetcher(BaseFetcher):
         allow_fallback_symbols: bool = False,
         income_limit: int = 1000,
         trade_limit: int = 1000,
+        portfolio_margin: bool = False,
     ) -> None:
         self.api = api
+        self.portfolio_margin = portfolio_margin
         if symbol_resolver is None:
             raise ValueError("BinanceFetcher requires a symbol_resolver callable")
         self._symbol_resolver = symbol_resolver
@@ -3339,11 +3341,19 @@ class BinanceFetcher(BaseFetcher):
         since_ms: Optional[int],
         until_ms: Optional[int],
     ) -> List[Dict[str, object]]:
+        income_method = (
+            self.api.papiGetUmIncome if self.portfolio_margin
+            else self.api.fapiprivate_get_income
+        )
         params: Dict[str, object] = {"incomeType": income_type, "limit": self.income_limit}
         if until_ms is None:
             if since_ms is None:
-                logger.debug(f"BinanceFetcher._fetch_income.fapiprivate_get_income params={params}")
-                payload = await self.api.fapiprivate_get_income(params=params)
+                logger.debug(
+                    "BinanceFetcher._fetch_income account_type=%s income_type=%s",
+                    "portfolio_margin" if self.portfolio_margin else "futures",
+                    income_type,
+                )
+                payload = await income_method(params=params)
                 return sorted(
                     [self._normalize_income(x, income_type=income_type) for x in payload],
                     key=lambda x: x["timestamp"],
@@ -3367,7 +3377,7 @@ class BinanceFetcher(BaseFetcher):
                 break
             previous_key = key
             fetch_count += 1
-            payload = await self.api.fapiprivate_get_income(params=params)
+            payload = await income_method(params=params)
             if fetch_count > 1:
                 payload_size = len(payload) if payload else 0
                 # Only log at INFO when there's actual data; DEBUG otherwise
@@ -8446,6 +8456,7 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
 
         return BinanceFetcher(
             api=bot.cca,
+            portfolio_margin=bool(getattr(bot, "is_portfolio_margin", False)),
             symbol_resolver=resolver,
             positions_provider=binance_live_symbol_provider,
             open_orders_provider=binance_live_symbol_provider,

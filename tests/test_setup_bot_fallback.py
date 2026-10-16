@@ -80,6 +80,34 @@ def test_setup_bot_known_exchange_uses_specific_bot():
             assert result._order_churn_gate_enabled_for_connector is True
 
 
+@pytest.mark.parametrize("account_type", ["portfolio_margin", "pm", "PM"])
+def test_setup_bot_binance_portfolio_margin_account_type(account_type):
+    """setup_bot() routes to BinancePortfolioBot when account_type is portfolio_margin."""
+    from passivbot import setup_bot
+
+    config = {"live": {"user": "test_user"}}
+
+    mock_user_info = {
+        "exchange": "binance",
+        "account_type": account_type,
+        "key": "test_key",
+        "secret": "test_secret",
+    }
+
+    with patch("passivbot.load_user_info", return_value=mock_user_info):
+        with patch("exchanges.binance_portfolio.BinancePortfolioBot") as mock_pm_bot:
+            mock_bot = MagicMock()
+            mock_pm_bot.return_value = mock_bot
+
+            result = setup_bot(config)
+
+            mock_pm_bot.assert_called_once_with(config)
+            assert result == mock_bot
+            # account_type is a credentials-level detail, not a different exchange --
+            # the order-churn-gate allowlist is still keyed on user_info["exchange"].
+            assert result._order_churn_gate_enabled_for_connector is True
+
+
 @pytest.mark.parametrize(
     ("exchange", "target"),
     [
