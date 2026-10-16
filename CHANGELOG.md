@@ -6,9 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve the dataset timestamp origin when restoring native GPU equity clocks, keeping fill-gap and time-dependent metrics on the same clock.
+
 - Allow frozen optimizer benchmarks to select existing RNG seeds for targeted reruns without resampling candidates.
 
-- Fix GPU trailing-martingale recursive closes moving or merging adjacent price ticks through intermediate relative-price rounding.
+- Fix GPU trailing-martingale grid and positive-retracement closes moving or merging adjacent price ticks through intermediate relative-price rounding.
 
 - Use the same elapsed-time origin for optimizer benchmark tuning windows and
   cohort completions, reporting parameter preparation and service setup separately.

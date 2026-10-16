@@ -376,3 +376,84 @@ def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hyster
     assert out["fill_count"].item() == expected_count
     key = "short_psize" if short else "psize"
     assert out[key].item() == pytest.approx(expected_size, abs=1e-5, rel=0)
+
+
+@pytest.mark.parametrize("source_name", [
+    "mps_trailing_martingale_source_py",
+    "mps_trailing_martingale_multicoin_source_py",
+])
+def test_partial_top_up_at_power_of_two_checks_inward_spacing(source_name):
+    import passivbot_rust
+    from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    source = getattr(passivbot_rust, source_name)()
+    def function(name):
+        start = source.index("inline float " + name + "(")
+        return source[start:source.index("\n}", start) + 2]
+    probe = "#include <metal_stdlib>\nusing namespace metal;\n"
+    probe += function("floor_step") + "\n" + function("aligned_qty_difference")
+    probe += """
+kernel void inward_spacing_probe(constant float* values, device float* output,
+                                 uint b [[thread_position_in_grid]]) {
+    output[b] = aligned_qty_difference(values[0], values[1], values[2]);
+}
+"""
+    device = gpu_device()
+    values = torch.tensor([0.125, 0.08537521, 1e-8], dtype=torch.float32, device=device)
+    output = torch.empty(1, device=device)
+    compile_shader(probe).inward_spacing_probe(values, output, threads=1)
+    synchronize()
+    expected = np.float32(3_962_479) * np.float32(1e-8)
+    assert output.item() == float(expected)
+
+
+@pytest.mark.parametrize("source_name", [
+    "mps_trailing_martingale_source_py",
+    "mps_trailing_martingale_multicoin_source_py",
+])
+@pytest.mark.parametrize("short", [False, True])
+def test_positive_retracement_close_forms_one_relative_distance(source_name, short):
+    import passivbot_rust
+    from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    source = getattr(passivbot_rust, source_name)()
+    if source_name == "mps_trailing_martingale_source_py":
+        branch = source.index("} else if (cr > 0.0f)", source.index("float close_target ="))
+        first = source.index("close_target =", branch)
+        last = source.index(";", first) + 1
+        expression = source[first:last].replace("s.pprice", "price").replace("is_long", "!short_side")
+    else:
+        branch = source.index("} else if (close_retracement > 0.0f)", source.index("float close_target ="))
+        first = source.index("close_target =", branch)
+        last = source.index(";", first) + 1
+        expression = source[first:last].replace("pprice[c]", "price").replace("close_threshold", "ct").replace("close_retracement", "cr")
+    probe = """#include <metal_stdlib>
+using namespace metal;
+kernel void retracement_close_probe(constant float* values, device float* output,
+                                    uint b [[thread_position_in_grid]]) {
+    float price=values[0], ct=values[1], cr=values[2], step=values[3];
+    bool short_side=values[4]>0;
+    float close_target;
+""" + expression + """
+    output[0] = short_side ? floor(close_target/step+1e-6f)
+                          : ceil(close_target/step-1e-6f);
+}
+"""
+    device = gpu_device()
+    values = torch.tensor([6198.13, .00865352712571621, .006685107946395874, .01, short],
+                          dtype=torch.float32, device=device)
+    output = torch.empty(1, device=device)
+    compile_shader(probe).retracement_close_probe(values, output, threads=1)
+    synchronize()
+    # Decimal reference for the same represented operands; the omitted
+    # intermediate 1 +/- threshold rounding changes the long target by a tick.
+    from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING
+    p, ct, cr, step = map(lambda value: Decimal(str(float(value))), values.cpu().tolist()[:4])
+    distance = -ct + cr if short else ct - cr
+    expected = ((p + p * distance) / step).to_integral_value(
+        rounding=ROUND_FLOOR if short else ROUND_CEILING)
+    assert output.item() == int(expected)

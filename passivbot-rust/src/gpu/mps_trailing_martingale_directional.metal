@@ -69,7 +69,7 @@ inline float aligned_qty_difference(float total, float held, float step) {
     float held_count = rint(held / step);
     bool counts_resolvable = total_count >= 0.0f && total_count < 0x1p24f
         && held_count >= 0.0f && held_count < 0x1p24f
-        && nextafter(total, INFINITY) - total <= step
+        && total - nextafter(total, -INFINITY) <= step
         && nextafter(held, INFINITY) - held <= step;
     bool on_grid = total_count * step == total && held_count * step == held;
     if (counts_resolvable && on_grid) {
@@ -1240,9 +1240,7 @@ inline void generate_orders(
             close_target = price_now;
         } else if (cr > 0.0f) {
             close_triggered = crossed_close && retraced_close;
-            close_target = s.pprice * (
-                is_long ? 1.0f + ct - cr : 1.0f - ct + cr
-            );
+            close_target = fma(s.pprice, is_long ? ct - cr : -ct + cr, s.pprice);
         }
     }
     int target_ticks = directional_ticks(close_target, price_step, close_up);

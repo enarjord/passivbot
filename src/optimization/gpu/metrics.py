@@ -2121,7 +2121,9 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
     return {name: values[name] for name in requested if name in values}
 
 
-def _with_native_equity_timestamps(out: dict, interval_ms: int) -> dict:
+def _with_native_equity_timestamps(
+    out: dict, interval_ms: int, timestamp_origin_ms: int = 0
+) -> dict:
     """Restore native clocks only after compact outputs reach host reduction."""
     if "first_eq_step" not in out:
         return out
@@ -2135,7 +2137,7 @@ def _with_native_equity_timestamps(out: dict, interval_ms: int) -> dict:
         raise RuntimeError("Invalid native GPU equity observation clocks")
     result = dict(out)
     for name, steps in (("first_eq", first), ("last_eq", last)):
-        milliseconds = steps.to(torch.float64) * int(interval_ms)
+        milliseconds = steps.to(torch.float64) * int(interval_ms) + int(timestamp_origin_ms)
         result[f"{name}_ts"] = torch.where(
             steps >= 0, milliseconds, torch.full_like(milliseconds, float("nan"))
         )
@@ -2145,7 +2147,7 @@ def _with_native_equity_timestamps(out: dict, interval_ms: int) -> dict:
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     """Reduce compact Metal output into validated proxy objective metrics."""
 
-    out = _with_native_equity_timestamps(out, run.interval_ms)
+    out = _with_native_equity_timestamps(out, run.interval_ms, data["ts0"])
     day_end_eq = out["day_end_eq"].to(torch.float64)
     day_min_eq = out["day_min_eq"].to(torch.float64)
     day_max_dd = out["day_max_dd"].to(torch.float64)
