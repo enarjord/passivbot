@@ -97,14 +97,23 @@ fn close_operand_step_count(quantity: f64, step: f64, upward: bool) -> Option<u6
     (matches(count) && neighbor != count && !matches(neighbor)).then_some(count as u64)
 }
 
-/// Whether a close wave leaves the effective minimum. Near that boundary,
-/// compare proven per-leg venue counts before accepting subtraction/sum noise.
-pub fn close_wave_remainder_meets_minimum<I>(
+#[derive(Debug, PartialEq, Eq)]
+pub enum CloseWaveRemainder {
+    NoRemainder,
+    MeetsMinimum,
+    BelowMinimum { proven_steps: Option<u64> },
+}
+
+/// Classify a close wave using proven per-leg venue counts when floating
+/// arithmetic can affect its minimum or the dust-absorption budget.
+/// Keep a proven remaining budget so finalization need not subtract float sums
+/// again after deciding to absorb dust.
+pub fn classify_close_wave_remainder<I>(
     position_size_abs: f64,
     clips: I,
     min_qty: f64,
     qty_step: f64,
-) -> bool
+) -> CloseWaveRemainder
 where
     I: Iterator<Item = f64> + ExactSizeIterator + Clone,
 {
@@ -118,45 +127,70 @@ where
             .max(total_abs.abs())
             .max(min_qty.abs())
         * (clips.len() as f64 + 3.0);
-    if (min_qty - remainder).abs() > representation_tolerance {
-        return remainder >= min_qty;
+    if clips.len() == 1 && clips.clone().next() == Some(position_size_abs) {
+        return CloseWaveRemainder::NoRemainder;
     }
-    let Some(position_steps) = close_operand_step_count(position_size_abs, qty_step, false) else {
-        return false;
-    };
-    let Some(minimum_steps) = close_operand_step_count(min_qty, qty_step, true) else {
-        return false;
-    };
-    // Do not reconstruct cardinality from an already rounded aggregate: several
-    // individually aligned legs can accumulate an error of whole venue steps.
-    let mut total_steps = 0_u64;
-    for clip in clips {
-        let Some(steps) = close_operand_step_count(clip, qty_step, true) else {
-            return false;
-        };
-        let Some(sum) = total_steps.checked_add(steps) else {
-            return false;
-        };
-        total_steps = sum;
+    if remainder >= min_qty && remainder - min_qty > representation_tolerance {
+        return CloseWaveRemainder::MeetsMinimum;
     }
-    position_steps
-        .checked_sub(total_steps)
-        .is_some_and(|steps| steps >= minimum_steps)
+    if remainder < -representation_tolerance {
+        return CloseWaveRemainder::NoRemainder;
+    }
+    // Prove positive dust even far below the minimum so absorption keeps its
+    // exact count budget. A sum near zero can also conceal positive dust,
+    // regardless of how large the minimum is.
+    let prove = || {
+        let position_steps = close_operand_step_count(position_size_abs, qty_step, false)?;
+        let minimum_steps = close_operand_step_count(min_qty, qty_step, true)?;
+        // Do not reconstruct cardinality from an already rounded aggregate.
+        let mut total_steps = 0_u64;
+        for clip in clips {
+            total_steps =
+                total_steps.checked_add(close_operand_step_count(clip, qty_step, true)?)?;
+        }
+        Some((position_steps.checked_sub(total_steps)?, minimum_steps))
+    };
+    match prove() {
+        Some((0, _)) => CloseWaveRemainder::NoRemainder,
+        Some((steps, minimum)) if steps >= minimum => CloseWaveRemainder::MeetsMinimum,
+        Some((steps, _)) => CloseWaveRemainder::BelowMinimum {
+            proven_steps: Some(steps),
+        },
+        // A positive ambiguous remainder stays conservative. A float sum which
+        // already covers the position retains its existing handling unless an
+        // actual positive subminimum remainder was independently proven.
+        None if remainder <= 0.0 => CloseWaveRemainder::NoRemainder,
+        None => CloseWaveRemainder::BelowMinimum { proven_steps: None },
+    }
 }
 
-/// The strategy's single clip and the final order wave use the same minimum
-/// remainder contract.
+pub fn close_qty_absorbing_proven_remainder(
+    clip_qty: f64,
+    remaining_steps: u64,
+    qty_step: f64,
+) -> Option<f64> {
+    let count = close_operand_step_count(clip_qty, qty_step, true)?.checked_add(remaining_steps)?;
+    if count > 1_u64 << 53 {
+        return None;
+    }
+    canonical_step_value(count as f64, qty_step).filter(|quantity| quantity.is_finite())
+}
+
+/// The strategy's single clip and the final order wave use the same contract.
 pub fn close_remainder_meets_minimum(
     position_size_abs: f64,
     clip_qty: f64,
     min_qty: f64,
     qty_step: f64,
 ) -> bool {
-    close_wave_remainder_meets_minimum(
-        position_size_abs,
-        std::iter::once(clip_qty),
-        min_qty,
-        qty_step,
+    !matches!(
+        classify_close_wave_remainder(
+            position_size_abs,
+            std::iter::once(clip_qty),
+            min_qty,
+            qty_step
+        ),
+        CloseWaveRemainder::BelowMinimum { .. }
     )
 }
 
