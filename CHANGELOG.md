@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Exclude newly reconstructed historical HSL breaches from observed stop/restart
+  counts when the current permission is GREEN; retain same-time lifecycle events.
+
+- Observe native multicoin GPU HSL time-in-red at flat execution boundaries, avoiding
+  an extra RED minute when final accounting restores GREEN before the next bar close.
+
 - Preserve native GPU equity observation clocks as candle indices until float64
   host decoding, avoiding long-history duration and annualized-metric drift.
 

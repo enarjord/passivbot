@@ -5786,6 +5786,15 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         );
         const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
             || (any_fill && hsl_equity <= liquidation_floor);
+        if (any_fill && !hsl_report_at_fill_boundary) {
+            HslFillTimeReport long_fill_report = observed_multicoin_hsl_fill_time(
+                long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions, k);
+            HslFillTimeReport short_fill_report = observed_multicoin_hsl_fill_time(
+                short_side.hsl, short_side.coin_hsl, C, short_effective_n_positions, k);
+            if (long_fill_report.observed || short_fill_report.observed)
+                record_hsl_time_observation(hsl_time, float(k - 1),
+                    max(long_fill_report.tier, short_fill_report.tier));
+        }
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
         bool can_sample_hsl = (long_can_generate || short_can_generate)
@@ -7040,6 +7049,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         );
         const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
             || (any_fill && balance + hsl_unrealized <= liquidation_floor);
+        if (any_fill && !hsl_report_at_fill_boundary) {
+            HslFillTimeReport fill_report = observed_multicoin_hsl_fill_time(
+                side.hsl, side.coin_hsl, C, effective_n_positions, k);
+            if (fill_report.observed)
+                record_hsl_time_observation(hsl_time, float(k - 1), fill_report.tier);
+        }
         const bool has_hsl_position = tm_multicoin_side_has_position(side, C);
         const bool hsl_has_blocking_orders = tm_multicoin_side_has_blocking_orders(
             side, config, bars, coin_settings, k, C

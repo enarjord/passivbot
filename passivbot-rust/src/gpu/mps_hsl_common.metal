@@ -99,6 +99,7 @@ struct HslState {
     int tier;
     bool red_active_now;
     bool halted;
+    int report_flat_minute; // Observed accounting boundary; never trading permission.
     float current_red_start_k;
     float current_halt_start_k;
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
@@ -776,6 +777,7 @@ inline void mirror_hsl(thread HslState& owner, thread HslState& view) {
     view.tier = owner.tier;
     view.drawdown_ema = owner.drawdown_ema;
     view.sampled_drawdown_raw = owner.sampled_drawdown_raw;
+    view.report_flat_minute = owner.report_flat_minute;
 }
 
 // Reporting only: finish one contiguous panic loss segment. GREEN cancels
@@ -1025,6 +1027,7 @@ inline HslState load_hsl(
     h.tier = 0;
     h.red_active_now = false;
     h.halted = false;
+    h.report_flat_minute = -1;
     h.current_red_start_k = -1.0f;
     h.current_halt_start_k = -1.0f;
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
@@ -1185,6 +1188,7 @@ inline bool finish_hsl_episode_at_flat(
     // budgets still reach HSL validation and remain fatal.
     if (isfinite(balance) && balance <= 0.0f) return true;
     observe_hsl(h, balance, realized_pnl, 0.0f, false, int(kf), true);
+    if (h.enabled && h.hsl_valid) h.report_flat_minute = int(kf);
     return true;
 }
 
@@ -1348,6 +1352,35 @@ inline void record_hsl_time_observation(
 ) {
     advance_hsl_time_observation(observation, step);
     observation.was_red = tier == 3;
+}
+
+// A flat execution can turn an observed RED scope GREEN at the preceding
+// bar-close timestamp. Capture that permission before the next bar observation
+// integrates its interval. This marker has no authority over strategy or risk.
+struct HslFillTimeReport {
+    int tier;
+    bool observed;
+};
+
+inline HslFillTimeReport observed_multicoin_hsl_fill_time(
+    thread const HslState& aggregate, thread const HslState* coins,
+    int coin_count, int effective_n_positions, int minute
+) {
+    HslFillTimeReport result;
+    result.tier = -1; result.observed = false;
+    if (aggregate.signal_mode == HSL_SIGNAL_COIN) {
+        if (effective_n_positions > 0) {
+            for (int c = 0; c < coin_count; ++c) {
+                if (!coins[c].enabled) continue;
+                result.tier = max(result.tier, hsl_report_tier(coins[c]));
+                result.observed = result.observed || coins[c].report_flat_minute == minute;
+            }
+        }
+    } else if (aggregate.enabled) {
+        result.tier = hsl_report_tier(aggregate);
+        result.observed = aggregate.report_flat_minute == minute;
+    }
+    return result;
 }
 
 // Convert the relative reporting clock to controller minute coordinates.
