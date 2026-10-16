@@ -440,7 +440,9 @@ GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
 Reporting state is separate from the panic tier used by the simulation; counting
 cooldown does not extend panic orders. Shared-account EMA/TM replay integrates
 elapsed steps using the preceding observation's portfolio RED state, matching CPU
-elapsed-time reporting. First observations add no duration, terminal states add no
+elapsed-time reporting. A flat execution observes its updated portfolio tier at the
+fill timestamp before the following bar interval; GREEN at that boundary adds no
+unobserved RED minute. First observations add no duration, terminal states add no
 unobserved tail, and temporal dispatches retain the complete clock. The two packed
 scalar labels remain unchanged. Retained legacy directional single-coin replay
 still counts samples. Controller-active parity checks remain required to assess
@@ -464,6 +466,11 @@ scope modes, unsupported devices, or insufficient cache/scratch budget use indep
 factual replay. Cache rejection or loss never clips retained facts or publishes a rejected
 attempt. Numerical conditioning and threshold guards retain the scalar adjudication path.
 Growing factual capacity can disable optional indexing while retaining authoritative history.
+
+Fresh scope composition may skip a flat zero-signal prefix, gap or tail within one
+query. The next causal fill and the current endpoint are always evaluated, logical
+observation counts are preserved, and requested traces retain every observation.
+Native candle projection and prepared-mark validity retain the same admission rules.
 
 Run the offline synthetic matched benchmark with
 `python -m tools.gpu_hsl_coin_cache_benchmark --sides both --bars 8192 --lookback-days 1 --candidates 8`.

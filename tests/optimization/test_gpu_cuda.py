@@ -1072,7 +1072,8 @@ def test_cuda_completion_keeps_short_wait_active(monkeypatch):
 @pytest.mark.parametrize("device", ["cuda", "mps"])
 @pytest.mark.parametrize("weighted_volume", [False, True])
 @pytest.mark.parametrize("fused", [False, True])
-def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, weighted_volume, fused):
+@pytest.mark.parametrize("batch_size", [1, 65])
+def test_tm_unchunked_dispatch_uses_backend_launch_options(monkeypatch, device, weighted_volume, fused, batch_size):
     pytest.importorskip("torch")
     from optimization.gpu import mps_kernel
 
@@ -1108,21 +1109,26 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device, w
         unstuck_pnl_capacity=0,
     )))
     calls = []
-    library = SimpleNamespace(**{
-        runner.replay_kernel_name: lambda *args, **kwargs: calls.append((args, kwargs))
-    })
+    def kernel(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    kernel.max_threads_per_threadgroup = 1024
+    kernel.thread_execution_width = 32
+    library = SimpleNamespace(**{runner.replay_kernel_name: kernel})
     buffers = [object() for _ in range(12)]
     runner._dispatch(
         library, *buffers, weighted_equity_samples=None,
-        hsl_ema_tail_samples=None, batch_size=65
+        hsl_ema_tail_samples=None, batch_size=batch_size
     )
     assert len(calls) == 1
     assert len(calls[0][0]) == 17 + int(fused) + int(weighted_volume)
     if weighted_volume:
         assert calls[0][0][-1] is buffers[-1]
-    expected = {"threads": (65, 1, 1)}
+    expected = {"threads": (batch_size, 1, 1)}
     if device == "cuda" and not fused:
         expected["group_size"] = (32, 1, 1)
+    if device == "mps":
+        expected["group_size"] = (min(batch_size, 32), 1, 1)
     assert calls[0][1] == expected
 
 
@@ -1301,3 +1307,20 @@ def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel
     runner._prepare_native_factual_hsl(matrix)
     assert runner.hsl_fact_capacity == 0 and not runner.hsl_factual_replay
     assert runner.hsl_fact_capacity_learned == 512
+
+
+def test_cuda_decimal_proofs_keep_metal_signed_64_bit_arithmetic():
+    source = """#include <metal_stdlib>
+using namespace metal;
+struct DecimalOperand { long coefficient; int exponent; };
+kernel void signed_decimal_probe(constant long* input, device long* output,
+                                 uint b [[thread_position_in_grid]]) {
+    output[b] = input[b] * long(1);
+}
+"""
+    lowered = cuda_source(source)
+    assert "using PBLong = long long;" in lowered
+    assert "PBLong coefficient" in lowered
+    assert "const PBLong* input" in lowered
+    assert "PBLong* output" in lowered
+    assert "input[b] * PBLong(1)" in lowered

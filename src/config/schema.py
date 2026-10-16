@@ -4,6 +4,7 @@ from .gpu import GPU_SCREENING_DEFAULTS
 from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
+from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
 CONFIG_SCHEMA_VERSION = "v8.6.0"
 SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset(
@@ -121,7 +122,24 @@ def _get_shared_bot_defaults():
     }
 
 
+_template_cache = None
+
+
 def get_template_config():
+    """Return an owned template; only its process-constant construction is cached.
+
+    Retain metadata objects so cache invalidation/reload cannot reuse their ids.
+    A replaced Rust metadata snapshot rebuilds the template before returning it.
+    """
+    global _template_cache
+    specs = tuple(get_strategy_spec(kind) for kind in get_supported_strategy_kinds())
+    if (_template_cache is None or len(specs) != len(_template_cache[0])
+            or any(a is not b for a, b in zip(specs, _template_cache[0]))):
+        _template_cache = (specs, _build_template_config())
+    return deepcopy(_template_cache[1])
+
+
+def _build_template_config():
     strategy_defaults = get_all_strategy_defaults()
     return deepcopy(
         {

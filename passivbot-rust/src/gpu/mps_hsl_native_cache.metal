@@ -498,7 +498,7 @@ inline bool hsl_native_cache_latest_flat(
 ) {
     flat.minute = flat.sequence = -1; flat.cash = 0.0f;
     if (end < first) return true;
-    int heads[2 * MAX_COINS], exposed;
+    int heads[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY], exposed;
     int n = hsl_native_heads_initialize(pairs, count, first, heads, exposed);
     HslPairSum cash; hsl_pair_sum_reset(cash, cash_start);
     if (initial_cash != nullptr) cash = *initial_cash;
@@ -585,7 +585,7 @@ inline bool hsl_native_cache_initialize(
         hsl_native_cache_physical_events(cache, pairs[p]);
         cache.pairs[p] = hsl_native_cache_pair_snapshot(pairs[p], cursor, pair_ids[p], quantity_steps[p]);
     }
-    int heads[2 * MAX_COINS], exposed;
+    int heads[PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY], exposed;
     int n = hsl_native_heads_initialize(pairs, count, first, heads, exposed);
     HslPairSum cash; hsl_pair_sum_reset(cash, 0.0f);
     HslNativeCacheFlat flat; flat.minute = flat.sequence = -1; flat.cash = 0.0f;

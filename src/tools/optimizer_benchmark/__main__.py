@@ -93,6 +93,18 @@ def read_worker_report(output, termination):
 def run(args):
     manifest = load_manifest(args.workload)
     parsed_modes = modes(args.modes)
+    if args.phase_profile and any(engine.startswith("search-") for _, engine, _ in parsed_modes):
+        raise ValueError("--phase-profile supports frozen replay modes, not production search")
+    if getattr(args, "host_profile", False) and any(not engine.startswith("search-") for _, engine, _ in parsed_modes):
+        raise ValueError("--host-profile supports production search modes only")
+    import fnmatch
+    selected_seeds = set(getattr(args, "seed", ()))
+    entries = [entry for entry in manifest["entries"]
+               if (not args.case or any(fnmatch.fnmatchcase(entry["case"]["name"], pattern)
+                                        for pattern in args.case))
+               and (not selected_seeds or entry["seed"] in selected_seeds)]
+    if not entries:
+        raise ValueError("case or seed selection is empty")
     if len(args.backend) != 2 or len({item[0] for item in args.backend}) != 2:
         raise ValueError("supply two uniquely labelled --backend LABEL CHECKOUT PYTHON arguments")
     preflight = {}
@@ -119,6 +131,8 @@ def run(args):
     validate_policies(policies)
     report = dict(version=1, workload_sha256=manifest["sha256"],
         harness_sha256=fingerprint,
+        selection=dict(case_patterns=args.case, seeds=sorted(selected_seeds),
+                       entry_ids=[entry["id"] for entry in entries]),
         backends={label: dict(checkout=str(Path(root).resolve()), python=str(Path(python).absolute()),
                              commit=subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip())
                   for label, root, python in args.backend},
@@ -133,11 +147,6 @@ def run(args):
             "Configured feature coverage is not proof that every controller transition occurred.",
             "Physical runner width is observed candidates in runner calls, not hardware occupancy."])
     experiment = 0
-    import fnmatch
-    entries = [entry for entry in manifest["entries"] if not args.case or
-               any(fnmatch.fnmatchcase(entry["case"]["name"], pattern) for pattern in args.case)]
-    if not entries:
-        raise ValueError("case selection is empty")
     for entry_index, entry in enumerate(entries):
         for mode_index, (mode, engine, size) in enumerate(parsed_modes):
             order = list(args.backend)
@@ -156,8 +165,13 @@ def run(args):
                     "--tune-seconds", str(args.tune_seconds), "--search-iters", str(args.search_iters),
                     "--dispatch-budget", str(args.dispatch_budget), "--output", str(output)]
                 command += ["--harness-sha256", fingerprint]
+                if args.phase_profile:
+                    command.append("--phase-profile")
+                if getattr(args, "host_profile", False):
+                    command.append("--host-profile")
                 environment = dict(os.environ, PYTHONPATH=str(source.parent),
                     PASSIVBOT_RUST_VERIFY="1", OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1",
+                    PASSIVBOT_GPU_PROFILE="1" if args.phase_profile else "0",
                     MKL_NUM_THREADS="1")
                 termination = bounded_process(command, cwd=root, environment=environment, log=log,
                     timeout=args.timeout, max_rss=args.max_rss_gib * 1024**3,
@@ -191,6 +205,8 @@ def main(argv=None):
     execute = sub.add_parser("run")
     execute.add_argument("--workload", required=True)
     execute.add_argument("--case", action="append", default=[])
+    execute.add_argument("--seed", type=int, action="append", default=[],
+                         help="Select an existing frozen seed; repeat to select several without resampling")
     execute.add_argument("--backend", nargs=3, action="append", required=True, metavar=("LABEL", "CHECKOUT", "PYTHON"))
     execute.add_argument("--output", required=True)
     execute.add_argument("--modes", nargs="+", default=["cpu:1", "cpu:4", "gpu:1", "gpu:8", "gpu:auto"])
@@ -203,6 +219,8 @@ def main(argv=None):
     execute.add_argument("--search-iters", type=int, default=64)
     execute.add_argument("--search-workers", type=int, default=4)
     execute.add_argument("--dispatch-budget", type=int, default=50_000_000)
+    execute.add_argument("--phase-profile", action="store_true", help="Diagnostic GPU phase timings; adds synchronization overhead")
+    execute.add_argument("--host-profile", action="store_true", help="Diagnostic production-search main-thread profile; adds overhead")
     execute.add_argument("--policies", help="Explicit per-metric numerical tolerance JSON")
     comparison = sub.add_parser("compare")
     comparison.add_argument("--report", required=True)

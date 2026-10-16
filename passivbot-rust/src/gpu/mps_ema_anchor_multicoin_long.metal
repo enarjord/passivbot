@@ -3405,6 +3405,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
         );
         const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
             || (any_fill && balance + hsl_unrealized <= liquidation_floor);
+        if (any_fill && !hsl_report_at_fill_boundary) {
+            HslFillTimeReport fill_report = observed_multicoin_hsl_fill_time(
+                side.hsl, side.coin_hsl, C, effective_n_positions, k);
+            if (fill_report.observed)
+                record_hsl_time_observation(hsl_time, float(k - 1), fill_report.tier);
+        }
         const bool has_hsl_position = ema_multicoin_side_has_position(side, C);
         const bool hsl_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
             side, config, bars, coin_settings, k, C
@@ -3866,12 +3872,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
     scalars[scalar_offset + 6] = last_high_k >= 0.0f
         ? last_high_k * interval_ms : -1.0f;
-    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
-        ? first_eq_k * interval_ms : -1.0f;
-    #if PASSIVBOT_HSL_FACTUAL_ONLY
-    // Candle indices are exact within the admitted native replay length.
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Both indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 7] = first_eq_k;
     scalars[scalar_offset + 8] = last_eq_k;
 #else
+    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
+        ? first_eq_k * interval_ms : -1.0f;
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
 #endif
@@ -4640,6 +4647,15 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         );
         const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
             || (any_fill && hsl_equity <= liquidation_floor);
+        if (any_fill && !hsl_report_at_fill_boundary) {
+            HslFillTimeReport long_fill_report = observed_multicoin_hsl_fill_time(
+                long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions, k);
+            HslFillTimeReport short_fill_report = observed_multicoin_hsl_fill_time(
+                short_side.hsl, short_side.coin_hsl, C, short_effective_n_positions, k);
+            if (long_fill_report.observed || short_fill_report.observed)
+                record_hsl_time_observation(hsl_time, float(k - 1),
+                    max(long_fill_report.tier, short_fill_report.tier));
+        }
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
         bool can_sample_hsl = (long_can_generate || short_can_generate)
@@ -5242,12 +5258,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
     scalars[scalar_offset + 6] = last_high_k >= 0.0f
         ? last_high_k * interval_ms : -1.0f;
-    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
-        ? first_eq_k * interval_ms : -1.0f;
-    #if PASSIVBOT_HSL_FACTUAL_ONLY
-    // Candle indices are exact within the admitted native replay length.
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Both indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 7] = first_eq_k;
     scalars[scalar_offset + 8] = last_eq_k;
 #else
+    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
+        ? first_eq_k * interval_ms : -1.0f;
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
 #endif

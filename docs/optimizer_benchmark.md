@@ -59,6 +59,9 @@ passivbot tool optimizer-benchmark compare \
 The standard/extended catalogue defaults to 128 candidates, seeds 7/43/101 and
 10,080 bars. `--random-seeds N` chooses and records N fresh seeds. Reusing the saved
 workload preserves the actual populations even if a future sampler changes.
+For a targeted repeat, add `run --seed 7` (repeat `--seed` for several seeds) and
+an optional `--case` filter. Selection keeps the original workload hash and saved
+vectors; it never regenerates candidates. The report records selected entry IDs.
 `--boundary-candidates` replaces the first two vectors with repaired low/high
 corners, retaining random candidates. `--bounds-config` reads only `optimize.bounds`
 from a canonical local config. Derived bounds and candidates remain private inputs.
@@ -126,6 +129,24 @@ iteration counts do not by themselves establish equal search quality.
   never the unweighted mean of per-batch rates. A candidate has one scenario here.
 - Master uses direct legacy GPU replay in frozen-population mode. That timing omits
   its CPU exact-validation pipeline. `search-gpu` uses each branch's real backend.
+- `run --phase-profile` adds opt-in frozen-GPU phase measurements to each
+  cohort and runner observation: packing, upload/clear, library compilation,
+  lazy pipeline preparation, kernel execution, readback and metric reduction.
+  `outside_replay_seconds` measures caller work outside replay, including service
+  submission/collection; it is not a pure queue-time measurement. First use can
+  spend most of its time creating a Metal pipeline after library compilation.
+  Older implementations without the separate pipeline field retain a combined
+  `kernel_execution_and_pipeline_preparation` phase and explicitly report that
+  pipeline preparation was not measured separately. State-size probing belongs
+  to compiled ABI preparation, outside replay execution.
+  Profiling adds synchronization overhead; use separate unprofiled runs for
+  acceptance throughput. This option does not profile production search modes.
+- Search modes accept `run --host-profile` for a main-thread function profile of
+  the production backend, including its preparation, scoring and persistence.
+  Independent Rust verification runs after the profiler stops. Function times are
+  instrumented wall time and include waits; cumulative times overlap. The report
+  separately records main-thread CPU time. GPU-worker and CPU-pool threads are
+  outside this profile. Use separate unprofiled campaigns for speed comparisons.
 - Warm runs exclude setup and first use. First use may reuse on-disk Metal/CUDA
   compiler caches; it is not a cold-machine measurement.
 - Runner-call candidate counts are observed execution widths, not measured hardware
@@ -149,6 +170,10 @@ source digest. Resource noise and thermal effects still require repeated paired
 experiments on an otherwise idle machine.
 
 ## Autotuning
+
+Tuning windows and cohort completion times share an origin immediately after
+parameter preparation and service setup. First-use compilation and replay remain
+inside that clock; preparation and setup are reported separately.
 
 Use a sufficiently large backlog and sustained run, separately from smoke:
 

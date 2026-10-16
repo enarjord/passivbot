@@ -52,6 +52,9 @@ Both current and terminal replay use the current budget. Changed balance, slots 
 headroom invalidates cached signals and can reclassify terminal cooldown without
 renewing the original flatten timestamp. Reject true for aggregate modes and reject
 coin overrides of this switch.
+A disposable factual index may survive a budget change only when each query recomputes
+the signal for the current budget. Index rejection or loss returns to independent factual
+replay without changing the controller decision.
 
 Use minute closes in live and backtest reconstruction. Historical coarser candles use the
 shared deterministic OHLC expansion; remaining gaps forward-fill then backfill a missing
@@ -82,6 +85,11 @@ Retired tier/intervention/terminal-threshold controls cannot silently acquire a 
 meaning; optimization over removed controls is rejected. Unified policy is never hydrated
 from a side or hidden template. Legacy optimizer fitness and checkpoints are not evidence
 for new signal semantics; reevaluate configurations.
+
+Backtest stop counts describe observed current permissions and same-capture
+lifecycle transitions. A newly reconstructed historical breach cannot add a stop
+or restart when the current permission is GREEN. Same-time execution sequences
+remain observable even when their elapsed RED duration is zero.
 
 ## Code and validation
 

@@ -587,23 +587,26 @@ impl Backtest<'_> {
         }
         let start = decision.timestamp
             - (self.backtest_params.pnls_max_lookback_days * 86_400_000.0).round() as i64;
-        let fills: Vec<_> = self
-            .fills
-            .iter()
-            .filter(|f| {
-                let side = if f.order_type.is_long() { LONG } else { SHORT };
-                f.timestamp_ms as i64 >= start
-                    && key.0.is_none_or(|s| s == side)
-                    && key
-                        .1
-                        .is_none_or(|c| self.backtest_params.coins[c] == f.coin)
-            })
-            .collect();
-        let first = *fills.first()?;
+        let in_scope = |f: &&Fill| {
+            let side = if f.order_type.is_long() { LONG } else { SHORT };
+            f.timestamp_ms as i64 >= start
+                && key.0.is_none_or(|s| s == side)
+                && key
+                    .1
+                    .is_none_or(|c| self.backtest_params.coins[c] == f.coin)
+        };
+        // Most captures follow a fresh execution and cannot prove an idle
+        // window. Check the same retained tail before scanning the full tape.
+        // Reverse selection preserves the original iterator order even if a
+        // caller's timestamps are not sorted.
+        let last = self.fills.iter().rfind(&in_scope)?;
+        if last.timestamp_ms as i64 >= decision.timestamp - 60_000 || last.position_size != 0.0 {
+            return None;
+        }
+        let mut fills = self.fills.iter().filter(in_scope);
+        let first = fills.next()?;
         if first.timestamp_ms as i64 <= start + 60_000
-            || fills.last()?.timestamp_ms as i64 >= decision.timestamp - 60_000
-            || fills.last()?.position_size != 0.0
-            || fills.iter().any(|f| {
+            || std::iter::once(first).chain(fills).any(|f| {
                 f.coin != first.coin
                     || f.order_type.is_long() != first.order_type.is_long()
                     || !f.fill_qty.is_finite()
@@ -623,11 +626,17 @@ impl Backtest<'_> {
         // The ordinary scalar path reports current transitions only; older
         // lifecycle events have already passed the report's watermark.
         let settled = settings.restart == crate::hsl_controller::Restart::Always
-            && (fills.last()?.timestamp_ms as i64).checked_add(settings.cooldown_ms)
+            && (last.timestamp_ms as i64)
+                .checked_add(settings.cooldown_ms)
                 .is_some_and(|end| decision.timestamp > end)
-            && output.events.iter().all(|e| e.timestamp < decision.timestamp);
-        if !settled && (!output.events.is_empty()
-            || !Self::hsl_suffixes_are_green(episodes, budget, settings, anchor)) {
+            && output
+                .events
+                .iter()
+                .all(|e| e.timestamp < decision.timestamp);
+        if !settled
+            && (!output.events.is_empty()
+                || !Self::hsl_suffixes_are_green(episodes, budget, settings, anchor))
+        {
             return None;
         }
         Some(FlatWindow {

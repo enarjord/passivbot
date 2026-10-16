@@ -336,3 +336,263 @@ def test_cpu_worker_hashes_repetitions_without_latency_noise(frozen, monkeypatch
 def test_cohort_digest_covers_terminal_status():
     rows = [dict(metrics={"adg_strategy_eq": 1.0}, liquidated=False)]
     assert cohort_digest(rows) != cohort_digest([dict(metrics=rows[0]["metrics"], liquidated=True)])
+
+
+def test_phase_profiles_are_snapshotted_on_the_replay_owner():
+    class Replay:
+        profile_enabled = False
+        runners = {}
+        last_profile = {}
+        def evaluate(self, rows):
+            self.last_profile.clear()
+            self.last_profile.update(wall_seconds=float(len(rows)))
+            return rows
+    replay, profiles, dispatches = Replay(), [], []
+    instrument_replay(replay, dispatches, profiles=profiles)
+    assert replay.profile_enabled
+    replay.evaluate([1])
+    replay.evaluate([1, 2])
+    assert profiles == [dict(wall_seconds=1.0), dict(wall_seconds=2.0)]
+
+
+def test_summary_aggregates_phases_without_losing_timing_scope():
+    result = dict(status="completed", samples=[dict(seconds=5.0, completed=2, results=[],
+        phase_profiles=[dict(timings_seconds={"pipeline_preparation": 1.0, "kernel_execution": 2.0})],
+        outside_replay_seconds=2.0), dict(seconds=4.0, completed=2, results=[],
+        phase_profiles=[dict(timings_seconds={"pipeline_preparation": 0.0, "kernel_execution": 3.0})],
+        outside_replay_seconds=1.0)])
+    measured = summary(result)
+    assert measured["profiled_evaluations"] == 2
+    assert measured["phase_seconds_total"] == {"pipeline_preparation": 1.0, "kernel_execution": 5.0}
+    assert measured["outside_replay_seconds_total"] == 3.0
+    assert measured["candidates_per_second"] == pytest.approx(4 / 9)
+
+
+def test_phase_profile_rejects_search_modes(frozen):
+    from tools.optimizer_benchmark.__main__ import run
+    directory, _ = frozen
+    with pytest.raises(ValueError, match="supports frozen replay"):
+        run(SimpleNamespace(workload=directory, modes=["search-gpu:8"], phase_profile=True))
+
+
+def test_gpu_instrumentation_hooks_are_restored_after_failed_setup(monkeypatch):
+    pytest.importorskip("torch")
+    from optimization.gpu.autotune import BatchController
+    from optimization.gpu.service import MpsMulticoinProxy
+    original_observe, original_init = BatchController.observe, MpsMulticoinProxy.__init__
+    def failing(*_args):
+        BatchController.observe = object()
+        MpsMulticoinProxy.__init__ = object()
+        raise RuntimeError("setup failed")
+    monkeypatch.setattr(worker, "_gpu_runs", failing)
+    with pytest.raises(RuntimeError, match="setup failed"):
+        worker.gpu_runs(None, None, "8", 1, 1, 0, 100)
+    assert BatchController.observe is original_observe
+    assert MpsMulticoinProxy.__init__ is original_init
+
+
+def test_tuning_and_cohort_clocks_exclude_the_same_setup(monkeypatch, tmp_path):
+    from collections import deque
+    torch = pytest.importorskip("torch")
+    from optimization.gpu import autotune, runtime, service
+
+    # Exercise the legacy replay path without a device. Preparation and setup
+    # deliberately dwarf replay so an inconsistent origin cannot pass.
+    monkeypatch.chdir(tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr(worker.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(runtime, "gpu_device", lambda *_: "mps")
+    monkeypatch.setattr(runtime, "synchronize", lambda: None)
+    for name in ("current_allocated_memory", "driver_allocated_memory", "recommended_max_memory"):
+        monkeypatch.setattr(torch.mps, name, lambda: 0)
+    monkeypatch.setattr(worker, "instrument_replay", lambda *_args, **_kwargs: None)
+
+    def parameters(*_args):
+        clock[0] += 100.0
+        return {}
+
+    monkeypatch.setattr(worker, "legacy_parameters", parameters)
+    monkeypatch.setattr(autotune, "configure_batch_tuning", lambda *_args: None, raising=False)
+    monkeypatch.setattr(autotune.BatchController, "observe", lambda *_args, **_kwargs: True)
+    controller = SimpleNamespace(width=1, samples=deque(maxlen=24), baseline=None)
+
+    class Replay:
+        def __init__(self, **_kwargs):
+            clock[0] += 200.0
+
+        def evaluate(self, _parameters):
+            clock[0] += 2.0
+            autotune.BatchController.observe(controller, 1, 2.0)
+            return [{"score": 1.0}]
+
+    monkeypatch.setattr(service, "MpsSingleCoinProxy", Replay)
+    arrays = (np.zeros((2, 1, 4)), np.ones(2), np.arange(2))
+    entry = dict(configs=[{"optimize": {"gpu": {}}}], metrics=["score"], markets={}, exchange="fake")
+    report = worker.gpu_runs(entry, arrays, "auto", 1, 0, 0, 100)
+    assert report["parameter_seconds"] == 100.0
+    assert report["setup_seconds"] == 200.0
+    assert report["first_tuning_window_seconds"] == 2.0
+    assert report["first_use"]["elapsed_seconds"] == 2.0
+    assert report["samples"][0]["elapsed_seconds"] == 2.0
+
+
+def test_frozen_gpu_profiling_is_explicit():
+    replay = SimpleNamespace(profile_enabled=True, runners={})
+    instrument_replay(replay, [])
+    assert replay.profile_enabled is False
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_search_host_profile_records_backend_work_and_restores_hook(raises):
+    before = sys.getprofile()
+    def backend_work():
+        return sum(x * x for x in range(100))
+    try:
+        with worker.profile_search_host(True) as profile:
+            backend_work()
+            if raises:
+                raise RuntimeError("backend failed")
+    except RuntimeError:
+        assert raises
+    assert sys.getprofile() is before
+    assert profile["wall_seconds"] >= 0
+    assert profile["main_thread_cpu_seconds"] >= 0
+    assert any(row["function"] == "backend_work" for row in profile["functions"])
+
+
+def test_disabled_search_host_profile_does_not_create_profiler(monkeypatch):
+    import cProfile
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("unprofiled acceptance must not create a profiler")
+    monkeypatch.setattr(cProfile, "Profile", forbidden)
+    with worker.profile_search_host(False) as profile:
+        pass
+    assert profile == {}
+
+
+def test_host_profile_rejects_frozen_replay(frozen):
+    from tools.optimizer_benchmark.__main__ import run
+    directory, _ = frozen
+    with pytest.raises(ValueError, match="production search modes only"):
+        run(SimpleNamespace(workload=directory, modes=["gpu:8"], phase_profile=False, host_profile=True))
+
+
+def test_host_profile_leaves_an_existing_profiler_intact():
+    def existing(_frame, _event, _arg):
+        pass
+    before = sys.getprofile()
+    sys.setprofile(existing)
+    try:
+        with pytest.raises(RuntimeError, match="without an active profiler"):
+            with worker.profile_search_host(True):
+                pass
+        assert sys.getprofile() is existing
+    finally:
+        sys.setprofile(before)
+
+
+def test_search_transports_continuous_bounds_without_null_step(frozen, monkeypatch, caplog):
+    from optimization import backends
+    from optimization.bounds import Bound
+    directory, manifest = frozen
+    entry = manifest["entries"][0]
+    assert any(spec["step"] is None for spec in entry["bounds"])
+    with np.load(directory / entry["data_file"]) as data:
+        arrays = tuple(data[key] for key in ("hlcvs", "btc", "timestamps"))
+    class BackendReached(Exception):
+        pass
+    def inspect_bounds(**kwargs):
+        transported = kwargs["config"]["optimize"]["bounds"]
+        for spec in entry["bounds"]:
+            bound = Bound.from_config(spec["key"], transported[spec["key"]])
+            assert bound.step == spec["step"]
+        raise BackendReached
+    monkeypatch.setattr(backends, "get_backend_runner", lambda _name: inspect_bounds)
+    args = SimpleNamespace(engine="search-cpu", workers=1, search_iters=64, width="8", dispatch_budget=100000)
+    with pytest.raises(BackendReached):
+        worker.search_run(entry, arrays, args)
+    assert not any("step is null" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("profiling", [None, "host_profile", "phase_profile_enabled"])
+def test_profiled_timings_cannot_establish_an_acceptance_speedup(profiling):
+    from tools.optimizer_benchmark.report import compare
+    names = ["adg_strategy_eq", "drawdown_worst_strategy_eq"]
+    result = dict(status="completed", samples=[dict(seconds=1.0, completed=1,
+        results=[dict(metrics=dict(zip(names, [0.01, 0.1])), liquidated=False)])])
+    other = deepcopy(result)
+    if profiling:
+        other[profiling] = {"wall_seconds": 1.0} if profiling == "host_profile" else True
+    manifest = dict(entries=[dict(id="case", case=dict(name="case"), seed=7, metrics=names)])
+    report = dict(backends={"before": {}, "after": {}},
+        policies={key: dict(absolute=1e-6, relative=1e-4) for key in names},
+        runs=[dict(entry="case", label=label, mode="cpu:1", result=row)
+              for label, row in (("before", result), ("after", other))])
+    row = compare(report, manifest)["rows"][0]
+    assert row["speedup_second_over_first"] == 1.0
+    assert row["equivalent_work_speedup"] == (None if profiling else 1.0)
+
+
+def test_older_replay_pipeline_timing_remains_explicitly_combined():
+    class Replay:
+        runners = {}
+        def evaluate(self, rows):
+            self.last_profile = dict(timings_seconds=dict(kernel_execution=12.0), wall_seconds=12.0)
+            return rows
+    replay, profiles = Replay(), []
+    instrument_replay(replay, [], profiles=profiles)
+    replay.evaluate([])
+    assert profiles[0]["pipeline_preparation_measured"] is False
+    assert profiles[0]["timings_seconds"] == {"kernel_execution_and_pipeline_preparation": 12.0}
+
+
+@pytest.mark.parametrize("selected_seed, expected_status", [(43, 0), (101, 2)])
+def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, monkeypatch,
+                                                     selected_seed, expected_status):
+    from tools.optimizer_benchmark import __main__ as cli
+
+    directory = tmp_path / "frozen"
+    manifest = freeze(directory, patterns=["trailing_martingale/short/fixed/*"],
+                      candidates=2, bars=128, seeds=[7, 43])
+    original = (directory / "manifest.json").read_bytes()
+    dispatched = []
+    original_run = cli.subprocess.run
+    def preflight(command, **kwargs):
+        if len(command) > 1 and command[1] == "-c":
+            return SimpleNamespace(returncode=0, stdout="{}")
+        return original_run(command, **kwargs)
+    monkeypatch.setattr(cli.subprocess, "run", preflight)
+    original_check_output = cli.subprocess.check_output
+    def check_output(command, **kwargs):
+        return "test-head" if command[0] == "git" else original_check_output(command, **kwargs)
+    monkeypatch.setattr(cli.subprocess, "check_output", check_output)
+
+    def bounded(command, **kwargs):
+        dispatched.append(command[command.index("--entry") + 1])
+        output = Path(command[command.index("--output") + 1])
+        output.write_text(json.dumps(dict(status="unsupported", reason="test worker")))
+        return dict(exit_code=0, termination_reason=None, wall_seconds=0.0)
+
+    monkeypatch.setattr(cli, "bounded_process", bounded)
+    destination = tmp_path / "report"
+    command = ["run", "--workload", str(directory), "--seed", str(selected_seed),
+               "--backend", "before", str(tmp_path), sys.executable,
+               "--backend", "after", str(tmp_path), sys.executable,
+               "--modes", "cpu:1", "--output", str(destination)]
+    if expected_status == 0:
+        assert cli.main(command) == 0
+    else:
+        with pytest.raises(SystemExit) as error:
+            cli.main(command)
+        assert error.value.code == 2
+    assert (directory / "manifest.json").read_bytes() == original
+    expected_ids = [entry["id"] for entry in manifest["entries"]
+                    if entry["seed"] == selected_seed]
+    assert dispatched == [identity for identity in expected_ids for _ in range(2)]
+    if expected_status == 0:
+        report = json.loads((destination / "report.json").read_text())
+        assert report["workload_sha256"] == manifest["sha256"]
+        assert report["selection"]["entry_ids"] == expected_ids
+        assert report["selection"]["seeds"] == [selected_seed]
+    else:
+        assert not destination.exists()

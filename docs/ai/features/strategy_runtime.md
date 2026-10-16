@@ -161,6 +161,39 @@ Close thresholds are additive so they can intentionally cross through break-even
 as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
 wallet-exposure modifier.
 
+TM grid and trailing re-entry/close distance targets use a fused base-plus-distance expression.
+A representation residual is corrected only when checked decimal arithmetic proves exact venue
+alignment; genuine off-grid targets keep directional rounding. Quantity-unit recovery requires exact
+decimal divisibility below 2^53 units and distinguishable neighbors in the operation's direction.
+Ambiguous counts, unproven alignment, and checked-arithmetic overflow keep physical-unit rounding.
+Near-half quantity products use checked decimal operand arithmetic, including products rounded
+onto the boundary. Unproven products retain physical-unit rounding.
+Venue rounding converts the chosen integer count directly to its decimal step value, avoiding
+another physical-value rescaling. Nearest rounding resolves quotient ties with checked decimal
+arithmetic when possible; directional rounding only recovers provably aligned inputs and keeps
+physical rounding for other intermediate values.
+
+Compound trailing-price targets retain the two effective threshold/retracement operands through
+an exact decimal venue-alignment proof. For example, `43.2 * (1 + 0.1 - 0.09375)` proves `43.47`
+before the subtraction introduces a binary residual. Only exact divisibility overrides rounding;
+non-aligned pairs retain the existing composed-f64 distance and fused physical target. A failed
+compound proof must not retry alignment using the already-rounded sum; a physical target equal
+to the canonical venue value remains exact independently of any distance proof. Genuine
+authored offsets remain directional inputs, not candidates for tolerance snapping.
+
+GPU TM replay transports original decimal DDF and base threshold/retracement operands from Rust
+as finite integer limbs, separately from the ordinary float32 parameters. Checked unit arithmetic
+resolves near-half quantities only for uniquely recoverable counts below 2^24. Static price-distance
+proofs additionally require a passive initial-fill tick lineage; partial closes retain that lineage,
+while every weighted increase, market fill, and full flatten invalidates it. Recursive snapshots
+and temporal replay preserve the same proof state. Per-modifier masks preserve original-precision nonzero values and explicit coin pins, so an
+effective static group remains provable when pinned zeros replace nonzero global modifiers. Coefficients outside 60 bits, decimal exponents outside [-18, 18], checked
+integer overflow, weighted prices, and dynamic distances retain fused physical float32 arithmetic.
+Non-aligned rational price proofs additionally decline remainders within a conservative f64
+operand/FMA/tick-conversion envelope, where Rust's fused rounding may cross the decimal boundary.
+Exact aligned proofs and authored offsets outside that envelope retain their existing decision.
+These bounded proofs do not establish general GPU numerical acceptance or native migration readiness.
+
 Auto-unstuck has its own EMA trigger toggle:
 `bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure

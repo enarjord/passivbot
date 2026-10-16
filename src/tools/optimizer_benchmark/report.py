@@ -57,6 +57,11 @@ def summary(result):
     completion_latencies = [v for s in samples for v in s.get("completion_latencies_seconds", [])]
     if result.get("isolated_requests"):
         latencies = completion_latencies
+    profiles = [p for sample in samples for p in sample.get("phase_profiles", [])]
+    phase_seconds = {}
+    for profile in profiles:
+        for key, value in profile.get("timings_seconds", {}).items():
+            phase_seconds[key] = phase_seconds.get(key, 0.0) + value
     def p95(values):
         return sorted(values)[max(0, math.ceil(len(values) * .95) - 1)] if values else None
     return dict(status="completed", median_batch_seconds=statistics.median(seconds),
@@ -67,7 +72,11 @@ def summary(result):
                 dispatch_size_counts={str(n): dispatches.count(n) for n in sorted(set(dispatches))},
                 single_candidate_latency_median_seconds=statistics.median(latencies) if latencies else None,
                 single_candidate_latency_p95_seconds=p95(latencies),
-                request_latency_p95_seconds=p95(completion_latencies))
+                request_latency_p95_seconds=p95(completion_latencies),
+                profiling_enabled=bool(result.get("phase_profile_enabled") or profiles or result.get("host_profile")),
+                profiled_evaluations=len(profiles), phase_seconds_total=phase_seconds,
+                outside_replay_seconds_total=sum(sample.get("outside_replay_seconds") or 0.0 for sample in samples)
+                    if profiles else None)
 
 
 def numerical_comparison(reference, observed, metrics, policies, checks=()):
@@ -191,9 +200,10 @@ def compare(report, manifest):
                 branch_ranking=ranking_assessment(first, second) if not mode.startswith("search") else None,
                 tuning=tuning,
                 equivalent_work_speedup=speedup if metrics["status"] == "passed" and
-                    all(p["status"] == "passed" for p in gpu_parity.values()) else None))
+                    all(p["status"] == "passed" for p in gpu_parity.values())
+                    and not any(s.get("profiling_enabled") for s in summaries) else None))
     return dict(labels=labels, rows=rows,
-                interpretation="speedup = first branch median time / second branch median time; >1 favors second; failed/incomplete correctness does not establish equivalent work speedup")
+                interpretation="speedup = first branch median time / second branch median time; >1 favors second; profiled runs are diagnostic; failed/incomplete correctness does not establish equivalent work speedup")
 
 
 def markdown(comparison):

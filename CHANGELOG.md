@@ -6,6 +6,53 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve the dataset timestamp origin when restoring native GPU equity clocks, keeping fill-gap and time-dependent metrics on the same clock.
+
+- Allow frozen optimizer benchmarks to select existing RNG seeds for targeted reruns without resampling candidates.
+
+- Use the same elapsed-time origin for optimizer benchmark tuning windows and
+  cohort completions, reporting parameter preparation and service setup separately.
+
+- Bound whole-history multicoin Metal dispatch groups by the candidate batch and
+  pipeline execution width, preventing zeroed replay results on large coin-state layouts.
+
+- Exclude newly reconstructed historical HSL breaches from observed stop/restart
+  counts when the current permission is GREEN; retain same-time lifecycle events.
+
+- Observe native multicoin GPU HSL time-in-red at flat execution boundaries, avoiding
+  an extra RED minute when final accounting restores GREEN before the next bar close.
+
+- Preserve native GPU equity observation clocks as candle indices until float64
+  host decoding, avoiding long-history duration and annualized-metric drift.
+
+- Reuse coin-HSL factual indexes across balance-budget changes while recomputing
+  each signal against the current budget; rejected queries use independent replay.
+  Compact exactly flat zero-signal intervals within fresh GPU reconstruction,
+  preserving fill order, endpoint evaluation, observation counts and full debug traces.
+  Reject ineligible CPU idle-window proofs before scanning or allocating fill history.
+
+- Reduce GPU trailing-martingale entry quantities at strict exposure-cap boundaries
+  without losing an extra venue step to binary rounding. Above float32's exact unit-count
+  range, retain a representably smaller quantity so the reduction cannot round away.
+  Recheck the final strict-cap cost after clipping; a bounded search handles
+  cases where one quantity decrement still rounds onto the exposure cap.
+
+- Preserve venue-aligned trailing-martingale entry/close prices and reentry quantities
+  without snapping genuinely off-grid or below-half values. Use fused relative-price
+  expressions, checked decimal boundary arithmetic, unique unit-count recovery and
+  direct decimal count conversion. Keep threshold/retracement operands separate through
+  compound alignment proofs so their subtraction cannot lose a valid authored tick. GPU replay preserves original factors and static
+  distances through candidate and coin-override packing; price proofs require a known
+  passive initial-fill tick. Unsupported proofs retain physical arithmetic. Partial
+  initial top-ups preserve recoverable quantity steps, including power-of-two boundaries.
+
+- Preserve unfilled native GPU TM entries through forager hysteresis, reduce
+  coin-HSL replay scratch and Metal pipeline preparation cost, reuse immutable
+  TM rung settings, and expose opt-in replay phase and production-search host profiling
+  in the repeatable optimizer benchmark suite. Preserve continuous search bounds without
+  null-step warnings. Reuse config templates and immutable Rust metadata projections
+  while retaining owned return values and metadata reload behavior.
+
 - Standardize `clean-config` numeric output by field type, including sparse coin overrides and optimizer bounds, so equivalent values such as `0` and `0.0` produce the same cleaned text. Preserve fractional values and lossless `--mode format` output.
 
 - Add an offline optimizer benchmark suite with frozen random candidate populations,
@@ -121,8 +168,8 @@ since the latest release tag; these features may already be available when insta
   maximum and tail only at portfolio scope, with zero long/short values.
 
 - EMA Anchor partial closes preserve valid minimum-size remainders when floating
-  subtraction differs only by representation noise; genuinely undersized
-  remainders still use full-position closes.
+  subtraction differs only by representation noise, including at representable
+  power-of-two quantity boundaries. Genuinely undersized remainders still close in full.
 
 - Native CUDA EMA Anchor backtests retain complete replay state across temporal
   dispatches, allowing interruption between history chunks. Native CUDA EMA/TM

@@ -227,9 +227,22 @@ fn calc_close_qty(
         // otherwise keep the ordinary full-close decision.
         let step = exchange.qty_step.abs();
         let quantities = [position_size_abs, clip_qty, min_qty];
+        // Position decreases and clip increases when testing a smaller
+        // remainder. At a power-of-two boundary those neighbor gaps differ.
         if !quantities
             .iter()
-            .all(|qty| qty.is_finite() && f64::from_bits(qty.to_bits() + 1) - qty < step)
+            .zip([false, true, true])
+            .all(|(qty, upward)| {
+                if !qty.is_finite() || *qty <= 0.0 {
+                    return false;
+                }
+                let bits = if upward {
+                    qty.to_bits() + 1
+                } else {
+                    qty.to_bits() - 1
+                };
+                (*qty - f64::from_bits(bits)).abs() <= step
+            })
         {
             return position_size_abs;
         }
@@ -749,6 +762,55 @@ mod tests {
             ),
             position
         );
+    }
+
+    #[test]
+    fn close_clip_resolves_steps_towards_the_subtraction_operands() {
+        let position = 8192.0_f64;
+        let clip = f64::from_bits(position.to_bits() - 1);
+        let mut params = base_params();
+        params.base_qty_pct = 1.0;
+        for step in [1e-12, 2.0_f64.powi(-40)] {
+            let mut exchange = ExchangeParams {
+                qty_step: step,
+                min_qty: step,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            assert_eq!(
+                calc_base_clip_qty(&exchange, &BotParams::default(), &params, clip, 1.0, 1.0),
+                clip
+            );
+            assert!(f64::from_bits(position.to_bits() + 1) - position > step);
+            assert!(position - clip <= step);
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &params,
+                    clip,
+                    1.0,
+                    position,
+                    1.0
+                ),
+                clip
+            );
+            // A two-step minimum still rejects the same one-step remainder.
+            exchange.min_qty = 2.0 * step;
+            assert_eq!(
+                calc_close_qty(
+                    &exchange,
+                    &BotParams::default(),
+                    &params,
+                    clip,
+                    1.0,
+                    position,
+                    1.0
+                ),
+                position
+            );
+        }
     }
 
     #[test]

@@ -154,9 +154,15 @@ def get_all_strategy_optimize_bounds() -> dict:
     }
 
 
+_optimize_path_cache = {}
+
+
 def strategy_optimize_key_path_map(strategy_kind: str) -> dict[str, tuple[str, ...]]:
     normalized_kind = normalize_strategy_kind(strategy_kind)
     spec = get_strategy_spec(normalized_kind)
+    cached = _optimize_path_cache.get(normalized_kind)
+    if cached is not None and cached[0] is spec:
+        return dict(cached[1])
     mapping: dict[str, tuple[str, ...]] = {}
     for param in spec.get("parameters", []):
         if not isinstance(param, dict):
@@ -173,6 +179,8 @@ def strategy_optimize_key_path_map(strategy_kind: str) -> dict[str, tuple[str, .
                 normalized_kind,
                 *(str(part) for part in config_path[2:]),
             )
+    # Immutable paths may be reused; callers still own each returned mapping.
+    _optimize_path_cache[normalized_kind] = (spec, tuple(mapping.items()))
     return mapping
 
 
