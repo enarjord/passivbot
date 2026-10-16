@@ -18,6 +18,7 @@ _CUDA_PREAMBLE = r"""
 #define NAN __int_as_float(0x7fffffff)
 using uint = unsigned int;
 using ulong = unsigned long long;
+using PBLong = long long;
 template <typename T> __device__ inline T clamp(T v, T lo, T hi) {
     return min(max(v, lo), hi);
 }
@@ -89,6 +90,7 @@ def cuda_source(source: str, *, coin_capacity: int | None = None) -> str:
     source = re.sub(r"kernel\s+void\s+\w+\(.*?\)\s*\{", lower_kernel_references, source, flags=re.S)
     source = source.replace("#include <metal_stdlib>", "")
     source = source.replace("using namespace metal;", "")
+    source = re.sub(r"\blong\b", "PBLong", source)
     source = re.sub(r"\bconstant\s+(\w+)\s*\*", r"const \1*", source)
     # The multicoin input packer uses signed bytes for this ternary table.
     # Integer promotion preserves all strategy expressions and comparisons.

@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
+
 - Fix GPU trailing-martingale grid and positive-retracement closes moving or merging adjacent price ticks through intermediate relative-price rounding.
 
 - Bound whole-history multicoin Metal dispatch groups by the candidate batch and
@@ -35,11 +37,12 @@ since the latest release tag; these features may already be available when insta
   ambiguous and genuinely fractional positions retain physical-unit rounding.
   Venue rounding preserves its chosen integer count through decimal conversion,
   including fine steps with large quantities.
+  GPU replay preserves original decimal factors and static distances through parameter and
+  coin-override packing. Recoverable venue counts and proven passive initial-fill price ticks
+  retain aligned boundaries without snapping authored near-half or off-grid values.
   Directional and multicoin GPU top-ups after partial closes also subtract
   recoverable venue-unit counts without losing a quantity step.
   Preserve valid quantity steps when topping up partial initial entries. Recover partial top-ups at power-of-two quantity boundaries using inward floating-point spacing.
-
-- Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
 - Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
 

@@ -164,6 +164,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         mps_strategy_eq_recovery_distribution_source_py,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(utils::gpu_decimal_metadata_py, m)?)?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;

@@ -457,3 +457,169 @@ kernel void retracement_close_probe(constant float* values, device float* output
     expected = ((p + p * distance) / step).to_integral_value(
         rounding=ROUND_FLOOR if short else ROUND_CEILING)
     assert output.item() == int(expected)
+
+
+def _decimal_boundary_inputs(side, coin_count, *, price, balance, initial_pct, qty_step,
+                             factor, threshold, low, high):
+    config, candles, markets, _, timestamps = _fixture(side, coin_count, "initial")
+    config["backtest"].update(starting_balance=balance, maker_fee_override=0.0,
+                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    strategy = config["bot"][side]["strategy"]["trailing_martingale"]
+    strategy["entry"].update(initial_qty_pct=initial_pct, threshold_base_pct=threshold,
+        retracement_base_pct=0.0, double_down_factor=factor, threshold_we_weight=0.0,
+        threshold_volatility_1h_weight=0.0, threshold_volatility_1m_weight=0.0)
+    strategy["close"].update(threshold_base_pct=0.5, retracement_base_pct=0.0,
+        threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0,
+        threshold_volatility_1m_weight=0.0)
+    candles = np.tile(candles[:1], (12, 1, 1))
+    candles[:, :, :3] = price
+    short = side == "short"
+    candles[4, :, 0 if short else 1] = price + .01 if short else price - .01
+    candles[5, :, 0 if short else 1] = high if short else low
+    for coin, market in markets.items():
+        if coin != "__meta__":
+            market.update(qty_step=qty_step, price_step=.01, min_qty=qty_step,
+                          min_cost=0.0, last_valid_index=11)
+    timestamps = timestamps[0] + np.arange(12, dtype=np.int64) * 60_000
+    return config, candles, markets, np.full(12, 50_000.0), timestamps
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("coin_count", [1, 2])
+@pytest.mark.parametrize("coin_pin", [False, True])
+@pytest.mark.parametrize("factor,initial_pct,qty_step,balance,expected", [
+    (1.5, .0037, .001, 1000.0, .093),
+    (1.15, .05, .1, 10000.0, 10.8),
+    (1.15 - 1e-12, .05, .1, 10000.0, 10.7),
+    (1.15 + 1e-12, .05, .1, 10000.0, 10.8),
+])
+def test_decimal_reentry_half_steps_match_rust_without_snapping(
+    side, coin_count, coin_pin, factor, initial_pct, qty_step, balance, expected
+):
+    inputs = _decimal_boundary_inputs(side, coin_count, price=100.0, balance=balance,
+        initial_pct=initial_pct, qty_step=qty_step, factor=factor, threshold=.01,
+        low=98.9, high=101.1)
+    if coin_pin:
+        config, _, markets, _, _ = inputs
+        config["bot"][side]["strategy"]["trailing_martingale"]["entry"]["double_down_factor"] = 0.25
+        config["coin_overrides"] = {
+            coin: {"bot": {side: {"strategy": {"trailing_martingale": {
+                "entry": {"double_down_factor": factor}}}}}}
+            for coin in markets if coin != "__meta__"
+        }
+    out, fills = _evaluate(side, inputs)
+    assert len(fills) == coin_count * 2
+    exact = abs(sum(float(fill[9]) for fill in fills))
+    assert exact == pytest.approx(expected * coin_count, abs=1e-10)
+    assert out["short_psize" if side == "short" else "psize"].item() == pytest.approx(exact, abs=2e-6)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("coin_count", [1, 2])
+@pytest.mark.parametrize("offset", [0.0, -1e-12, 1e-12])
+@pytest.mark.parametrize("coin_pin", [False, True, "zeroed_modifiers"])
+def test_canonical_entry_ticks_keep_authored_off_grid_distances(side, coin_count, offset, coin_pin):
+    inputs = _decimal_boundary_inputs(side, coin_count, price=2.5, balance=100.0,
+        initial_pct=.025, qty_step=.001, factor=1.0, threshold=.044 + offset,
+        low=2.385, high=2.615)
+    if coin_pin:
+        config, _, markets, _, _ = inputs
+        config["bot"][side]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"] = 0.5
+        config["coin_overrides"] = {
+            coin: {"bot": {side: {"strategy": {"trailing_martingale": {
+                "entry": {"threshold_base_pct": .044 + offset}}}}}}
+            for coin in markets if coin != "__meta__"
+        }
+        if coin_pin == "zeroed_modifiers":
+            entry = config["bot"][side]["strategy"]["trailing_martingale"]["entry"]
+            entry.update(threshold_we_weight=0.25, threshold_volatility_1h_weight=1e-100)
+            for override in config["coin_overrides"].values():
+                override["bot"][side]["strategy"]["trailing_martingale"]["entry"].update(
+                    threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0)
+    out, fills = _evaluate(side, inputs)
+    expected_count = (1 if offset > 0 else 2) * coin_count
+    assert len(fills) == expected_count
+    assert out["fill_count"].item() == expected_count
+    exact = abs(sum(float(fill[9]) for fill in fills))
+    assert out["short_psize" if side == "short" else "psize"].item() == pytest.approx(exact, abs=2e-6)
+
+
+def test_decimal_metadata_device_proofs_preserve_large_and_near_half_products():
+    import passivbot_rust
+    from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    source = passivbot_rust.mps_trailing_martingale_source_py()
+    first = source.index("struct GpuDecimal {")
+    last = source.index("// PASSIVBOT_DECIMAL_ROUNDING_END", first)
+    probe = "#include <metal_stdlib>\nusing namespace metal;\n" + source[first:last] + """
+kernel void decimal_proof_probe(constant float* cases, constant float* metadata,
+    device float* output, uint b [[thread_position_in_grid]]) {
+    GpuDecimal value = load_gpu_decimal(metadata, int(b) * 4);
+    output[b] = float(round_gpu_decimal_product(uint(cases[b]), value, true, false));
+}
+"""
+    factors = [1.15, 1.15 - 1e-12, 1.15 + 1e-12, 1.5,
+               .12345674999999999, 1e-100, -1.15]
+    counts = [50, 50, 50, 37, 10_000_000, 37, 37]
+    expected = [58, 57, 58, 56, 1_234_567, -1, -1]
+    device = gpu_device()
+    packed = torch.tensor(passivbot_rust.gpu_decimal_metadata_py(factors), dtype=torch.float32, device=device)
+    assert torch.isfinite(packed).all().item()
+    values = torch.tensor(counts, dtype=torch.float32, device=device)
+    output = torch.empty(len(counts), device=device)
+    compile_shader(probe).decimal_proof_probe(values, packed, output, threads=len(counts))
+    synchronize()
+    assert output.cpu().tolist() == expected
+
+
+def test_tm_decimal_packing_declines_original_nonzero_modifiers():
+    from optimization.gpu.mps_kernel import _pack_tm_parameter_matrix, _TM_DECIMAL_WORDS
+    from optimization.gpu.model import TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS as keys
+    from test_gpu_mps import _tm_single_row
+
+    params = np.asarray([_tm_single_row() * 2], dtype=np.float64)
+    for side in range(2):
+        for column, key in enumerate(keys):
+            if key.endswith("_weight"):
+                params[:, side * len(keys) + column] = 0.0
+    # Underflow in the public float32 column does not license a static proof.
+    params[0, keys.index("entry_threshold_we_weight")] = 1e-100
+    params[0, len(keys) + keys.index("close_retracement_volatility_1m_weight")] = 1e-100
+    packed = _pack_tm_parameter_matrix(params, keys, sides=2)
+    width = len(keys) + _TM_DECIMAL_WORDS
+    assert packed[0, keys.index("entry_threshold_we_weight")] == 0.0
+    assert packed[0, len(keys) + 20:len(keys) + 24].tolist() == [1, 0, 0, 0]
+    assert packed[0, width + len(keys) + 20:width + len(keys) + 24].tolist() == [0, 0, 0, 2]
+
+
+def test_decimal_device_masks_apply_zero_pins_before_static_price_proof():
+    import passivbot_rust
+    from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
+
+    directional = passivbot_rust.mps_trailing_martingale_source_py()
+    first = directional.index("struct GpuDecimal {")
+    last = directional.index("// PASSIVBOT_DECIMAL_ROUNDING_END", first)
+    multicoin = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+    start = multicoin.index("inline bool tm_static_decimal_distance(")
+    end = multicoin.index("inline GpuDecimal tm_decimal_override(", start)
+    probe = ("#include <metal_stdlib>\nusing namespace metal;\nconstant int OVERRIDE_COLS = 73;\n"
+             + directional[first:last] + multicoin[start:end] + """
+kernel void zero_pin_probe(constant float* overrides, constant float* metadata,
+    device float* output, uint b [[thread_position_in_grid]]) {
+    bool proven = tm_static_decimal_distance(3u, overrides, int(b), 0);
+    output[b] = proven ? float(canonical_gpu_relative_ticks(250,
+        load_gpu_decimal(metadata, 0), invalid_gpu_decimal(), true, false, false)) : -1;
+}
+""")
+    device = gpu_device()
+    overrides = np.zeros((3, 73), dtype=np.float32)
+    overrides[:, 69] = [0, 3, 39]  # Inherited, pinned zero, pinned tiny nonzero.
+    packed = torch.tensor(overrides, device=device)
+    metadata = torch.tensor(passivbot_rust.gpu_decimal_metadata_py([.044]),
+                            dtype=torch.float32, device=device)
+    output = torch.empty(3, device=device)
+    compile_shader(probe).zero_pin_probe(packed, metadata, output, threads=3)
+    synchronize()
+    assert output.cpu().tolist() == [-1, 239, -1]

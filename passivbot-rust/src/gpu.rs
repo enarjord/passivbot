@@ -6,6 +6,8 @@
 
 use std::sync::LazyLock;
 
+const MPS_DECIMAL_ROUNDING_SOURCE: &str = include_str!("gpu/mps_decimal_rounding.metal");
+
 const MPS_ADAPTIVE_TIMING_SOURCE: &str = include_str!("gpu/mps_adaptive_timing.metal");
 const MPS_UNSTUCK_EMA_MARKER: &str = "// PASSIVBOT_UNSTUCK_EMA_COMMON";
 const MPS_UNSTUCK_EMA_COMMON_SOURCE: &str = include_str!("gpu/mps_unstuck_ema_common.metal");
@@ -63,24 +65,33 @@ fn compose_hsl_source(body: &str) -> String {
         1,
         "MPS source must contain exactly one shared entry-interval marker"
     );
-    body.replacen("// PASSIVBOT_ADAPTIVE_TIMING", MPS_ADAPTIVE_TIMING_SOURCE, 1)
-        .replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
-        .replacen(
-            MPS_HSL_MARKER,
-            &format!("{}\n{}", MPS_HSL_SOURCE, MPS_HSL_COMMON_SOURCE),
-            1,
-        )
-        .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
-        .replacen(
-            MPS_EQUITY_BALANCE_DIFF_MARKER,
-            MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
-            1,
-        )
-        .replacen(
-            MPS_ENTRY_INTERVAL_MARKER,
-            MPS_ENTRY_INTERVAL_COMMON_SOURCE,
-            1,
-        )
+    body.replacen(
+        "// PASSIVBOT_DECIMAL_ROUNDING\n",
+        MPS_DECIMAL_ROUNDING_SOURCE,
+        1,
+    )
+    .replacen(
+        "// PASSIVBOT_ADAPTIVE_TIMING",
+        MPS_ADAPTIVE_TIMING_SOURCE,
+        1,
+    )
+    .replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
+    .replacen(
+        MPS_HSL_MARKER,
+        &format!("{}\n{}", MPS_HSL_SOURCE, MPS_HSL_COMMON_SOURCE),
+        1,
+    )
+    .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
+    .replacen(
+        MPS_EQUITY_BALANCE_DIFF_MARKER,
+        MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
+        1,
+    )
+    .replacen(
+        MPS_ENTRY_INTERVAL_MARKER,
+        MPS_ENTRY_INTERVAL_COMMON_SOURCE,
+        1,
+    )
 }
 
 fn compose_multicoin_source(body: &str) -> String {
@@ -89,7 +100,14 @@ fn compose_multicoin_source(body: &str) -> String {
         1,
         "MPS multi-coin source must contain exactly one shared-common marker"
     );
-    compose_hsl_source(&body.replacen(MPS_MULTICOIN_MARKER, MPS_MULTICOIN_COMMON_SOURCE, 1))
+    compose_hsl_source(&body.replacen(
+        MPS_MULTICOIN_MARKER,
+        &format!(
+            "{}\n{}",
+            MPS_DECIMAL_ROUNDING_SOURCE, MPS_MULTICOIN_COMMON_SOURCE
+        ),
+        1,
+    ))
 }
 
 fn compose_trailing_topology_source(preamble: &str) -> String {
@@ -357,6 +375,7 @@ mod tests {
     fn assert_shared_multicoin_contract(source: &str) {
         assert!(!source.contains(MPS_MULTICOIN_MARKER));
         assert!(source.contains(MPS_MULTICOIN_COMMON_SOURCE));
+        assert_eq!(source.matches("struct GpuDecimal {").count(), 1);
         for signature in [
             "inline float round_step(",
             "inline float ceil_step(",
@@ -1012,7 +1031,7 @@ mod tests {
         assert!(source.contains("short_last_initial_entry_k"));
         assert!(source.contains("long_side.entry_gen_psize <= 0.0f"));
         assert!(source.contains("short_side.entry_gen_psize <= 0.0f"));
-        assert!(source.contains("constant int SIDE_PARAMS = 57"));
+        assert!(source.contains("constant int SIDE_PARAMS = 81"));
         assert!(source.contains("float base_wel = p[o + 47]"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
@@ -1119,7 +1138,10 @@ mod tests {
         let (_, after_qty_difference) = qty_and_rest
             .split_once("inline float min_entry_qty(")
             .unwrap();
-        assert!(!before_qty_difference.contains("nextafter("));
+        let price_prefix = before_qty_difference
+            .split_once("// PASSIVBOT_DECIMAL_ROUNDING_END")
+            .map_or(before_qty_difference, |(_, rest)| rest);
+        assert!(!price_prefix.contains("nextafter("));
         assert!(!after_qty_difference.contains("nextafter("));
         assert!(source.contains("int cticks = touch_controls ? touch_nearest_ticks : target_ticks"));
         assert!(source.contains("remainder == mq && mq_relation > 0"));
@@ -1271,8 +1293,8 @@ mod tests {
         assert_shared_entry_interval_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 64"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 49"));
+        assert!(source.contains("constant int PARAM_COLS = 88"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 73"));
         assert!(source.contains("constant int HSL_OVERRIDE_START = 34"));
         assert!(source.contains("constant int GATE_INITIAL_OVERRIDE_COL = 40"));
         assert!(source.contains("constant int GATE_REENTRY_OVERRIDE_COL = 41"));

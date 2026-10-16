@@ -621,3 +621,20 @@ def test_mps_coin_capacity_is_explicit_and_preserves_other_source(monkeypatch):
     source = "constant int MAX_COINS = 64; // 64 remains elsewhere"
     compile_shader(source, mps_coin_capacity=4)
     assert sources == ["constant int MAX_COINS = 4; // 64 remains elsewhere"]
+
+
+def test_cuda_decimal_proofs_keep_metal_signed_64_bit_arithmetic():
+    source = """#include <metal_stdlib>
+using namespace metal;
+struct DecimalOperand { long coefficient; int exponent; };
+kernel void signed_decimal_probe(constant long* input, device long* output,
+                                 uint b [[thread_position_in_grid]]) {
+    output[b] = input[b] * long(1);
+}
+"""
+    lowered = cuda_source(source)
+    assert "using PBLong = long long;" in lowered
+    assert "PBLong coefficient" in lowered
+    assert "const PBLong* input" in lowered
+    assert "PBLong* output" in lowered
+    assert "input[b] * PBLong(1)" in lowered
