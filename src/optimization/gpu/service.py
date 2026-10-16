@@ -2560,7 +2560,7 @@ def _build_multicoin_tm_coin_overrides(
     matrix = np.full(
         (len(coins), TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         np.nan,
-        dtype=np.float32,
+        dtype=np.float64,
     )
     exact_overrides = []
     missing = object()
@@ -2586,15 +2586,7 @@ def _build_multicoin_tm_coin_overrides(
                     break
             if value is not missing:
                 effective_value = float(effective_strategy[key])
-                matrix[coin_index, column] = (
-                    encode_tm_retracement_base_pct(effective_value)
-                    if key
-                    in {
-                        "entry_retracement_base_pct",
-                        "close_retracement_base_pct",
-                    }
-                    else effective_value
-                )
+                matrix[coin_index, column] = effective_value
         entry_patch = strategy_patch.get("entry", {}) or {}
         if "ema_gate_mode" in entry_patch:
             matrix[

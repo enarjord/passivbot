@@ -20,6 +20,66 @@ inline float floor_step(float value, float step) {
     return floor(value / step + 1.0e-6f) * step;
 }
 
+// The caller already quantized quantity. Subtract in venue units so binary
+// subtraction followed by floor cannot accidentally remove a second increment.
+// Above float32's exact integer range, retain a representably smaller quantity;
+// the conservative reduction can span several venue steps.
+inline float decrement_aligned_qty_step(float quantity, float step) {
+    float units = rint(quantity / step);
+    float previous_units = fmax(units - 1.0f, 0.0f);
+    if (previous_units >= units && units > 0.0f) {
+        previous_units = nextafter(units, 0.0f);
+    }
+    float result = previous_units * step;
+    // The multiply can round back up even when the unit count decreased.
+    return fmax(fmin(result, nextafter(quantity, 0.0f)), 0.0f);
+}
+
+inline float strict_cap_quantity(
+    float quantity, float step, float retained_cost, float cap_cost,
+    float gate_price, float c_mult
+) {
+    if (retained_cost + quantity * gate_price * c_mult < cap_cost)
+        return quantity;
+    quantity = decrement_aligned_qty_step(quantity, step);
+    if (retained_cost + quantity * gate_price * c_mult < cap_cost)
+        return quantity;
+    // A retained-cost ULP can cover millions of venue increments. Search the
+    // ordered positive float encodings of unit counts, rather than decrementing
+    // each increment. Floor maps fractional count encodings to whole units.
+    // Positive multiplication/addition and this map are monotone. At most 31
+    // bisections cover every nonnegative finite float count (including an
+    // infinite upper sentinel); every accepted candidate satisfies the cap.
+    uint lower = 0;
+    uint upper = as_type<uint>(fmax(rint(quantity / step), 0.0f));
+    while (lower < upper) {
+        uint middle = lower + (upper - lower + 1) / 2;
+        float candidate = floor(as_type<float>(middle)) * step;
+        bool accepted = candidate <= quantity
+            && retained_cost + candidate * gate_price * c_mult < cap_cost;
+        if (accepted) lower = middle;
+        else upper = middle - 1;
+    }
+    return floor(as_type<float>(lower)) * step;
+}
+
+// Quantities produced by venue rounding can recover their integer counts.
+// Require a unique round-trip before subtracting counts; otherwise preserve
+// physical-unit directional rounding for representations outside that domain.
+inline float aligned_qty_difference(float total, float held, float step) {
+    float total_count = rint(total / step);
+    float held_count = rint(held / step);
+    bool counts_resolvable = total_count >= 0.0f && total_count < 0x1p24f
+        && held_count >= 0.0f && held_count < 0x1p24f
+        && total - nextafter(total, -INFINITY) <= step
+        && nextafter(held, INFINITY) - held <= step;
+    bool on_grid = total_count * step == total && held_count * step == held;
+    if (counts_resolvable && on_grid) {
+        return fmax(total_count - held_count, 0.0f) * step;
+    }
+    return fmax(floor_step(total - held, step), 0.0f);
+}
+
 inline float min_entry_qty(
     float price, float qty_step, float min_qty, float min_cost, float c_mult
 ) {

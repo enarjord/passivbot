@@ -6,6 +6,13 @@ import time
 import numpy as np
 import torch
 
+from optimization.gpu.decimal import (
+    _TM_DECIMAL_KEYS,
+    _TM_DECIMAL_WORDS,
+    _pack_tm_parameter_matrix,
+    _tm_decimal_metadata,
+    _tm_modifier_masks,
+)
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import record_replay_chunk
 from optimization.gpu.runtime import (
@@ -40,7 +47,6 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
-    encode_tm_retracement_base_pct,
     single_coin_shader_topology,
 )
 
@@ -298,29 +304,6 @@ def _btc_risk_price_tensor(btc_prices, *, expected_count: int):
     return torch.as_tensor(values, dtype=torch.float32, device=gpu_device())
 
 
-def _pack_tm_parameter_matrix(
-    params: np.ndarray, keys: tuple[str, ...], *, sides: int
-) -> np.ndarray:
-    """Pack TM rows while preserving each candidate's retracement mode sign."""
-
-    matrix = np.ascontiguousarray(params, dtype=np.float32)
-    side_width = len(keys)
-    for side_index in range(sides):
-        offset = side_index * side_width
-        for key in (
-            "entry_retracement_base_pct",
-            "close_retracement_base_pct",
-        ):
-            column = offset + keys.index(key)
-            positive_underflow = (params[:, column] > 0.0) & (
-                matrix[:, column] == np.float32(0.0)
-            )
-            if np.any(positive_underflow):
-                matrix[positive_underflow, column] = encode_tm_retracement_base_pct(
-                    np.finfo(np.float64).tiny
-                )
-    return matrix
-
 
 def _tm_dispatch_specialization(
     matrix: np.ndarray,
@@ -332,7 +315,7 @@ def _tm_dispatch_specialization(
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
     """Prove dispatch-wide TM features before compiling away inactive paths."""
 
-    side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
+    side_width = matrix.shape[1] // 2
     active_offsets = [
         side_index * side_width
         for side_index, enabled in enumerate((long_enabled, short_enabled))
@@ -1219,6 +1202,19 @@ def strategy_eq_recovery_distribution_from_samples(
     return output * sample_interval_days
 
 
+def _metal_replay_group_options(kernel, batch_size):
+    if gpu_device(torch) != "mps":
+        return {}
+    maximum = int(kernel.max_threads_per_threadgroup)
+    width = int(kernel.thread_execution_width)
+    if maximum < 1 or width < 1 or batch_size < 1:
+        raise RuntimeError("Metal replay has invalid dispatch limits")
+    # The API's implicit group may reserve private state for many inactive
+    # lanes. Bound a state-heavy portfolio group by its actual candidates and
+    # one execution width, retaining the compiled pipeline's limit as well.
+    return {"group_size": (min(batch_size, maximum, width), 1, 1)}
+
+
 def _require_available_held_valuation(scalars):
     # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
     # Metal writes -2 and returns immediately if a held coin has no price.
@@ -1764,7 +1760,7 @@ class MpsEmaAnchorRunner:
         return self._buffers[batch_size]
 
     def _validate_hsl_params(self, params, keys):
-        width = len(keys)
+        width = params.shape[1] // 2
         for side, active in enumerate((self.long_enabled, self.short_enabled)):
             if not active:
                 continue
@@ -2077,6 +2073,8 @@ class MpsEmaAnchorMulticoinRunner:
     coin_override_label = "EMA"
     scalar_cols = MPS_MULTICOIN_SCALAR_COLS
 
+    decimal_coin_overrides = False
+
     def __init__(
         self,
         run: ProxyRun,
@@ -2206,7 +2204,7 @@ class MpsEmaAnchorMulticoinRunner:
         if (
             self.hsl_capacity
             and self.bars.device.type == "mps"
-            and self.coin_override_label == "Trailing Martingale"
+            and self.decimal_coin_overrides
         ):
             if not 1 <= self.n_coins <= MPS_MULTICOIN_MAX_COINS:
                 raise ValueError("Metal coin count exceeds the multicoin shader limit")
@@ -2227,7 +2225,7 @@ class MpsEmaAnchorMulticoinRunner:
             coin_overrides = np.full(
                 (self.n_coins, self.coin_override_cols), np.nan, dtype=np.float32
             )
-        coin_overrides = np.asarray(coin_overrides, dtype=np.float32)
+        coin_overrides = np.asarray(coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         if coin_overrides.shape != (self.n_coins, self.coin_override_cols):
             raise ValueError(
                 f"expected multicoin {self.coin_override_label} override matrix shaped "
@@ -2235,11 +2233,11 @@ class MpsEmaAnchorMulticoinRunner:
                 f"got {coin_overrides.shape}"
             )
         wel_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
-                      if self.coin_override_label == "Trailing Martingale"
+                      if self.decimal_coin_overrides
                       else EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN)
         self.rms_ranking_coin_counts = (int(np.count_nonzero(coin_overrides[:, wel_column] != 0.0)),)
         cooldown_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
-                           if self.coin_override_label == "Trailing Martingale"
+                           if self.decimal_coin_overrides
                            else EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN)
         self.rms_cooldown_coin_overrides = (coin_overrides[:, [
             cooldown_column, self.coin_override_cols - 4, self.coin_override_cols - 3,
@@ -2442,9 +2440,11 @@ class MpsEmaAnchorMulticoinRunner:
             kernel_args += (recovery_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
-        library.passivbot_ema_anchor_multicoin(
+        kernel = library.passivbot_ema_anchor_multicoin
+        kernel(
             *kernel_args,
             threads=(batch_size, 1, 1),
+            **_metal_replay_group_options(kernel, batch_size),
         )
 
     def _library(self):
@@ -2625,7 +2625,7 @@ class MpsEmaAnchorMulticoinRunner:
         if self.hsl_capacity:
             keys = (
                 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-                if self.coin_override_label == "Trailing Martingale"
+                if self.decimal_coin_overrides
                 else EMA_ANCHOR_MULTICOIN_PARAM_KEYS
             )
             policy_matrix = np.asarray(params, dtype=np.float32)
@@ -2796,7 +2796,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 np.nan,
                 dtype=np.float32,
             )
-        short_coin_overrides = np.asarray(short_coin_overrides, dtype=np.float32)
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         expected_shape = (self.n_coins, self.coin_override_cols)
         if short_coin_overrides.shape != expected_shape:
             raise ValueError(
@@ -2916,9 +2916,11 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (recovery_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
-        library.passivbot_ema_anchor_multicoin_fused(
+        kernel = library.passivbot_ema_anchor_multicoin_fused
+        kernel(
             *kernel_args,
             threads=(batch_size, 1, 1),
+            **_metal_replay_group_options(kernel, batch_size),
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
@@ -2978,9 +2980,19 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
 
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
+    decimal_coin_overrides = True
 
     def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
-        return _scale_tm_multicoin_coin_overrides(coin_overrides, self.interval_minutes)
+        scaled = _scale_tm_multicoin_coin_overrides(coin_overrides, self.interval_minutes)
+        keys = [key for key, _ in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS]
+        columns = [keys.index(key) for key in _TM_DECIMAL_KEYS]
+        metadata = _tm_decimal_metadata(coin_overrides[:, columns]).reshape(len(scaled), -1)
+        flags = _tm_modifier_masks(coin_overrides, keys, overrides=True)
+        for key in ("entry_retracement_base_pct", "close_retracement_base_pct"):
+            column = keys.index(key)
+            underflow = (coin_overrides[:, column] > 0.0) & (scaled[:, column] == 0.0)
+            scaled[underflow, column] = np.finfo(np.float32).tiny
+        return np.ascontiguousarray(np.concatenate((scaled, metadata, flags), axis=1), dtype=np.float32)
 
     def __init__(
         self,
@@ -3181,13 +3193,13 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
         if self.max_dispatch_candidate_bars is None:
+            kernel = library.passivbot_trailing_martingale_multicoin
             dispatch_options = {"threads": (batch_size, 1, 1)}
+            dispatch_options.update(_metal_replay_group_options(kernel, batch_size))
             if gpu_device(torch) == "cuda":
                 # Spread independent, state-heavy candidates across more SMs.
                 dispatch_options["group_size"] = (32, 1, 1)
-            library.passivbot_trailing_martingale_multicoin(
-                *kernel_args, **dispatch_options
-            )
+            kernel(*kernel_args, **dispatch_options)
             return
         chunk_bars = min(
             MPS_TM_MULTICOIN_CHUNK_BARS,
@@ -3340,7 +3352,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 np.nan,
                 dtype=np.float32,
             )
-        short_coin_overrides = np.asarray(short_coin_overrides, dtype=np.float32)
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         expected_shape = (self.n_coins, self.coin_override_cols)
         if short_coin_overrides.shape != expected_shape:
             raise ValueError(
@@ -3455,9 +3467,11 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        library.passivbot_trailing_martingale_multicoin_fused(
+        kernel = library.passivbot_trailing_martingale_multicoin_fused
+        kernel(
             *kernel_args,
             threads=(batch_size, 1, 1),
+            **_metal_replay_group_options(kernel, batch_size),
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:

@@ -22,6 +22,32 @@ since the latest release tag; these features may already be available when insta
 
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
+- Preserve venue-aligned trailing-martingale entry/close prices and reentry quantities
+  without snapping genuinely off-grid or below-half values. Use fused relative-price
+  expressions, checked decimal boundary arithmetic, unique unit-count recovery and
+  direct decimal count conversion. Keep threshold/retracement operands separate through
+  compound alignment proofs so their subtraction cannot lose a valid authored tick. GPU replay preserves original factors and static
+  distances through candidate and coin-override packing; price proofs require a known
+  passive initial-fill tick. Unsupported proofs retain physical arithmetic. Partial
+  initial top-ups preserve recoverable quantity steps, including power-of-two boundaries.
+
+- Bound whole-history multicoin Metal dispatch groups by the candidate batch and
+  pipeline execution width, preventing zeroed replay results on large coin-state layouts.
+
+- Exclude newly reconstructed historical HSL breaches from observed stop/restart
+  counts when the current permission is GREEN; retain same-time lifecycle events.
+
+- Replay multicoin GPU trailing-martingale passive entry and close ladders when
+  market orders are disabled. Market permission governs execution promotion;
+  reachable passive recursive fills remain part of the strategy. Preserve an
+  unfilled gated entry until Forager applies incumbent score hysteresis.
+
+- Reduce GPU trailing-martingale entry quantities at strict exposure-cap boundaries
+  without losing an extra venue step to binary rounding. Above float32's exact unit-count
+  range, retain a representably smaller quantity so the reduction cannot round away.
+  Recheck the final strict-cap cost after clipping; a bounded search handles
+  cases where one quantity decrement still rounds onto the exposure cap.
+
 - Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
 
 - Add opt-in Binance Portfolio Margin support for debt-free USDT collateral and USDT-settled UM perpetuals. Preserve wallet balance separately from unrealized PnL, validate unsupported collateral and COIN-M exposure, route native positions and income through PAPI, and retain Binance broker attribution with REST order polling. See [the PM guide](docs/exchanges/binance_portfolio_margin.md).

@@ -17,6 +17,79 @@ requires_extension = pytest.mark.skipif(
 )
 
 
+@requires_extension
+@pytest.mark.parametrize("kind", ["entry", "close"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("threshold", [.1, .1 - 1e-12, .1 + 1e-12, .1001])
+def test_compound_trailing_prices_follow_authored_decimal_alignment(kind, side, threshold):
+    from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    increasing = (kind == "close") != (side == "short")
+    distance = Decimal(str(threshold)) - Decimal("0.09375")
+    raw = Decimal("43.2") * (1 + (distance if increasing else -distance))
+    rounding = ROUND_CEILING if increasing else ROUND_FLOOR
+    expected = float((raw / Decimal("0.01")).to_integral_value(rounding=rounding) * Decimal("0.01"))
+    assert _compound_trailing_order_price(kind, side, 43.2, threshold, .09375) == expected
+
+
+def _compound_trailing_order_price(kind, side, base, threshold, retracement):
+    common = dict(qty_step=.001, price_step=.01, min_qty=.001, min_cost=0., c_mult=1.,
+        wallet_exposure_limit=1., risk_we_excess_allowance_pct=0., balance=1000.,
+        position_size=-1. if side == "short" else 1., position_price=base,
+        min_since_open=base * .5, max_since_min=base * .9,
+        max_since_open=base * 1.4, min_since_max=base * .9,
+        volatility_ema_1h=0., volatility_ema_1m=0.)
+    if kind == "entry":
+        common.update(entry_grid_double_down_factor=.2, entry_grid_spacing_pct=threshold,
+            entry_initial_ema_dist=0., entry_initial_qty_pct=.0001,
+            entry_trailing_double_down_factor=.2, entry_trailing_retracement_pct=retracement,
+            entry_trailing_threshold_pct=threshold, entry_weight_volatility_1h=0.,
+            entry_weight_volatility_1m=0., entry_we_weight=0.)
+        common["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 1. if side == "short" else 100.
+        common["order_book_ask" if side == "short" else "order_book_bid"] = base * .6 if side == "short" else base * 1.4
+    else:
+        common.update(close_grid_qty_pct=1., close_trailing_qty_pct=1.,
+            close_trailing_retracement_pct=retracement, close_trailing_threshold_pct=threshold,
+            risk_wel_enforcer_threshold=1.)
+        common["order_book_bid" if side == "short" else "order_book_ask"] = base * 1.4 if side == "short" else base * .6
+    orders = getattr(pbr, f"calc_{'entries' if kind == 'entry' else 'closes'}_{side}_py")(**common)
+    assert orders and abs(orders[0][0]) > 0.0
+    return orders[0][1]
+
+
+@requires_extension
+@pytest.mark.parametrize("kind", ["entry", "close"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("threshold,retracement", [
+    (.01, .0037499999999999994),
+    (.006927290310531164, .0006772903105311638),
+    (.05788483791847438, .007884837918474379),
+])
+def test_failed_compound_alignment_keeps_fused_physical_rounding(kind, side, threshold, retracement):
+    from decimal import Decimal
+    from fractions import Fraction
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    increasing = (kind == "close") != (side == "short")
+    base = 43.2 if increasing else 11.2
+    sign = 1 if increasing else -1
+    authored = Decimal(str(base)) * (1 + sign * (Decimal(str(threshold)) - Decimal(str(retracement))))
+    assert authored % Decimal("0.01") != 0  # No authored-pair alignment proof.
+    distance = sign * (threshold - retracement)
+    assert abs(distance) in (.00625, .05)  # The composed float misleadingly looks aligned.
+    # Compute one correctly rounded f64 FMA independently of the extension.
+    target = float(Fraction.from_float(base) * Fraction.from_float(distance) + Fraction.from_float(base))
+    units = target / .01
+    count = math.ceil(units) if increasing else math.floor(units)
+    expected = float(Decimal(count) * Decimal("0.01"))
+    assert expected == ((45.37 if increasing else 10.63) if threshold > .05
+                        else (43.48 if increasing else 11.12))
+    assert _compound_trailing_order_price(kind, side, base, threshold, retracement) == expected
+
+
 def _is_step_aligned(value: float, step: float, tol: float = 1e-12) -> bool:
     if step <= 0.0 or not math.isfinite(value):
         return True
@@ -276,3 +349,116 @@ def test_single_trailing_close_matches_expanded_price_at_raw_touch(side):
     assert single[0] == expanded[0][0]
     # Strict fill tests must agree for a candle between the raw touch and tick.
     assert not (101.008 > single[1] if is_long else 98.992 < single[1])
+
+@requires_extension
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("retracement", [0.0, 0.001])
+@pytest.mark.parametrize("size,expected", [(0.066, 0.028), (0.066000001, 0.027)])
+def test_partial_initial_entries_preserve_quantity_steps(side, retracement, size, expected):
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    params = dict(
+        qty_step=0.001, price_step=0.01, min_qty=0.001, min_cost=1.0, c_mult=1.0,
+        entry_grid_double_down_factor=0.2, entry_grid_spacing_pct=0.001,
+        entry_initial_ema_dist=0.0, entry_initial_qty_pct=0.012,
+        entry_trailing_double_down_factor=0.2, entry_trailing_retracement_pct=retracement,
+        entry_trailing_threshold_pct=0.001, entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0, entry_we_weight=0.0, wallet_exposure_limit=0.5,
+        risk_we_excess_allowance_pct=0.0, balance=1102.0,
+        position_size=-size if side == "short" else size, position_price=99.85,
+        min_since_open=0.0, max_since_min=0.0, max_since_open=0.0, min_since_max=0.0,
+        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+    )
+    params["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 70.62
+    params["order_book_ask" if side == "short" else "order_book_bid"] = 70.62
+    order = getattr(pbr, f"calc_entries_{side}_py")(**params)[0]
+    assert order[0] == (-expected if side == "short" else expected)
+    assert order[1] == 70.62
+    assert order[2] == (12 if side == "short" else 1)
+
+@requires_extension
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("factor,expected", [(1.15, 5.8), (1.15 - 1e-10, 5.7), (1.15 + 1e-10, 5.8)])
+def test_reentry_quantity_recovers_only_half_step_representation_noise(side, factor, expected):
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    params = dict(
+        qty_step=0.1, price_step=0.01, min_qty=0.1, min_cost=0.0, c_mult=1.0,
+        entry_grid_double_down_factor=factor, entry_grid_spacing_pct=0.01,
+        entry_initial_ema_dist=0.0, entry_initial_qty_pct=0.0001,
+        entry_trailing_double_down_factor=factor, entry_trailing_retracement_pct=0.0,
+        entry_trailing_threshold_pct=0.0, entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0, entry_we_weight=0.0, wallet_exposure_limit=1.0,
+        risk_we_excess_allowance_pct=0.0, balance=10000.0,
+        position_size=-5.0 if side == "short" else 5.0, position_price=100.0,
+        min_since_open=90.0, max_since_min=100.0, max_since_open=110.0, min_since_max=100.0,
+        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+    )
+    params["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 100.0
+    params["order_book_ask" if side == "short" else "order_book_bid"] = 100.0
+    order = getattr(pbr, f"calc_entries_{side}_py")(**params)[0]
+    assert abs(order[0]) == pytest.approx(expected, abs=1e-12)
+
+
+@requires_extension
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("offset", [0.0, 1e-8])
+def test_trailing_reentry_preserves_exact_ticks_without_absorbing_off_tick_targets(side, offset):
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    short = side == "short"
+    params = dict(
+        qty_step=0.001, price_step=0.01, min_qty=0.001, min_cost=0.0, c_mult=1.0,
+        entry_grid_double_down_factor=0.2,
+        entry_grid_spacing_pct=0.0021 if short else 0.0026,
+        entry_initial_ema_dist=0.0, entry_initial_qty_pct=0.0001,
+        entry_trailing_double_down_factor=0.2, entry_trailing_retracement_pct=0.001,
+        entry_trailing_threshold_pct=0.0021 if short else 0.0026,
+        entry_weight_volatility_1h=0.0, entry_weight_volatility_1m=0.0,
+        entry_we_weight=0.0, wallet_exposure_limit=1.0, risk_we_excess_allowance_pct=0.0,
+        balance=1000.0, position_size=-1.0 if short else 1.0,
+        position_price=100.0 + offset if short else 131.25 - offset,
+        min_since_open=90.0 if short else 120.0,
+        max_since_min=100.0 if short else 130.0,
+        max_since_open=110.0 if short else 140.0,
+        min_since_max=100.0 if short else 120.0,
+        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+    )
+    params["ema_bands_upper" if short else "ema_bands_lower"] = 100.0 if short else 140.0
+    params["order_book_ask" if short else "order_book_bid"] = 90.0 if short else 140.0
+    order = getattr(pbr, f"calc_entries_{side}_py")(**params)[0]
+    expected = (100.11 if offset == 0.0 else 100.12) if short else (131.04 if offset == 0.0 else 131.03)
+    assert abs(order[0]) > 0.0
+    assert order[1] == pytest.approx(expected, abs=1e-12)
+
+@requires_extension
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("retracement", [0.0, 0.001])
+def test_partial_initial_qty_at_power_of_two_uses_inward_spacing(side, retracement):
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    short = side == "short"
+    params = dict(
+        qty_step=1e-12, price_step=0.01, min_qty=1e-12, min_cost=0.0, c_mult=1.0,
+        entry_grid_double_down_factor=1.0, entry_grid_spacing_pct=0.5,
+        entry_initial_ema_dist=0.0, entry_initial_qty_pct=1.0,
+        entry_trailing_double_down_factor=1.0,
+        entry_trailing_retracement_pct=retracement, entry_trailing_threshold_pct=0.5,
+        entry_weight_volatility_1h=0.0, entry_weight_volatility_1m=0.0, entry_we_weight=0.0,
+        wallet_exposure_limit=1.0, risk_we_excess_allowance_pct=0.0,
+        balance=819200.0, position_size=(-1 if short else 1) * 4217.878608603804,
+        position_price=100.0, min_since_open=100.0, max_since_min=100.0,
+        max_since_open=100.0, min_since_max=100.0,
+        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+    )
+    params["ema_bands_upper" if short else "ema_bands_lower"] = 100.0
+    params["order_book_ask" if short else "order_book_bid"] = 100.0
+    orders = (pbr.calc_entries_short_py if short else pbr.calc_entries_long_py)(**params)
+    assert len(orders) == 1
+    qty, price, _ = orders[0]
+    assert qty == (-1 if short else 1) * 3974.121391396196
+    assert price == 100.0

@@ -6,8 +6,9 @@ use crate::types::{
 };
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
-    calc_wallet_exposure_if_filled, cost_to_qty, interpolate, quantize_price, quantize_qty, round_,
-    round_dn, round_up, RoundingMode,
+    calc_wallet_exposure_if_filled, canonical_qty_units, cost_to_qty, floor_qty_difference,
+    interpolate, quantize_price, quantize_qty, round_, round_compound_price_distance,
+    round_price_distance, round_qty_unit_product, RoundingMode,
 };
 
 pub fn wallet_exposure_limit_with_allowance(
@@ -317,6 +318,25 @@ pub fn calc_cropped_reentry_qty(
     }
 }
 
+// Multiplication can cross a half-step or land on it after rounding.
+// Resolve boundary products from canonical decimal operands in venue units;
+// preserve physical-unit behavior when that proof is unavailable.
+fn rounded_position_reentry_qty(position_size: f64, factor: f64, step: f64) -> f64 {
+    if let Some(aligned) = canonical_qty_units(position_size.abs(), step) {
+        let product = aligned * factor;
+        let half_step = product.floor() + 0.5;
+        // Multiplication can land on either side of a half-step, or on it.
+        // The bound selects proof candidates; decimal operands decide rounding.
+        if (half_step - product).abs() <= f64::EPSILON * product.abs() * 4.0 {
+            return round_qty_unit_product(aligned, factor, step)
+                .unwrap_or_else(|| position_size.abs() * factor);
+        }
+        product.round() * step
+    } else {
+        position_size.abs() * factor
+    }
+}
+
 pub fn calc_reentry_qty(
     entry_price: f64,
     balance: f64,
@@ -336,7 +356,11 @@ pub fn calc_reentry_qty(
         calc_min_entry_qty(entry_price, &exchange_params),
         round_(
             f64::max(
-                position_size.abs() * double_down_factor,
+                rounded_position_reentry_qty(
+                    position_size,
+                    double_down_factor,
+                    exchange_params.qty_step,
+                ),
                 cost_to_qty(balance, entry_price, exchange_params.c_mult)
                     * effective_wallet_exposure_limit
                     * entry_params.initial_qty_pct,
@@ -370,9 +394,11 @@ fn calc_reentry_price_bid(
         volatility_ema_1m,
     );
     let reentry_price = f64::min(
-        round_dn(
-            position_price * (1.0 - entry_params.threshold_base_pct * spacing_multiplier),
+        round_price_distance(
+            position_price,
+            -entry_params.threshold_base_pct * spacing_multiplier,
             exchange_params.price_step,
+            RoundingMode::Floor,
         ),
         order_book_bid,
     );
@@ -407,9 +433,11 @@ fn calc_reentry_price_ask(
         volatility_ema_1m,
     );
     let reentry_price = f64::max(
-        round_up(
-            position_price * (1.0 + entry_params.threshold_base_pct * spacing_multiplier),
+        round_price_distance(
+            position_price,
+            entry_params.threshold_base_pct * spacing_multiplier,
             exchange_params.price_step,
+            RoundingMode::Ceil,
         ),
         order_book_ask,
     );
@@ -457,7 +485,11 @@ pub fn calc_grid_entry_long(
         return Order {
             qty: f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                round_dn(initial_entry_qty - position.size, exchange_params.qty_step),
+                floor_qty_difference(
+                    initial_entry_qty,
+                    position.size,
+                    exchange_params.qty_step,
+                ),
             ),
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialLong,
@@ -621,7 +653,11 @@ pub fn calc_trailing_entry_long(
         return Order {
             qty: f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                round_dn(initial_entry_qty - position.size, exchange_params.qty_step),
+                floor_qty_difference(
+                    initial_entry_qty,
+                    position.size,
+                    exchange_params.qty_step,
+                ),
             ),
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialLong,
@@ -677,9 +713,11 @@ pub fn calc_trailing_entry_long(
             entry_triggered = true;
             reentry_price = f64::min(
                 state_params.order_book.bid,
-                round_dn(
-                    position.price * (1.0 - threshold_pct),
+                round_price_distance(
+                    position.price,
+                    -threshold_pct,
                     exchange_params.price_step,
+                    RoundingMode::Floor,
                 ),
             );
         } else {
@@ -691,9 +729,12 @@ pub fn calc_trailing_entry_long(
                 entry_triggered = true;
                 reentry_price = f64::min(
                     state_params.order_book.bid,
-                    round_dn(
-                        position.price * (1.0 - threshold_pct + retracement_pct),
+                    round_compound_price_distance(
+                        position.price,
+                        -threshold_pct,
+                        retracement_pct,
                         exchange_params.price_step,
+                        RoundingMode::Floor,
                     ),
                 );
             }
@@ -789,8 +830,9 @@ pub fn calc_grid_entry_short(
         return Order {
             qty: -f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                round_dn(
-                    initial_entry_qty - position_size_abs,
+                floor_qty_difference(
+                    initial_entry_qty,
+                    position_size_abs,
                     exchange_params.qty_step,
                 ),
             ),
@@ -907,8 +949,9 @@ pub fn calc_trailing_entry_short(
         return Order {
             qty: -f64::max(
                 calc_min_entry_qty(initial_entry_price, &exchange_params),
-                round_dn(
-                    initial_entry_qty - position_size_abs,
+                floor_qty_difference(
+                    initial_entry_qty,
+                    position_size_abs,
                     exchange_params.qty_step,
                 ),
             ),
@@ -966,9 +1009,11 @@ pub fn calc_trailing_entry_short(
             entry_triggered = true;
             reentry_price = f64::max(
                 state_params.order_book.ask,
-                round_up(
-                    position.price * (1.0 + threshold_pct),
+                round_price_distance(
+                    position.price,
+                    threshold_pct,
                     exchange_params.price_step,
+                    RoundingMode::Ceil,
                 ),
             );
         } else {
@@ -980,9 +1025,12 @@ pub fn calc_trailing_entry_short(
                 entry_triggered = true;
                 reentry_price = f64::max(
                     state_params.order_book.ask,
-                    round_up(
-                        position.price * (1.0 + threshold_pct - retracement_pct),
+                    round_compound_price_distance(
+                        position.price,
+                        threshold_pct,
+                        -retracement_pct,
                         exchange_params.price_step,
+                        RoundingMode::Ceil,
                     ),
                 );
             }
@@ -1251,6 +1299,95 @@ mod tests {
     }
 
     #[test]
+    fn partial_initial_entries_preserve_aligned_difference_without_rounding_up() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.001,
+            min_cost: 1.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 1102.0,
+            order_book: OrderBook {
+                bid: 70.62,
+                ask: 70.62,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 0.5,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = RuntimeOrderContext {
+            effective_wallet_exposure_limit: 0.5,
+        };
+        for retracement in [0.0, 0.001] {
+            let entry = TrailingMartingaleEntryParams {
+                initial_qty_pct: 0.012,
+                ema_gate_mode: EmaGateMode::Disabled,
+                retracement_base_pct: retracement,
+                ..Default::default()
+            };
+            assert_eq!(
+                calc_initial_entry_qty(&exchange, &bot, &runtime, &entry, state.balance, 70.62),
+                0.094
+            );
+            // The aligned difference is 28 steps. A genuinely fractional
+            // remaining quantity must still be rounded down to 27 steps.
+            for (size, expected) in [
+                (0.066, 0.028),
+                (0.066_f64.next_up(), 0.027),
+                (0.066000001, 0.027),
+            ] {
+                for short in [false, true] {
+                    let position = Position {
+                        size: if short { -size } else { size },
+                        price: 99.85,
+                    };
+                    let order = if short {
+                        calc_next_entry_short(
+                            &exchange,
+                            &state,
+                            &bot,
+                            &runtime,
+                            &entry,
+                            &position,
+                            &TrailingPriceBundle::default(),
+                        )
+                    } else {
+                        calc_next_entry_long(
+                            &exchange,
+                            &state,
+                            &bot,
+                            &runtime,
+                            &entry,
+                            &position,
+                            &TrailingPriceBundle::default(),
+                        )
+                    };
+                    assert_eq!(
+                        order.qty,
+                        if short { -expected } else { expected },
+                        "short={short}, retracement={retracement}, size={size}"
+                    );
+                    assert_eq!(
+                        order.order_type,
+                        if short {
+                            OrderType::EntryInitialPartialShort
+                        } else {
+                            OrderType::EntryInitialPartialLong
+                        }
+                    );
+                    assert_eq!(order.price, 70.62);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_min_entry_qty_quantizes_without_overshooting_aligned_minimum() {
         let exchange = ExchangeParams {
             qty_step: 0.01,
@@ -1471,6 +1608,388 @@ mod tests {
             c_mult: 1.0,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn reentry_targets_preserve_aligned_ticks_despite_binary_noise() {
+        let mut exchange = make_exchange_params();
+        exchange.price_step = 0.01;
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = RuntimeOrderContext {
+            effective_wallet_exposure_limit: 1.0,
+        };
+        let mut entry = make_entry_params();
+        entry.threshold_we_weight = 0.0;
+        entry.threshold_volatility_1h_weight = 0.0;
+        entry.threshold_volatility_1m_weight = 0.0;
+        entry.threshold_base_pct = 0.0016;
+        // 131.25 * (1 - 0.0016) = 131.04 exactly in decimal arithmetic.
+        // The ordinary binary multiplication lands just below that valid tick.
+        assert_eq!(
+            calc_reentry_price_bid(
+                131.25, 0.1, 200.0, &exchange, &bot, &runtime, &entry, 0.0, 0.0, 1.0
+            ),
+            131.04
+        );
+        assert_eq!(
+            calc_reentry_price_bid(
+                131.25 - 1e-8,
+                0.1,
+                200.0,
+                &exchange,
+                &bot,
+                &runtime,
+                &entry,
+                0.0,
+                0.0,
+                1.0
+            ),
+            131.03
+        );
+        entry.threshold_base_pct = 0.0011;
+        // 100 * (1 + 0.0011) = 100.11; binary noise must not add a tick.
+        assert_eq!(
+            calc_reentry_price_ask(
+                100.0, 0.1, 1.0, &exchange, &bot, &runtime, &entry, 0.0, 0.0, 1.0
+            ),
+            100.11
+        );
+        assert_eq!(
+            calc_reentry_price_ask(
+                100.0 + 1e-8,
+                0.1,
+                1.0,
+                &exchange,
+                &bot,
+                &runtime,
+                &entry,
+                0.0,
+                0.0,
+                1.0
+            ),
+            100.12
+        );
+    }
+
+    #[test]
+    fn partial_initial_quantity_uses_inward_spacing() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-12,
+            price_step: 0.01,
+            min_qty: 1e-12,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 819200.0,
+            order_book: OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = make_runtime_context();
+        for retracement in [0.0, 0.001] {
+            let params = TrailingMartingaleEntryParams {
+                initial_qty_pct: 1.0,
+                ema_gate_mode: EmaGateMode::Disabled,
+                threshold_base_pct: 0.5,
+                retracement_base_pct: retracement,
+                ..Default::default()
+            };
+            for short in [false, true] {
+                let position = Position {
+                    size: if short {
+                        -4217.878608603804
+                    } else {
+                        4217.878608603804
+                    },
+                    price: 100.0,
+                };
+                let order = if short {
+                    calc_next_entry_short(
+                        &exchange,
+                        &state,
+                        &bot,
+                        &runtime,
+                        &params,
+                        &position,
+                        &TrailingPriceBundle::default(),
+                    )
+                } else {
+                    calc_next_entry_long(
+                        &exchange,
+                        &state,
+                        &bot,
+                        &runtime,
+                        &params,
+                        &position,
+                        &TrailingPriceBundle::default(),
+                    )
+                };
+                assert_eq!(
+                    order.qty,
+                    if short {
+                        -3974.121391396196
+                    } else {
+                        3974.121391396196
+                    }
+                );
+                assert_eq!(order.price, 100.0);
+            }
+        }
+    }
+
+    #[test]
+    fn reentry_product_rounded_onto_half_preserves_which_side_it_came_from() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-8,
+            price_step: 0.01,
+            min_qty: 1e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = make_runtime_context();
+        let params = TrailingMartingaleEntryParams {
+            initial_qty_pct: 1e-8,
+            ..Default::default()
+        };
+        for (factor, expected) in [
+            (0.12345674999999999, 0.01234567),
+            (0.12345675, 0.01234568),
+            (0.12345675000000001, 0.01234568),
+        ] {
+            for sign in [-1.0, 1.0] {
+                assert_eq!(
+                    calc_reentry_qty(
+                        100.0,
+                        1000.0,
+                        sign * 0.1,
+                        factor,
+                        &exchange,
+                        &bot,
+                        &runtime,
+                        &params,
+                        1.0
+                    ),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reentry_quantity_does_not_infer_adjacent_large_count() {
+        let exchange = ExchangeParams {
+            qty_step: 3e-12,
+            price_step: 0.01,
+            min_qty: 3e-12,
+            min_cost: 1.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = make_runtime_context();
+        let params = TrailingMartingaleEntryParams {
+            initial_qty_pct: 1e-6,
+            ..Default::default()
+        };
+        for sign in [-1.0, 1.0] {
+            assert_eq!(
+                calc_reentry_qty(
+                    100.0,
+                    1e7,
+                    sign * 9045.269825510173,
+                    0.5,
+                    &exchange,
+                    &bot,
+                    &runtime,
+                    &params,
+                    1.0
+                ),
+                4522.634912755086
+            );
+        }
+    }
+
+    #[test]
+    fn reentry_unit_recovery_preserves_genuine_off_grid_sizes() {
+        for sign in [-1.0, 1.0] {
+            let size = sign * 0.477_f64.next_down();
+            assert_eq!(
+                round_(rounded_position_reentry_qty(size, 0.5, 0.001), 0.001),
+                0.238
+            );
+        }
+        // Preserve a distinct, authored factor immediately below 1.15.
+        assert_eq!(
+            round_(
+                rounded_position_reentry_qty(5.0, 1.15_f64.next_down(), 0.1),
+                0.1
+            ),
+            5.7
+        );
+    }
+
+    #[test]
+    fn large_reentry_products_preserve_resolvable_sub_half_units() {
+        // Independent decimal reference: 10,000,000,003,871 * 1.19
+        // = 11,900,000,004,606.49 venue units, which must round down.
+        for sign in [-1.0, 1.0] {
+            assert_eq!(
+                round_(
+                    rounded_position_reentry_qty(sign * 100_000.00003871, 1.19, 1e-8),
+                    1e-8
+                ),
+                119_000.00004606
+            );
+        }
+    }
+
+    #[test]
+    fn aligned_reentry_product_recovers_binary_half_step_noise() {
+        for sign in [-1.0, 1.0] {
+            let quantity = rounded_position_reentry_qty(sign * 5.0, 1.15, 0.1);
+            assert!((quantity - 5.8).abs() < 1e-14);
+            let below = rounded_position_reentry_qty(sign * 5.0, 1.15 - 1e-10, 0.1);
+            assert!((below - 5.7).abs() < 1e-14);
+            let above = rounded_position_reentry_qty(sign * 5.0, 1.15 + 1e-10, 0.1);
+            assert!((above - 5.8).abs() < 1e-14);
+        }
+        // Large counts do not justify snapping a resolvable quarter-step.
+        assert_eq!(
+            rounded_position_reentry_qty(1.0, 1.0 + 2.5e-15, 1e-14),
+            (100_000_000_000_000.0_f64 * (1.0 + 2.5e-15)).round() * 1e-14
+        );
+    }
+
+    #[test]
+    fn trailing_reentry_prices_preserve_aligned_targets_and_directional_rounding() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.001,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = RuntimeOrderContext {
+            effective_wallet_exposure_limit: 1.0,
+        };
+        for short in [false, true] {
+            for retracement in [0.0, 0.001] {
+                for offset in [0.0, 1e-8] {
+                    let entry = TrailingMartingaleEntryParams {
+                        ema_gate_mode: EmaGateMode::Disabled,
+                        threshold_base_pct: if short { 0.0011 } else { 0.0016 } + retracement,
+                        retracement_base_pct: retracement,
+                        initial_qty_pct: 0.0001,
+                        double_down_factor: 0.2,
+                        ..Default::default()
+                    };
+                    let position = Position {
+                        size: if short { -1.0 } else { 1.0 },
+                        price: if short {
+                            100.0 + offset
+                        } else {
+                            131.25 - offset
+                        },
+                    };
+                    let state = StateParams {
+                        balance: 1000.0,
+                        order_book: OrderBook {
+                            bid: 140.0,
+                            ask: 90.0,
+                        },
+                        ..Default::default()
+                    };
+                    let trailing = TrailingPriceBundle {
+                        min_since_open: 120.0,
+                        max_since_min: 130.0,
+                        max_since_open: 110.0,
+                        min_since_max: 100.0,
+                    };
+                    let order = if short {
+                        calc_trailing_entry_short(
+                            &exchange, &state, &bot, &runtime, &entry, &position, &trailing, 1.0,
+                        )
+                    } else {
+                        calc_trailing_entry_long(
+                            &exchange, &state, &bot, &runtime, &entry, &position, &trailing, 1.0,
+                        )
+                    };
+                    assert!(order.qty.abs() > 0.0);
+                    let expected = match (short, offset == 0.0) {
+                        (false, true) => 131.04,
+                        (false, false) => 131.03,
+                        (true, true) => 100.11,
+                        (true, false) => 100.12,
+                    };
+                    assert!(
+                        (order.price - expected).abs() < 1e-12,
+                        "short={short}, retracement={retracement}, offset={offset}, price={}",
+                        order.price
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aligned_reentry_quantity_half_steps_round_in_venue_units() {
+        let mut exchange = make_exchange_params();
+        exchange.qty_step = 0.001;
+        exchange.min_qty = 0.0;
+        exchange.min_cost = 0.0;
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = RuntimeOrderContext {
+            effective_wallet_exposure_limit: 1.0,
+        };
+        let mut entry = make_entry_params();
+        entry.initial_qty_pct = 0.0001;
+        let calculate = |size, factor| {
+            calc_reentry_qty(
+                100.0, 1.0, size, factor, &exchange, &bot, &runtime, &entry, 1.0,
+            )
+        };
+        // Decimal references: 0.477 * 0.5 = 0.2385; 0.85 * 1.19 = 1.0115.
+        assert_eq!(calculate(0.477, 0.5), 0.239);
+        assert_eq!(calculate(-0.477, 0.5), 0.239);
+        assert_eq!(calculate(0.85, 1.19), 1.012);
+        // Genuine differences on either side of a half-step remain distinct.
+        assert_eq!(calculate(0.477, 0.5 - 1e-12), 0.238);
+        assert_eq!(calculate(0.477, 0.5 + 1e-12), 0.239);
+        assert_eq!(calculate(0.477 - 1e-8, 0.5), 0.238);
+        assert_eq!(calculate(0.477 + 1e-8, 0.5), 0.239);
     }
 
     fn make_entry_params() -> TrailingMartingaleEntryParams {

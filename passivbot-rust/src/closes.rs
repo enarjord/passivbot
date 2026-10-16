@@ -6,8 +6,9 @@ use crate::types::{
     TrailingPriceBundle,
 };
 use crate::utils::{
-    calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty, round_, round_dn, round_up,
-    tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step, RoundingMode,
+    calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty, round_,
+    round_compound_price_distance, round_price_distance, round_up, tolerant_round_dn_preserve_step,
+    tolerant_round_up_preserve_step, RoundingMode,
 };
 use serde::Serialize;
 
@@ -326,9 +327,11 @@ pub fn calc_grid_close_long(
     );
     let close_price = f64::max(
         state_params.order_book.ask,
-        round_up(
-            position.price * (1.0 + threshold_pct),
+        round_price_distance(
+            position.price,
+            threshold_pct,
             exchange_params.price_step,
+            RoundingMode::Ceil,
         ),
     );
     let qty_pct = if close_params.threshold_we_weight == 0.0 {
@@ -406,9 +409,11 @@ pub fn calc_trailing_close_long(
             // close at threshold
             let close_price = f64::max(
                 state_params.order_book.ask,
-                round_up(
-                    position.price * (1.0 + close_trailing_threshold_pct),
+                round_price_distance(
+                    position.price,
+                    close_trailing_threshold_pct,
                     exchange_params.price_step,
+                    RoundingMode::Ceil,
                 ),
             );
             Order {
@@ -433,10 +438,12 @@ pub fn calc_trailing_close_long(
             {
                 let close_price = f64::max(
                     state_params.order_book.ask,
-                    round_up(
-                        position.price
-                            * (1.0 + close_trailing_threshold_pct - close_trailing_retracement_pct),
+                    round_compound_price_distance(
+                        position.price,
+                        close_trailing_threshold_pct,
+                        -close_trailing_retracement_pct,
                         exchange_params.price_step,
+                        RoundingMode::Ceil,
                     ),
                 );
                 Order {
@@ -549,9 +556,11 @@ pub fn calc_grid_close_short(
     );
     let close_price = f64::min(
         state_params.order_book.bid,
-        round_dn(
-            position.price * (1.0 - threshold_pct),
+        round_price_distance(
+            position.price,
+            -threshold_pct,
             exchange_params.price_step,
+            RoundingMode::Floor,
         ),
     );
     let qty_pct = if close_params.threshold_we_weight == 0.0 {
@@ -630,9 +639,11 @@ pub fn calc_trailing_close_short(
             // close at threshold
             let close_price = f64::min(
                 state_params.order_book.bid,
-                round_dn(
-                    position.price * (1.0 - close_trailing_threshold_pct),
+                round_price_distance(
+                    position.price,
+                    -close_trailing_threshold_pct,
                     exchange_params.price_step,
+                    RoundingMode::Floor,
                 ),
             );
             Order {
@@ -656,10 +667,12 @@ pub fn calc_trailing_close_short(
             {
                 let close_price = f64::min(
                     state_params.order_book.bid,
-                    round_dn(
-                        position.price
-                            * (1.0 - close_trailing_threshold_pct + close_trailing_retracement_pct),
+                    round_compound_price_distance(
+                        position.price,
+                        -close_trailing_threshold_pct,
+                        close_trailing_retracement_pct,
                         exchange_params.price_step,
+                        RoundingMode::Floor,
                     ),
                 );
                 Order {
@@ -1107,6 +1120,198 @@ mod tests {
         let new_psize = (pos.size.abs() - order.qty.abs()).max(0.0);
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
         assert!(new_we < 1.0, "new_we={} not strictly below target", new_we);
+    }
+
+    #[test]
+    fn tiny_price_steps_preserve_resolvable_off_tick_close_targets() {
+        let mut exchange = make_exchange_params();
+        exchange.price_step = 1e-8;
+        let state = StateParams {
+            balance: 1e9,
+            order_book: crate::types::OrderBook {
+                ask: 1.0,
+                bid: 200_000.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = make_runtime_context();
+        let close = TrailingMartingaleCloseParams {
+            threshold_base_pct: 0.0,
+            threshold_we_weight: 0.0,
+            threshold_volatility_1h_weight: 0.0,
+            threshold_volatility_1m_weight: 0.0,
+            retracement_base_pct: 0.0,
+            ..make_close_params()
+        };
+        for ulps in 1..=8 {
+            let long_price = f64::from_bits(100_000.0_f64.to_bits() + ulps);
+            let short_price = f64::from_bits(100_000.00000001_f64.to_bits() - ulps);
+            let long = calc_grid_close_long(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &close,
+                &Position {
+                    size: 1.0,
+                    price: long_price,
+                },
+            );
+            let short = calc_grid_close_short(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &close,
+                &Position {
+                    size: -1.0,
+                    price: short_price,
+                },
+            );
+            assert_eq!(long.price, 100_000.00000001, "long offset {ulps} ULP");
+            assert_eq!(short.price, 100_000.0, "short offset {ulps} ULP");
+        }
+    }
+
+    #[test]
+    fn close_prices_preserve_aligned_ticks_and_genuine_off_tick_distances() {
+        let mut exchange = make_exchange_params();
+        exchange.price_step = 0.01;
+        let state = StateParams {
+            balance: 10_000.0,
+            order_book: crate::types::OrderBook {
+                ask: 1.0,
+                bid: 200.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = make_runtime_context();
+        let mut close = TrailingMartingaleCloseParams {
+            threshold_base_pct: 0.0,
+            threshold_we_weight: 0.0,
+            threshold_volatility_1h_weight: 0.0,
+            threshold_volatility_1m_weight: 0.0,
+            retracement_base_pct: 0.0,
+            ..make_close_params()
+        };
+        let grid_long = |price, params: &TrailingMartingaleCloseParams| {
+            calc_grid_close_long(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                params,
+                &Position { size: 1.0, price },
+            )
+            .price
+        };
+        let grid_short = |price, params: &TrailingMartingaleCloseParams| {
+            calc_grid_close_short(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                params,
+                &Position { size: -1.0, price },
+            )
+            .price
+        };
+        // A zero threshold must not manufacture a profitable extra tick.
+        assert_eq!(grid_long(130.08, &close), 130.08);
+        assert_eq!(grid_short(131.04, &close), 131.04);
+        assert_eq!(grid_long(130.08 + 1e-8, &close), 130.09);
+        assert_eq!(grid_short(131.04 - 1e-8, &close), 131.03);
+        // Decimal reference: 100 * 1.0011 = 100.11.
+        close.threshold_base_pct = 0.0011;
+        assert_eq!(grid_long(100.0, &close), 100.11);
+        assert_eq!(
+            calc_trailing_close_long(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &close,
+                &Position {
+                    size: 1.0,
+                    price: 100.0
+                },
+                &TrailingPriceBundle::default()
+            )
+            .price,
+            100.11
+        );
+        // Decimal reference: 131.25 * (1 - 0.0016) = 131.04.
+        close.threshold_base_pct = 0.0016;
+        assert_eq!(grid_short(131.25, &close), 131.04);
+        assert_eq!(
+            calc_trailing_close_short(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &close,
+                &Position {
+                    size: -1.0,
+                    price: 131.25
+                },
+                &TrailingPriceBundle::default()
+            )
+            .price,
+            131.04
+        );
+        // The threshold/retracement branch uses the same directional contract.
+        close.threshold_base_pct = 0.0013;
+        close.retracement_base_pct = 0.0002;
+        close.retracement_volatility_1h_weight = 0.0;
+        close.retracement_volatility_1m_weight = 0.0;
+        let trail = TrailingPriceBundle {
+            max_since_open: 101.0,
+            min_since_max: 100.5,
+            min_since_open: 130.0,
+            max_since_min: 130.5,
+        };
+        assert_eq!(
+            calc_trailing_close_long(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &close,
+                &Position {
+                    size: 1.0,
+                    price: 100.0
+                },
+                &trail
+            )
+            .price,
+            100.11
+        );
+        close.threshold_base_pct = 0.0018;
+        assert_eq!(
+            calc_trailing_close_short(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &close,
+                &Position {
+                    size: -1.0,
+                    price: 131.25
+                },
+                &trail
+            )
+            .price,
+            131.04
+        );
     }
 
     #[test]

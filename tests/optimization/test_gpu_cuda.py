@@ -437,7 +437,8 @@ def test_cuda_completion_keeps_short_wait_active(monkeypatch):
 
 
 @pytest.mark.parametrize("device", ["cuda", "mps"])
-def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
+@pytest.mark.parametrize("batch_size", [1, 65])
+def test_tm_unchunked_dispatch_uses_backend_launch_options(monkeypatch, device, batch_size):
     pytest.importorskip("torch")
     from optimization.gpu import mps_kernel
 
@@ -467,19 +468,22 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
         unstuck_pnl_capacity=0,
     )
     calls = []
-    library = SimpleNamespace(
-        passivbot_trailing_martingale_multicoin=lambda *args, **kwargs: calls.append(
-            (args, kwargs)
-        )
-    )
+    def kernel(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    kernel.max_threads_per_threadgroup = 1024
+    kernel.thread_execution_width = 32
+    library = SimpleNamespace(**{"passivbot_trailing_martingale_multicoin": kernel})
     mps_kernel.MpsTrailingMartingaleMulticoinRunner._dispatch(
-        runner, library, *[object() for _ in range(11)], batch_size=65
+        runner, library, *[object() for _ in range(11)], batch_size=batch_size
     )
     assert len(calls) == 1
     assert len(calls[0][0]) == 17
-    expected = {"threads": (65, 1, 1)}
+    expected = {"threads": (batch_size, 1, 1)}
     if device == "cuda":
         expected["group_size"] = (32, 1, 1)
+    if device == "mps":
+        expected["group_size"] = (min(batch_size, 32), 1, 1)
     assert calls[0][1] == expected
 
 
@@ -617,3 +621,20 @@ def test_mps_coin_capacity_is_explicit_and_preserves_other_source(monkeypatch):
     source = "constant int MAX_COINS = 64; // 64 remains elsewhere"
     compile_shader(source, mps_coin_capacity=4)
     assert sources == ["constant int MAX_COINS = 4; // 64 remains elsewhere"]
+
+
+def test_cuda_decimal_proofs_keep_metal_signed_64_bit_arithmetic():
+    source = """#include <metal_stdlib>
+using namespace metal;
+struct DecimalOperand { long coefficient; int exponent; };
+kernel void signed_decimal_probe(constant long* input, device long* output,
+                                 uint b [[thread_position_in_grid]]) {
+    output[b] = input[b] * long(1);
+}
+"""
+    lowered = cuda_source(source)
+    assert "using PBLong = long long;" in lowered
+    assert "PBLong coefficient" in lowered
+    assert "const PBLong* input" in lowered
+    assert "PBLong* output" in lowered
+    assert "input[b] * PBLong(1)" in lowered
