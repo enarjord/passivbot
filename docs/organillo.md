@@ -14,7 +14,9 @@ date,BTC,ETH,SOL
 Headers must exactly match canonical coin identities in the resolved approved universe. Dates
 must be unique, increasing UTC days. Supply every operational date, including execution candles;
 blank cells, missing dates, duplicate headers and values other than `0`/`1` raise an error.
-A row takes effect at 00:00 UTC. Candle warmup before the requested start is inert.
+A row takes effect at 00:00 UTC. Candle warmup before the requested start and the final unused
+execution-lookahead candle are inert. That final candle needs no additional CSV date; every
+candle actually consumed by the replay still requires coverage.
 
 `1` permits ordinary Forager selection. `0` applies graceful stop: existing positions retain DCA,
 closes, unstuck and protective management; once flat they cannot reopen. Pending initial orders

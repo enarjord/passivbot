@@ -101,13 +101,16 @@ def _align(path, expected_hash, coins, first, length, interval, operational_star
     days = stamps // DAY_MS * DAY_MS
     rows = np.searchsorted(dates, days).astype(np.int32)
     required = stamps >= operational_start
+    # Both replay engines consume candles through length - 2; the final
+    # prepared candle supplies execution lookahead and never reads eligibility.
+    required[-1] = False
     bounded = np.minimum(rows, len(dates) - 1)
     covered = (rows < len(dates)) & (dates[bounded] == days)
     if np.any(required & ~covered):
         day = int(days[np.flatnonzero(required & ~covered)[0]])
         date = datetime.fromtimestamp(day / 1000, timezone.utc).strftime("%Y-%m-%d")
         raise ValueError(f"Organillo CSV {path}: missing required UTC date {date}")
-    # Warmup-only rows are inert, explicitly mapped to an appended zero row.
+    # Warmup and unused lookahead are inert, mapped to an appended zero row.
     aligned = np.ascontiguousarray(values[:, [source_coins.index(c) for c in coins]])
     aligned = np.concatenate((aligned, np.zeros((1, len(coins)), dtype=np.uint8)))
     rows[~required] = len(dates)

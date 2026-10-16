@@ -76,7 +76,8 @@ def test_warmup_is_inert_and_operational_coverage_is_strict(tmp_path):
     config = {"backtest": {"organillo_csv": str(path), "start_date": "2025-01-02"}}
     selection = prepare_selection(config, ["A"], stamps)
     assert np.all(selection.values[selection.rows[:24]] == 0)
-    assert np.all(selection.values[selection.rows[24:]] == 1)
+    assert np.all(selection.values[selection.rows[24:-1]] == 1)
+    assert selection.values[selection.rows[-1]].tolist() == [0]
     with pytest.raises(ValueError, match="row indices"):
         validate_buffers(selection.values, np.full(48, -1, dtype=np.int32), 48, 1)
 
@@ -92,8 +93,37 @@ def test_alignment_cache_distinguishes_operational_starts(tmp_path):
     later["backtest"]["start_date"] = "2025-01-02"
     second = prepare_selection(later, ["A"], stamps)
     assert first.identity != second.identity
-    assert np.all(first.values[first.rows] == 1)
+    assert np.all(first.values[first.rows[:-1]] == 1)
+    assert first.values[first.rows[-1]].tolist() == [0]
     assert np.all(second.values[second.rows[:24]] == 0)
+
+
+@pytest.mark.parametrize("with_end", [False, True])
+def test_unused_lookahead_needs_no_additional_csv_date(tmp_path, with_end):
+    from organillo import period_coins
+    path = tmp_path / "selection.csv"
+    path.write_text("date,A\n2025-01-01,1\n")
+    config = {"backtest": {"organillo_csv": str(path), "start_date": "2025-01-01"}}
+    if with_end:
+        config["backtest"]["end_date"] = "2025-01-02"
+        assert period_coins(config) == {"A"}
+    stamps = 1_735_689_600_000 + np.arange(25) * 3_600_000
+    selection = prepare_selection(config, ["A"], stamps)
+    assert np.all(selection.values[selection.rows[:-1]] == 1)
+    assert selection.values[selection.rows[-1]].tolist() == [0]
+    assert prepare_selection(config, ["A"], stamps) is selection
+
+
+def test_consumed_post_end_candles_still_require_csv_coverage(tmp_path):
+    path = tmp_path / "selection.csv"
+    path.write_text("date,A\n2025-01-01,1\n")
+    config = {"backtest": {"organillo_csv": str(path), "start_date": "2025-01-01",
+                           "end_date": "2025-01-02"}}
+    # The engine consumes the penultimate candle even when externally prepared
+    # data extends beyond the configured period. Only the final row is unused.
+    stamps = 1_735_689_600_000 + np.arange(26) * 3_600_000
+    with pytest.raises(ValueError, match="missing required UTC date 2025-01-02"):
+        prepare_selection(config, ["A"], stamps)
 
 
 @pytest.mark.asyncio
@@ -161,6 +191,60 @@ def test_cpu_all_ones_preserves_results_and_all_zero_blocks_entries(tmp_path, st
     zero = build_backtest_payload(candles, markets, config, "binance", btc, stamps, metrics_only=False)
     fills, _equities, _analysis = execute_backtest(zero, config)
     assert len(fills) == 0
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("backend", ["cpu", "native"])
+def test_exclusive_end_lookahead_preserves_disabled_results(tmp_path, strategy, backend,
+        monkeypatch, require_real_passivbot_rust_module):
+    from copy import deepcopy
+    from backtest import build_backtest_payload, execute_backtest
+    from organillo import period_coins
+    if backend == "native":
+        torch = pytest.importorskip("torch")
+        if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
+            pytest.skip("native GPU runtime unavailable")
+    config, candles, markets, btc, stamps = fixture_inputs(strategy, sides="both", bars=512)
+    # Supply the execution lookahead at the existing exclusive endpoint, without
+    # adding that next UTC day's unused eligibility to the CSV.
+    candles = np.concatenate((candles, candles[-1:]), axis=0)
+    btc = np.concatenate((btc, btc[-1:]))
+    stamps = np.concatenate((stamps, stamps[-1:] + 60_000))
+    for coin in config["backtest"]["coins"]["binance"]:
+        markets[coin]["last_valid_index"] = len(stamps) - 1
+    ones = deepcopy(config)
+    write_schedule(tmp_path / "ones.csv", (ones, candles, markets, btc, stamps[:-1]), [[1, 1]])
+    assert period_coins(ones) == {"COIN00", "COIN01"}
+    selection = prepare_selection(ones, ["COIN00", "COIN01"], stamps)
+    assert selection.values[selection.rows[-1]].tolist() == [0, 0]
+    if backend == "cpu":
+        baseline = execute_backtest(build_backtest_payload(
+            candles, markets, config, "binance", btc, stamps), config)
+        enabled = execute_backtest(build_backtest_payload(
+            candles, markets, ones, "binance", btc, stamps), ones)
+        np.testing.assert_array_equal(baseline[0], enabled[0])
+        np.testing.assert_array_equal(baseline[1], enabled[1])
+        assert baseline[2] == enabled[2]
+        assert enabled[2]["backtest_completion_ratio"] == 1.0
+    else:
+        from contextlib import ExitStack
+        from tools.gpu_parity import _native_dataset
+        from optimization.gpu.native import NativeBacktestService
+        from optimization.gpu.executor import BacktestRequest
+        def forbidden(*_args, **_kwargs):
+            pytest.fail("native eligibility cannot invoke CPU simulation")
+        monkeypatch.setattr("backtest.execute_backtest", forbidden)
+        metrics = ("adg_strategy_eq", "fills_per_day", "backtest_completion_ratio")
+        with ExitStack() as resources:
+            with NativeBacktestService(batch_size=1, tuning_mode="off") as service:
+                for key, current in (("disabled", config), ("ones", ones)):
+                    dataset = resources.enter_context(_native_dataset(
+                        (current, candles, markets, btc, stamps), "binance", metrics))
+                    service.register_dataset(key, dataset)
+                baseline = service.submit(BacktestRequest("disabled", "disabled", {})).result(timeout=180)
+                enabled = service.submit(BacktestRequest("ones", "ones", {})).result(timeout=180)
+                assert baseline.metrics == enabled.metrics
+                assert enabled.metrics["backtest_completion_ratio"] == 1.0
 
 
 def test_payload_subset_preserves_physical_column_mapping(tmp_path, require_real_passivbot_rust_module):

@@ -91,7 +91,7 @@ since the latest release tag; these features may already be available when insta
 
 - Compute native CUDA and Metal backtest completion from exact candle endpoints. Fully replayed candidates report exactly 1.0, while early liquidation and explicitly truncated replay remain incomplete.
 
-- Add optional Organillo daily eligibility CSVs for CPU backtests and optimization and native GPU optimization. Historical eligibility applies graceful stop, follows existing dynamic-WEL accounting, and leaves ordinary simulation paths unchanged when disabled.
+- Add optional Organillo daily eligibility CSVs for CPU backtests and optimization and native GPU optimization. Historical eligibility applies graceful stop, follows existing dynamic-WEL accounting, requires coverage for consumed candles without extending it to unused lookahead, and leaves ordinary simulation paths unchanged when disabled.
 
 - Support experimental native GPU optimization on Apple Silicon through Metal/MPS,
   including both strategies, suites, HSL, weighted and exponential equity metrics,

@@ -14,9 +14,12 @@ errors. No fuzzy matching, carry-forward or default eligibility.
 
 A daily row applies at UTC midnight until the following midnight. The parent freezes the source
 SHA-256 into `backtest.organillo_sha256` and aligns a read-only daily `uint8` matrix plus one `int32`
-row index per execution candle. Warmup-only rows map to an inert zero row. Candle format stays
-unchanged. CPU workers borrow shared arrays; native GPU datasets borrow the same descriptors and
-upload the schedule when resident, shared across candidates and compatible directional runners.
+row index per execution candle. Warmup-only rows and the unused final execution-lookahead candle
+map to an inert zero row; that final candle needs no additional CSV date. Every consumed candle
+still requires coverage, including any extra consumed rows supplied beyond a configured end.
+Candle format stays unchanged. CPU workers borrow shared arrays; native GPU datasets borrow the
+same descriptors and upload the schedule when resident, shared across candidates and compatible
+directional runners.
 
 The data universe is the period union intersected with existing enabled-side approved coins.
 CSV headers must be exact identities in the resolved approved universe (including disabled sides);
