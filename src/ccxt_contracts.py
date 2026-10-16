@@ -93,6 +93,10 @@ def get_bot_class(exchange: str):
         from exchanges.binance import BinanceBot
 
         return BinanceBot
+    if exchange in ("binance_portfolio", "binance_pm"):
+        from exchanges.binance_portfolio import BinancePortfolioBot
+
+        return BinancePortfolioBot
     if exchange == "bitget":
         from exchanges.bitget import BitgetBot
 

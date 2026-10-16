@@ -20311,9 +20311,14 @@ def setup_bot(config):
 
         bot = BitunixBot(config)
     elif user_info["exchange"] == "binance":
-        from exchanges.binance import BinanceBot
+        if str(user_info.get("account_type", "")).lower() in ("portfolio_margin", "pm"):
+            from exchanges.binance_portfolio import BinancePortfolioBot
 
-        bot = BinanceBot(config)
+            bot = BinancePortfolioBot(config)
+        else:
+            from exchanges.binance import BinanceBot
+
+            bot = BinanceBot(config)
     elif user_info["exchange"] == "okx":
         from exchanges.okx import OKXBot
 
