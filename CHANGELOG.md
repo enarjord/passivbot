@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add Binance Portfolio Margin (PM) account support via `"account_type": "portfolio_margin"` in `api-keys.json`. Reuses the existing Binance futures connector's position, order, and fill handling unchanged (CCXT already routes these through PM's `papi*` endpoints with matching response shapes); real overrides are limited to balance reading (PM's balance shape differs from regular futures), dropping per-symbol margin-mode setting (PM risk is unified account-wide), and the hedge-mode startup check. No realtime order stream yet for PM accounts; falls back to REST polling. No behavior change for existing non-PM accounts. See `docs/exchanges/binance_portfolio_margin.md`.
+
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
 - Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
