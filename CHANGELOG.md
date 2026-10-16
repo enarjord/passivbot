@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Exclude newly reconstructed historical HSL breaches from observed stop/restart
+  counts when the current permission is GREEN; retain same-time lifecycle events.
+
 - Replay multicoin GPU trailing-martingale passive entry and close ladders when
   market orders are disabled. Market permission governs execution promotion;
   reachable passive recursive fills remain part of the strategy. Preserve an
