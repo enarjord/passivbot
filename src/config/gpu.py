@@ -6,6 +6,16 @@ import math
 GPU_SCREENING_DEFAULTS = {"scenarios": [], "survival_fraction": 0.1, "min_survivors": 64}
 
 
+def resolve_gpu_sizing(value, *, field):
+    """Normalize automatic intent and positive integer-valued sizing inputs."""
+    if value is None or (isinstance(value, str) and value.strip().lower() == "auto"):
+        return None
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 1 or value != int(value)):
+        raise ValueError(f"optimize.gpu.{field} must be a positive integer or auto")
+    return int(value)
+
+
 def resolve_gpu_screening(value=None) -> dict:
     screening = dict(GPU_SCREENING_DEFAULTS)
     configured_screening = value
@@ -84,6 +94,20 @@ def validate_gpu_backtest_config(config: dict) -> None:
         raise ValueError(
             f"GPU backtests do not support strategy {strategy!r}; use a CPU backend"
         )
+    if strategy == "ema_anchor":
+        from optimization.gpu.model import gpu_side_enabled
+
+        for side in ("long", "short"):
+            if not gpu_side_enabled(config, side):
+                continue
+            risks = [config["bot"][side]["risk"]]
+            risks.extend(patch.get("bot", {}).get(side, {}).get("risk", {})
+                         for patch in (config.get("coin_overrides") or {}).values())
+            if any(risk.get("position_exposure_enforcer_enabled", False) for risk in risks):
+                raise ValueError(
+                    f"GPU EMA Anchor does not support bot.{side}.risk."
+                    "position_exposure_enforcer_enabled; disable it or use a CPU backend"
+                )
     backtest = config["backtest"]
     collateral = float(backtest["btc_collateral_cap"])
     if not math.isfinite(collateral) or collateral != 0.0:

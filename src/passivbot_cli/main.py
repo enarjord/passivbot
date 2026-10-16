@@ -158,6 +158,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "measure offline CPU/GPU cohorts and native CUDA service latency (requires full install)",
         requires_full=True,
     ),
+    "optimizer-benchmark": CommandSpec(
+        "tools.optimizer_benchmark",
+        "freeze offline candidate populations and compare optimizer implementations",
+        requires_full=True,
+    ),
     "gpu-service-benchmark": CommandSpec(
         "tools.gpu_service_benchmark",
         "measure offline native CUDA suite resources and default tuning evidence (requires full install)",

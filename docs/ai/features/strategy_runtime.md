@@ -71,6 +71,11 @@ Seed evaluation contract:
 - CPU optimizers evaluate every deduplicated seed with Rust CPU backtests. GPU optimization
   evaluates every deduplicated seed and initial parent with its authoritative CUDA service.
   Seed work is additional to the evolutionary `optimize.iters` budget.
+- Explicitly enabled `optimize.prefilter` checks may instead complete a seed or offspring with
+  a graded constraint and signed numerical penalty defaults, without replay. Such records carry
+  `backtest_performed=false`; they are terminal optimizer evaluations, not simulator evidence.
+  Disabled checks perform no strategy probing. Rust owns hypothetical geometry and grid sizing;
+  Python owns normalized policy violations and ordinary evolutionary F/G transport.
 - Partial scenario-screening observations may select later offspring for full-suite evaluation;
   they must never supply complete fitness, result records or Pareto membership.
 - Incomplete GPU checkpoints own normalized CPU search/cohort state and anchors, without
@@ -155,6 +160,28 @@ for that tie-break, and missing EMA inputs must fail loudly.
 Close thresholds are additive so they can intentionally cross through break-even or negative markup
 as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
 wallet-exposure modifier.
+
+TM grid and trailing re-entry/close distance targets use a fused base-plus-distance expression.
+A representation residual is corrected only when checked decimal arithmetic proves exact venue
+alignment; genuine off-grid targets keep directional rounding. Quantity-unit recovery requires exact
+decimal divisibility below 2^53 units and distinguishable neighbors in the operation's direction.
+Ambiguous counts, unproven alignment, and checked-arithmetic overflow keep physical-unit rounding.
+Near-half quantity products use checked decimal operand arithmetic, including products rounded
+onto the boundary. Unproven products retain physical-unit rounding.
+Venue rounding converts the chosen integer count directly to its decimal step value, avoiding
+another physical-value rescaling. Nearest rounding resolves quotient ties with checked decimal
+arithmetic when possible; directional rounding only recovers provably aligned inputs and keeps
+physical rounding for other intermediate values.
+
+GPU TM replay transports original decimal DDF and base threshold/retracement operands from Rust
+as finite integer limbs, separately from the ordinary float32 parameters. Checked unit arithmetic
+resolves near-half quantities only for uniquely recoverable counts below 2^24. Static price-distance
+proofs additionally require a passive initial-fill tick lineage; partial closes retain that lineage,
+while every weighted increase, market fill, and full flatten invalidates it. Recursive snapshots
+and temporal replay preserve the same proof state. Per-modifier masks preserve original-precision nonzero values and explicit coin pins, so an
+effective static group remains provable when pinned zeros replace nonzero global modifiers. Coefficients outside 60 bits, decimal exponents outside [-18, 18], checked
+integer overflow, weighted prices, and dynamic distances retain fused physical float32 arithmetic.
+These bounded proofs do not establish general GPU numerical acceptance or native migration readiness.
 
 Auto-unstuck has its own EMA trigger toggle:
 `bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the

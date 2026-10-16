@@ -97,6 +97,15 @@ def test_optimizer_backend_cli_alias_updates_config():
     assert out["optimize"]["backend"] == "pymoo"
 
 
+@pytest.mark.parametrize("help_all", [False, True])
+def test_gpu_backend_help_names_both_supported_devices(help_all):
+    parser = argparse.ArgumentParser()
+    add_config_arguments(parser, get_template_config(), command="optimize", help_all=help_all)
+    help_text = " ".join(parser.format_help().split())
+    assert "NVIDIA/CUDA" in help_text
+    assert "experimental Apple Metal" in help_text
+
+
 def test_gpu_backend_registry_entry_is_lazy():
     assert get_backend_runner("gpu") is run_gpu_backend
 

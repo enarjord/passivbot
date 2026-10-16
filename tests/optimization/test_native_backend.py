@@ -257,11 +257,26 @@ def test_native_contract_and_checkpoint_reject_other_engines_or_precision(monkey
 
 
 @pytest.mark.parametrize("fail_preparation", [False, True])
-def test_cpu_pipeline_starts_gpu_and_records_before_preparing_full_window(monkeypatch, tmp_path, fail_preparation):
+@pytest.mark.parametrize("duplicate_seed", [False, True])
+def test_cpu_pipeline_starts_gpu_and_records_before_preparing_full_window(
+    monkeypatch, tmp_path, fail_preparation, duplicate_seed
+):
     guard_cpu(monkeypatch)
     import optimization.backends.gpu_backend as backend
     import optimization.gpu.native as native
     from optimization.native_planning import NativeCandidatePlanner
+
+    def sampling(bounds, population_size):
+        # Control cohort identity: pymoo legitimately removes duplicate seeds,
+        # so an uncontrolled random sample need not yield population_size rows.
+        population = np.asarray([
+            [bound.low + (bound.high - bound.low) * (i + 1) / (population_size + 1)
+             for bound in bounds] for i in range(population_size)
+        ])
+        if duplicate_seed:
+            population[-1] = population[0]
+        return population
+    monkeypatch.setattr(backend, "_build_random_sampling", sampling)
 
     clock = [0.0]
     monkeypatch.setattr(backend, "time", SimpleNamespace(
@@ -307,5 +322,5 @@ def test_cpu_pipeline_starts_gpu_and_records_before_preparing_full_window(monkey
             execute(base, SimpleNamespace(record=records.append), checkpoint, resume=True)
         else:
             execute(base, SimpleNamespace(record=records.append), checkpoint)
-        assert len(records) == 16
+        assert len(records) == 16 - int(duplicate_seed)
         assert load_checkpoint(checkpoint, base.config)["phase"] == "idle"

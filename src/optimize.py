@@ -244,6 +244,8 @@ from optimization.evaluation_payload import (
     apply_evaluation_payload,
     build_evaluation_payload,
 )
+from config.prefilter import prefilter_enabled
+from optimization.prefilter import prefilter_candidate, build_prefilter_payload, prefilter_config_for_exchange
 from optimization.prepared_dataset_identity import (
     PREPARED_DATASET_KEY,
     build_prepared_dataset_identity,
@@ -913,6 +915,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "fixed_params",
         "fixed_runtime_overrides",
         "limits",
+        "prefilter",
         "mutation_eta",
         "mutation_indpb",
         "mutation_probability",
@@ -1728,6 +1731,26 @@ class Evaluator:
         from organillo import borrow_selection
         return borrow_selection(specs, self._attachments.setdefault("organillo", {}))
 
+    def prefilter_payload(self, individual, configs, *, suite=False, markets_by_scenario=None):
+        params = self.config["optimize"].get("prefilter")
+        if not prefilter_enabled(params):
+            return None
+        views = {}
+        for label, config in configs.items():
+            markets = self.msss if markets_by_scenario is None else markets_by_scenario[label]
+            for exchange in markets:
+                views.setdefault(label, []).append(
+                    prefilter_config_for_exchange(config, markets[exchange], exchange))
+        constraint, findings = prefilter_candidate(views, params)
+        if constraint == 0.0:
+            return None
+        payload = build_prefilter_payload(self, individual, constraint, findings, suite=suite,
+                                          scenario_labels=tuple(configs) if suite else ())
+        _set_candidate_metrics(individual, payload["metrics"])
+        if self.use_duplicate_guard:
+            self.seen_hashes[calc_hash(individual)] = (payload["fitness"], constraint)
+        return payload
+
     def _ensure_attached(self, exchange: str) -> None:
         if exchange not in self.shared_hlcvs_np:
             spec = self.hlcvs_specs[exchange]
@@ -1897,6 +1920,9 @@ class Evaluator:
                 else:
                     if existing_score is not None:
                         self.duplicate_counter["reused"] += 1
+                        rejected = self.prefilter_payload(individual, {"base": config})
+                        if rejected is not None:
+                            return rejected
                         return build_evaluation_payload(
                             existing_score,
                             existing_penalty,
@@ -1905,6 +1931,9 @@ class Evaluator:
                         )
             else:
                 self.seen_hashes[individual_hash] = None
+        rejected = self.prefilter_payload(individual, {"base": config})
+        if rejected is not None:
+            return rejected
         required_metrics = [
             *(spec.metric for spec in self.scoring_specs),
             *(check["metric"] for check in self.limit_checks),
@@ -2367,13 +2396,15 @@ class SuiteEvaluator:
         ]
 
     def score_scenario_results(
-        self, scenario_results: List[ScenarioResult]
+        self, scenario_results: List[ScenarioResult], *, stage: str = "full"
     ) -> Dict[str, Any]:
         """Apply the canonical suite reducers, objectives, and limits to scenario stats."""
 
+        if stage not in {"full", "screening"}:
+            raise ValueError("evaluation stage must be full or screening")
         result_labels = {result.scenario.label for result in scenario_results}
         for ctx in getattr(self, "contexts", []):
-            if ctx.label not in result_labels and any(
+            if stage == "full" and ctx.label not in result_labels and any(
                 is_ew_metric(metric)
                 for metric in self.required_metrics_for_scenario(ctx.label)
             ):
@@ -2525,6 +2556,13 @@ class SuiteEvaluator:
                 else:
                     if existing_score is not None:
                         duplicate_counter["reused"] += 1
+                        if prefilter_enabled(self.base.config["optimize"].get("prefilter")):
+                            configs = {ctx.label: self.build_scenario_candidate_config(config, ctx)
+                                       for ctx in self.contexts}
+                            rejected = self.base.prefilter_payload(individual, configs, suite=True,
+                                markets_by_scenario={ctx.label: ctx.msss for ctx in self.contexts})
+                            if rejected is not None:
+                                return rejected
                         return build_evaluation_payload(
                             existing_score,
                             existing_penalty,
@@ -2534,6 +2572,13 @@ class SuiteEvaluator:
             else:
                 seen_hashes[individual_hash] = None
 
+        if prefilter_enabled(self.base.config["optimize"].get("prefilter")):
+            configs = {ctx.label: self.build_scenario_candidate_config(config, ctx)
+                       for ctx in self.contexts}
+            rejected = self.base.prefilter_payload(individual, configs, suite=True,
+                markets_by_scenario={ctx.label: ctx.msss for ctx in self.contexts})
+            if rejected is not None:
+                return rejected
         scenario_results: List[ScenarioResult] = []
         liquidated = False
 
@@ -3538,7 +3583,7 @@ def _run_gpu_preparation_preflight(
 
     if str(config.get("optimize", {}).get("backend", "")).strip().lower() != "gpu":
         return
-    from config.gpu import resolve_gpu_screening, validate_gpu_backtest_config
+    from config.gpu import resolve_gpu_screening, resolve_gpu_sizing, validate_gpu_backtest_config
     from optimization.warmup import _apply_config_overrides
 
     effective_config = deepcopy(config)
@@ -3546,6 +3591,8 @@ def _run_gpu_preparation_preflight(
     if effective_config["live"]["strategy_kind"] != config["live"]["strategy_kind"]:
         raise ValueError("fixed_runtime_overrides may not change live.strategy_kind")
     validate_gpu_backtest_config(effective_config)
+    for field in ("batch_size", "max_dispatch_candidate_bars"):
+        resolve_gpu_sizing(config["optimize"]["gpu"].get(field), field=field)
     screening = resolve_gpu_screening(config["optimize"]["gpu"].get("screening"))
     if suite_cfg.get("enabled"):
         scenarios, _reducer_cfg = build_scenarios(

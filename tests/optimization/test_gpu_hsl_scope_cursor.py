@@ -17,7 +17,7 @@ _BODY = r"""
     int start=info[io+1], end=info[io+2], seed=start+2;
     for(int p=0;p<count;++p) {
 #if CURSOR_GUARD == 12
-        pairs[p].candles=pairs[p].prices;
+        pairs[p].candles=candles+(int(b)*3+p)*160;
         pairs[p].candle_stride=1; pairs[p].candle_first=0; pairs[p].candle_last=end-1;
         pairs[p].fallback_price=100.0f;
         pairs[p].current_mark=hsl_scope_price_at(pairs[p],seed,start,seed);

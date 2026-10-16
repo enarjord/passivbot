@@ -23,6 +23,13 @@ from optimization.gpu.entry_intervals import (
 )
 
 from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
+from optimization.gpu.decimal import (
+    _TM_DECIMAL_KEYS,
+    _TM_DECIMAL_WORDS,
+    _pack_tm_parameter_matrix,
+    _tm_decimal_metadata,
+    _tm_modifier_masks,
+)
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import record_replay_chunk, ReplayDurationController
 from optimization.gpu.runtime import (
@@ -60,7 +67,6 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
-    encode_tm_retracement_base_pct,
     single_coin_shader_topology,
 )
 
@@ -355,29 +361,6 @@ def _btc_risk_price_tensor(btc_prices, *, expected_count: int):
     return torch.as_tensor(values, dtype=torch.float32, device=gpu_device())
 
 
-def _pack_tm_parameter_matrix(
-    params: np.ndarray, keys: tuple[str, ...], *, sides: int
-) -> np.ndarray:
-    """Pack TM rows while preserving each candidate's retracement mode sign."""
-
-    matrix = np.ascontiguousarray(params, dtype=np.float32)
-    side_width = len(keys)
-    for side_index in range(sides):
-        offset = side_index * side_width
-        for key in (
-            "entry_retracement_base_pct",
-            "close_retracement_base_pct",
-        ):
-            column = offset + keys.index(key)
-            positive_underflow = (params[:, column] > 0.0) & (
-                matrix[:, column] == np.float32(0.0)
-            )
-            if np.any(positive_underflow):
-                matrix[positive_underflow, column] = encode_tm_retracement_base_pct(
-                    np.finfo(np.float64).tiny
-                )
-    return matrix
-
 
 def _tm_dispatch_specialization(
     matrix: np.ndarray,
@@ -389,7 +372,7 @@ def _tm_dispatch_specialization(
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
     """Prove dispatch-wide TM features before compiling away inactive paths."""
 
-    side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
+    side_width = matrix.shape[1] // 2
     active_offsets = [
         side_index * side_width
         for side_index, enabled in enumerate((long_enabled, short_enabled))
@@ -822,6 +805,14 @@ def _decode_entry_interval_outputs(stats, counts) -> dict:
         "entry_interval_max_steps": stats[:, 1],
         "entry_interval_hist": counts[:, 1:],
     }
+
+
+def _lookup_replay_kernel(library, name, *, profile):
+    """Metal creates its compute pipeline lazily during kernel lookup."""
+    started = time.perf_counter() if profile else 0.0
+    kernel = getattr(library, name)
+    finished = time.perf_counter() if profile else 0.0
+    return kernel, finished - started, finished
 
 
 def _cached_library_with_miss(loader, *args):
@@ -1266,6 +1257,8 @@ def _trailing_martingale_multicoin_shader_library(
     side: str | None = None,
     hsl_native_cache_capacity: int = 0,
     exposure_rms_enabled: bool = False,
+    coin_overrides_absent: bool = False,
+    hsl_native_coin_cache: bool = False,
     organillo_enabled: bool = False,
 ):
     gpu_device(torch)
@@ -1288,6 +1281,8 @@ def _trailing_martingale_multicoin_shader_library(
         raw_tail_capacity=hsl_raw_tail_capacity,
     )
     source = (
+        f"#define PASSIVBOT_COIN_OVERRIDES_ABSENT {int(coin_overrides_absent)}\n"
+        f"#define PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED {int(hsl_native_coin_cache)}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_ENABLED {int(bool(hsl_native_cache_capacity))}\n"
         f"#define PASSIVBOT_HSL_NATIVE_CACHE_CAPACITY {hsl_native_cache_capacity}\n"
         f"#define PASSIVBOT_EXPOSURE_RMS_ENABLED {int(exposure_rms_enabled)}\n"
@@ -1462,6 +1457,19 @@ class HslFactHistoryOverflow(RuntimeError):
     """A rejected GPU attempt may be repeated with larger worker-owned storage."""
 
 
+def _metal_replay_group_options(kernel, batch_size):
+    if gpu_device(torch) != "mps":
+        return {}
+    maximum = int(kernel.max_threads_per_threadgroup)
+    width = int(kernel.thread_execution_width)
+    if maximum < 1 or width < 1 or batch_size < 1:
+        raise RuntimeError("Metal replay has invalid dispatch limits")
+    # The API's implicit group may reserve private state for many inactive
+    # lanes. Bound a state-heavy portfolio group by its actual candidates and
+    # one execution width, retaining the compiled pipeline's limit as well.
+    return {"group_size": (min(batch_size, maximum, width), 1, 1)}
+
+
 def _require_available_held_valuation(scalars):
     # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
     # Metal writes -2 and returns immediately if a held coin has no price.
@@ -1622,10 +1630,11 @@ def _decode_outputs(
         )):
             output[name] = rms_scalars[:, i]
     if native_factual_hsl:
-        # Native shaders transport the candle index before f32 millisecond
-        # multiplication loses precision. Keep legacy timestamp consumers intact.
-        output["last_eq_step"] = scalars[:, 8].to(torch.int64)
-        output["last_eq_ts"] = timestamp_column(8) * float(interval_ms)
+        # Preserve exact indices on-device. Host metric reduction restores
+        # float64 timestamps after transfer; legacy raw timestamp views remain.
+        for name, column in (("first_eq", 7), ("last_eq", 8)):
+            output[f"{name}_step"] = scalars[:, column].to(torch.int64)
+            output[f"{name}_ts"] = timestamp_column(column) * float(interval_ms)
         # Column 17 is unused by legacy shared replay. Native reporting owns a
         # distinct portfolio maximum, since unified side signals are zero.
         output["hsl_drawdown_ema_max_portfolio"] = scalars[:, 17]
@@ -1776,7 +1785,7 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
 
 
 def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
-    width = len(keys)
+    width = params.shape[1] // 2
     for side, active in enumerate((runner.long_enabled, runner.short_enabled)):
         if not active:
             continue
@@ -2327,6 +2336,9 @@ class MpsEmaAnchorRunner:
         loader, library_args = self._shader_library_cache_call()
         library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
+        kernel, pipeline_seconds, pipeline_finished = _lookup_replay_kernel(
+            library, "passivbot_ema_anchor", profile=profile
+        )
         if profile:
             synchronize()
             dispatched = time.perf_counter()
@@ -2353,7 +2365,7 @@ class MpsEmaAnchorRunner:
             kernel_args += self._hsl_buffers(batch_size)
             if self.recovery_distribution_enabled:
                 kernel_args += (recovery_samples,)
-            library.passivbot_ema_anchor(
+            kernel(
                 *kernel_args,
                 threads=(batch_size, 1, 1),
             )
@@ -2366,7 +2378,8 @@ class MpsEmaAnchorRunner:
                 "cpu_pack_seconds": packed - started,
                 "upload_and_zero_seconds": prepared - packed,
                 "compile_seconds": compiled - prepared,
-                "pre_dispatch_sync_seconds": dispatched - compiled,
+                "pre_dispatch_sync_seconds": dispatched - pipeline_finished,
+                "pipeline_seconds": pipeline_seconds,
                 "kernel_seconds": finished - dispatched,
                 "batch_size": batch_size,
                 "dispatch_count": 1,
@@ -2400,6 +2413,7 @@ class _MulticoinReplayRunner:
     cuda_whole_group_size = None
     temporal_chunk_bar_limit = MPS_TM_MULTICOIN_CHUNK_BARS
     supports_entry_interval = False
+    decimal_coin_overrides = False
     specialize_metal_coin_capacity = False
     _validate_hsl_params = _validate_hsl_params
 
@@ -2641,7 +2655,7 @@ class _MulticoinReplayRunner:
             coin_overrides = np.full(
                 (self.n_coins, self.coin_override_cols), np.nan, dtype=np.float32
             )
-        coin_overrides = np.asarray(coin_overrides, dtype=np.float32)
+        coin_overrides = np.asarray(coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         if coin_overrides.shape != (self.n_coins, self.coin_override_cols):
             raise ValueError(
                 f"expected multicoin {self.coin_override_label} override matrix shaped "
@@ -2663,9 +2677,11 @@ class _MulticoinReplayRunner:
         )
         unstuck_start = self.coin_override_unstuck_start
         self._unstuck_ema_overrides = (coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
-        self.coin_overrides = torch.as_tensor(
-            self._prepare_coin_overrides(coin_overrides), device=gpu_device()
-        )
+        prepared_overrides = self._prepare_coin_overrides(coin_overrides)
+        # Only immutable dataset values specialize lookup; candidate fallbacks
+        # stay in the Rust-owned shader and may differ on every dispatch.
+        self.coin_overrides_absent = not bool(np.isfinite(coin_overrides).any())
+        self.coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         forager_score_hysteresis_pct = float(forager_score_hysteresis_pct)
         if not np.isfinite(forager_score_hysteresis_pct) or (
             forager_score_hysteresis_pct < 0.0
@@ -2810,21 +2826,40 @@ class _MulticoinReplayRunner:
     # Disposable unified factual arithmetic. Strategy subclasses enable only
     # supported device shapes; this internal flag retains scalar ablation.
     hsl_native_cache_enabled = False
+    hsl_native_coin_cache_enabled = False
     hsl_native_cache_budget_bytes = 64 * 1024 * 1024
 
+    def _hsl_native_coin_cache_selected(self):
+        return bool(
+            getattr(self, "hsl_native_coin_cache_enabled", False)
+            and getattr(self, "dispatch_native_hsl_coin_cache_eligible", False)
+            and self.bars.device.type in {"cuda", "mps"}
+        )
+
+    def _hsl_native_cache_layout_bytes(self, capacity):
+        if self._hsl_native_coin_cache_selected():
+            # Coin controllers own independent reconstructed pairs and events.
+            return (_hsl_native_cache_bytes(capacity, 1, self.hsl_fact_capacity)
+                    * self.hsl_replay_sides * self.n_coins)
+        return _hsl_native_cache_bytes(
+            capacity, self.hsl_replay_sides * self.n_coins, self.hsl_fact_capacity
+        )
+
     def _hsl_native_cache_capacity(self):
-        if not (getattr(self, "hsl_native_cache_enabled", False)
+        coin_cache = self._hsl_native_coin_cache_selected()
+        unified_cache = (
+            getattr(self, "hsl_native_cache_enabled", False)
+            and self.bars.device.type == "cuda"
+            and getattr(self, "dispatch_native_hsl_cache_eligible", False)
+        )
+        if not ((coin_cache or unified_cache)
                 and getattr(self, "native_factual_hsl", False)
-                and self.bars.device.type == "cuda"
-                and getattr(self, "dispatch_native_hsl_cache_eligible", False)
                 and not getattr(self, "dispatch_native_hsl_cache_budget_disabled", False)
                 and self.hsl_capacity and getattr(self, "hsl_fact_capacity", 0)
                 and not getattr(self, "dispatch_hsl_disabled", False)):
             return 0
         capacity = ((self.hsl_capacity + 64 + 63) // 64) * 64
-        needed = _hsl_native_cache_bytes(
-            capacity, self.hsl_replay_sides * self.n_coins, self.hsl_fact_capacity
-        )
+        needed = self._hsl_native_cache_layout_bytes(capacity)
         return capacity if needed <= self.hsl_native_cache_budget_bytes else 0
 
     def _disable_native_cache_over_budget(self):
@@ -2839,13 +2874,7 @@ class _MulticoinReplayRunner:
 
     def _hsl_native_cache_bytes_per_candidate(self):
         capacity = self._hsl_native_cache_capacity()
-        if not capacity:
-            return 0
-        return _hsl_native_cache_bytes(
-            capacity,
-            self.hsl_replay_sides * self.n_coins,
-            getattr(self, "hsl_fact_capacity", 0),
-        )
+        return self._hsl_native_cache_layout_bytes(capacity) if capacity else 0
 
     def _hsl_history_bytes_per_candidate(self):
         if not self.hsl_capacity:
@@ -2892,6 +2921,27 @@ class _MulticoinReplayRunner:
 
     def _history_batch_bytes(self, batch_size):
         return batch_size * self._history_bytes_per_candidate() + self._history_workspace_bytes()
+
+    def _prepare_scratch_shape(self, batch_size):
+        """Drop completed automatic CUDA scratch before allocating a new shape."""
+        if not getattr(self, "automatic_scratch_budget", False):
+            return
+        shape = (batch_size, self.hsl_fact_capacity,
+                 self._hsl_native_cache_bytes_per_candidate(), self._replay_state_bytes)
+        if shape == getattr(self, "_scratch_shape", None):
+            return
+        # Clearing one buffer at its allocator still overlaps the new tensor
+        # with every other old history. Release the complete prior dispatch
+        # before params, outputs or any replacement histories are allocated.
+        for name in (
+            "_buffers", "_hsl_scratch_buffers", "_unstuck_pnl_buffers",
+            "_recovery_buffers", "_volume_buffers", "_weighted_equity_buffers",
+            "_hsl_ema_tail_buffers", "_equity_balance_diff_buffers",
+            "_entry_interval_stat_buffers", "_entry_interval_count_buffers",
+            "_replay_states", "_sizes", "_full_end_steps",
+        ):
+            getattr(self, name).clear()
+        self._scratch_shape = shape
 
     def _history_batch_limit(self):
         resident = self._history_bytes_per_candidate()
@@ -2966,6 +3016,7 @@ class _MulticoinReplayRunner:
                 }
             )
             profiles.append(dict(self.last_profile))
+            del result
         combined = {}
         for key, value in outputs[0].items():
             if isinstance(value, torch.Tensor):
@@ -3054,16 +3105,24 @@ class _MulticoinReplayRunner:
         if not self.weighted_equity_cols:
             return {}
         interval = self.run_config.interval_ms
-        dtype = torch.float32 if samples.device.type == "mps" else torch.float64
-        first = output["first_eq_ts"].to(dtype)
-        last = output["last_eq_ts"].to(dtype)
-        observed = torch.isfinite(first)
-        if bool((observed != torch.isfinite(last)).any()):
-            raise RuntimeError("GPU weighted equity observation clocks disagree")
-        # Relative f32 millisecond clocks can lose low bits over long histories.
-        # Restore their integer bar grid before adding the absolute UTC origin.
-        first_step = torch.round(torch.where(observed, first, 0) / interval)
-        last_step = torch.round(torch.where(observed, last, 0) / interval)
+        if "first_eq_step" in output:
+            first_step = output["first_eq_step"]
+            last_step = output["last_eq_step"]
+            observed = first_step >= 0
+            if bool((observed != (last_step >= 0)).any()):
+                raise RuntimeError("GPU weighted equity observation clocks disagree")
+            first_step = torch.where(observed, first_step, 0)
+            last_step = torch.where(observed, last_step, 0)
+        else:
+            dtype = torch.float32 if samples.device.type == "mps" else torch.float64
+            first = output["first_eq_ts"].to(dtype)
+            last = output["last_eq_ts"].to(dtype)
+            observed = torch.isfinite(first)
+            if bool((observed != torch.isfinite(last)).any()):
+                raise RuntimeError("GPU weighted equity observation clocks disagree")
+            # Legacy relative millisecond clocks need their bar grid restored.
+            first_step = torch.round(torch.where(observed, first, 0) / interval)
+            last_step = torch.round(torch.where(observed, last, 0) / interval)
         counts = torch.where(observed, last_step - first_step + 1, 0).to(torch.long)
         timestamps = first_step.to(torch.int64) * interval + self.run_config.first_ts_ms
         kwargs = dict(
@@ -3165,6 +3224,7 @@ class _MulticoinReplayRunner:
 
     def _prepare_native_factual_hsl(self, params):
         self.dispatch_native_hsl_cache_eligible = False
+        self.dispatch_native_hsl_coin_cache_eligible = False
         self.dispatch_native_hsl_cache_budget_disabled = False
         if not getattr(self, "native_factual_hsl", False):
             return
@@ -3178,11 +3238,64 @@ class _MulticoinReplayRunner:
         unified = np.stack([matrix[:, mode + side * len(keys)] == 0
                             for side in range(self.hsl_replay_sides)], axis=1)
         self.dispatch_native_hsl_cache_eligible = bool(np.any(effective & unified))
+        # One compile-time owner layout serves the whole dispatch. Decline
+        # mixed scope modes rather than allowing shared physical event scratch.
+        modes = matrix[:, [mode + side * len(keys)
+                           for side in range(self.hsl_replay_sides)]]
+        self.dispatch_native_hsl_coin_cache_eligible = bool(active and np.all(modes == 2))
         capacity = self.hsl_fact_capacity_learned if active else 0
-        if capacity != self.hsl_fact_capacity:
+        if (capacity != self.hsl_fact_capacity
+                and not (active and getattr(self, "initial_factual_capacity_batch_width", 0)
+                         and self.hsl_fact_capacity_learned == min(256, max(1, self.n)))):
             self._hsl_scratch_buffers.clear()
+        # An enabled fixed owner finalizes its reservation after policy validation.
+        # Keep completed buffers until that decision to avoid temporary reallocation.
         self.hsl_fact_capacity = capacity
         self.hsl_factual_replay = active
+
+    def _seed_initial_factual_capacity(self, batch_size):
+        """Reserve only an unlearned owner's window; guesses never become learning."""
+        width = getattr(self, "initial_factual_capacity_batch_width", 0)
+        if not width or not self.native_factual_hsl or not self.hsl_factual_replay:
+            return
+        baseline = self.hsl_fact_capacity_learned
+        if baseline != min(256, max(1, self.n)):
+            return  # Preserve useful overflow learning and its accepted storage.
+        width = min(width, self._history_batch_limit())
+        desired = 1 << (min(self.n, self.pnl_lookback_bars + 2) - 1).bit_length()
+        identity = self._library_cache_call()
+        available = None
+        candidate = max(baseline, desired)
+        try:
+            while candidate > baseline:
+                self.hsl_fact_capacity = candidate
+                needed = self._history_batch_bytes(width)
+                key = (batch_size, candidate, self._hsl_native_cache_bytes_per_candidate())
+                if (width >= batch_size and needed <= self.hsl_scratch_budget_bytes
+                        and self._library_cache_call() == identity):
+                    state_key = (batch_size, self._replay_state_bytes)
+                    if (key in self._hsl_scratch_buffers
+                            and (not self._temporal_replay_enabled()
+                                 or state_key in self._replay_states)):
+                        break  # Matching completed storage requires no resource query.
+                    if available is None:
+                        if self.bars.device.type == "cuda":
+                            free, total = map(int, torch.cuda.mem_get_info())
+                        else:
+                            total = int(torch.mps.recommended_max_memory())
+                            free = total - int(torch.mps.driver_allocated_memory())
+                        # Existing fixed-service growth headroom, without changing caps.
+                        available = max(0, free - max(256 * 1024**2, int(total * 0.2)))
+                    if needed <= available:
+                        break
+                candidate //= 2
+        finally:
+            self.hsl_fact_capacity = baseline
+        self.hsl_fact_capacity = max(baseline, candidate)
+        key = (batch_size, self.hsl_fact_capacity, self._hsl_native_cache_bytes_per_candidate())
+        if self._hsl_scratch_buffers and key not in self._hsl_scratch_buffers:
+            # Release completed factual storage before allocating its replacement.
+            self._hsl_scratch_buffers.clear()
 
     def _prepare_replay_state_layout(self, library, library_args):
         if not self._temporal_replay_enabled():
@@ -3201,9 +3314,17 @@ class _MulticoinReplayRunner:
             raise RuntimeError("GPU replay state has an invalid compiled size")
 
     def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
-        kernel = getattr(library, self.replay_kernel_name)
+        # Metal creates the compute pipeline lazily at kernel lookup. Keep its
+        # first-use cost separate from device execution, including unchunked replay.
+        profile_pipeline = getattr(self, "_profile_pipeline", False)
+        kernel, pipeline_seconds, _prepared = _lookup_replay_kernel(
+            library, self.replay_kernel_name, profile=profile_pipeline
+        )
+        if profile_pipeline:
+            self._pipeline_seconds += pipeline_seconds
         if not self._temporal_replay_enabled():
             dispatch_options = {"threads": (batch_size, 1, 1)}
+            dispatch_options.update(_metal_replay_group_options(kernel, batch_size))
             if gpu_device(torch) == "cuda" and self.replay_sides == 1 and self.cuda_whole_group_size is not None:
                 # Spread independent, state-heavy candidates across more SMs.
                 dispatch_options["group_size"] = self.cuda_whole_group_size
@@ -3405,9 +3526,12 @@ class _MulticoinReplayRunner:
     ) -> dict:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
-        self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(matrix)
-        self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(matrix)
-        self.dispatch_unstuck_enabled = self._unstuck_required(matrix)
+        # Host feature proofs consume public policy columns; the shader matrix
+        # additionally carries private decimal operands after each side block.
+        policy_matrix = np.asarray(params, dtype=np.float32)
+        self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(policy_matrix)
+        self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(policy_matrix)
+        self.dispatch_unstuck_enabled = self._unstuck_required(policy_matrix)
         packed = time.perf_counter() if profile else 0.0
         loader, library_args = self._library_cache_call()
         library, cold = _cached_library_with_miss(loader, *library_args)
@@ -3442,13 +3566,17 @@ class _MulticoinReplayRunner:
                     effective = np.repeat(effective, 2, axis=1)
             self._validate_hsl_params(
                 policy_matrix, keys, effective_enabled=effective)
+        # The baseline split and policy validation precede any new headroom query.
+        # Admission preserves that split width and the already-sized compiled ABI.
+        self._seed_initial_factual_capacity(int(matrix.shape[0]))
         self.settings[-2] = getattr(self, "hsl_fact_capacity", 0)
         factual_replay = bool(getattr(self, "hsl_factual_replay", False))
         if factual_replay and not getattr(self, "hsl_fact_capacity", 0):
             raise ValueError("GPU factual HSL evaluation requires retained fill capacity")
         self.settings[-1] = float(factual_replay)
-        params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
+        self._prepare_scratch_shape(batch_size)
+        params_mps = torch.as_tensor(matrix, device=gpu_device())
         end_steps_mps = self._end_steps(end_steps, batch_size)
         daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
         recovery_samples = (
@@ -3483,6 +3611,8 @@ class _MulticoinReplayRunner:
                 device=gpu_device(),
             )
         prepared = time.perf_counter() if profile else 0.0
+        self._profile_pipeline = profile
+        self._pipeline_seconds = 0.0
         if profile:
             synchronize()
             dispatched = time.perf_counter()
@@ -3514,7 +3644,8 @@ class _MulticoinReplayRunner:
                 "upload_and_zero_seconds": prepared - compiled,
                 "compile_seconds": compiled - packed,
                 "pre_dispatch_sync_seconds": dispatched - prepared,
-                "kernel_seconds": finished - dispatched,
+                "pipeline_seconds": self._pipeline_seconds,
+                "kernel_seconds": max(0.0, finished - dispatched - self._pipeline_seconds),
                 "batch_size": batch_size,
                 "dispatch_count": 1,
                 "kernel_candidate_steps": int(
@@ -3819,7 +3950,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 np.nan,
                 dtype=np.float32,
             )
-        short_coin_overrides = np.asarray(short_coin_overrides, dtype=np.float32)
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         expected_shape = (self.n_coins, self.coin_override_cols)
         if short_coin_overrides.shape != expected_shape:
             raise ValueError(
@@ -4016,6 +4147,8 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
 class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
 
+    hsl_native_coin_cache_enabled = True
+
     replay_kernel_name = "passivbot_trailing_martingale_multicoin"
     replay_state_size_kernel_name = "passivbot_tm_multicoin_replay_state_bytes"
     replay_sides = 1
@@ -4024,6 +4157,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     parameter_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
+    decimal_coin_overrides = True
     coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
     coin_override_cooldown_column = TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
     coin_override_hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
@@ -4032,7 +4166,16 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     specialize_metal_coin_capacity = True
 
     def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
-        return _scale_tm_multicoin_coin_overrides(coin_overrides, self.interval_minutes)
+        scaled = _scale_tm_multicoin_coin_overrides(coin_overrides, self.interval_minutes)
+        keys = [key for key, _ in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS]
+        columns = [keys.index(key) for key in _TM_DECIMAL_KEYS]
+        metadata = _tm_decimal_metadata(coin_overrides[:, columns]).reshape(len(scaled), -1)
+        flags = _tm_modifier_masks(coin_overrides, keys, overrides=True)
+        for key in ("entry_retracement_base_pct", "close_retracement_base_pct"):
+            column = keys.index(key)
+            underflow = (coin_overrides[:, column] > 0.0) & (scaled[:, column] == 0.0)
+            scaled[underflow, column] = np.finfo(np.float32).tiny
+        return np.ascontiguousarray(np.concatenate((scaled, metadata, flags), axis=1), dtype=np.float32)
 
     def __init__(
         self,
@@ -4161,6 +4304,8 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             self._compiled_side(),
             self._hsl_native_cache_capacity(),
             getattr(self, "exposure_rms_enabled", False),
+            getattr(self, "coin_overrides_absent", False),
+            bool(self._hsl_native_cache_capacity() and self._hsl_native_coin_cache_selected()),
             self.organillo_enabled,
         )
         return _trailing_martingale_multicoin_shader_library, args
@@ -4318,7 +4463,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 np.nan,
                 dtype=np.float32,
             )
-        short_coin_overrides = np.asarray(short_coin_overrides, dtype=np.float32)
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         expected_shape = (self.n_coins, self.coin_override_cols)
         if short_coin_overrides.shape != expected_shape:
             raise ValueError(
@@ -4339,9 +4484,11 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         ]].copy(),)
         unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
-        self.short_coin_overrides = torch.as_tensor(
-            self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
+        prepared_overrides = self._prepare_coin_overrides(short_coin_overrides)
+        self.coin_overrides_absent = (
+            self.coin_overrides_absent and not bool(np.isfinite(short_coin_overrides).any())
         )
+        self.short_coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             float(max_realized_loss_pct)
         )
@@ -4858,7 +5005,15 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             dispatch_features, temporal_chunking=temporal_chunking
         )
         library, cold = _cached_library_with_miss(loader, *library_args)
+        # State layout probing prepares the compiled ABI, before replay timing.
+        if temporal_chunking and library_args not in self._replay_state_sizes:
+            size = torch.empty(1, dtype=torch.int32, device=gpu_device())
+            library.passivbot_tm_single_coin_replay_state_bytes(size, threads=1)
+            self._replay_state_sizes[library_args] = int(size.item())
         compiled = time.perf_counter() if profile else 0.0
+        kernel, pipeline_seconds, pipeline_finished = _lookup_replay_kernel(
+            library, "passivbot_trailing_martingale", profile=profile
+        )
         if profile:
             synchronize()
             dispatched = time.perf_counter()
@@ -4888,7 +5043,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             if self.recovery_distribution_enabled:
                 kernel_args += (recovery_samples,)
             if not temporal_chunking:
-                library.passivbot_trailing_martingale(
+                kernel(
                     *kernel_args,
                     threads=(batch_size, 1, 1),
                     **(
@@ -4911,10 +5066,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 raise ValueError(
                     "MPS replay batch exceeds the per-dispatch work envelope"
                 )
-            if library_args not in self._replay_state_sizes:
-                size = torch.empty(1, dtype=torch.int32, device=gpu_device())
-                library.passivbot_tm_single_coin_replay_state_bytes(size, threads=1)
-                self._replay_state_sizes[library_args] = int(size.item())
             # Feature specialization changes the state ABI. Only the current
             # candidate batch allocation is retained across evaluations.
             state_bytes = self._replay_state_sizes[library_args]
@@ -4943,7 +5094,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                     device=gpu_device(),
                 )
                 started = time.perf_counter()
-                library.passivbot_trailing_martingale(
+                kernel(
                     *kernel_args,
                     replay_states,
                     replay_range,
@@ -4985,7 +5136,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 "cpu_pack_seconds": packed - started,
                 "upload_and_zero_seconds": prepared - packed,
                 "compile_seconds": compiled - prepared,
-                "pre_dispatch_sync_seconds": dispatched - compiled,
+                "pre_dispatch_sync_seconds": dispatched - pipeline_finished,
+                "pipeline_seconds": pipeline_seconds,
                 "kernel_seconds": finished - dispatched,
                 "batch_size": batch_size,
                 **dispatch_profile,

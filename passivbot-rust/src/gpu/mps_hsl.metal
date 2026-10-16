@@ -1,3 +1,15 @@
+#ifndef PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+#define PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED 0
+#endif
+// Coin-cache dispatches are proven coin-only by the parameter packer. Their
+// independent controllers each reconstruct one pair; aggregate dispatches keep
+// room for both sides of the complete universe.
+#if PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED
+#define PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY 1
+#else
+#define PASSIVBOT_HSL_REPLAY_PAIR_CAPACITY (2 * MAX_COINS)
+#endif
+
 #ifndef PASSIVBOT_HSL_FACTUAL_ONLY
 #define PASSIVBOT_HSL_FACTUAL_ONLY 0
 #endif

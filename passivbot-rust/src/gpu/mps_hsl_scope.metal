@@ -452,20 +452,36 @@ inline bool hsl_compose_scope(
         }
         if (!hsl_scope_visit(signal, budget, alpha, threshold, cooldown,
             never_restart, start, reopened, point, result, trace, trace_capacity)) return false;
-        // A completed flat episode seeds an exact zero signal. With every fill
-        // consumed and no current exposure, later idle marks cannot change it.
-        // Keep the logical observation count, then visit the real endpoint so
-        // cooldown/lookback expiry still uses current time. Debug traces retain
-        // every observation; this is evaluation-local compaction, not a cache.
-        if (trace == nullptr && !current_exposed && !exposed
-            && signal.raw == 0.0f && signal.ema == 0.0f && minute + 1 < end) {
-            bool complete = true;
-            for (int p = 0; p < pair_count; ++p)
-                complete = complete && pairs[p].consumed == pairs[p].facts.count
-                    && pairs[p].boundary_size == 0.0f;
-            if (complete) {
-                result.point_count += end - minute - 1;
-                minute = end - 1;
+        // With flat reconstructed inventory and an exact zero signal, idle
+        // observations cannot change this query's peak, raw drawdown or EMA.
+        // Stop before the next causal fact (including same-time fills), and
+        // still visit the actual endpoint for current positions and expiry.
+        // Debug traces keep every observation; no permission survives a query.
+        if (trace == nullptr && !exposed && signal.raw == 0.0f
+            && signal.ema == 0.0f && minute + 1 < end) {
+            bool idle = true;
+            int until = end - 1;
+            for (int p = 0; p < pair_count; ++p) {
+                thread const HslScopePair& pair = pairs[p];
+                idle = idle && pair.boundary_size == 0.0f;
+                if (pair.consumed < pair.facts.count)
+                    until = min(until, pair.next_fill_minute - (before_price ? 1 : 0));
+            }
+            if (idle && until > minute) {
+                // Native projection returns a valid close for the whole fixed
+                // query window if any such close exists, or the same fallback
+                // throughout. The sample just visited validated that proof.
+                // Prepared marks instead retain their per-minute validation.
+                for (int p = 0; p < pair_count; ++p) {
+                    thread const HslScopePair& pair = pairs[p];
+                    if (pair.candles != nullptr) continue;
+                    for (int t = minute + 1; t <= until; ++t) {
+                        float price = hsl_scope_price_at(pair, t, start, end);
+                        if (!isfinite(price) || price <= 0.0f) return false;
+                    }
+                }
+                result.point_count += until - minute;
+                minute = until;
             }
         }
     }

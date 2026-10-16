@@ -30,6 +30,406 @@ fn round_to_step_decimal_places(value: f64, step: f64) -> f64 {
     }
 }
 
+// Checked decimal arithmetic proves alignment of the finite input values.
+// An overflow only declines that proof; it never widens a snapping tolerance.
+#[derive(Clone, Copy, Debug)]
+struct DecimalParts {
+    coefficient: i128,
+    exponent: i32,
+}
+
+impl DecimalParts {
+    fn normalized(mut self) -> Self {
+        if self.coefficient == 0 {
+            self.exponent = 0;
+        } else {
+            while self.coefficient % 10 == 0 {
+                self.coefficient /= 10;
+                self.exponent += 1;
+            }
+        }
+        self
+    }
+
+    fn from_float(value: f64) -> Option<Self> {
+        if !value.is_finite() {
+            return None;
+        }
+        if value == 0.0 {
+            return Some(Self {
+                coefficient: 0,
+                exponent: 0,
+            });
+        }
+        let text = value.to_string();
+        let (mantissa, exponent) = match text.split_once('e') {
+            Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+            None => (text.as_str(), 0),
+        };
+        let places = mantissa
+            .split_once('.')
+            .map_or(0, |(_, tail)| tail.len() as i32);
+        let digits = mantissa.replace('.', "");
+        let trimmed = digits.trim_end_matches('0');
+        Some(
+            Self {
+                coefficient: trimmed.parse().ok()?,
+                exponent: exponent - places + (digits.len() - trimmed.len()) as i32,
+            }
+            .normalized(),
+        )
+    }
+
+    fn add(self, other: Self) -> Option<Self> {
+        if self.coefficient == 0 {
+            return Some(other);
+        }
+        if other.coefficient == 0 {
+            return Some(self);
+        }
+        let exponent = self.exponent.min(other.exponent);
+        let left = self
+            .coefficient
+            .checked_mul(10_i128.checked_pow((self.exponent - exponent) as u32)?)?;
+        let right = other
+            .coefficient
+            .checked_mul(10_i128.checked_pow((other.exponent - exponent) as u32)?)?;
+        Some(
+            Self {
+                coefficient: left.checked_add(right)?,
+                exponent,
+            }
+            .normalized(),
+        )
+    }
+
+    fn multiply(self, other: Self) -> Option<Self> {
+        Some(
+            Self {
+                coefficient: self.coefficient.checked_mul(other.coefficient)?,
+                exponent: self.exponent.checked_add(other.exponent)?,
+            }
+            .normalized(),
+        )
+    }
+
+    fn integer_ratio(self, other: Self) -> Option<i128> {
+        if other.coefficient <= 0 {
+            return None;
+        }
+        if self.coefficient == 0 {
+            return Some(0);
+        }
+        let difference = self.exponent - other.exponent;
+        let (numerator, denominator) = if difference >= 0 {
+            (
+                self.coefficient
+                    .checked_mul(10_i128.checked_pow(difference as u32)?)?,
+                other.coefficient,
+            )
+        } else {
+            (
+                self.coefficient,
+                other
+                    .coefficient
+                    .checked_mul(10_i128.checked_pow((-difference) as u32)?)?,
+            )
+        };
+        (numerator % denominator == 0).then_some(numerator / denominator)
+    }
+
+    fn rounded_ratio(self, other: Self, mode: RoundingMode) -> Option<i128> {
+        if other.coefficient <= 0 {
+            return None;
+        }
+        let difference = self.exponent - other.exponent;
+        let (numerator, denominator) = if difference >= 0 {
+            (
+                self.coefficient
+                    .checked_mul(10_i128.checked_pow(difference as u32)?)?,
+                other.coefficient,
+            )
+        } else {
+            (
+                self.coefficient,
+                other
+                    .coefficient
+                    .checked_mul(10_i128.checked_pow((-difference) as u32)?)?,
+            )
+        };
+        let quotient = numerator / denominator;
+        let remainder = numerator % denominator;
+        let adjustment = match mode {
+            RoundingMode::Floor if remainder < 0 => -1,
+            RoundingMode::Ceil if remainder > 0 => 1,
+            RoundingMode::Nearest
+                if remainder.unsigned_abs() >= (denominator / 2 + denominator % 2) as u128 =>
+            {
+                numerator.signum()
+            }
+            _ => 0,
+        };
+        let count = quotient.checked_add(adjustment)?;
+        (count.unsigned_abs() < 1_u128 << 53).then_some(count)
+    }
+
+    fn to_float(self) -> Option<f64> {
+        let value: f64 = format!("{}e{}", self.coefficient, self.exponent)
+            .parse()
+            .ok()?;
+        value.is_finite().then_some(value)
+    }
+}
+
+/// Lossless finite-limb transport for the canonical decimal operands used by
+/// GPU venue proofs. The sentinel declines a proof; physical arithmetic remains
+/// available for coefficients/exponents outside the checked GPU integer domain.
+#[pyfunction]
+pub fn gpu_decimal_metadata_py(values: Vec<f64>) -> Vec<(u32, u32, u32, i32)> {
+    values
+        .into_iter()
+        .map(|value| {
+            let Some(parts) = DecimalParts::from_float(value) else {
+                return (0, 0, 0, 2048);
+            };
+            let coefficient = parts.coefficient.unsigned_abs();
+            if coefficient >= 1_u128 << 60 || !(-18..=18).contains(&parts.exponent) {
+                return (0, 0, 0, 2048);
+            }
+            let mask = (1_u128 << 20) - 1;
+            (
+                (coefficient & mask) as u32,
+                ((coefficient >> 20) & mask) as u32,
+                ((coefficient >> 40) & mask) as u32,
+                parts.exponent + if parts.coefficient < 0 { 1024 } else { 0 },
+            )
+        })
+        .collect()
+}
+
+// The smallest exact decimal scale keeps ordinary venue steps on a cheap
+// integer path. Equality here is required; a tolerance cannot prove a step.
+fn exact_step_scale(step: f64) -> Option<(f64, f64)> {
+    let mut multiplier = 1.0;
+    for _ in 0..=15 {
+        let coefficient = (step * multiplier).round();
+        if coefficient >= 1.0
+            && coefficient < (1_u64 << 50) as f64
+            && step == coefficient / multiplier
+        {
+            return Some((coefficient, multiplier));
+        }
+        multiplier *= 10.0;
+    }
+    None
+}
+
+// Below this integer scale, a canonical decimal value and its adjacent
+// decimals have distinct f64 representations. This is an equality proof,
+// not a numerical band around a venue increment.
+fn small_decimal_units(value: f64, scale: (f64, f64)) -> Option<i128> {
+    let (coefficient, multiplier) = scale;
+    let integer = (value * multiplier).round();
+    if integer.abs() < (1_u64 << 50) as f64
+        && value == integer / multiplier
+        && integer % coefficient == 0.0
+    {
+        Some((integer / coefficient) as i128)
+    } else {
+        None
+    }
+}
+
+// Convert the chosen integer count once. Multiplying a physical value back
+// by a decimal scale can round a second time and move it off the venue grid.
+fn venue_value(count: f64, step: f64, scale: Option<(f64, f64)>) -> f64 {
+    if count.is_finite() && count.fract() == 0.0 && count.abs() < (1_u64 << 53) as f64 {
+        if let Some((coefficient, multiplier)) = scale {
+            let integer = count * coefficient;
+            if integer.abs() < (1_u64 << 53) as f64 {
+                return integer / multiplier;
+            }
+        }
+        if let Some(value) = DecimalParts::from_float(step)
+            .and_then(|step| {
+                step.multiply(DecimalParts {
+                    coefficient: count as i128,
+                    exponent: 0,
+                })
+            })
+            .and_then(DecimalParts::to_float)
+        {
+            return value;
+        }
+    }
+    round_to_step_decimal_places(count * step, step)
+}
+
+fn round_at_venue_step(value: f64, step: f64, mode: RoundingMode) -> f64 {
+    let units = value / step;
+    let scale = exact_step_scale(step);
+    let mut count = match mode {
+        RoundingMode::Nearest => units.round(),
+        RoundingMode::Floor => units.floor(),
+        RoundingMode::Ceil => units.ceil(),
+    };
+    let fraction = units - units.floor();
+    let boundary_distance = match mode {
+        RoundingMode::Nearest => (fraction - 0.5).abs(),
+        _ => fraction.min(1.0 - fraction),
+    };
+    // Only the exact decimal ratio decides a near-boundary result.
+    if boundary_distance <= 4.0 * f64::EPSILON * units.abs() {
+        if scale
+            .and_then(|scale| small_decimal_units(value, scale))
+            .is_some()
+        {
+            return value;
+        }
+        if let Some(exact) = DecimalParts::from_float(value).and_then(|value| {
+            let step = DecimalParts::from_float(step)?;
+            match mode {
+                RoundingMode::Nearest => value.rounded_ratio(step, mode),
+                // Preserve physical directional rounding for non-aligned
+                // inputs, including residuals formed by callers.
+                _ => value
+                    .integer_ratio(step)
+                    .filter(|count| count.unsigned_abs() < 1_u128 << 53),
+            }
+        }) {
+            count = exact as f64;
+        }
+    }
+    venue_value(count, step, scale)
+}
+
+fn decimal_unit_count(quantity: f64, step: DecimalParts) -> Option<i128> {
+    let count = DecimalParts::from_float(quantity)?.integer_ratio(step)?;
+    (count >= 0 && count < 1_i128 << 53).then_some(count)
+}
+
+fn decimal_aligned_price(base: f64, distance: f64, step: f64) -> Option<f64> {
+    let factor = DecimalParts {
+        coefficient: 1,
+        exponent: 0,
+    }
+    .add(DecimalParts::from_float(distance)?)?;
+    let target = DecimalParts::from_float(base)?.multiply(factor)?;
+    let count = target.integer_ratio(DecimalParts::from_float(step)?)?;
+    if count.unsigned_abs() >= 1_u128 << 52 {
+        return None;
+    }
+    target.to_float()
+}
+
+pub(crate) fn round_qty_unit_product(units: f64, factor: f64, step: f64) -> Option<f64> {
+    if !units.is_finite() || units < 0.0 || units.fract() != 0.0 || units >= (1_u64 << 53) as f64 {
+        return None;
+    }
+    // An exact integer numerator below this bound keeps distinct decimal
+    // sides of a half-step several floats apart after division.
+    if let Some((coefficient, multiplier)) = exact_step_scale(factor) {
+        let numerator = units * coefficient;
+        if numerator < (1_u64 << 50) as f64 {
+            return Some(venue_value(
+                (numerator / multiplier).round(),
+                step,
+                exact_step_scale(step),
+            ));
+        }
+    }
+    let product = DecimalParts {
+        coefficient: units as i128,
+        exponent: 0,
+    }
+    .multiply(DecimalParts::from_float(factor)?)?;
+    let count = product.rounded_ratio(
+        DecimalParts {
+            coefficient: 1,
+            exponent: 0,
+        },
+        RoundingMode::Nearest,
+    )?;
+    Some(venue_value(count as f64, step, exact_step_scale(step)))
+}
+
+/// Recover an exact decimal venue count only when both physical neighbors
+/// remain distinguishable. Fractional or ambiguous inputs retain physical
+/// arithmetic at their caller.
+pub(crate) fn canonical_qty_units(quantity: f64, step: f64) -> Option<f64> {
+    if !(quantity.next_up() - quantity <= step && quantity - quantity.next_down() <= step) {
+        return None;
+    }
+    if quantity >= 0.0 {
+        if let Some(count) =
+            exact_step_scale(step).and_then(|scale| small_decimal_units(quantity, scale))
+        {
+            return Some(count as f64);
+        }
+    }
+    decimal_unit_count(quantity, DecimalParts::from_float(step)?).map(|count| count as f64)
+}
+
+pub(crate) fn floor_qty_difference(total: f64, held: f64, step: f64) -> f64 {
+    // Decreasing total and increasing held both decrease this difference. At
+    // a power-of-two boundary, the opposite neighbors have different spacing.
+    if total - total.next_down() <= step && held.next_up() - held <= step {
+        if total >= 0.0 && held >= 0.0 {
+            if let Some(scale) = exact_step_scale(step) {
+                if let (Some(total), Some(held)) = (
+                    small_decimal_units(total, scale),
+                    small_decimal_units(held, scale),
+                ) {
+                    return venue_value((total - held).max(0) as f64, step, Some(scale));
+                }
+            }
+        }
+        let recover = || {
+            let exact_step = DecimalParts::from_float(step)?;
+            let total_units = decimal_unit_count(total, exact_step)?;
+            let held_units = decimal_unit_count(held, exact_step)?;
+            exact_step
+                .multiply(DecimalParts {
+                    coefficient: (total_units - held_units).max(0),
+                    exponent: 0,
+                })?
+                .to_float()
+        };
+        if let Some(difference) = recover() {
+            return difference;
+        }
+    }
+    round_dn_preserve_step(total - held, step)
+}
+
+/// Form a relative price with one arithmetic rounding. A nearby residual may
+/// be corrected only when the decimal operands prove exact venue alignment.
+pub(crate) fn round_price_distance(base: f64, distance: f64, step: f64, mode: RoundingMode) -> f64 {
+    let target = base.mul_add(distance, base);
+    let units = target / step;
+    let scale = exact_step_scale(step);
+    let canonical = |count: f64| venue_value(count, step, scale);
+    let nearest = canonical(units.round());
+    if target == nearest {
+        return nearest;
+    }
+    // This bound only avoids expensive proofs for non-boundary targets.
+    // Exact decimal divisibility, not the bound, decides whether to align.
+    let candidate_bound =
+        4.0 * f64::EPSILON * base.abs().max(target.abs()) * (1.0 + distance.abs());
+    if (target - nearest).abs() <= candidate_bound {
+        if let Some(aligned) = decimal_aligned_price(base, distance, step) {
+            return aligned;
+        }
+    }
+    let count = match mode {
+        RoundingMode::Nearest => units.round(),
+        RoundingMode::Floor => units.floor(),
+        RoundingMode::Ceil => units.ceil(),
+    };
+    canonical(count)
+}
+
 fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool {
     let scale = value.abs().max(aligned_value.abs());
     (value - aligned_value).abs() <= f64::EPSILON * scale * 4.0
@@ -37,12 +437,12 @@ fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool 
 
 /// Directionally quantize without truncating valid increments below ten decimals.
 pub fn round_dn_preserve_step(value: f64, step: f64) -> f64 {
-    round_to_step_decimal_places((value / step).floor() * step, step)
+    round_at_venue_step(value, step, RoundingMode::Floor)
 }
 
 /// Directionally quantize without truncating valid increments below ten decimals.
 pub fn round_up_preserve_step(value: f64, step: f64) -> f64 {
-    round_to_step_decimal_places((value / step).ceil() * step, step)
+    round_at_venue_step(value, step, RoundingMode::Ceil)
 }
 
 /// Snap ordinary binary noise at an aligned increment before rounding down.
@@ -51,7 +451,7 @@ pub fn tolerant_round_dn_preserve_step(value: f64, step: f64) -> f64 {
     let nearest_count = step_count.round();
     let nearest_value = nearest_count * step;
     if differs_only_by_float_representation(value, nearest_value) {
-        round_to_step_decimal_places(nearest_value, step)
+        venue_value(nearest_count, step, exact_step_scale(step))
     } else {
         round_dn_preserve_step(value, step)
     }
@@ -63,7 +463,7 @@ pub fn tolerant_round_up_preserve_step(value: f64, step: f64) -> f64 {
     let nearest_count = step_count.round();
     let nearest_value = nearest_count * step;
     if differs_only_by_float_representation(value, nearest_value) {
-        round_to_step_decimal_places(nearest_value, step)
+        venue_value(nearest_count, step, exact_step_scale(step))
     } else {
         round_up_preserve_step(value, step)
     }
@@ -78,8 +478,7 @@ pub fn round_up(n: f64, step: f64) -> f64 {
 /// Rounds a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_(n: f64, step: f64) -> f64 {
-    let result = (n / step).round() * step;
-    round_to_step_decimal_places(result, step)
+    round_at_venue_step(n, step, RoundingMode::Nearest)
 }
 
 /// Rounds down a number to the nearest multiple of the given step.
@@ -461,6 +860,119 @@ mod tests {
         assert_eq!(round_(1e-10, 3e-12), 9.9e-11);
         assert_eq!(round_dn(0.999999999999, 3e-12), 0.999999999999);
         assert_eq!(round_up(1.000000000001, 3e-12), 1.000000000002);
+    }
+
+    #[test]
+    fn gpu_decimal_transport_preserves_authored_sides_of_boundaries() {
+        use super::gpu_decimal_metadata_py;
+        let input = [1.15, 1.15 - 1e-12, 1.15 + 1e-12, -0.044, 0.0];
+        let metadata = gpu_decimal_metadata_py(input.to_vec());
+        assert_ne!(metadata[0], metadata[1]);
+        assert_ne!(metadata[0], metadata[2]);
+        for (value, (lo, mid, hi, encoded)) in input.into_iter().zip(metadata) {
+            assert!(lo < 1 << 20 && mid < 1 << 20 && hi < 1 << 20);
+            let magnitude = lo as u64 | (mid as u64) << 20 | (hi as u64) << 40;
+            let negative = encoded >= 512;
+            let exponent = encoded - if negative { 1024 } else { 0 };
+            let restored: f64 = format!(
+                "{}{}e{}",
+                if negative { "-" } else { "" },
+                magnitude,
+                exponent
+            )
+            .parse()
+            .unwrap();
+            assert_eq!(restored, value);
+        }
+        assert_eq!(
+            gpu_decimal_metadata_py(vec![f64::NAN, 1e-100, 1e100]),
+            vec![(0, 0, 0, 2048); 3]
+        );
+    }
+
+    #[test]
+    fn canonical_quantity_proof_does_not_accept_adjacent_inputs() {
+        use super::canonical_qty_units;
+        for (value, step, count) in [(0.477_f64, 0.001, 477.0), (1.25, 0.25, 5.0)] {
+            assert_eq!(canonical_qty_units(value, step), Some(count));
+            assert_eq!(canonical_qty_units(value.next_up(), step), None);
+            assert_eq!(canonical_qty_units(value.next_down(), step), None);
+        }
+        assert_eq!(canonical_qty_units(9045.269825510173, 3e-12), None);
+    }
+
+    #[test]
+    fn large_venue_counts_keep_the_chosen_decimal_increment() {
+        // Decimal cleanup must not add a digit after choosing a venue count.
+        for sign in [-1.0, 1.0] {
+            assert_eq!(
+                round_(sign * (9045.269825510173 * 0.5), 3e-12),
+                sign * 4522.634912755086
+            );
+            assert_eq!(
+                round_(sign * 9045.269825510173, 3e-12),
+                sign * 9045.269825510171
+            );
+            assert_eq!(
+                round_dn(sign * 4522.634912755086, 3e-12),
+                sign * 4522.634912755086
+            );
+            assert_eq!(
+                round_up(sign * 4522.634912755086, 3e-12),
+                sign * 4522.634912755086
+            );
+        }
+        // Preserve an authored one-float offset, rather than applying a band.
+        assert_eq!(round_dn(0.3_f64.next_down(), 0.1), 0.2);
+        assert_eq!(round_up(0.3_f64.next_up(), 0.1), 0.4);
+        assert_eq!(round_(0.25_f64.next_down(), 0.1), 0.2);
+        assert_eq!(round_(0.25_f64.next_up(), 0.1), 0.3);
+        assert_eq!(round_(0.25, 0.1), 0.3);
+        assert_eq!(round_(-0.25, 0.1), -0.3);
+    }
+
+    #[test]
+    fn decimal_target_residuals_preserve_aligned_ticks() {
+        use super::{round_price_distance, RoundingMode};
+        for mode in [RoundingMode::Floor, RoundingMode::Ceil] {
+            assert_eq!(round_price_distance(11.2, -0.00625, 0.01, mode), 11.13);
+            assert_eq!(round_price_distance(43.2, 0.00625, 0.01, mode), 43.47);
+        }
+        // A tiny distance cannot justify snapping a genuine adjacent input.
+        assert_eq!(
+            round_price_distance(11.13_f64.next_down(), 1e-300, 0.01, RoundingMode::Floor),
+            11.12
+        );
+    }
+
+    #[test]
+    fn relative_price_quantization_preserves_exact_venue_alignment() {
+        use super::{round_price_distance, RoundingMode};
+        for (base, distance, step, expected) in [
+            (131.25, -0.0016, 0.01, 131.04),
+            (100.0, 0.0011, 0.01, 100.11),
+            (2.5, -0.044, 0.01, 2.39),
+            (0.29, 0.0, 0.01, 0.29),
+            (10.0, 0.025, 0.25, 10.25),
+            (1e-10, -0.01, 3e-12, 9.9e-11),
+        ] {
+            assert_eq!(
+                round_price_distance(base, distance, step, RoundingMode::Floor),
+                expected
+            );
+            assert_eq!(
+                round_price_distance(base, distance, step, RoundingMode::Ceil),
+                expected
+            );
+        }
+        assert_eq!(
+            round_price_distance(100.0, 0.00111, 0.01, RoundingMode::Floor),
+            100.11
+        );
+        assert_eq!(
+            round_price_distance(100.0, 0.00111, 0.01, RoundingMode::Ceil),
+            100.12
+        );
     }
 
     #[test]

@@ -241,6 +241,57 @@ def test_enabled_shader_lowers_byte_eligibility_to_cuda(strategy, require_real_p
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_cuda_eligibility_macro_preserves_current_launch_argument_classification(
+        strategy, enabled, monkeypatch, require_real_passivbot_rust_module):
+    import re
+    import sys
+    from types import SimpleNamespace
+    import passivbot_rust
+    from optimization.gpu.cuda_kernel import CudaShaderLibrary
+
+    class RawModule:
+        def __init__(self, **kwargs):
+            self.code = kwargs["code"]
+        def compile(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace(RawModule=RawModule))
+    source = getattr(passivbot_rust, f"mps_{strategy}_multicoin_source_py")()
+    assert "#define ORGANILLO_ARGS , constant uchar* organillo_values, constant int* organillo_rows" in source
+    if enabled:
+        source = "#define PASSIVBOT_ORGANILLO 1\n" + source
+    library = CudaShaderLibrary(source, coin_capacity=2)
+    for name, signature in re.findall(r"kernel\s+void\s+(\w+)\((.*?)\)\s*\{", source, re.S):
+        # Eligibility adds two compiler-side pointer arguments. Current kernels
+        # have no scalar-reference conversion after them, and the one byte input
+        # precedes them, so host launch classifications must remain valid.
+        expanded = signature.replace("ORGANILLO_ARGS", (
+            ", constant uchar* organillo_values, constant int* organillo_rows" if enabled else ""
+        ))
+        arguments = expanded.split(",")
+        expected = {
+            index: match[1]
+            for index, argument in enumerate(arguments)
+            if (match := re.search(r"\bconstant\s+(\w+)\s*&", argument))
+        }
+        assert not expected, name
+        assert library._scalar_parameters[name] == expected, name
+        byte_indices = {
+            index for index, argument in enumerate(arguments)
+            if re.search(r"\bconstant\s+int\s*\*\s*touch_min_qty_relation\b", argument)
+        }
+        assert library._byte_parameters[name] == byte_indices, name
+        if enabled and "ORGANILLO_ARGS" in signature:
+            coin = next(i for i, argument in enumerate(arguments) if "coin_settings" in argument)
+            assert "organillo_values" in arguments[coin + 1]
+            assert "organillo_rows" in arguments[coin + 2]
+            assert all(index < coin for index in byte_indices)
+        # Keep the compiler source macro-based; only host argument inspection expands it.
+        assert "ORGANILLO_ARGS" in library._module.code
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", ["long", "short", "both"])
 @pytest.mark.parametrize("dynamic", [False, True])
 @pytest.mark.parametrize("hedge", [False, True])

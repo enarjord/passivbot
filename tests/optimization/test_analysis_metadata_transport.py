@@ -72,7 +72,8 @@ class CaptureScorer:
     def required_metrics(self, scenario):
         return {"adg_strategy_eq_ew"}
 
-    def score(self, vector, analyses):
+    def score(self, vector, analyses, *, stage="full"):
+        assert stage == "full"
         self.analyses = deepcopy(analyses)
         return {"metrics": {"objectives": {"adg_strategy_eq_ew": .01}}, "fitness": (-.01,)}
 

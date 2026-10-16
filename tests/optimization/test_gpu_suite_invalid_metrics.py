@@ -25,7 +25,7 @@ class Suite:
     objective_bases = [SimpleNamespace(scenario=None)]
     objective_scenario = None
 
-    def score_scenario_results(self, results):
+    def score_scenario_results(self, results, *, stage="full"):
         """Return a finite objective for valid synthetic candidates."""
         value = results[0].metrics["stats"][METRIC]["mean"]
         return {
@@ -92,8 +92,8 @@ def test_native_nan_envelope_still_fails_as_malformed_output():
 def test_reducer_metric_failure_is_candidate_local():
     """Aggregation failures after scenario construction use the same policy."""
     class ReducerFailure(Suite):
-        def score_scenario_results(self, results):
-            scored = super().score_scenario_results(results)
+        def score_scenario_results(self, results, *, stage="full"):
+            scored = super().score_scenario_results(results, stage=stage)
             if scored["objectives"] == (2.0,):
                 raise MetricAggregationError("synthetic reducer failure")
             return scored
@@ -107,7 +107,7 @@ def test_reducer_metric_failure_is_candidate_local():
 def test_unrelated_errors_still_propagate():
     """Programming errors must not be treated as bad candidate fitness."""
     class BrokenSuite(Suite):
-        def score_scenario_results(self, results):
+        def score_scenario_results(self, results, *, stage="full"):
             raise RuntimeError("synthetic scorer failure")
 
     with pytest.raises(RuntimeError, match="synthetic scorer failure"):

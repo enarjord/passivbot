@@ -11,6 +11,7 @@ from optimization.fine_tune_anchors import get_anchor_plan
 from optimization.evaluation_implementation import evaluation_implementation_identity
 from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
+from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
 CONTRACT_VERSION = 2
 CONTRACT_KEY = "optimizer_evaluation_contract"
@@ -140,6 +141,9 @@ def build_evaluation_contract(config: dict) -> dict:
         if not isinstance(digest, str) or len(digest) != 64:
             raise ValueError("Organillo requires a validated SHA-256 before saving evaluation fitness")
         contract["organillo"] = {"sha256": digest, "contract": 1}
+    policy = resolve_prefilter(config.get("optimize", {}).get("prefilter"))
+    if prefilter_enabled(policy):
+        contract["prefilter"] = {"version": PREFILTER_VERSION, "policy": policy}
     half_life = effective.get("backtest", {}).get("ew_half_life_days")
     if half_life is not None:
         from config.ew import EW_DEFINITION_VERSION

@@ -318,8 +318,10 @@ cannot restore their anchors automatically; use saved configs as seeds for a fre
 
 Finite anchor and side-enable choices use registered compatible execution views without
 copying candle histories. Numeric candidate values still travel in compact requests.
-Continuous changes to dataset-owned coin patches remain explicit errors, and candidates
-with both sides disabled remain unsupported by the replay. Measured parity, specialized/general equivalence and resource limits are recorded in the
+Continuous changes to dataset-owned coin patches remain explicit errors. Search spaces
+with a reachable both-sides-disabled execution view are rejected before evolution;
+constrain at least one side to remain enabled. EMA Anchor position-exposure enforcers
+on an enabled side, including coin overrides, require the CPU backend. Measured parity, specialized/general equivalence and resource limits are recorded in the
 acceptance map. They certify the stated cases rather than every possible trajectory.
 
 ## Execution and cleanup
@@ -438,8 +440,40 @@ GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
 Reporting state is separate from the panic tier used by the simulation; counting
 cooldown does not extend panic orders. Shared-account EMA/TM replay integrates
 elapsed steps using the preceding observation's portfolio RED state, matching CPU
-elapsed-time reporting. First observations add no duration, terminal states add no
+elapsed-time reporting. A flat execution observes its updated portfolio tier at the
+fill timestamp before the following bar interval; GREEN at that boundary adds no
+unobserved RED minute. First observations add no duration, terminal states add no
 unobserved tail, and temporal dispatches retain the complete clock. The two packed
 scalar labels remain unchanged. Retained legacy directional single-coin replay
 still counts samples. Controller-active parity checks remain required to assess
 observation timing and numerical discrepancies.
+
+### Coin HSL replay arithmetic
+
+Native trailing-martingale replay on CUDA and Metal may maintain a bounded arithmetic
+index per coin and position side. Execution facts, current positions, current balance
+budgets and the independent factual composer remain authoritative. The index owns no
+panic permission or cooldown. Changed facts return to independent composition. A budget
+change prevents reuse of a previously certified scalar continuation and refreshes that path.
+Sliding lookbacks or histories without scalar continuation can use bounded indexed queries
+with the current budget. A certified scalar continuation supplies ordinary observations
+without maintaining an unused index. Changed facts and budgets retire optional
+arithmetic; unchanged sliding histories build it after three consecutive observations
+that cannot continue the scalar result. Brief gaps between fills do not rebuild the index.
+
+Each owner has separate scratch and event ownership. Candidate batches with mixed HSL
+scope modes, unsupported devices, or insufficient cache/scratch budget use independent
+factual replay. Cache rejection or loss never clips retained facts or publishes a rejected
+attempt. Numerical conditioning and threshold guards retain the scalar adjudication path.
+Growing factual capacity can disable optional indexing while retaining authoritative history.
+
+Fresh scope composition may skip a flat zero-signal prefix, gap or tail within one
+query. The next causal fill and the current endpoint are always evaluated, logical
+observation counts are preserved, and requested traces retain every observation.
+Native candle projection and prepared-mark validity retain the same admission rules.
+
+Run the offline synthetic matched benchmark with
+`python -m tools.gpu_hsl_coin_cache_benchmark --sides both --bars 8192 --lookback-days 1 --candidates 8`.
+It warms both shader variants before comparing repeated cache-off/cache-on runs,
+checks replay parity, and reports completed single-scenario backtests per second.
+Results depend on device, batch size and history; they do not predict suite throughput.

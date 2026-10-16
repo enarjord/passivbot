@@ -33,6 +33,10 @@ cutoff requires a fresh run instead of reusing scores from the earlier window.
 
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
+Optional [configuration prefilters](config_prefilter.md) return graded constraints
+before CPU or native GPU replay. All checks are disabled by default; each must be
+explicitly enabled under `optimize.prefilter.checks`.
+
 The canonical defaults live in `src/config/schema.py`. The example config
 `configs/examples/default_trailing_martingale_long.json` mirrors those defaults exactly. For the
 recommended config workflow, see [Config Workflow](config_workflow.md).
@@ -250,6 +254,20 @@ budgets can reduce physical widths further. Native CUDA history chunks still ada
 CPU consumption cadence also adapts independently. These controls change execution only;
 they never tune simulation precision or search policy.
 
+Automatic native CUDA sessions size replay scratch when a dataset's replay owner is
+created, after its market tensors are resident. The budget includes per-candidate
+history and shared metric workspace, and reserves the
+larger of 1 GiB or 20% of total VRAM when feasible. Under pressure it uses 35% of free
+VRAM, with room for one candidate if that candidate fits. Directional owners share
+the allowance. Before a physical batch changes width or factual storage shape,
+automatic CUDA owners release all completed scratch so replacement histories do
+not overlap retained histories. Unchanged shapes reuse their buffers. Switching
+datasets releases the old owner's scratch and samples free VRAM again; active owners are never resized. Explicit batch widths, tuning mode
+`"off"`, and Metal retain their existing scratch budgets. Increased capacity does
+not eagerly allocate scratch or force a wider batch: dispatch limits and completed
+throughput evidence still govern actual widths. The allowance leaves room for
+factual histories to grow during a resident owner's lifetime.
+
 Legacy CPU exact-worker, validation-count, drift-probe and screened-seed controls have
 been removed. Population size belongs to `optimize.population_size`. Old screening/
 validation checkpoints and earlier experimental `gpu_native` checkpoints cannot resume;
@@ -267,6 +285,8 @@ selection promotes survivors for the remaining scenarios. Retain the larger of
 Explicit objective/limit scenarios must be included. Only full-suite survivors receive
 fitness, result records and Pareto admission. Completed scenario rows can be reused
 at promotion without reusing partial scores as full fitness.
+Suite-aggregated EW objectives and limits reduce the selected scenarios during screening;
+full evaluation still requires all scenarios and available EW samples from every source.
 
 Empty screening labels disable the partial stage. Selecting all scenarios or retaining
 all offspring bypasses it. Screening reduces full evaluations within `iters`; it does

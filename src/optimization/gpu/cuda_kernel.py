@@ -3,6 +3,8 @@
 Only address-space qualifiers, the grid index, and the few Metal vector operations
 used by these kernels differ. Multi-coin private arrays may use a smaller validated
 capacity, and the immutable ternary quantity-relation table uses signed bytes.
+Native temporal replay uses bounded block-owned side state when it fits in shared
+memory; its launch contract gives each block exactly one candidate.
 Strategy expressions remain in the Rust-owned source.
 CuPy compiles with NVRTC and shares PyTorch tensors and its current CUDA stream.
 """
@@ -18,6 +20,7 @@ _CUDA_PREAMBLE = r"""
 #define NAN __int_as_float(0x7fffffff)
 using uint = unsigned int;
 using ulong = unsigned long long;
+using PBLong = long long;
 template <typename T> __device__ inline T clamp(T v, T lo, T hi) {
     return min(max(v, lo), hi);
 }
@@ -58,11 +61,41 @@ __device__ inline PBFloat3 clamp(PBFloat3 a, float lo, float hi) {
 __device__ inline PBFloat3 fma(PBFloat3 a, PBFloat3 b, PBFloat3 c) {
     return PBFloat3(fmaf(a.x,b.x,c.x),fmaf(a.y,b.y,c.y),fmaf(a.z,b.z,c.z));
 }
+// At most two directional workspaces share a block. Keep their total within
+// CUDA's portable 48 KiB static shared-memory limit; larger states stay private.
+// Slot distinguishes long and short even when both have the same state type.
+template <typename T, int Slot, bool Shared = (sizeof(T) <= 24 * 1024)>
+struct PBReplaySideStorage;
+template <typename T, int Slot>
+struct PBReplaySideStorage<T, Slot, true> {
+    static_assert(Slot >= 0 && Slot < 2, "CUDA replay supports two directional slots");
+    __device__ __forceinline__ T& get() {
+        __shared__ T value;
+        return value;
+    }
+};
+template <typename T, int Slot>
+struct PBReplaySideStorage<T, Slot, false> {
+    static_assert(Slot >= 0 && Slot < 2, "CUDA replay supports two directional slots");
+    T value;
+    __device__ __forceinline__ T& get() { return value; }
+};
+
 """
 
 
-def cuda_source(source: str, *, coin_capacity: int | None = None) -> str:
+def _shared_side_replay(source: str) -> bool:
+    return bool(
+        re.search(r"^#define\s+PASSIVBOT_HSL_FACTUAL_ONLY\s+1\s*$", source, re.M)
+        and re.search(r"^#define\s+PASSIVBOT_(?:EMA|TM)_MULTICOIN_CHUNKED\s+1\s*$", source, re.M)
+    )
+
+
+def cuda_source(
+    source: str, *, coin_capacity: int | None = None, shared_replay_state: bool = True
+) -> str:
     """Lower only the explicitly supported scalar shader dialect."""
+    shared = shared_replay_state and _shared_side_replay(source)
     if coin_capacity is not None:
         from optimization.gpu.runtime import specialize_coin_capacity
 
@@ -89,6 +122,7 @@ def cuda_source(source: str, *, coin_capacity: int | None = None) -> str:
     source = re.sub(r"kernel\s+void\s+\w+\(.*?\)\s*\{", lower_kernel_references, source, flags=re.S)
     source = source.replace("#include <metal_stdlib>", "")
     source = source.replace("using namespace metal;", "")
+    source = re.sub(r"\blong\b", "PBLong", source)
     source = re.sub(r"\bconstant\s+(\w+)\s*\*", r"const \1*", source)
     # The multicoin input packer uses signed bytes for this ternary table.
     # Integer promotion preserves all strategy expressions and comparisons.
@@ -112,7 +146,13 @@ def cuda_source(source: str, *, coin_capacity: int | None = None) -> str:
     )
     if count == 0 or "[[" in source:
         raise ValueError("Unsupported GPU shader grid signature or Metal attribute")
-    return _CUDA_PREAMBLE + source
+    storage = (
+        "#define PASSIVBOT_GPU_SIDE_STATE(TYPE, NAME, SLOT) "
+        "PBReplaySideStorage<TYPE, SLOT> NAME##_storage; "
+        "TYPE& NAME = NAME##_storage.get()\n"
+        if shared else ""
+    )
+    return _CUDA_PREAMBLE + storage + source
 
 
 class CudaShaderLibrary:
@@ -120,6 +160,7 @@ class CudaShaderLibrary:
         import cupy
 
         self._cupy = cupy
+        self._shared_side_replay = _shared_side_replay(source)
         self._scalar_parameters = {}
         self._byte_parameters = {}
         for name, signature in re.findall(r"kernel\s+void\s+(\w+)\((.*?)\)\s*\{", source, re.S):
@@ -140,6 +181,7 @@ class CudaShaderLibrary:
 
     def __getattr__(self, name: str):
         kernel = self._module.get_function(name)
+        single_owner = self._shared_side_replay and kernel.attributes["shared_size_bytes"] > 0
 
         def launch(*args, threads, group_size=None):
             import torch
@@ -154,6 +196,8 @@ class CudaShaderLibrary:
             block = 64 if group_size is None else int(group_size[0])
             if not 1 <= block <= 1024:
                 raise ValueError("Invalid CUDA thread block size")
+            if single_owner and block != 1:
+                raise ValueError("CUDA shared replay state requires one candidate per thread block")
             scalar_parameters = self._scalar_parameters.get(name, {})
             if scalar_parameters:
                 device = next(

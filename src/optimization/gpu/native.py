@@ -121,6 +121,7 @@ class NativeBacktestService:
                     interrupt_check=self._interrupt_check, prepared_data_cache=self._prepared_cache,
                     factual_hsl=True, selection=selection,
                     factual_capacity_hints=capacity_hints,
+                    automatic_scratch_budget=self._batch_tuner is not None,
                 )
                 try:
                     # Discover physical limits after claiming one ownership request.

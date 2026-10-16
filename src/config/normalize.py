@@ -16,6 +16,7 @@ from .hydrate import (
 )
 from .coerce import normalize_validation_fields
 from .gpu import resolve_gpu_screening
+from .prefilter import resolve_prefilter
 from .migrations import (
     apply_backward_compatibility_renames,
     apply_migrations,
@@ -98,6 +99,7 @@ def normalize_config(
         require_config_dict(result, path)
     reject_legacy_flat_strategy_fields(result)
     apply_migrations(result, verbose=verbose, tracker=tracker)
+    result["optimize"]["prefilter"] = resolve_prefilter(result["optimize"].get("prefilter"))
     gpu = result["optimize"].get("gpu")
     if isinstance(gpu, dict) and "screening" in gpu:
         gpu["screening"] = resolve_gpu_screening(gpu["screening"])

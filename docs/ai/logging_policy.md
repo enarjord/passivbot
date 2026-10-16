@@ -177,12 +177,19 @@ original values, bounds, adjusted values and source details are DEBUG.
 
 GPU optimizer summaries identify the current cohort phase, generation, complete candidate
 count, screened count, pending requests and elapsed time. Phase changes are immediate;
-unchanged summaries are at most once per minute. Completed candidates and Pareto members
+unchanged summaries are at most once per minute. `completed/s` and `screened/s` divide the
+additional complete suite or screening candidates since the first summary by elapsed run
+time; restored checkpoint counts are excluded. These observed rates include waiting and
+other orchestration time. Completed candidates and Pareto members
 remain independently durable; log cadence never controls persistence.
 
 Temporal replay start/update/completion records carry a replay ID, historical-bar progress,
 actual command count and a scoped `eta_batch`. Bar counts are batch-wide time steps, not
-candidate evaluations. Replay INFO updates are at most once per minute; intermediate
+candidate evaluations. `est_backtests/s` is the current scenario batch width times
+the bar rate since the preceding delivered INFO update divided by the total history bars.
+`avg_backtests/s` uses the average rate since replay start. ETA uses the recent rate so an
+early fast prefix does not conceal a later slowdown. Both estimates exclude compilation,
+host metric reduction and other scenarios; it never counts completed optimizer candidates. Replay INFO updates are at most once per minute; intermediate
 updates are DEBUG. Scenario/group context appears when supplied by a direct replay caller.
 The async service's worker progress must not pretend to know CPU search policy or generation.
 Auto-tune logs distinguish trial, accepted and retained widths with completed-work evidence

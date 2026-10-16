@@ -34,11 +34,10 @@ def _library():
     root = Path(__file__).resolve().parents[2] / "passivbot-rust/src/gpu"
     source = "\n".join((root / name).read_text() for name in
                        ("mps_hsl_history.metal", "mps_hsl_scope.metal"))
-    probe = composer._PROBE.replace("device const float* prices", "constant float* prices")
-    probe = probe.replace("pair.prices=prices+(int(b)*3+p)*160;", "pair.prices=nullptr;")
-    probe = probe.replace("pair.candles=nullptr; pair.candle_stride=0; pair.fallback_price=0.0f;",
-                          "pair.candles=prices+(int(b)*3+p)*160; pair.candle_stride=1; "
-                          "pair.candle_first=0; pair.candle_last=info[io+2]-1; pair.fallback_price=0.0f;")
+    probe = composer._PROBE.replace(
+        "pair.candles=params[po+24]!=0.0f ? candles+(int(b)*3+p)*160 : nullptr;",
+        "pair.candles=candles+(int(b)*3+p)*160;",
+    ).replace("pair.fallback_price=100.0f;", "pair.fallback_price=0.0f;")
     first = probe.index("    HslScopeResult result;")
     last = probe.index("    int out=int(b)*8;", first)
     probe = probe[:first] + _BODY + probe[last:]

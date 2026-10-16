@@ -109,29 +109,50 @@ def test_position_rounding_and_stepped_endpoints_determine_finite_views(monkeypa
             assert len({request.dataset_id for request in requests}) == expected
 
 
-def test_two_side_choices_prepare_only_supported_topologies_and_reject_zero_sides(monkeypatch):
+@pytest.mark.parametrize("bound", ["total_wallet_exposure_limit", "n_positions"])
+def test_zero_side_search_space_is_rejected_before_service_or_evolution(monkeypatch, bound, tmp_path):
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:
         base = variable_base(manager)
         config = deepcopy(base.config)
-        config["optimize"]["bounds"]["long_total_wallet_exposure_limit"] = [0, 1]
+        for side in ("long", "short"):
+            config["optimize"]["bounds"][f"{side}_{bound}"] = [0, 1, 1]
         base = optimize.Evaluator(base.hlcvs_specs, base.btc_usd_specs, base.msss,
                                   config, timestamps=base.timestamps)
-        with NativeDatasetRegistry(base, standalone_candle_coins={"binance":("COIN00", "COIN01", "COIN02")}) as registry:
-            assert len(registry.bindings) == 3
-            choices = {}
-            for long, short in ((1, 0), (0, 1), (1, 1), (0, 0)):
-                candidate = deepcopy(config)
-                for side, value in (("long", long), ("short", short)):
-                    candidate["bot"][side]["risk"]["total_wallet_exposure_limit"] = value
-                values = optimize.config_to_individual(candidate, base.bounds,
-                                                        optimization_shape=base.optimization_shape)
-                if not long and not short:
-                    with pytest.raises(ValueError, match="dataset-owned execution inputs"):
-                        registry.planner.prepare("zero", values)
-                else:
-                    choices[long, short] = registry.planner.prepare(f"{long}:{short}", values).requests[0].dataset_id
-            assert len(set(choices.values())) == 3
+        import optimization.gpu.native as native
+        def forbidden_service(**kwargs):
+            pytest.fail("unsupported zero-side search space reached GPU service construction")
+        monkeypatch.setattr(native, "NativeBacktestService", forbidden_service)
+        with pytest.raises(ValueError, match="both sides disabled.*constrain at least one side"):
+            execute(base, SimpleNamespace(record=lambda _: pytest.fail("unexpected result")),
+                    tmp_path / "checkpoint.pkl")
+
+
+def test_reachable_ema_side_cannot_silently_enable_unsupported_enforcer(monkeypatch, tmp_path):
+    from tools.gpu_parity import build_parser, fixture_inputs
+    guard_cpu(monkeypatch)
+    with managed_arrays() as manager:
+        original = inputs(manager)
+        config, *_ = fixture_inputs(build_parser().parse_args([
+            "--fixture", "ema_anchor", "--sides", "both", "--coins", "3", "--bars", "128",
+        ]))
+        config["optimize"].update(backend="gpu", population_size=4, iters=4, bounds={})
+        for side in ("long", "short"):
+            for key in ("n_positions", "total_wallet_exposure_limit"):
+                value = config["bot"][side]["risk"][key]
+                config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
+        config["bot"]["short"]["risk"].update(total_wallet_exposure_limit=0,
+                                                 position_exposure_enforcer_enabled=True)
+        config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0, 1]
+        base = optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
+                                  config, timestamps=original.timestamps)
+        import optimization.gpu.native as native
+        def forbidden_service(**kwargs):
+            pytest.fail("reachable unsupported EMA side reached GPU construction")
+        monkeypatch.setattr(native, "NativeBacktestService", forbidden_service)
+        with pytest.raises(ValueError, match="bot.short.risk.position_exposure_enforcer_enabled"):
+            execute(base, SimpleNamespace(record=lambda _: pytest.fail("unexpected result")),
+                    tmp_path / "checkpoint.pkl")
 
 
 @pytest.mark.parametrize("duplicate_initial", [False, True])

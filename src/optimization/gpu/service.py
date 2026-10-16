@@ -142,6 +142,7 @@ CORE_OUTPUT_KEYS = {
     "last_high_ts",
     "first_eq_ts",
     "last_eq_ts",
+    "first_eq_step",
     "last_eq_step",
     "liq_step",
     "profit_sum",
@@ -168,6 +169,7 @@ _GPU_PROFILE_TIMING_KEYS = (
     "upload_and_buffer_clear",
     "cold_compilation",
     "warm_library_lookup",
+    "pipeline_preparation",
     "kernel_execution",
     "device_to_host",
     "metric_reduction",
@@ -180,6 +182,7 @@ _GPU_PROFILE_RUNNER_TIMING_KEYS = (
     "upload_and_buffer_clear",
     "cold_compilation",
     "warm_library_lookup",
+    "pipeline_preparation",
     "kernel_execution",
     "metric_reduction",
 )
@@ -445,6 +448,7 @@ def _add_gpu_runner_profile(
     ) + float(runner_profile.get("pre_dispatch_sync_seconds", 0.0))
     compile_seconds = float(runner_profile.get("compile_seconds", 0.0))
     timings["cold_compilation" if cold else "warm_library_lookup"] += compile_seconds
+    timings["pipeline_preparation"] += float(runner_profile.get("pipeline_seconds", 0.0))
     timings["kernel_execution"] += float(runner_profile.get("kernel_seconds", 0.0))
     timings["metric_reduction"] += float(
         runner_profile.get("metric_decode_seconds", 0.0)
@@ -1712,6 +1716,8 @@ def _combine_hedged_multicoin_outputs(
     combined["last_eq_ts"] = last_eq_ts.minimum(complete_tail_ms).where(
         liquidated, last_eq_ts
     )
+    if "first_eq_step" in long or "first_eq_step" in short:
+        combined["first_eq_step"] = long["first_eq_step"].maximum(short["first_eq_step"])
     if "last_eq_step" in long or "last_eq_step" in short:
         last_step = long["last_eq_step"].minimum(short["last_eq_step"])
         # Keep the existing conservative day boundary for independent side
@@ -2602,6 +2608,7 @@ class MpsMulticoinProxy:
         prepared_data_cache: dict | None = None,
         factual_hsl: bool = False,
         factual_capacity_hints: dict | None = None,
+        automatic_scratch_budget: bool = False,
         selection=None,
     ):
         from config.gpu import validate_gpu_backtest_config
@@ -3023,6 +3030,7 @@ class MpsMulticoinProxy:
         # Small service-owned estimates outlive residency eviction. This mapping
         # contains integers only, never runners, tensors or checkpoint state.
         self._factual_capacity_hints = factual_capacity_hints
+        self._automatic_scratch_budget = automatic_scratch_budget
         if selection is None and config["backtest"].get("organillo_csv") is not None:
             from organillo import prepare_selection
             selection = prepare_selection(config, backtest_params["coins"], timestamps)
@@ -3184,8 +3192,23 @@ class MpsMulticoinProxy:
                 raise ValueError("Invalid learned GPU HSL factual capacity")
             capacity = max(capacity, runner.hsl_fact_capacity_learned)
             runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = capacity
-            if runner._history_batch_bytes(1) > runner.hsl_scratch_budget_bytes:
-                raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
+        if (self._automatic_scratch_budget and runner.bars.device.type == "cuda"):
+            from optimization.gpu.autotune import cuda_history_budget
+
+            runner.automatic_scratch_budget = True
+            free, total = map(int, self._torch.cuda.mem_get_info())
+            runner.hsl_scratch_budget_bytes = cuda_history_budget(
+                runner, free, total,
+                owners=1 if self.shared_account_fused else len(self.sides),
+            )
+        if (self._factual_capacity_hints is not None and runner.native_factual_hsl
+                and runner._history_batch_bytes(1) > runner.hsl_scratch_budget_bytes):
+            raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
+        if (self._factual_capacity_hints is not None and not self._automatic_scratch_budget
+                and runner.native_factual_hsl):
+            # Fixed service owners reserve against their maximum configured width.
+            # Automatic owners retain the existing seed and growth policy.
+            runner.initial_factual_capacity_batch_width = self.dispatch_batch_size
         return runner
 
     def _remember_factual_capacities(self):

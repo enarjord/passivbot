@@ -186,6 +186,25 @@ def history_dispatch_ceiling(proxy, ceiling):
     return ceiling
 
 
+def cuda_history_budget(runner, free, total, *, owners=1):
+    """Bound one new replay owner's histories and shared reduction workspace.
+
+    Immutable market tensors are already resident when free VRAM is sampled.
+    Directional owners share the allowance because both can retain scratch.
+    """
+    reserve = max(1024**3, int(total * 0.2))
+    minimum = runner._history_batch_bytes(1)
+    if minimum == 0:
+        return runner.hsl_scratch_budget_bytes
+    if minimum > free // owners:
+        raise MemoryError("CUDA replay history and workspace exceed available VRAM")
+    allowance = (free - reserve if free - reserve >= minimum * owners
+                 else int(free * 0.35)) // owners
+    # This is an allowance, not an allocation. Keep room for factual-history
+    # growth within this owner; dispatch demand bounds actual lazy allocation.
+    return max(minimum, allowance)
+
+
 def proxy_batches(proxy, candidates, ceiling, *, end_step=None, clock=None):
     """Bound physical replay histories; service scheduling owns adaptive width.
 

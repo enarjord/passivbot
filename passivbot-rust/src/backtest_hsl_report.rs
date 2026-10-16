@@ -142,7 +142,10 @@ impl Report {
         let watermark = scope.watermark.unwrap_or(now);
         let mut counts = BTreeMap::new();
         for event in &output.events {
-            if event.timestamp < watermark {
+            // A newly reconstructed historical breach is not an observed stop.
+            // Keep same-capture lifecycle events, including zero-time round trips;
+            // current non-GREEN permission is still counted independently below.
+            if event.timestamp < watermark || event.timestamp < now {
                 continue;
             }
             let identity = (event.timestamp, event.kind);
@@ -588,6 +591,61 @@ mod tests {
             report.summary.triggers_long + report.summary.triggers_short,
             0
         );
+    }
+
+    #[test]
+    fn reporting_ignores_newly_revealed_historical_red_when_current_green() {
+        let key = (Some(LONG), Some(0));
+        let mut report = Report::new(false, true);
+        report.observe(key, 0, "bar_close", &output(0, Action::Normal, vec![]));
+        report.observe(
+            key,
+            60_000,
+            "bar_close",
+            &output(60_000, Action::Panic, vec![]),
+        );
+        report.observe(
+            key,
+            60_000,
+            "scope_flat",
+            &output(60_000, Action::Normal, vec![]),
+        );
+        report.observe(
+            key,
+            120_000,
+            "bar_close",
+            &output(120_000, Action::Normal, vec![]),
+        );
+        let historical = LifecycleEvent {
+            timestamp: 120_000,
+            kind: "red",
+            red_at: 120_000,
+            flat_at: None,
+            reason: "drawdown",
+            raw: Some(0.2),
+            ema: Some(0.1),
+        };
+        // Reconstruction can reveal a new hypothetical breach at the previous
+        // watermark. Today's GREEN permission never observed that stop.
+        report.observe(
+            key,
+            180_000,
+            "bar_close",
+            &output(180_000, Action::Normal, vec![historical.clone()]),
+        );
+        assert_eq!((report.summary.triggers, report.summary.restarts), (1, 1));
+        assert_eq!(report.summary.red_minutes, 0.0);
+        assert_eq!(report.events.len(), 2);
+        // A genuinely current RED still starts an observed stop, even when its
+        // reconstructed onset predates this capture.
+        report.observe(
+            key,
+            240_000,
+            "bar_close",
+            &output(240_000, Action::Panic, vec![historical]),
+        );
+        assert_eq!((report.summary.triggers, report.summary.restarts), (2, 1));
+        assert_eq!(report.events.last().unwrap().observed_at, 240_000);
     }
 
     #[test]
