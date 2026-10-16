@@ -14,13 +14,15 @@ since the latest release tag; these features may already be available when insta
   range, retain a representably smaller quantity so the reduction cannot round away.
 
 - Preserve valid tick-aligned trailing-martingale grid/trailing entry and close prices
-  using a fused relative-price expression and exact canonical venue alignment.
+  using a fused relative-price expression and provable decimal venue alignment.
   Genuine off-tick targets retain directional rounding even at tiny tick sizes.
   Round aligned reentry
   quantity products in venue units, recovering half-step representation noise
-  without snapping resolvable products below the half-step. Canonical venue
-  quantities retain unit arithmetic; genuinely fractional positions retain their
-  original nearest/floor rounding.
+  without snapping resolvable products below the half-step. Exact decimal venue
+  quantities retain unit arithmetic where the operation's neighbors are resolvable;
+  ambiguous and genuinely fractional positions retain physical-unit rounding.
+  Venue rounding preserves its chosen integer count through decimal conversion,
+  including fine steps with large quantities.
   Directional and multicoin GPU top-ups after partial closes also subtract
   recoverable venue-unit counts without losing a quantity step.
 

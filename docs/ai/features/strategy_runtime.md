@@ -162,11 +162,16 @@ as wallet exposure rises. Close retracement is volatility-weighted and intention
 wallet-exposure modifier.
 
 TM grid and trailing re-entry/close distance targets use a fused base-plus-distance expression.
-An aligned target equals the canonical decimal venue price; a distinct float keeps directional
-rounding. Quantity-unit arithmetic requires exact canonical quantities, fewer than 2^53 units,
-and distinguishable adjacent physical quantities. Other positions retain physical-unit rounding.
+A representation residual is corrected only when checked decimal arithmetic proves exact venue
+alignment; genuine off-grid targets keep directional rounding. Quantity-unit recovery requires exact
+decimal divisibility below 2^53 units and distinguishable neighbors in the operation's direction.
+Ambiguous counts, unproven alignment, and checked-arithmetic overflow keep physical-unit rounding.
 Half-step recovery is bounded by the measured multiplication residual and half a factor ULP,
 and is disabled when that bound reaches a quarter-step.
+Venue rounding converts the chosen integer count directly to its decimal step value, avoiding
+another physical-value rescaling. Nearest rounding resolves quotient ties with checked decimal
+arithmetic when possible; directional rounding only recovers provably aligned inputs and keeps
+physical rounding for other intermediate values.
 
 Auto-unstuck has its own EMA trigger toggle:
 `bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the
