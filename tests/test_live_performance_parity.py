@@ -1,5 +1,6 @@
 """Synthetic regression coverage for disk-row reuse and live native HSL parity."""
 from pathlib import Path
+import builtins
 import json
 import os
 
@@ -95,6 +96,78 @@ def test_changed_or_unusable_sources_match_uncached_loader(manager, tmp_path, ch
     else:
         np.testing.assert_array_equal(actual, expected)
 
+
+@pytest.mark.parametrize('failed_source', ['primary', 'legacy'])
+@pytest.mark.parametrize('failure', ['empty', 'open_error'])
+@pytest.mark.parametrize('merge_memory_cache', [False, True])
+def test_partial_merged_shard_read_recovers_before_reuse(
+    manager, tmp_path, monkeypatch, failed_source, failure, merge_memory_cache
+):
+    """A surviving source cannot certify a failed constituent as reusable history."""
+    monkeypatch.chdir(tmp_path)
+    rows = candles(3)
+    rows['c'] = [100.0, 101.0, 102.0]
+    primary_rows = rows[1:].copy()
+    primary_rows['c'][0] = 999.0  # Legacy remains canonical on overlap.
+    persist(manager, primary_rows)
+    day = manager._date_key(int(rows['ts'][0]))
+    legacy_dir = tmp_path / 'historical_data' / 'ohlcvs_synthetic' / 'TEST'
+    legacy_dir.mkdir(parents=True)
+    legacy_path = legacy_dir / f'{day}.npy'
+    np.save(legacy_path, rows[:2])
+    primary_path = Path(manager._shard_path(SYMBOL, day, tf='1m'))
+    manager._legacy_shard_paths_cache.clear()
+    manager._legacy_day_quality_cache.clear()
+    np.testing.assert_array_equal(load(manager, rows, merge_memory_cache=False), rows)
+    manager._disk_rows_cache.clear()
+    manager._cache.clear()
+    failed_path = primary_path if failed_source == 'primary' else legacy_path
+    original_read = manager._load_shard
+    original_open = builtins.open
+    failing = True
+    source_reads = []
+
+    def controlled_read(path, **kwargs):
+        source_reads.append(Path(path).resolve())
+        if failing and failure == 'empty' and Path(path).resolve() == failed_path:
+            return np.empty((0,), dtype=CANDLE_DTYPE)
+        return original_read(path, **kwargs)
+
+    def controlled_open(path, *args, **kwargs):
+        if failing and failure == 'open_error' and Path(path).resolve() == failed_path:
+            raise OSError('synthetic transient shard read failure')
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(manager, '_load_shard', controlled_read)
+    monkeypatch.setattr(builtins, 'open', controlled_open)
+    partial = load(manager, rows, merge_memory_cache=merge_memory_cache)
+    np.testing.assert_array_equal(
+        partial, rows[:2] if failed_source == 'primary' else primary_rows
+    )
+    assert not manager._disk_rows_cache
+
+    # Restore readability without changing either file's identity or timestamps.
+    failing = False
+    source_reads.clear()
+    recovered = load(manager, rows, merge_memory_cache=merge_memory_cache)
+    np.testing.assert_array_equal(recovered, rows)
+    assert set(source_reads) == {primary_path, legacy_path}
+    assert len(manager._disk_rows_cache) == 1
+    cached_rows = next(iter(manager._disk_rows_cache.values()))[1]
+    assert not cached_rows.flags.writeable
+    assert not np.shares_memory(cached_rows, recovered)
+
+    source_reads.clear()
+    recovered['c'][-1] = 9.0
+    np.testing.assert_array_equal(
+        load(manager, rows, merge_memory_cache=merge_memory_cache), rows
+    )
+    assert not source_reads
+    manager._disk_rows_cache.clear()
+    manager._cache.clear()
+    np.testing.assert_array_equal(
+        load(manager, rows, merge_memory_cache=merge_memory_cache), rows
+    )
 
 @pytest.mark.parametrize('timeframe,step', [('1m',60_000), ('5m',300_000)])
 def test_returned_array_mutation_does_not_modify_cached_disk_rows(manager, timeframe, step):
