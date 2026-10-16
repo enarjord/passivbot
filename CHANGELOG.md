@@ -10,8 +10,6 @@ since the latest release tag; these features may already be available when insta
 
 - Allow frozen optimizer benchmarks to select existing RNG seeds for targeted reruns without resampling candidates.
 
-- Fix GPU trailing-martingale grid and positive-retracement closes moving or merging adjacent price ticks through intermediate relative-price rounding.
-
 - Use the same elapsed-time origin for optimizer benchmark tuning windows and
   cohort completions, reporting parameter preparation and service setup separately.
 
@@ -39,21 +37,13 @@ since the latest release tag; these features may already be available when insta
   Recheck the final strict-cap cost after clipping; a bounded search handles
   cases where one quantity decrement still rounds onto the exposure cap.
 
-- Preserve valid tick-aligned trailing-martingale grid/trailing entry and close prices
-  using a fused relative-price expression and provable decimal venue alignment.
-  Genuine off-tick targets retain directional rounding even at tiny tick sizes.
-  Round aligned reentry
-  quantity products in venue units, resolving half-step boundaries from their
-  decimal operands without snapping genuinely smaller products. Exact decimal venue
-  quantities retain unit arithmetic where the operation's neighbors are resolvable;
-  ambiguous and genuinely fractional positions retain physical-unit rounding.
-  Venue rounding preserves its chosen integer count through decimal conversion,
-  including fine steps with large quantities.
-  GPU replay preserves original decimal factors and static distances through parameter and
-  coin-override packing. Recoverable venue counts and proven passive initial-fill price ticks
-  retain aligned boundaries without snapping authored near-half or off-grid values.
-  Directional and multicoin GPU top-ups after partial closes also subtract
-  recoverable venue-unit counts without losing a quantity step.
+- Preserve venue-aligned trailing-martingale entry/close prices and reentry quantities
+  without snapping genuinely off-grid or below-half values. Use fused relative-price
+  expressions, checked decimal boundary arithmetic, unique unit-count recovery and
+  direct decimal count conversion. GPU replay preserves original factors and static
+  distances through candidate and coin-override packing; price proofs require a known
+  passive initial-fill tick. Unsupported proofs retain physical arithmetic. Partial
+  initial top-ups preserve recoverable quantity steps, including power-of-two boundaries.
 
 - Preserve unfilled native GPU TM entries through forager hysteresis, reduce
   coin-HSL replay scratch and Metal pipeline preparation cost, reuse immutable
