@@ -497,7 +497,7 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
 inline void init_ema_multicoin_side_state(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int coin_count
 ) {
@@ -625,7 +625,7 @@ inline void init_ema_multicoin_side_state(
 inline float accumulate_ema_multicoin_side_unrealized_pnl(
     thread const EmaMulticoinSideState& side,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count,
     bool short_side,
@@ -654,7 +654,7 @@ inline void update_ema_multicoin_side_indicators(
     thread const EmaMulticoinSideConfig& config,
     constant float* bars,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {
@@ -721,10 +721,13 @@ inline void update_ema_multicoin_side_indicators(
 
 inline int count_ema_multicoin_tradable_coins(
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int coin_count
+#ifdef PASSIVBOT_ORGANILLO
+    , bool apply_eligibility = true
+#endif
 ) {
     int tradable_count = 0;
     for (int c = 0; c < coin_count; ++c) {
@@ -734,7 +737,12 @@ inline int count_ema_multicoin_tradable_coins(
         float coin_wel = coin_override_or(coin_overrides, c, 11, -1.0f);
         if (k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
-            && finite_positive(close) && coin_wel != 0.0f) {
+            && finite_positive(close) && coin_wel != 0.0f
+
+#ifdef PASSIVBOT_ORGANILLO
+            && (!apply_eligibility || ORGANILLO_ALLOWED(k, c, coin_count))
+#endif
+        ) {
             tradable_count += 1;
         }
     }
@@ -754,7 +762,7 @@ inline bool ema_multicoin_side_has_position(
 inline bool ema_multicoin_side_held_marks_are_valid(
     thread const EmaMulticoinSideState& side,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {
@@ -776,7 +784,7 @@ inline bool ema_multicoin_side_has_blocking_orders(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {
@@ -818,7 +826,7 @@ inline bool update_ema_multicoin_dual_side_hsl(
     int short_effective_n_positions,
     thread const JointPortfolioAccount& account,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
     int k,
@@ -829,18 +837,18 @@ inline bool update_ema_multicoin_dual_side_hsl(
     if (long_side.hsl.signal_mode != short_side.hsl.signal_mode) return false;
     if (long_config.coin_hsl_mode != short_config.coin_hsl_mode) return false;
     if (!ema_multicoin_side_held_marks_are_valid(
-            long_side, bars, coin_settings, k, coin_count
+            long_side, bars, coin_settings ORGANILLO_PASS, k, coin_count
         ) || !ema_multicoin_side_held_marks_are_valid(
-            short_side, bars, coin_settings, k, coin_count
+            short_side, bars, coin_settings ORGANILLO_PASS, k, coin_count
         )) {
         return false;
     }
 
     float long_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
-        long_side, bars, coin_settings, k, coin_count, false, 0.0f
+        long_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, false, 0.0f
     );
     float short_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
-        short_side, bars, coin_settings, k, coin_count, true, 0.0f
+        short_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, true, 0.0f
     );
     bool long_has_position = ema_multicoin_side_has_position(
         long_side, coin_count
@@ -849,10 +857,10 @@ inline bool update_ema_multicoin_dual_side_hsl(
         short_side, coin_count
     );
     bool long_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
-        long_side, long_config, bars, coin_settings, k, coin_count
+        long_side, long_config, bars, coin_settings ORGANILLO_PASS, k, coin_count
     );
     bool short_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
-        short_side, short_config, bars, coin_settings, k, coin_count
+        short_side, short_config, bars, coin_settings ORGANILLO_PASS, k, coin_count
     );
 
     if (long_config.coin_hsl_mode) {
@@ -946,7 +954,7 @@ inline void update_ema_multicoin_side_selection(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int coin_count,
@@ -987,7 +995,11 @@ inline void update_ema_multicoin_side_selection(
         if (k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
-            && coin_override_or(coin_overrides, c, 11, -1.0f) != 0.0f) {
+            && coin_override_or(coin_overrides, c, 11, -1.0f) != 0.0f
+#ifdef PASSIVBOT_ORGANILLO
+            && ORGANILLO_ALLOWED(k, c, coin_count)
+#endif
+        ) {
             current_tradable_count += 1;
         }
     }
@@ -1017,9 +1029,13 @@ inline void update_ema_multicoin_side_selection(
         );
         bool min_cost_eligible = passes_multicoin_min_effective_cost(
             filter_by_min_effective_cost, balance,
-            allowed_wel, initial_qty_pct, bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
+            allowed_wel, initial_qty_pct, bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
         );
-        bool base_eligible = k >= int(coin_settings[coin_offset + 8])
+        bool base_eligible =
+#ifdef PASSIVBOT_ORGANILLO
+            ORGANILLO_ALLOWED(k, c, coin_count) &&
+#endif
+            k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
             && coin_wel != 0.0f
@@ -1220,7 +1236,7 @@ inline int select_ema_multicoin_unstuck_coin(
     thread const JointPortfolioAccount& account,
     constant float* bars,
     constant int* touch_ticks,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int coin_count,
@@ -1338,7 +1354,7 @@ inline void generate_ema_multicoin_side_orders(
     thread JointPortfolioAccount& account,
     constant float* bars,
     constant int* touch_ticks,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int coin_count,
@@ -1468,7 +1484,7 @@ inline void generate_ema_multicoin_side_orders(
                     continue;
                 }
                 float market_price = clamped_market_price(
-                    bars, coin_settings, k, c, C
+                    bars, coin_settings ORGANILLO_PASS, k, c, C
                 );
                 float projected_loss = psize[c] * c_mult * fmax(
                     short_side
@@ -1498,7 +1514,7 @@ inline void generate_ema_multicoin_side_orders(
                 exposure
             );
             float market_price = clamped_market_price(
-                bars, coin_settings, k, best, C
+                bars, coin_settings ORGANILLO_PASS, k, best, C
             );
             int reducer_tick = short_side
                 ? int(ceil(
@@ -1901,7 +1917,7 @@ inline void generate_ema_multicoin_side_orders(
             float c_mult = coin_settings[coin_offset + 4];
             float price = entry_market[best]
                 ? clamped_market_price(
-                    bars, coin_settings, k, best, C
+                    bars, coin_settings ORGANILLO_PASS, k, best, C
                 )
                 : float(entry_tick[best]) * price_step;
             float room_cost = fmax((total_cap - running_twe) * balance, 0.0f);
@@ -2037,7 +2053,7 @@ inline bool ema_multicoin_reducer_candidate_preferred(
 inline void prepare_ema_multicoin_reducer_candidates(
     thread EmaMulticoinSideState& side,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count,
     bool short_side,
@@ -2054,7 +2070,7 @@ inline void prepare_ema_multicoin_reducer_candidates(
         if (!(side.psize[c] > 0.0f) || side.close_is_hsl_panic[c]) continue;
         int coin_offset = c * COIN_COLS;
         float market_price = clamped_market_price(
-            bars, coin_settings, k, c, coin_count
+            bars, coin_settings ORGANILLO_PASS, k, c, coin_count
         );
         float qty_step = coin_settings[coin_offset + 0];
         float price_step = coin_settings[coin_offset + 1];
@@ -2137,14 +2153,14 @@ inline void apply_ema_multicoin_reducer_candidate(
     int coin,
     EmaMulticoinReducerCandidate candidate,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {
     if (!candidate.valid) return;
     int coin_offset = coin * COIN_COLS;
     float market_price = clamped_market_price(
-        bars, coin_settings, k, coin, coin_count
+        bars, coin_settings ORGANILLO_PASS, k, coin, coin_count
     );
     float qty_step = coin_settings[coin_offset + 0];
     float price_step = coin_settings[coin_offset + 1];
@@ -2227,7 +2243,7 @@ inline float ema_multicoin_remaining_loss_budget(
 inline void gate_ema_multicoin_side_ordinary_closes(
     thread EmaMulticoinSideState& side,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count,
     bool short_side,
@@ -2239,7 +2255,7 @@ inline void gate_ema_multicoin_side_ordinary_closes(
         if (side.close_is_hsl_panic[c]) continue;
         int coin_offset = c * COIN_COLS;
         float market_price = clamped_market_price(
-            bars, coin_settings, k, c, coin_count
+            bars, coin_settings ORGANILLO_PASS, k, c, coin_count
         );
         float price_step = coin_settings[coin_offset + 1];
         float c_mult = coin_settings[coin_offset + 4];
@@ -2276,7 +2292,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
     thread EmaMulticoinSideState& side,
     thread const JointPortfolioAccount& account,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count,
     bool short_side,
@@ -2291,7 +2307,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
     int candidate_index[MAX_COINS];
     bool resolved[MAX_COINS];
     prepare_ema_multicoin_reducer_candidates(
-        side, bars, coin_settings, k, coin_count, short_side,
+        side, bars, coin_settings ORGANILLO_PASS, k, coin_count, short_side,
         market_orders_allowed, market_order_near_touch_threshold,
         preferred, fallback
     );
@@ -2324,7 +2340,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
         if (best < 0) break;
         int coin_offset = best * COIN_COLS;
         float market_price = clamped_market_price(
-            bars, coin_settings, k, best, coin_count
+            bars, coin_settings ORGANILLO_PASS, k, best, coin_count
         );
         bool allowed = gate_ema_multicoin_close(
             best_candidate.qty, best_candidate.tick, best_candidate.market,
@@ -2347,11 +2363,11 @@ inline void finalize_ema_multicoin_reducers_one_side(
     }
     for (int c = 0; c < coin_count; ++c) {
         apply_ema_multicoin_reducer_candidate(
-            side, c, selected[c], bars, coin_settings, k, coin_count
+            side, c, selected[c], bars, coin_settings ORGANILLO_PASS, k, coin_count
         );
     }
     gate_ema_multicoin_side_ordinary_closes(
-        side, bars, coin_settings, k, coin_count, short_side,
+        side, bars, coin_settings ORGANILLO_PASS, k, coin_count, short_side,
         market_order_slippage_pct, loss_gate_enabled,
         remaining_loss_budget
     );
@@ -2362,7 +2378,7 @@ inline void finalize_ema_multicoin_reducers_fused(
     thread EmaMulticoinSideState& short_side,
     thread const JointPortfolioAccount& account,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count,
     bool long_enabled,
@@ -2383,13 +2399,13 @@ inline void finalize_ema_multicoin_reducers_fused(
     bool long_resolved[MAX_COINS];
     bool short_resolved[MAX_COINS];
     prepare_ema_multicoin_reducer_candidates(
-        long_side, bars, coin_settings, k, coin_count, false,
+        long_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, false,
         long_enabled && market_orders_allowed,
         market_order_near_touch_threshold,
         long_preferred, long_fallback
     );
     prepare_ema_multicoin_reducer_candidates(
-        short_side, bars, coin_settings, k, coin_count, true,
+        short_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, true,
         short_enabled && market_orders_allowed,
         market_order_near_touch_threshold,
         short_preferred, short_fallback
@@ -2442,7 +2458,7 @@ inline void finalize_ema_multicoin_reducers_fused(
         if (best_coin < 0) break;
         int coin_offset = best_coin * COIN_COLS;
         float market_price = clamped_market_price(
-            bars, coin_settings, k, best_coin, coin_count
+            bars, coin_settings ORGANILLO_PASS, k, best_coin, coin_count
         );
         float pprice = best_short
             ? short_side.pprice[best_coin] : long_side.pprice[best_coin];
@@ -2479,26 +2495,26 @@ inline void finalize_ema_multicoin_reducers_fused(
         if (long_enabled) {
             apply_ema_multicoin_reducer_candidate(
                 long_side, c, long_selected[c],
-                bars, coin_settings, k, coin_count
+                bars, coin_settings ORGANILLO_PASS, k, coin_count
             );
         }
         if (short_enabled) {
             apply_ema_multicoin_reducer_candidate(
                 short_side, c, short_selected[c],
-                bars, coin_settings, k, coin_count
+                bars, coin_settings ORGANILLO_PASS, k, coin_count
             );
         }
     }
     if (long_enabled) {
         gate_ema_multicoin_side_ordinary_closes(
-            long_side, bars, coin_settings, k, coin_count, false,
+            long_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, false,
             market_order_slippage_pct, loss_gate_enabled,
             remaining_loss_budget
         );
     }
     if (short_enabled) {
         gate_ema_multicoin_side_ordinary_closes(
-            short_side, bars, coin_settings, k, coin_count, true,
+            short_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, true,
             market_order_slippage_pct, loss_gate_enabled,
             remaining_loss_budget
         );
@@ -2511,7 +2527,7 @@ inline bool process_ema_multicoin_side_fills(
     thread EmaMulticoinFillState& fills,
     constant float* bars,
     constant int* fill_ticks,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     device float* coin_fill_counts,
     int candidate_index,
@@ -2684,6 +2700,9 @@ inline bool process_ema_multicoin_side_fills(
         }
         if (executed_close) any_fill = true;
 
+#ifdef PASSIVBOT_ORGANILLO
+        if (!ORGANILLO_ALLOWED(k, c, coin_count) && psize[c] <= 0.0f) entry_qty[c] = 0.0f;
+#endif
         bool was_flat = psize[c] <= 0.0f;
         bool filled_entry = entry_qty[c] > 0.0f
             && (entry_market[c] || (short_side
@@ -2787,7 +2806,7 @@ inline bool force_close_ema_multicoin_delisted_position(
     thread JointPortfolioAccount& account,
     thread EmaMulticoinFillState& fills,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     device float* coin_fill_counts,
     int candidate_index,
     int k,
@@ -2865,7 +2884,7 @@ inline bool force_close_ema_multicoin_delisted_one_side(
     thread JointPortfolioAccount& account,
     thread EmaMulticoinFillState& fills,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     device float* coin_fill_counts,
     int candidate_index,
     int k,
@@ -2881,7 +2900,7 @@ inline bool force_close_ema_multicoin_delisted_one_side(
         const int last_valid = int(coin_settings[c * COIN_COLS + 7]);
         if (k != last_valid || last_valid + 1400 >= timestep_count) continue;
         const bool closed = force_close_ema_multicoin_delisted_position(
-            side, account, fills, bars, coin_settings, coin_fill_counts,
+            side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, short_side,
             collect_coin_fill_counts, market_order_slippage_pct,
             hsl_equity_before_close
@@ -2898,7 +2917,7 @@ inline bool force_close_ema_multicoin_delisted_fused(
     thread JointPortfolioAccount& account,
     thread EmaMulticoinFillState& fills,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     device float* coin_fill_counts,
     int candidate_index,
     int k,
@@ -2917,7 +2936,7 @@ inline bool force_close_ema_multicoin_delisted_fused(
             short_has_position = short_has_position || short_side.psize[other_coin] > 0.0f;
         }
         const bool long_closed = force_close_ema_multicoin_delisted_position(
-            long_side, account, fills, bars, coin_settings, coin_fill_counts,
+            long_side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, false,
             collect_coin_fill_counts, market_order_slippage_pct,
             hsl_equity_before_close, &short_side.hsl, short_has_position
@@ -2927,7 +2946,7 @@ inline bool force_close_ema_multicoin_delisted_fused(
             long_has_position = long_has_position || long_side.psize[other_coin] > 0.0f;
         }
         const bool short_closed = force_close_ema_multicoin_delisted_position(
-            short_side, account, fills, bars, coin_settings, coin_fill_counts,
+            short_side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, true,
             collect_coin_fill_counts, market_order_slippage_pct,
             hsl_equity_before_close, &long_side.hsl, long_has_position
@@ -3025,7 +3044,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
@@ -3103,7 +3122,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float allowance_pct = config.allowance_pct;
     PASSIVBOT_GPU_SIDE_STATE(EmaMulticoinSideState, side, 0);
     init_ema_multicoin_side_state(
-        side, config, coin_settings, coin_overrides, C
+        side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
     );
     thread HslState& hsl = side.hsl;
     const bool coin_hsl_mode = config.coin_hsl_mode;
@@ -3294,7 +3313,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
-        if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings, k, C))) {
+        if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
             scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
             return;
@@ -3353,7 +3372,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #else
         float hsl_equity_before_fills =
             accumulate_ema_multicoin_side_unrealized_pnl(
-                side, bars, coin_settings, k, C, short_side, balance
+                side, bars, coin_settings ORGANILLO_PASS, k, C, short_side, balance
             );
 #endif
         prepare_coin_hsl_budgets(
@@ -3364,18 +3383,18 @@ inline void passivbot_ema_anchor_multicoin_impl(
         );
         bool any_fill = process_ema_multicoin_side_fills(
             side, account, fills,
-            bars, fill_ticks, coin_settings, coin_overrides,
+            bars, fill_ticks, coin_settings ORGANILLO_PASS, coin_overrides,
             coin_fill_counts, int(b), k, C, short_side, alive,
             collect_coin_fill_counts, market_order_slippage_pct,
             hsl_panic_market, hsl_equity_before_fills
         );
         update_ema_multicoin_side_indicators(
             side, config, bars, hour_log_ranges,
-            coin_settings, k, C
+            coin_settings ORGANILLO_PASS, k, C
         );
 
         int tradable_count = count_ema_multicoin_tradable_coins(
-            bars, coin_settings, coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C
         );
         const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f;
         const bool past_activation_guard =
@@ -3392,16 +3411,24 @@ inline void passivbot_ema_anchor_multicoin_impl(
         const bool can_generate = alive && effective_n_positions > 0
             && side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started || can_generate;
+#ifdef PASSIVBOT_ORGANILLO
+        // Account for flat ineligible days once the ordinary side is ready.
+        // The sticky clock avoids rescanning after its first ready candle.
+        if (!equity_started && alive && past_activation_guard && n_positions > 0) {
+            equity_started = count_ema_multicoin_tradable_coins(
+                bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C, false) > 0;
+        }
+#endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         if (alive && !post_fill_balance_depleted && past_activation_guard)
-            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, coin_overrides,
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, effective_n_positions, short_side, twel, 11);
 #endif
         // Refresh HSL after fills, before forager selection and next orders.
 #if !PASSIVBOT_HSL_DISABLED
         const bool hsl_ema_eligible = hsl.enabled && !hsl.halted;
         const float hsl_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
-            side, bars, coin_settings, k, C, short_side, 0.0f
+            side, bars, coin_settings ORGANILLO_PASS, k, C, short_side, 0.0f
         );
         const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
             || (any_fill && balance + hsl_unrealized <= liquidation_floor);
@@ -3413,13 +3440,14 @@ inline void passivbot_ema_anchor_multicoin_impl(
         }
         const bool has_hsl_position = ema_multicoin_side_has_position(side, C);
         const bool hsl_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
-            side, config, bars, coin_settings, k, C
+            side, config, bars, coin_settings ORGANILLO_PASS, k, C
         );
 #endif
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
 #if !PASSIVBOT_HSL_DISABLED
-        if (can_generate && alive && balance > 0.0f
+        if (ORGANILLO_ACCOUNTING_GATE(can_generate, (equity_started && past_activation_guard))
+            && alive && balance > 0.0f
             && (balance + hsl_unrealized > liquidation_floor
                 || hsl_mark_terminal_observation_eligible(
                     balance, balance + hsl_unrealized, liquidation_floor,
@@ -3488,7 +3516,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #endif
         if (can_generate) {
             update_ema_multicoin_side_selection(
-                side, config, bars, coin_settings, coin_overrides,
+                side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side,
                 any_fill,
                 effective_n_positions,
@@ -3497,13 +3525,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
             );
             generate_ema_multicoin_side_orders(
                 side, config, account,
-                bars, touch_ticks, coin_settings, coin_overrides,
+                bars, touch_ticks, coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side, tradable_count, effective_n_positions,
                 current_hsl_mode, market_orders_allowed,
                 market_order_near_touch_threshold, -2, 0ul
             );
             finalize_ema_multicoin_reducers_one_side(
-                side, account, bars, coin_settings, k, C, short_side,
+                side, account, bars, coin_settings ORGANILLO_PASS, k, C, short_side,
                 market_orders_allowed, market_order_near_touch_threshold,
                 market_order_slippage_pct, max_realized_loss_pct
             );
@@ -3511,12 +3539,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
 
         float forced_delist_equity =
             accumulate_ema_multicoin_side_unrealized_pnl(
-                side, bars, coin_settings, k, C, short_side, balance
+                side, bars, coin_settings ORGANILLO_PASS, k, C, short_side, balance
             );
         bool forced_delist_fill = false;
         if (alive && balance > 0.0f) {
             forced_delist_fill = force_close_ema_multicoin_delisted_one_side(
-                side, account, fills, bars, coin_settings,
+                side, account, fills, bars, coin_settings ORGANILLO_PASS,
                 coin_fill_counts, int(b), k, T, C, short_side,
                 collect_coin_fill_counts, market_order_slippage_pct,
                 forced_delist_equity
@@ -3569,7 +3597,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
         }
         float equity = balance + unrealized;
 #if !PASSIVBOT_HSL_DISABLED
-        if (can_generate && alive && balance > 0.0f
+        if (ORGANILLO_ACCOUNTING_GATE(can_generate, (equity_started && past_activation_guard))
+            && alive && balance > 0.0f
             && (equity > liquidation_floor || hsl_mark_terminal_observation_eligible(
                 balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
             int sampled_tier = record_multicoin_hsl_report(
@@ -4035,7 +4064,7 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
     thread const EmaMulticoinSideConfig& short_config,
     constant float* short_coin_overrides,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count,
     int long_hsl_mode,
@@ -4108,7 +4137,7 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
                 coin_override_or(
                     long_coin_overrides, c, 0, long_config.base_qty_pct
                 ),
-                bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
+                bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
             );
         const bool short_min_cost_eligible =
             passes_multicoin_min_effective_cost(
@@ -4117,13 +4146,17 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
                 coin_override_or(
                     short_coin_overrides, c, 0, short_config.base_qty_pct
                 ),
-                bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
+                bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
             );
         const int long_coin_mode = long_config.coin_hsl_mode
             ? hsl_mode(long_side.coin_hsl[c], false) : long_hsl_mode;
         const int short_coin_mode = short_config.coin_hsl_mode
             ? hsl_mode(short_side.coin_hsl[c], false) : short_hsl_mode;
-        const bool coin_tradable = k >= int(coin_settings[coin_offset + 8])
+        const bool coin_tradable =
+#ifdef PASSIVBOT_ORGANILLO
+            ORGANILLO_ALLOWED(k, c, coin_count) &&
+#endif
+            k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(close);
         const bool long_eligible = long_can_generate && coin_tradable
@@ -4178,7 +4211,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
     constant float* params,
@@ -4288,11 +4321,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     PASSIVBOT_GPU_SIDE_STATE(EmaMulticoinSideState, long_side, 0);
     PASSIVBOT_GPU_SIDE_STATE(EmaMulticoinSideState, short_side, 1);
     init_ema_multicoin_side_state(
-        long_side, long_config, coin_settings,
+        long_side, long_config, coin_settings ORGANILLO_PASS,
         long_coin_overrides, C
     );
     init_ema_multicoin_side_state(
-        short_side, short_config, coin_settings,
+        short_side, short_config, coin_settings ORGANILLO_PASS,
         short_coin_overrides, C
     );
 
@@ -4476,8 +4509,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
-        if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings, k, C)
-            || held_positions_have_missing_prices(short_side.psize, bars, coin_settings, k, C))) {
+        if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings ORGANILLO_PASS, k, C)
+            || held_positions_have_missing_prices(short_side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;
             return;
@@ -4548,17 +4581,17 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         float long_hsl_equity_before_fills = account.balance;
         long_hsl_equity_before_fills =
             accumulate_ema_multicoin_side_unrealized_pnl(
-                long_side, bars, coin_settings, k, C, false,
+                long_side, bars, coin_settings ORGANILLO_PASS, k, C, false,
                 long_hsl_equity_before_fills
             );
         long_hsl_equity_before_fills =
             accumulate_ema_multicoin_side_unrealized_pnl(
-                short_side, bars, coin_settings, k, C, true,
+                short_side, bars, coin_settings ORGANILLO_PASS, k, C, true,
                 long_hsl_equity_before_fills
             );
         bool long_fill = process_ema_multicoin_side_fills(
             long_side, account, fills,
-            bars, fill_ticks, coin_settings, long_coin_overrides,
+            bars, fill_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
             coin_fill_counts, int(b), k, C, false, alive,
             collect_coin_fill_counts, market_order_slippage_pct,
             long_hsl_panic_market, long_hsl_equity_before_fills,
@@ -4567,17 +4600,17 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         float short_hsl_equity_before_fills = account.balance;
         short_hsl_equity_before_fills =
             accumulate_ema_multicoin_side_unrealized_pnl(
-                long_side, bars, coin_settings, k, C, false,
+                long_side, bars, coin_settings ORGANILLO_PASS, k, C, false,
                 short_hsl_equity_before_fills
             );
         short_hsl_equity_before_fills =
             accumulate_ema_multicoin_side_unrealized_pnl(
-                short_side, bars, coin_settings, k, C, true,
+                short_side, bars, coin_settings ORGANILLO_PASS, k, C, true,
                 short_hsl_equity_before_fills
             );
         bool short_fill = process_ema_multicoin_side_fills(
             short_side, account, fills,
-            bars, fill_ticks, coin_settings, short_coin_overrides,
+            bars, fill_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
             coin_fill_counts, int(b), k, C, true, alive,
             collect_coin_fill_counts, market_order_slippage_pct,
             short_hsl_panic_market, short_hsl_equity_before_fills,
@@ -4587,17 +4620,17 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 
         update_ema_multicoin_side_indicators(
             long_side, long_config, bars, hour_log_ranges,
-            coin_settings, k, C
+            coin_settings ORGANILLO_PASS, k, C
         );
         update_ema_multicoin_side_indicators(
             short_side, short_config, bars, hour_log_ranges,
-            coin_settings, k, C
+            coin_settings ORGANILLO_PASS, k, C
         );
         int long_tradable_count = count_ema_multicoin_tradable_coins(
-            bars, coin_settings, long_coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C
         );
         int short_tradable_count = count_ema_multicoin_tradable_coins(
-            bars, coin_settings, short_coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C
         );
         const bool post_fill_balance_depleted =
             isfinite(account.balance) && account.balance <= 0.0f;
@@ -4627,11 +4660,21 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             && short_side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started
             || long_can_generate || short_can_generate;
+#ifdef PASSIVBOT_ORGANILLO
+        if (!equity_started && alive && past_activation_guard) {
+            equity_started = (long_config.n_positions > 0
+                && count_ema_multicoin_tradable_coins(
+                    bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C, false) > 0)
+                || (short_config.n_positions > 0
+                && count_ema_multicoin_tradable_coins(
+                    bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C, false) > 0);
+        }
+#endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         if (alive && !post_fill_balance_depleted && past_activation_guard) {
-            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, long_coin_overrides,
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, long_effective_n_positions, false, long_config.twel, 11);
-            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, short_coin_overrides,
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, short_effective_n_positions, true, short_config.twel, 11);
         }
 #endif
@@ -4641,9 +4684,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         const float hsl_equity = joint_portfolio_equity(
             account,
             accumulate_ema_multicoin_side_unrealized_pnl(
-                long_side, bars, coin_settings, k, C, false, 0.0f),
+                long_side, bars, coin_settings ORGANILLO_PASS, k, C, false, 0.0f),
             accumulate_ema_multicoin_side_unrealized_pnl(
-                short_side, bars, coin_settings, k, C, true, 0.0f)
+                short_side, bars, coin_settings ORGANILLO_PASS, k, C, true, 0.0f)
         );
         const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
             || (any_fill && hsl_equity <= liquidation_floor);
@@ -4658,7 +4701,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         }
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
-        bool can_sample_hsl = (long_can_generate || short_can_generate)
+        bool can_sample_hsl = ORGANILLO_ACCOUNTING_GATE(
+            (long_can_generate || short_can_generate), (equity_started && past_activation_guard))
             && alive && (joint_portfolio_can_generate(
                 account, hsl_equity, liquidation_floor)
                 || hsl_mark_terminal_observation_eligible(
@@ -4672,7 +4716,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             bool hsl_valid = update_ema_multicoin_dual_side_hsl(
                 long_side, long_config, long_effective_n_positions,
                 short_side, short_config, short_effective_n_positions,
-                account, bars, coin_settings,
+                account, bars, coin_settings ORGANILLO_PASS,
                 long_coin_overrides, short_coin_overrides, k, C,
                 starting_balance, interval_ms
             );
@@ -4708,7 +4752,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             compute_ema_multicoin_one_way_initial_blocks(
                 long_side, long_config, long_coin_overrides,
                 short_side, short_config, short_coin_overrides,
-                bars, coin_settings, k, C,
+                bars, coin_settings ORGANILLO_PASS, k, C,
                 long_hsl_mode, short_hsl_mode,
                 long_effective_n_positions,
                 short_effective_n_positions,
@@ -4731,7 +4775,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         const int long_unstuck_candidate = long_can_generate
             ? select_ema_multicoin_unstuck_coin(
                 long_side, long_config, account,
-                bars, touch_ticks, coin_settings, long_coin_overrides,
+                bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_effective_n_positions,
                 long_unstuck_diff
             )
@@ -4739,7 +4783,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         const int short_unstuck_candidate = short_can_generate
             ? select_ema_multicoin_unstuck_coin(
                 short_side, short_config, account,
-                bars, touch_ticks, coin_settings, short_coin_overrides,
+                bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_effective_n_positions,
                 short_unstuck_diff
             )
@@ -4759,7 +4803,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             ? short_unstuck_candidate : -1;
         if (long_can_generate) {
             update_ema_multicoin_side_selection(
-                long_side, long_config, bars, coin_settings,
+                long_side, long_config, bars, coin_settings ORGANILLO_PASS,
                 long_coin_overrides, k, C, false,
                 any_fill,
                 long_effective_n_positions, score_hysteresis,
@@ -4768,7 +4812,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             );
             generate_ema_multicoin_side_orders(
                 long_side, long_config, account,
-                bars, touch_ticks, coin_settings, long_coin_overrides,
+                bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
                 market_orders_allowed, market_order_near_touch_threshold,
@@ -4777,7 +4821,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         }
         if (short_can_generate) {
             update_ema_multicoin_side_selection(
-                short_side, short_config, bars, coin_settings,
+                short_side, short_config, bars, coin_settings ORGANILLO_PASS,
                 short_coin_overrides, k, C, true,
                 any_fill,
                 short_effective_n_positions, score_hysteresis,
@@ -4786,7 +4830,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             );
             generate_ema_multicoin_side_orders(
                 short_side, short_config, account,
-                bars, touch_ticks, coin_settings, short_coin_overrides,
+                bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
                 market_orders_allowed, market_order_near_touch_threshold,
@@ -4796,7 +4840,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         if (long_can_generate || short_can_generate) {
             finalize_ema_multicoin_reducers_fused(
                 long_side, short_side, account,
-                bars, coin_settings, k, C,
+                bars, coin_settings ORGANILLO_PASS, k, C,
                 long_can_generate, short_can_generate,
                 market_orders_allowed, market_order_near_touch_threshold,
                 market_order_slippage_pct, max_realized_loss_pct
@@ -4806,19 +4850,19 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         float forced_delist_equity = account.balance;
         forced_delist_equity =
             accumulate_ema_multicoin_side_unrealized_pnl(
-                long_side, bars, coin_settings, k, C, false,
+                long_side, bars, coin_settings ORGANILLO_PASS, k, C, false,
                 forced_delist_equity
             );
         forced_delist_equity =
             accumulate_ema_multicoin_side_unrealized_pnl(
-                short_side, bars, coin_settings, k, C, true,
+                short_side, bars, coin_settings ORGANILLO_PASS, k, C, true,
                 forced_delist_equity
             );
         bool forced_delist_fill = false;
         if (alive && account.balance > 0.0f) {
             forced_delist_fill = force_close_ema_multicoin_delisted_fused(
                 long_side, short_side, account, fills,
-                bars, coin_settings, coin_fill_counts,
+                bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
                 int(b), k, T, C, collect_coin_fill_counts,
                 market_order_slippage_pct, forced_delist_equity
             );
@@ -5396,7 +5440,7 @@ kernel void passivbot_ema_anchor_multicoin_fused(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
     constant float* params,
@@ -5443,7 +5487,7 @@ kernel void passivbot_ema_anchor_multicoin_fused(
     device EmaMulticoinFusedReplayState* replay_states = reinterpret_cast<device EmaMulticoinFusedReplayState*>(replay_state_bytes);
 #endif
     passivbot_ema_anchor_multicoin_fused_impl(
-        bars, fill_ticks, touch_ticks, hour_log_ranges, coin_settings,
+        bars, fill_ticks, touch_ticks, hour_log_ranges, coin_settings ORGANILLO_PASS,
         long_coin_overrides, short_coin_overrides,
         params, run_settings, sizes, end_steps,
 #if PASSIVBOT_BTC_PRICES_ENABLED
@@ -5481,7 +5525,7 @@ kernel void passivbot_ema_anchor_multicoin(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
@@ -5533,7 +5577,7 @@ kernel void passivbot_ema_anchor_multicoin(
 #endif
     passivbot_ema_anchor_multicoin_impl(
         bars, fill_ticks, touch_ticks, hour_log_ranges,
-        coin_settings, coin_overrides, params, run_settings,
+        coin_settings ORGANILLO_PASS, coin_overrides, params, run_settings,
         sizes, end_steps,
 #if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,
@@ -5570,7 +5614,7 @@ kernel void passivbot_ema_anchor_multicoin_long(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
@@ -5617,7 +5661,7 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #endif
     passivbot_ema_anchor_multicoin_impl(
         bars, fill_ticks, touch_ticks, hour_log_ranges,
-        coin_settings, coin_overrides, params, run_settings,
+        coin_settings ORGANILLO_PASS, coin_overrides, params, run_settings,
         sizes, end_steps,
 #if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,

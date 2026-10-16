@@ -621,6 +621,7 @@ def _build_hlcvs_bundle(
     bundle_meta_base: dict,
     *,
     coin_indices: list[int] | None = None,
+    selection=None,
 ) -> pbr.HlcvsBundle:
     active_coin_indices = None
     if coin_indices is not None:
@@ -689,6 +690,13 @@ def _build_hlcvs_bundle(
             os.getpid(),
             f"{rss_after:.1f}" if rss_after is not None else "na",
         )
+    if selection is not None:
+        values = selection.values
+        if active_coin_indices is not None:
+            values = np.zeros((len(values), hlcvs_arr.shape[1]), dtype=np.uint8)
+            values[:, active_coin_indices] = selection.values
+        return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta,
+                               values, selection.rows)
     return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
 
 
@@ -966,6 +974,7 @@ def build_backtest_payload(
     calculate_legacy_w: bool = True,
     runtime_config: dict | None = None,
     execution_settings: BacktestExecutionSettings | None = None,
+    selection=None,
 ) -> BacktestPayload:
     """
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
@@ -1120,6 +1129,26 @@ def build_backtest_payload(
     )
     # RMS readiness belongs to each consuming Rust side/order branch; it must
     # not delay other sides or coins through shared activation metadata.
+    partial_initial_universe = False
+    if selection is not None and config["backtest"].get("organillo_csv") is None:
+        raise ValueError("Organillo prepared eligibility requires backtest.organillo_csv")
+    if config["backtest"].get("organillo_csv") is not None:
+        if selection is None:
+            from organillo import prepare_selection
+            selection = prepare_selection(config, coins_order, timestamps)
+        from organillo import validate_buffers
+        validate_buffers(selection.values, selection.rows, len(timestamps), len(coins_order))
+        expected_hash = config["backtest"].get("organillo_sha256")
+        if expected_hash is not None and selection.sha256 != expected_hash:
+            raise ValueError("Organillo prepared eligibility SHA-256 differs from the configured input; prepare again")
+        first_operational = min(requested_start_idx, len(timestamps) - 1)
+        initial_members = selection.values[selection.rows[first_operational]]
+        # Keep the established all-ones path exact. Only a partial historical
+        # universe needs its future-only warmup contributions removed.
+        partial_initial_universe = not np.all(initial_members)
+        if partial_initial_universe:
+            global_warmup_minutes = max((int(warmup_map.get(coin, default_warm))
+                for i, coin in enumerate(coins_order) if initial_members[i]), default=1)
     first_valid_indices = []
     last_valid_indices = []
     warmup_minutes = []
@@ -1157,11 +1186,14 @@ def build_backtest_payload(
         # Only producer-tagged history budgets may be replaced with a local
         # activation budget. Optimizer activation stamps and untyped external
         # metadata remain authoritative, independent of candidate RMS settings.
-        activation_warm = max(int(warmup_map.get(coin, default_warm)), global_warmup_minutes)
+        coin_global_warm = global_warmup_minutes
+        if partial_initial_universe:
+            coin_global_warm = int(warmup_map.get(coin, default_warm))
+        activation_warm = max(int(warmup_map.get(coin, default_warm)), coin_global_warm)
         metadata_warm = int(coin_meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
         if coin_meta.get("warmup_minutes_source") == "history":
             metadata_warm = activation_warm
-        warm = max(metadata_warm, int(global_warmup_minutes))
+        warm = max(metadata_warm, int(coin_global_warm))
         warmup_minutes.append(warm)
         # trade_start_idx is in candle units, adjust warm from minutes to candle periods
         warm_bars = (
@@ -1231,6 +1263,7 @@ def build_backtest_payload(
         trade_start_indices,
         bundle_meta_base,
         coin_indices=coin_indices,
+        selection=selection,
     )
 
     if coin_indices is not None:
@@ -1399,7 +1432,12 @@ def subset_backtest_payload(
         coin_entry["index"] = new_idx
         new_meta["coins"].append(coin_entry)
 
-    new_bundle = pbr.HlcvsBundle(subset_hlcvs, btc_np, ts_np, new_meta)
+    if getattr(payload.bundle, "eligibility", None) is not None:
+        values = np.ascontiguousarray(np.asarray(payload.bundle.eligibility)[:, source_columns])
+        new_bundle = pbr.HlcvsBundle(subset_hlcvs, btc_np, ts_np, new_meta,
+                                   values, payload.bundle.eligibility_rows)
+    else:
+        new_bundle = pbr.HlcvsBundle(subset_hlcvs, btc_np, ts_np, new_meta)
 
     def _select(seq):
         return [seq[pos] for pos in selected_positions]
@@ -2238,6 +2276,9 @@ async def prepare_hlcvs_mss(
     force_refetch_gaps: bool = False,
     allow_internal_nan_gaps: bool = False,
 ):
+    if config["backtest"].get("organillo_csv") is not None:
+        from organillo import freeze_config
+        freeze_config(config)
     if is_offline() and force_refetch_gaps:
         raise ValueError("backtest.offline cannot be combined with force_refetch_gaps")
     base_dir = require_config_value(config, "backtest.base_dir")

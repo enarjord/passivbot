@@ -2609,6 +2609,7 @@ class MpsMulticoinProxy:
         factual_hsl: bool = False,
         factual_capacity_hints: dict | None = None,
         automatic_scratch_budget: bool = False,
+        selection=None,
     ):
         from config.gpu import validate_gpu_backtest_config
         validate_gpu_backtest_config(config)
@@ -2753,6 +2754,7 @@ class MpsMulticoinProxy:
             exchange,
             btc_values,
             timestamps,
+            selection=selection,
             metrics_only=True,
             skip_btc_analysis=not self.btc_analysis_enabled,
         )
@@ -3029,6 +3031,9 @@ class MpsMulticoinProxy:
         # contains integers only, never runners, tensors or checkpoint state.
         self._factual_capacity_hints = factual_capacity_hints
         self._automatic_scratch_budget = automatic_scratch_budget
+        if selection is None and config["backtest"].get("organillo_csv") is not None:
+            from organillo import prepare_selection
+            selection = prepare_selection(config, backtest_params["coins"], timestamps)
         common_runner_kwargs = {
             "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
             "max_realized_loss_pct": float(
@@ -3077,6 +3082,9 @@ class MpsMulticoinProxy:
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
         }
+        if selection is not None:
+            self.checkpoint_contract["organillo"] = selection.identity
+            common_runner_kwargs["selection"] = selection
         # Auto-unstuck and realized-loss admission share one bounded fill-PnL
         # window. Preserve it even if a tunable unstuck allowance is initially
         # zero. Both shared-account strategies consume the same effective peak.
@@ -3252,7 +3260,9 @@ class MpsMulticoinProxy:
         runner_cls, kwargs = self._runner_specs[self.sides[0]]
         runner_settings = {}
         for key, value in kwargs.items():
-            if isinstance(value, np.ndarray):
+            if key == "selection":
+                runner_settings[key] = value.identity
+            elif isinstance(value, np.ndarray):
                 array = np.ascontiguousarray(value)
                 runner_settings[key] = (
                     array.shape,

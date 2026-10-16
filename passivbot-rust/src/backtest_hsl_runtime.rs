@@ -168,7 +168,7 @@ impl Scope {
     }
 }
 
-impl Backtest<'_> {
+impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
     pub(super) fn hsl_exposure_budget(
         &self,
         side: Option<usize>,

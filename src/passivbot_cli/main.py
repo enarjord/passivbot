@@ -145,6 +145,9 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.gpu_proxy_benchmark",
         "benchmark deterministic Apple MPS proxy workloads",
     ),
+    "organillo-validate": CommandSpec(
+        "organillo", "Validate an external historical eligibility CSV.",
+    ),
     "gpu-parity": CommandSpec(
         "tools.gpu_parity",
         "compare offline CPU/GPU backtest metrics (requires full install)",

@@ -110,13 +110,18 @@ fn compose_multicoin_source(body: &str) -> String {
         1,
         "MPS multi-coin source must contain exactly one shared-common marker"
     );
-    compose_hsl_source(&body.replacen(
+    let body = body.replacen(
         MPS_MULTICOIN_MARKER,
         &format!(
             "{}\n{}",
             MPS_DECIMAL_ROUNDING_SOURCE, MPS_MULTICOIN_COMMON_SOURCE
         ),
         1,
+    );
+    compose_hsl_source(&format!(
+        "{}{}",
+        include_str!("gpu/mps_organillo.metal"),
+        body
     ))
 }
 
@@ -398,7 +403,8 @@ mod tests {
 
     fn assert_shared_multicoin_contract(source: &str) {
         assert!(!source.contains(MPS_MULTICOIN_MARKER));
-        assert!(source.contains(MPS_MULTICOIN_COMMON_SOURCE));
+        assert!(source.contains(&MPS_MULTICOIN_COMMON_SOURCE.replace(" ORGANILLO_PASS", "").replace(" ORGANILLO_ARGS", ""))
+            || source.contains(MPS_MULTICOIN_COMMON_SOURCE));
         assert_eq!(source.matches("struct GpuDecimal {").count(), 1);
         for signature in [
             "inline float round_step(",
@@ -828,7 +834,8 @@ mod tests {
 
     #[test]
     fn ema_anchor_multicoin_mps_source_exposes_expected_kernel_contract() {
-        let source = mps_ema_anchor_multicoin_source();
+        let normalized = mps_ema_anchor_multicoin_source().replace(" ORGANILLO_PASS", "").replace(" ORGANILLO_ARGS", "");
+        let source = normalized.as_str();
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin"));
@@ -1037,7 +1044,7 @@ mod tests {
         assert!(source.contains("one global auto-unstuck intent"));
         assert!(source.contains("unstuck_loss_allowance_pct"));
         assert!(!source.contains("hard_stop"));
-        assert_eq!(source, mps_ema_anchor_multicoin_long_source());
+        assert_eq!(mps_ema_anchor_multicoin_source(), mps_ema_anchor_multicoin_long_source());
     }
 
     #[test]
@@ -1326,7 +1333,8 @@ mod tests {
 
     #[test]
     fn trailing_martingale_multicoin_mps_source_exposes_expected_kernel_contract() {
-        let source = mps_trailing_martingale_multicoin_source();
+        let normalized = mps_trailing_martingale_multicoin_source().replace(" ORGANILLO_PASS", "").replace(" ORGANILLO_ARGS", "");
+        let source = normalized.as_str();
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
         assert_shared_entry_interval_contract(source);

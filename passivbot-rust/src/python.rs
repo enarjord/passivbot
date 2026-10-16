@@ -1,7 +1,7 @@
 use crate::analysis::{
     analyze_backtest_pair_with_options, analyze_backtest_usd_with_profile, FillActivityMetrics,
 };
-use crate::backtest::Backtest;
+use crate::backtest::BacktestEngine;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
     calc_trailing_martingale_close_diagnostic,
@@ -32,7 +32,10 @@ use crate::types::{
     TrailingPriceBundle, TwelEnforcerPolicy,
 };
 use ndarray::Array2;
-use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
+use numpy::{
+    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
+    PyReadonlyArray3,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
@@ -215,12 +218,14 @@ pub struct HlcvsBundlePy {
 #[pymethods]
 impl HlcvsBundlePy {
     #[new]
-    #[pyo3(signature = (hlcvs, btc_usd, timestamps, meta))]
+    #[pyo3(signature = (hlcvs, btc_usd, timestamps, meta, eligibility=None, eligibility_rows=None))]
     pub fn new(
         hlcvs: Py<PyArray3<f64>>,
         btc_usd: Py<PyArray1<f64>>,
         timestamps: Py<PyArray1<i64>>,
         meta: &Bound<'_, PyAny>,
+        eligibility: Option<Py<PyArray2<u8>>>,
+        eligibility_rows: Option<Py<PyArray1<i32>>>,
     ) -> PyResult<Self> {
         let parsed_meta = hlcvs_meta_from_py(meta)?;
         let bundle = HlcvsBundle {
@@ -228,6 +233,8 @@ impl HlcvsBundlePy {
             btc_usd,
             timestamps,
             meta: parsed_meta,
+            eligibility,
+            eligibility_rows,
         };
         Python::with_gil(|py| bundle.validate_shapes(py))?;
         Ok(Self { inner: bundle })
@@ -246,6 +253,21 @@ impl HlcvsBundlePy {
     #[getter]
     pub fn timestamps<'py>(&self, py: Python<'py>) -> PyObject {
         self.inner.timestamps.clone_ref(py).into_py(py)
+    }
+
+    #[getter]
+    pub fn eligibility(&self, py: Python<'_>) -> Option<PyObject> {
+        self.inner
+            .eligibility
+            .as_ref()
+            .map(|a| a.clone_ref(py).into_py(py))
+    }
+    #[getter]
+    pub fn eligibility_rows(&self, py: Python<'_>) -> Option<PyObject> {
+        self.inner
+            .eligibility_rows
+            .as_ref()
+            .map(|a| a.clone_ref(py).into_py(py))
     }
 
     #[getter]
@@ -1122,13 +1144,15 @@ pub fn run_backtest(
     exchange_params_list: &Bound<'_, PyAny>,
     backtest_params_dict: &Bound<'_, PyDict>,
 ) -> PyResult<BacktestPyResult> {
-    run_backtest_core(
+    run_backtest_core::<false>(
         hlcvs,
         btc_usd,
         bot_params,
         strategy_params,
         exchange_params_list,
         backtest_params_dict,
+        None,
+        None,
     )
 }
 
@@ -1143,23 +1167,43 @@ pub fn run_backtest_bundle(
     let py = bot_params.py();
     let hlcvs = bundle.inner.hlcvs.bind(py).readonly();
     let btc = bundle.inner.btc_usd.bind(py).readonly();
-    run_backtest_core(
-        hlcvs,
-        btc,
-        bot_params,
-        strategy_params,
-        exchange_params_list,
-        backtest_params_dict,
-    )
+    if let (Some(values), Some(rows)) = (&bundle.inner.eligibility, &bundle.inner.eligibility_rows)
+    {
+        let values = values.bind(py).readonly();
+        let rows = rows.bind(py).readonly();
+        run_backtest_core::<true>(
+            hlcvs,
+            btc,
+            bot_params,
+            strategy_params,
+            exchange_params_list,
+            backtest_params_dict,
+            Some(values),
+            Some(rows),
+        )
+    } else {
+        run_backtest_core::<false>(
+            hlcvs,
+            btc,
+            bot_params,
+            strategy_params,
+            exchange_params_list,
+            backtest_params_dict,
+            None,
+            None,
+        )
+    }
 }
 
-fn run_backtest_core<'py>(
+fn run_backtest_core<'py, const ORGANILLO: bool>(
     hlcvs: PyReadonlyArray3<'py, f64>,
     btc_usd: PyReadonlyArray1<'py, f64>,
     bot_params: &Bound<'py, PyAny>,
     strategy_params: &Bound<'py, PyAny>,
     exchange_params_list: &Bound<'py, PyAny>,
     backtest_params_dict: &Bound<'py, PyDict>,
+    eligibility: Option<PyReadonlyArray2<'py, u8>>,
+    eligibility_rows: Option<PyReadonlyArray1<'py, i32>>,
 ) -> PyResult<BacktestPyResult> {
     let profile_enabled = rust_profile_enabled();
     let profile_total_start = profile_start(profile_enabled);
@@ -1262,7 +1306,7 @@ fn run_backtest_core<'py>(
         && backtest_params.skip_btc_analysis
         && backtest_params.btc_collateral_cap <= 0.0;
     let init_start = profile_start(profile_enabled);
-    let mut backtest = Backtest::new_with_strategy_params(
+    let mut backtest = BacktestEngine::<ORGANILLO>::new_with_strategy_params(
         hlcvs_rust,
         btc_usd_rust,
         strategy_kind,
@@ -1271,6 +1315,8 @@ fn run_backtest_core<'py>(
         exchange_params,
         &backtest_params,
     );
+    backtest.eligibility = eligibility.as_ref().map(|a| a.as_array());
+    backtest.eligibility_rows = eligibility_rows.as_ref().map(|a| a.as_array());
     profile_add(&mut rust_profile, "rust_backtest_init_ms", init_start);
 
     // Run the backtest and process results
@@ -1711,9 +1757,9 @@ fn run_backtest_core<'py>(
 
 /// Preserve the public report schema while avoiding a huge intermediate JSON tree.
 /// Static field names and enum strings are shared; each row/list remains independent.
-pub(crate) fn hsl_report_to_py(
+pub(crate) fn hsl_report_to_py<const ORGANILLO: bool>(
     py: Python<'_>,
-    backtest: &Backtest<'_>,
+    backtest: &BacktestEngine<'_, ORGANILLO>,
 ) -> PyResult<Option<PyObject>> {
     let Some(metadata) = backtest
         .hsl_report_metadata()

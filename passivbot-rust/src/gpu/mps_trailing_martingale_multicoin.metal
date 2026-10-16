@@ -731,7 +731,7 @@ inline int finalize_tm_admission_closes(
 
 inline void prepare_tm_close_admission(
     thread TmCloseAdmission& source,
-    constant float* bars, constant int* fill_ticks, constant float* coin_settings,
+    constant float* bars, constant int* fill_ticks, constant float* coin_settings ORGANILLO_ARGS,
     int k, int T, int C, int coin
 ) {
     thread TmCloseGridContext& context = source.context;
@@ -784,7 +784,7 @@ inline void prepare_tm_close_admission(
 
 inline float tm_projected_close_pnl(
     thread const TmCloseGridContext& context, thread const CloseGroup& order,
-    constant float* coin_settings, int coin, float slippage
+    constant float* coin_settings ORGANILLO_ARGS, int coin, float slippage
 ) {
     float price = order.market
         ? ordinary_market_fill_price(context.generation_market_price,
@@ -814,7 +814,7 @@ inline bool apply_tm_multicoin_close_admission(
     thread TrailingMartingaleMulticoinSideState* long_side,
     thread TrailingMartingaleMulticoinSideState* short_side,
     thread const JointPortfolioAccount& account,
-    constant float* bars, constant int* fill_ticks, constant float* coin_settings,
+    constant float* bars, constant int* fill_ticks, constant float* coin_settings ORGANILLO_ARGS,
     int k, int T, int C, float max_loss_pct, float slippage
 ) {
     TmFinalizedClose orders[501];
@@ -829,7 +829,7 @@ inline bool apply_tm_multicoin_close_admission(
         for (int c = 0; c < C; ++c) {
             thread TmCloseAdmission& source = side->close_admission[c];
             if (!source.valid || side->close_is_hsl_panic[c]) continue;
-            prepare_tm_close_admission(source, bars, fill_ticks, coin_settings, k, T, C, c);
+            prepare_tm_close_admission(source, bars, fill_ticks, coin_settings ORGANILLO_PASS, k, T, C, c);
             for (int candidate = 0; candidate < 3; ++candidate) {
                 if (!(source.reducers[candidate].qty > 0.0f)) continue;
                 int count = finalize_tm_admission_closes(source, candidate, orders);
@@ -867,7 +867,7 @@ inline bool apply_tm_multicoin_close_admission(
         thread TmCloseAdmission& source = side->close_admission[best_coin];
         CloseGroup reducer = source.reducers[best_candidate];
         reducer.qty = best_qty;
-        float net_pnl = tm_projected_close_pnl(source.context, reducer, coin_settings, best_coin, slippage);
+        float net_pnl = tm_projected_close_pnl(source.context, reducer, coin_settings ORGANILLO_PASS, best_coin, slippage);
         if (!isfinite(net_pnl)) return false;
         if (realized_loss_gate_allows(net_pnl, remaining, true)) {
             source.selected_reducer = best_candidate;
@@ -901,7 +901,7 @@ inline bool apply_tm_multicoin_close_admission(
                 thread TmFinalizedClose& item = orders[i];
                 bool reducer = item.group_index == -2;
                 if (!reducer) {
-                    float net_pnl = tm_projected_close_pnl(source.context, item.order, coin_settings, c, slippage);
+                    float net_pnl = tm_projected_close_pnl(source.context, item.order, coin_settings ORGANILLO_PASS, c, slippage);
                     if (!isfinite(net_pnl)) return false;
                     if (!realized_loss_gate_allows(net_pnl, remaining, true)) continue;
                     if (net_pnl < 0.0f) remaining = float32_floor_nonnegative(fmax(remaining + net_pnl, 0.0f));
@@ -1276,7 +1276,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
     thread const TrailingMartingaleMulticoinSideConfig& config,
     constant float* bars,
     constant int* fill_ticks,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int C,
@@ -1882,7 +1882,7 @@ inline bool force_close_tm_multicoin_delisted_position(
     thread JointPortfolioAccount& account,
     thread TrailingMartingaleMulticoinFillState& fills,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     device float* coin_fill_counts,
     int candidate_index,
     int k,
@@ -1946,7 +1946,7 @@ inline bool force_close_tm_multicoin_delisted_one_side(
     thread JointPortfolioAccount& account,
     thread TrailingMartingaleMulticoinFillState& fills,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     device float* coin_fill_counts,
     int candidate_index,
     int k,
@@ -1962,7 +1962,7 @@ inline bool force_close_tm_multicoin_delisted_one_side(
         const int last_valid = int(coin_settings[c * COIN_COLS + 7]);
         if (k != last_valid || last_valid + 1400 >= timestep_count) continue;
         const bool closed = force_close_tm_multicoin_delisted_position(
-            side, account, fills, bars, coin_settings, coin_fill_counts,
+            side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, short_side,
             collect_coin_fill_counts, market_order_slippage_pct,
             hsl_equity_before_close
@@ -1979,7 +1979,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
     thread JointPortfolioAccount& account,
     thread TrailingMartingaleMulticoinFillState& fills,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     device float* coin_fill_counts,
     int candidate_index,
     int k,
@@ -1998,7 +1998,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
             short_has_position = short_has_position || short_side.psize[other_coin] > 0.0f;
         }
         const bool long_closed = force_close_tm_multicoin_delisted_position(
-            long_side, account, fills, bars, coin_settings, coin_fill_counts,
+            long_side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, false,
             collect_coin_fill_counts, market_order_slippage_pct,
             hsl_equity_before_close, &short_side.hsl, short_has_position
@@ -2008,7 +2008,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
             long_has_position = long_has_position || long_side.psize[other_coin] > 0.0f;
         }
         const bool short_closed = force_close_tm_multicoin_delisted_position(
-            short_side, account, fills, bars, coin_settings, coin_fill_counts,
+            short_side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
             candidate_index, k, coin_count, c, true,
             collect_coin_fill_counts, market_order_slippage_pct,
             hsl_equity_before_close, &long_side.hsl, long_has_position
@@ -2033,7 +2033,7 @@ inline bool process_tm_multicoin_side_fills(
     constant int* touch_nearest_ticks,
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     device float* coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
@@ -2110,7 +2110,7 @@ inline bool process_tm_multicoin_side_fills(
     bool any_fill = false;
     for (int c = 0; c < C; ++c) filled_coin[c] = false;
     apply_tm_multicoin_recursive_entry_twel_gate(
-        side, config, bars, fill_ticks, coin_settings, coin_overrides,
+        side, config, bars, fill_ticks, coin_settings ORGANILLO_PASS, coin_overrides,
         k, C, short_side, market_orders_allowed,
         market_order_near_touch_threshold
     );
@@ -2548,6 +2548,12 @@ inline bool process_tm_multicoin_side_fills(
             }
         }
 
+#ifdef PASSIVBOT_ORGANILLO
+        if (!ORGANILLO_ALLOWED(k, c, C) && psize[c] <= 0.0f) {
+            entry_qty[c] = 0.0f;
+            side.entry_gate_suffix_keep_count[c] = 0;
+        }
+#endif
         bool first_entry_passive_reachable = entry_qty[c] > 0.0f
             && (short_side
                 ? entry_tick[c] <= fill_ticks[tick_offset + 0]
@@ -2885,7 +2891,7 @@ load_trailing_martingale_multicoin_side_config(
 inline void init_trailing_martingale_multicoin_side_state(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int coin_count
 ) {
@@ -3045,7 +3051,7 @@ inline void init_trailing_martingale_multicoin_side_state(
 inline float accumulate_tm_multicoin_side_unrealized_pnl(
     thread const TrailingMartingaleMulticoinSideState& side,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count,
     bool short_side,
@@ -3074,7 +3080,7 @@ inline void update_tm_multicoin_side_indicators(
     thread const TrailingMartingaleMulticoinSideConfig& config,
     constant float* bars,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {
@@ -3166,10 +3172,13 @@ inline void update_tm_multicoin_side_indicators(
 
 inline int count_tm_multicoin_tradable_coins(
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int coin_count
+#ifdef PASSIVBOT_ORGANILLO
+    , bool apply_eligibility = true
+#endif
 ) {
     int tradable_count = 0;
     for (int c = 0; c < coin_count; ++c) {
@@ -3179,7 +3188,12 @@ inline int count_tm_multicoin_tradable_coins(
         float coin_wel = coin_override_or(coin_overrides, c, 24, -1.0f);
         if (k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
-            && finite_positive(close) && coin_wel != 0.0f) {
+            && finite_positive(close) && coin_wel != 0.0f
+
+#ifdef PASSIVBOT_ORGANILLO
+            && (!apply_eligibility || ORGANILLO_ALLOWED(k, c, coin_count))
+#endif
+        ) {
             tradable_count += 1;
         }
     }
@@ -3199,7 +3213,7 @@ inline bool tm_multicoin_side_has_position(
 inline bool tm_multicoin_side_held_marks_are_valid(
     thread const TrailingMartingaleMulticoinSideState& side,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {
@@ -3221,7 +3235,7 @@ inline bool tm_multicoin_side_has_blocking_orders(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {
@@ -3263,7 +3277,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
     int short_effective_n_positions,
     thread const JointPortfolioAccount& account,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
     int k,
@@ -3274,18 +3288,18 @@ inline bool update_tm_multicoin_dual_side_hsl(
     if (long_side.hsl.signal_mode != short_side.hsl.signal_mode) return false;
     if (long_config.coin_hsl_mode != short_config.coin_hsl_mode) return false;
     if (!tm_multicoin_side_held_marks_are_valid(
-            long_side, bars, coin_settings, k, coin_count
+            long_side, bars, coin_settings ORGANILLO_PASS, k, coin_count
         ) || !tm_multicoin_side_held_marks_are_valid(
-            short_side, bars, coin_settings, k, coin_count
+            short_side, bars, coin_settings ORGANILLO_PASS, k, coin_count
         )) {
         return false;
     }
 
     float long_unrealized = accumulate_tm_multicoin_side_unrealized_pnl(
-        long_side, bars, coin_settings, k, coin_count, false, 0.0f
+        long_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, false, 0.0f
     );
     float short_unrealized = accumulate_tm_multicoin_side_unrealized_pnl(
-        short_side, bars, coin_settings, k, coin_count, true, 0.0f
+        short_side, bars, coin_settings ORGANILLO_PASS, k, coin_count, true, 0.0f
     );
     bool long_has_position = tm_multicoin_side_has_position(
         long_side, coin_count
@@ -3294,10 +3308,10 @@ inline bool update_tm_multicoin_dual_side_hsl(
         short_side, coin_count
     );
     bool long_has_blocking_orders = tm_multicoin_side_has_blocking_orders(
-        long_side, long_config, bars, coin_settings, k, coin_count
+        long_side, long_config, bars, coin_settings ORGANILLO_PASS, k, coin_count
     );
     bool short_has_blocking_orders = tm_multicoin_side_has_blocking_orders(
-        short_side, short_config, bars, coin_settings, k, coin_count
+        short_side, short_config, bars, coin_settings ORGANILLO_PASS, k, coin_count
     );
 
     if (long_config.coin_hsl_mode) {
@@ -3391,7 +3405,7 @@ inline void update_tm_multicoin_side_selection(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int coin_count,
@@ -3433,7 +3447,11 @@ inline void update_tm_multicoin_side_selection(
         if (k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
-            && coin_override_or(coin_overrides, c, 24, -1.0f) != 0.0f) {
+            && coin_override_or(coin_overrides, c, 24, -1.0f) != 0.0f
+#ifdef PASSIVBOT_ORGANILLO
+            && ORGANILLO_ALLOWED(k, c, coin_count)
+#endif
+        ) {
             current_tradable_count += 1;
         }
     }
@@ -3465,9 +3483,13 @@ inline void update_tm_multicoin_side_selection(
         );
         bool min_cost_eligible = passes_multicoin_min_effective_cost(
             filter_by_min_effective_cost, balance,
-            allowed_wel, initial_qty_pct, bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
+            allowed_wel, initial_qty_pct, bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
         );
-        bool base_eligible = k >= int(coin_settings[coin_offset + 8])
+        bool base_eligible =
+#ifdef PASSIVBOT_ORGANILLO
+            ORGANILLO_ALLOWED(k, c, coin_count) &&
+#endif
+            k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
             && coin_wel != 0.0f
@@ -3665,7 +3687,7 @@ inline int select_tm_multicoin_unstuck_coin(
     thread const JointPortfolioAccount& account,
     constant float* bars,
     constant int* touch_ticks,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int coin_count,
@@ -3789,7 +3811,7 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
     thread const TrailingMartingaleMulticoinSideConfig& short_config,
     constant float* short_coin_overrides,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count,
     int long_hsl_mode,
@@ -3862,7 +3884,7 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
                 coin_override_or(
                     long_coin_overrides, c, 6, long_config.initial_qty_pct
                 ),
-                bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
+                bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
             );
         const bool short_min_cost_eligible =
             passes_multicoin_min_effective_cost(
@@ -3871,13 +3893,17 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
                 coin_override_or(
                     short_coin_overrides, c, 6, short_config.initial_qty_pct
                 ),
-                bars[(k * coin_count + c) * 4 + 2], coin_settings, coin_offset
+                bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
             );
         const int long_coin_mode = long_config.coin_hsl_mode
             ? hsl_mode(long_side.coin_hsl[c], false) : long_hsl_mode;
         const int short_coin_mode = short_config.coin_hsl_mode
             ? hsl_mode(short_side.coin_hsl[c], false) : short_hsl_mode;
-        const bool coin_tradable = k >= int(coin_settings[coin_offset + 8])
+        const bool coin_tradable =
+#ifdef PASSIVBOT_ORGANILLO
+            ORGANILLO_ALLOWED(k, c, coin_count) &&
+#endif
+            k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(close);
         const bool long_eligible = long_can_generate && coin_tradable
@@ -3934,7 +3960,7 @@ inline void generate_tm_multicoin_side_orders(
     constant int* touch_nearest_ticks,
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
     int coin_count,
@@ -4115,7 +4141,7 @@ inline void generate_tm_multicoin_side_orders(
                     continue;
                 }
                 float market_price = clamped_market_price(
-                    bars, coin_settings, k, c, C
+                    bars, coin_settings ORGANILLO_PASS, k, c, C
                 );
                 float projected_loss = psize[c] * c_mult * fmax(
                     short_side
@@ -4145,7 +4171,7 @@ inline void generate_tm_multicoin_side_orders(
                 exposure
             );
             float market_price = clamped_market_price(
-                bars, coin_settings, k, best, C
+                bars, coin_settings ORGANILLO_PASS, k, best, C
             );
             int reducer_tick = short_side
                 ? int(ceil(
@@ -5182,7 +5208,7 @@ inline void generate_tm_multicoin_side_orders(
                 float c_mult = coin_settings[coin_offset + 4];
                 float price = entry_market[best]
                     ? clamped_market_price(
-                        bars, coin_settings, k, best, C
+                        bars, coin_settings ORGANILLO_PASS, k, best, C
                     )
                     : float(entry_tick[best]) * price_step;
                 float room_cost = fmax(
@@ -5345,7 +5371,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
     constant float* params,
@@ -5472,11 +5498,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, long_side, 0);
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, short_side, 1);
     init_trailing_martingale_multicoin_side_state(
-        long_side, long_config, coin_settings,
+        long_side, long_config, coin_settings ORGANILLO_PASS,
         long_coin_overrides, C
     );
     init_trailing_martingale_multicoin_side_state(
-        short_side, short_config, coin_settings,
+        short_side, short_config, coin_settings ORGANILLO_PASS,
         short_coin_overrides, C
     );
 
@@ -5662,8 +5688,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
-        if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings, k, C)
-            || held_positions_have_missing_prices(short_side.psize, bars, coin_settings, k, C))) {
+        if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings ORGANILLO_PASS, k, C)
+            || held_positions_have_missing_prices(short_side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;
             return;
@@ -5734,19 +5760,19 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         float long_hsl_equity_before_fills = account.balance;
         long_hsl_equity_before_fills =
             accumulate_tm_multicoin_side_unrealized_pnl(
-                long_side, bars, coin_settings, k, C, false,
+                long_side, bars, coin_settings ORGANILLO_PASS, k, C, false,
                 long_hsl_equity_before_fills
             );
         long_hsl_equity_before_fills =
             accumulate_tm_multicoin_side_unrealized_pnl(
-                short_side, bars, coin_settings, k, C, true,
+                short_side, bars, coin_settings ORGANILLO_PASS, k, C, true,
                 long_hsl_equity_before_fills
             );
         bool long_fill = process_tm_multicoin_side_fills(
             long_side, long_config, account, fills,
             bars, fill_ticks, touch_ticks, touch_nearest_ticks,
             touch_min_qty_bits, touch_min_qty_relation,
-            coin_settings, long_coin_overrides,
+            coin_settings ORGANILLO_PASS, long_coin_overrides,
             coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
@@ -5765,19 +5791,19 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         float short_hsl_equity_before_fills = account.balance;
         short_hsl_equity_before_fills =
             accumulate_tm_multicoin_side_unrealized_pnl(
-                long_side, bars, coin_settings, k, C, false,
+                long_side, bars, coin_settings ORGANILLO_PASS, k, C, false,
                 short_hsl_equity_before_fills
             );
         short_hsl_equity_before_fills =
             accumulate_tm_multicoin_side_unrealized_pnl(
-                short_side, bars, coin_settings, k, C, true,
+                short_side, bars, coin_settings ORGANILLO_PASS, k, C, true,
                 short_hsl_equity_before_fills
             );
         bool short_fill = process_tm_multicoin_side_fills(
             short_side, short_config, account, fills,
             bars, fill_ticks, touch_ticks, touch_nearest_ticks,
             touch_min_qty_bits, touch_min_qty_relation,
-            coin_settings, short_coin_overrides,
+            coin_settings ORGANILLO_PASS, short_coin_overrides,
             coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
@@ -5797,17 +5823,17 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 
         update_tm_multicoin_side_indicators(
             long_side, long_config, bars, hour_log_ranges,
-            coin_settings, k, C
+            coin_settings ORGANILLO_PASS, k, C
         );
         update_tm_multicoin_side_indicators(
             short_side, short_config, bars, hour_log_ranges,
-            coin_settings, k, C
+            coin_settings ORGANILLO_PASS, k, C
         );
         int long_tradable_count = count_tm_multicoin_tradable_coins(
-            bars, coin_settings, long_coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C
         );
         int short_tradable_count = count_tm_multicoin_tradable_coins(
-            bars, coin_settings, short_coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C
         );
         const bool post_fill_balance_depleted =
             isfinite(account.balance) && account.balance <= 0.0f;
@@ -5839,11 +5865,21 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             && short_side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started
             || long_can_generate || short_can_generate;
+#ifdef PASSIVBOT_ORGANILLO
+        if (!equity_started && alive && past_activation_guard) {
+            equity_started = (long_config.n_positions > 0 && long_config.twel > 0.0f
+                && count_tm_multicoin_tradable_coins(
+                    bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C, false) > 0)
+                || (short_config.n_positions > 0 && short_config.twel > 0.0f
+                && count_tm_multicoin_tradable_coins(
+                    bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C, false) > 0);
+        }
+#endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         if (alive && !post_fill_balance_depleted && past_activation_guard) {
-            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, long_coin_overrides,
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, long_effective_n_positions, false, long_config.twel, 24);
-            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, short_coin_overrides,
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, short_effective_n_positions, true, short_config.twel, 24);
         }
 #endif
@@ -5853,9 +5889,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         const float hsl_equity = joint_portfolio_equity(
             account,
             accumulate_tm_multicoin_side_unrealized_pnl(
-                long_side, bars, coin_settings, k, C, false, 0.0f),
+                long_side, bars, coin_settings ORGANILLO_PASS, k, C, false, 0.0f),
             accumulate_tm_multicoin_side_unrealized_pnl(
-                short_side, bars, coin_settings, k, C, true, 0.0f)
+                short_side, bars, coin_settings ORGANILLO_PASS, k, C, true, 0.0f)
         );
         const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
             || (any_fill && hsl_equity <= liquidation_floor);
@@ -5870,7 +5906,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         }
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
-        bool can_sample_hsl = (long_can_generate || short_can_generate)
+        bool can_sample_hsl = ORGANILLO_ACCOUNTING_GATE(
+            (long_can_generate || short_can_generate), (equity_started && past_activation_guard))
             && alive && (joint_portfolio_can_generate(
                 account, hsl_equity, liquidation_floor)
                 || hsl_mark_terminal_observation_eligible(
@@ -5884,7 +5921,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             bool hsl_valid = update_tm_multicoin_dual_side_hsl(
                 long_side, long_config, long_effective_n_positions,
                 short_side, short_config, short_effective_n_positions,
-                account, bars, coin_settings,
+                account, bars, coin_settings ORGANILLO_PASS,
                 long_coin_overrides, short_coin_overrides, k, C,
                 starting_balance, interval_ms
             );
@@ -5920,7 +5957,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             compute_tm_multicoin_one_way_initial_blocks(
                 long_side, long_config, long_coin_overrides,
                 short_side, short_config, short_coin_overrides,
-                bars, coin_settings, k, C,
+                bars, coin_settings ORGANILLO_PASS, k, C,
                 long_hsl_mode, short_hsl_mode,
                 long_effective_n_positions,
                 short_effective_n_positions,
@@ -5943,7 +5980,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         const int long_unstuck_candidate = long_can_generate
             ? select_tm_multicoin_unstuck_coin(
                 long_side, long_config, account,
-                bars, touch_ticks, coin_settings, long_coin_overrides,
+                bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_effective_n_positions,
                 long_unstuck_diff
             )
@@ -5951,7 +5988,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         const int short_unstuck_candidate = short_can_generate
             ? select_tm_multicoin_unstuck_coin(
                 short_side, short_config, account,
-                bars, touch_ticks, coin_settings, short_coin_overrides,
+                bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_effective_n_positions,
                 short_unstuck_diff
             )
@@ -5971,7 +6008,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             ? short_unstuck_candidate : -1;
         if (long_can_generate) {
             update_tm_multicoin_side_selection(
-                long_side, long_config, bars, coin_settings,
+                long_side, long_config, bars, coin_settings ORGANILLO_PASS,
                 long_coin_overrides, k, C, false,
                 any_fill,
                 long_effective_n_positions, score_hysteresis,
@@ -5982,7 +6019,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 long_side, long_config, account,
                 bars, touch_ticks, touch_nearest_ticks,
                 touch_min_qty_bits, touch_min_qty_relation,
-                coin_settings, long_coin_overrides,
+                coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
@@ -5994,7 +6031,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         }
         if (short_can_generate) {
             update_tm_multicoin_side_selection(
-                short_side, short_config, bars, coin_settings,
+                short_side, short_config, bars, coin_settings ORGANILLO_PASS,
                 short_coin_overrides, k, C, true,
                 any_fill,
                 short_effective_n_positions, score_hysteresis,
@@ -6005,7 +6042,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_side, short_config, account,
                 bars, touch_ticks, touch_nearest_ticks,
                 touch_min_qty_bits, touch_min_qty_relation,
-                coin_settings, short_coin_overrides,
+                coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
@@ -6021,7 +6058,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             && !apply_tm_multicoin_close_admission(
                 long_can_generate ? &long_side : nullptr,
                 short_can_generate ? &short_side : nullptr,
-                account, bars, fill_ticks, coin_settings,
+                account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
                 k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -5.0f;
             return;
@@ -6031,19 +6068,19 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         float forced_delist_equity = account.balance;
         forced_delist_equity =
             accumulate_tm_multicoin_side_unrealized_pnl(
-                long_side, bars, coin_settings, k, C, false,
+                long_side, bars, coin_settings ORGANILLO_PASS, k, C, false,
                 forced_delist_equity
             );
         forced_delist_equity =
             accumulate_tm_multicoin_side_unrealized_pnl(
-                short_side, bars, coin_settings, k, C, true,
+                short_side, bars, coin_settings ORGANILLO_PASS, k, C, true,
                 forced_delist_equity
             );
         bool forced_delist_fill = false;
         if (alive && account.balance > 0.0f) {
             forced_delist_fill = force_close_tm_multicoin_delisted_fused(
                 long_side, short_side, account, fills,
-                bars, coin_settings, coin_fill_counts,
+                bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
                 int(b), k, T, C, collect_coin_fill_counts,
                 market_order_slippage_pct, forced_delist_equity
             );
@@ -6623,7 +6660,7 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
     constant float* params,
@@ -6676,7 +6713,7 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
     passivbot_trailing_martingale_multicoin_fused_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
-        hour_log_ranges, coin_settings,
+        hour_log_ranges, coin_settings ORGANILLO_PASS,
         long_coin_overrides, short_coin_overrides,
         params, run_settings, sizes, end_steps,
 #if PASSIVBOT_BTC_PRICES_ENABLED
@@ -6722,7 +6759,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
@@ -6816,7 +6853,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float allowance_pct = config.allowance_pct;
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, side, 0);
     init_trailing_martingale_multicoin_side_state(
-        side, config, coin_settings, coin_overrides, C
+        side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
     );
     thread HslState& hsl = side.hsl;
     const bool coin_hsl_mode = config.coin_hsl_mode;
@@ -7007,7 +7044,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
         account.unstuck_pnl_k = k;
 #endif
-        if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings, k, C))) {
+        if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
             scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
             return;
@@ -7063,7 +7100,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
         float hsl_equity_before_fills =
             accumulate_tm_multicoin_side_unrealized_pnl(
-                side, bars, coin_settings, k, C, short_side, balance
+                side, bars, coin_settings ORGANILLO_PASS, k, C, short_side, balance
             );
         prepare_coin_hsl_budgets(
             side.coin_hsl, config.coin_hsl_mode, config.scale_hsl_budget,
@@ -7075,7 +7112,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             side, config, account, fills,
             bars, fill_ticks, touch_ticks, touch_nearest_ticks,
             touch_min_qty_bits, touch_min_qty_relation,
-            coin_settings, coin_overrides, coin_fill_counts,
+            coin_settings ORGANILLO_PASS, coin_overrides, coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
             entry_interval_stats, entry_interval_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_EXACT
@@ -7090,11 +7127,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             hsl_panic_market, hsl_equity_before_fills
         );
         update_tm_multicoin_side_indicators(
-            side, config, bars, hour_log_ranges, coin_settings, k, C
+            side, config, bars, hour_log_ranges, coin_settings ORGANILLO_PASS, k, C
         );
 
         int tradable_count = count_tm_multicoin_tradable_coins(
-            bars, coin_settings, coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C
         );
         const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f;
         const bool past_activation_guard =
@@ -7109,16 +7146,24 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         const bool can_generate = alive && effective_n_positions > 0
             && max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started || can_generate;
+#ifdef PASSIVBOT_ORGANILLO
+        // Account for flat ineligible days once the ordinary side is ready.
+        // The sticky clock avoids rescanning after its first ready candle.
+        if (!equity_started && alive && past_activation_guard && n_positions > 0) {
+            equity_started = count_tm_multicoin_tradable_coins(
+                bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C, false) > 0;
+        }
+#endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
         if (alive && !post_fill_balance_depleted && past_activation_guard)
-            update_exposure_rms_budgets(exposure_rms, bars, coin_settings, coin_overrides,
+            update_exposure_rms_budgets(exposure_rms, bars, coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, effective_n_positions, short_side, twel, 24);
 #endif
         // Refresh HSL after fills, before forager selection and next orders.
 #if !PASSIVBOT_HSL_DISABLED
         const bool hsl_ema_eligible = hsl.enabled && !hsl.halted;
         const float hsl_unrealized = accumulate_tm_multicoin_side_unrealized_pnl(
-            side, bars, coin_settings, k, C, short_side, 0.0f
+            side, bars, coin_settings ORGANILLO_PASS, k, C, short_side, 0.0f
         );
         const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
             || (any_fill && balance + hsl_unrealized <= liquidation_floor);
@@ -7130,13 +7175,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         }
         const bool has_hsl_position = tm_multicoin_side_has_position(side, C);
         const bool hsl_has_blocking_orders = tm_multicoin_side_has_blocking_orders(
-            side, config, bars, coin_settings, k, C
+            side, config, bars, coin_settings ORGANILLO_PASS, k, C
         );
 #endif
 #if !PASSIVBOT_HSL_DISABLED
         // Held positions have valid valuation candles; unavailable tails are unheld.
         // Missing held-position prices were rejected before this bar's fills.
-        if (can_generate && alive && balance > 0.0f
+        if (ORGANILLO_ACCOUNTING_GATE(can_generate, (equity_started && past_activation_guard))
+            && alive && balance > 0.0f
             && (balance + hsl_unrealized > liquidation_floor
                 || hsl_mark_terminal_observation_eligible(
                     balance, balance + hsl_unrealized, liquidation_floor,
@@ -7205,7 +7251,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
         if (can_generate) {
             update_tm_multicoin_side_selection(
-                side, config, bars, coin_settings, coin_overrides,
+                side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side,
                 any_fill,
                 effective_n_positions,
@@ -7217,7 +7263,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 side, config, account,
                 bars, touch_ticks, touch_nearest_ticks,
                 touch_min_qty_bits, touch_min_qty_relation,
-                coin_settings, coin_overrides,
+                coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side, tradable_count,
                 effective_n_positions, current_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
@@ -7231,7 +7277,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #if !PASSIVBOT_TM_LOSS_GATE_DISABLED
         if (loss_gate_enabled && can_generate && !apply_tm_multicoin_close_admission(
                 short_side ? nullptr : &side, short_side ? &side : nullptr,
-                account, bars, fill_ticks, coin_settings,
+                account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
                 k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
             scalars[int(b) * SCALAR_COLS + 9] = -5.0f;
             return;
@@ -7240,12 +7286,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
         float forced_delist_equity =
             accumulate_tm_multicoin_side_unrealized_pnl(
-                side, bars, coin_settings, k, C, short_side, balance
+                side, bars, coin_settings ORGANILLO_PASS, k, C, short_side, balance
             );
         bool forced_delist_fill = false;
         if (alive && balance > 0.0f) {
             forced_delist_fill = force_close_tm_multicoin_delisted_one_side(
-                side, account, fills, bars, coin_settings,
+                side, account, fills, bars, coin_settings ORGANILLO_PASS,
                 coin_fill_counts, int(b), k, T, C, short_side,
                 collect_coin_fill_counts, market_order_slippage_pct,
                 forced_delist_equity
@@ -7298,7 +7344,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         }
         float equity = balance + unrealized;
 #if !PASSIVBOT_HSL_DISABLED
-        if (can_generate && alive && balance > 0.0f
+        if (ORGANILLO_ACCOUNTING_GATE(can_generate, (equity_started && past_activation_guard))
+            && alive && balance > 0.0f
             && (equity > liquidation_floor || hsl_mark_terminal_observation_eligible(
                 balance, equity, liquidation_floor, hsl_report_at_fill_boundary))) {
             int sampled_tier = record_multicoin_hsl_report(
@@ -7734,7 +7781,7 @@ kernel void passivbot_trailing_martingale_multicoin(
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
@@ -7791,7 +7838,7 @@ kernel void passivbot_trailing_martingale_multicoin(
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
-        hour_log_ranges, coin_settings,
+        hour_log_ranges, coin_settings ORGANILLO_PASS,
         coin_overrides, params, run_settings,
         sizes, end_steps,
 #if PASSIVBOT_BTC_PRICES_ENABLED
@@ -7835,7 +7882,7 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
     constant float* hour_log_ranges,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
@@ -7887,7 +7934,7 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
-        hour_log_ranges, coin_settings,
+        hour_log_ranges, coin_settings ORGANILLO_PASS,
         coin_overrides, params, run_settings,
         sizes, end_steps,
 #if PASSIVBOT_BTC_PRICES_ENABLED

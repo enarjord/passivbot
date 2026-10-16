@@ -49,6 +49,7 @@ class NativeDatasetRegistry:
 
         self._arrays = SharedArrayManager()
         self._timestamps = {}
+        self._selections = {}
         self._closed = False
         self.scorer = CanonicalResultScorer(evaluator)
         base = self.scorer.base
@@ -80,6 +81,7 @@ class NativeDatasetRegistry:
                         bindings.append(self._binding(
                             ctx.label, exchange, scenario, ctx.msss[exchange], candles, btc,
                             ctx.timestamps.get(exchange), columns, span, indices, requested, len(bindings),
+                            (getattr(ctx, "selection_specs", None) or {}).get(exchange),
                         ))
             else:
                 for exchange in base.exchanges:
@@ -89,7 +91,7 @@ class NativeDatasetRegistry:
                     bindings.append(self._binding(
                         "base", exchange, effective, base.msss[exchange], base.hlcvs_specs[exchange],
                         base.btc_usd_specs.get(exchange), base.timestamps.get(exchange), columns,
-                        None, None, requested, len(bindings),
+                        None, None, requested, len(bindings), getattr(base, "selection_specs", {}).get(exchange),
                     ))
             self.bindings = self._execution_variants(base, evaluator, bindings, vector, overrides)
             self.planner = NativeCandidatePlanner(evaluator, self.bindings, overrides_list=overrides)
@@ -155,7 +157,7 @@ class NativeDatasetRegistry:
         return tuple(result)
 
     def _binding(self, label, exchange, config, markets, candles, btc, timestamps,
-                 columns, span, indices, requested, index):
+                 columns, span, indices, requested, index, shared_selection=None):
         if timestamps is None:
             raise ValueError("prepared GPU scenario requires actual timestamps")
         timestamps = np.asarray(timestamps)
@@ -168,10 +170,26 @@ class NativeDatasetRegistry:
         selected_metrics = requested if requested is not None else tuple(sorted(
             self.scorer.required_metrics(label) or {"backtest_completion_ratio"},
         ))
+        selection_specs = {}
+        if shared_selection is not None:
+            if shared_selection[2] != config["backtest"].get("organillo_sha256"):
+                raise ValueError("Organillo shared eligibility SHA-256 differs from the configured input; prepare again")
+            selection_specs = dict(zip(("eligibility", "eligibility_rows"), shared_selection[:2]))
+        elif config["backtest"].get("organillo_csv") is not None:
+            from organillo import prepare_selection
+            coins = config["backtest"]["coins"][exchange]
+            selection = prepare_selection(config, coins, timestamps)
+            selection_key = (selection.sha256, tuple(coins),
+                             selection.identity["rows_sha256"], selection.identity["values_sha256"])
+            if selection_key not in self._selections:
+                self._selections[selection_key] = (self._arrays.create_from(selection.values)[0],
+                                         self._arrays.create_from(selection.rows)[0])
+            selection_specs = dict(zip(("eligibility", "eligibility_rows"), self._selections[selection_key]))
         dataset = PreparedGpuDataset(
             config=config, markets=markets, exchange=exchange, hlcvs=candles, btc=btc,
             timestamps=self._timestamps[key], timestamp_range=(0, len(timestamps)),
             candle_coins=columns, time_range=span, coin_indices=indices, metrics=selected_metrics,
+            **selection_specs,
         )
         return ScenarioBinding(label, f"native:{index}", dataset)
 
@@ -186,7 +204,8 @@ class NativeDatasetRegistry:
         if not self._closed:
             self._closed = True
             failure = None
-            for spec in self._timestamps.values():
+            specs = list(self._timestamps.values()) + [s for pair in self._selections.values() for s in pair]
+            for spec in specs:
                 try:
                     self._arrays.cleanup([spec])
                 except BaseException as error:
@@ -195,6 +214,7 @@ class NativeDatasetRegistry:
                     else:
                         logging.exception("native dataset cleanup failed after an earlier cleanup failure")
             self._timestamps.clear()
+            self._selections.clear()
             if failure is not None:
                 raise failure
 

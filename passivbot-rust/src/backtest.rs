@@ -534,7 +534,11 @@ struct OrderFillExecution {
 
 // RollingSum (SMA) removed — volume & log range are now tracked via EMAs in `EMAs`.
 
-pub struct Backtest<'a> {
+pub type Backtest<'a> = BacktestEngine<'a, false>;
+
+pub struct BacktestEngine<'a, const ORGANILLO: bool> {
+    pub eligibility: Option<ndarray::ArrayView2<'a, u8>>,
+    pub eligibility_rows: Option<ArrayView1<'a, i32>>,
     hlcvs: ArrayView3<'a, f64>,
     btc_usd_prices: ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
     active_coin_indices: Vec<usize>,
@@ -904,7 +908,7 @@ fn test_strategy_params_pair_value_from_flat(
     }
 }
 
-impl<'a> Backtest<'a> {
+impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
     #[inline]
     fn snapshot_balance(&self) -> BalanceSnapshot {
         BalanceSnapshot {
@@ -1296,6 +1300,7 @@ impl<'a> Backtest<'a> {
                     }
                 }
 
+                self.apply_organillo_modes(idx, k, &mut mode_long, &mut mode_short);
                 if self.backtest_params.filter_by_min_effective_cost {
                     if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
                         mode_long = Some(orchestrator::TradingMode::GracefulStop);
@@ -1607,6 +1612,7 @@ impl<'a> Backtest<'a> {
                 }
             }
 
+            self.apply_organillo_modes(idx, k, &mut mode_long, &mut mode_short);
             if self.backtest_params.filter_by_min_effective_cost {
                 if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
                     mode_long = Some(orchestrator::TradingMode::GracefulStop);
@@ -2016,7 +2022,9 @@ impl<'a> Backtest<'a> {
         let rms_enabled = crate::unilateralness::backtest_enabled_sides(
             &bot_params, backtest_params.dynamic_wel_by_tradability,
         );
-        Backtest {
+        BacktestEngine {
+            eligibility: None,
+            eligibility_rows: None,
             hlcvs,
             btc_usd_prices,
             active_coin_indices,
@@ -2357,6 +2365,34 @@ impl<'a> Backtest<'a> {
         true
     }
 
+    #[inline(always)]
+    fn organillo_allowed(&self, idx: usize, k: usize) -> bool {
+        if ORGANILLO {
+            self.eligibility.unwrap()[[
+                self.eligibility_rows.unwrap()[k] as usize,
+                self.active_coin_indices[idx],
+            ]] != 0
+        } else {
+            true
+        }
+    }
+
+    fn apply_organillo_modes(
+        &self,
+        idx: usize,
+        k: usize,
+        long: &mut Option<orchestrator::TradingMode>,
+        short: &mut Option<orchestrator::TradingMode>,
+    ) {
+        if ORGANILLO && !self.organillo_allowed(idx, k) {
+            for mode in [long, short] {
+                if matches!(*mode, None | Some(orchestrator::TradingMode::Normal)) {
+                    *mode = Some(orchestrator::TradingMode::GracefulStop);
+                }
+            }
+        }
+    }
+
     fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) -> bool {
         let eligible: Vec<usize> = (0..self.n_coins)
             .filter(|&idx| self.coin_is_tradeable_at(idx, k))
@@ -2383,8 +2419,22 @@ impl<'a> Backtest<'a> {
             })
             .collect();
 
-        let tradable_long_now = eligible_long.len();
-        let tradable_short_now = eligible_short.len();
+        let tradable_long_now = if ORGANILLO {
+            eligible_long
+                .iter()
+                .filter(|&&i| self.organillo_allowed(i, k))
+                .count()
+        } else {
+            eligible_long.len()
+        };
+        let tradable_short_now = if ORGANILLO {
+            eligible_short
+                .iter()
+                .filter(|&&i| self.organillo_allowed(i, k))
+                .count()
+        } else {
+            eligible_short.len()
+        };
         let tradable_long_for_denom = if self.backtest_params.dynamic_wel_by_tradability {
             // Grow-only tradable universe: once a coin has been tradable, later delistings
             // do not reduce the denominator.
@@ -2418,9 +2468,15 @@ impl<'a> Backtest<'a> {
             self.configured_n_positions.short
         };
 
-        // avoid division by zero (possible directly after a delisting)
+        // A zero eligibility mask pauses entries, not the accounting clock.
+        // Preserve ordinary no-capacity behavior when the mask is not the cause.
         if self.effective_n_positions.long == 0 && self.effective_n_positions.short == 0 {
-            return false;
+            if !ORGANILLO
+                || ((self.configured_n_positions.long == 0 || eligible_long.is_empty())
+                    && (self.configured_n_positions.short == 0 || eligible_short.is_empty()))
+            {
+                return false;
+            }
         }
 
         // ---------- 3. dynamic WELs ----------
@@ -2966,6 +3022,12 @@ impl<'a> Backtest<'a> {
                         }
                     }
                     for (order, exec) in entries_to_process {
+                        if ORGANILLO
+                            && !self.organillo_allowed(idx, k)
+                            && self.positions.long[idx].size == 0.0
+                        {
+                            continue;
+                        }
                         if self.hsl_enabled()
                             && self.hsl_action(LONG, idx) != crate::hsl_controller::Action::Normal
                         {
@@ -3011,6 +3073,12 @@ impl<'a> Backtest<'a> {
                         }
                     }
                     for (order, exec) in entries_to_process {
+                        if ORGANILLO
+                            && !self.organillo_allowed(idx, k)
+                            && self.positions.short[idx].size == 0.0
+                        {
+                            continue;
+                        }
                         if self.hsl_enabled()
                             && self.hsl_action(SHORT, idx) != crate::hsl_controller::Action::Normal
                         {
@@ -7308,6 +7376,273 @@ mod tests {
     }
 
     #[test]
+    fn organillo_rotation_counts_peaks_modes_and_retired_budgets() {
+        let hlcvs = Array3::from_shape_vec((6, 4, 4), vec![1.0; 6 * 4 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 6]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 4;
+        bp_pair.long.total_wallet_exposure_limit = 1.2;
+        bp_pair.long.wallet_exposure_limit = -1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.short.n_positions = 4;
+        bp_pair.short.total_wallet_exposure_limit = 2.0;
+        bp_pair.short.wallet_exposure_limit = -1.0;
+        bp_pair.short.ema_span_0 = 10.0;
+        bp_pair.short.ema_span_1 = 20.0;
+
+        bp_pair.long.wallet_exposure_limit = 0.2;
+        let mut short_only = bp_pair.clone();
+        short_only.long.entry_eligible = false;
+        short_only.long.n_positions = 0;
+        short_only.long.total_wallet_exposure_limit = 0.0;
+        short_only.long.wallet_exposure_limit = 0.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec![
+                "A".to_string(),
+                "B".to_string(),
+                "C".to_string(),
+                "D".to_string(),
+            ],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0, 0, 0, 0],
+            last_valid_indices: vec![5, 5, 5, 5],
+            warmup_minutes: vec![0, 0, 0, 0],
+            trade_start_indices: vec![0, 0, 0, 0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
+            hsl_detailed_report: false,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let eligibility = ndarray::array![
+            [1u8, 0, 0, 0],
+            [0, 1, 0, 0],
+            [1, 1, 1, 1],
+            [0, 0, 0, 0],
+            [1, 0, 0, 0],
+            [1, 1, 1, 1]
+        ];
+        let rows = Array1::from_vec(vec![0i32, 1, 2, 3, 4, 5]);
+        let mut bt = BacktestEngine::<true>::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair.clone(), bp_pair.clone(), bp_pair, short_only],
+            vec![
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+            ],
+            &backtest_params,
+        );
+
+        let initial_zero = ndarray::Array2::<u8>::zeros((6, 4));
+        bt.eligibility = Some(initial_zero.view());
+        bt.eligibility_rows = Some(rows.view());
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert_eq!(bt.effective_n_positions.long, 0);
+        assert_eq!(bt.effective_n_positions.short, 0);
+        assert_eq!(bt.runtime_budget[1].short.effective_wallet_exposure_limit, 0.0);
+        assert_eq!(bt.runtime_budget[0].long.effective_wallet_exposure_limit, 0.2);
+        let configured = (
+            bt.configured_n_positions.long,
+            bt.configured_n_positions.short,
+        );
+        bt.configured_n_positions.long = 0;
+        bt.configured_n_positions.short = 0;
+        assert!(!bt.update_n_positions_and_wallet_exposure_limits(0));
+        (bt.configured_n_positions.long, bt.configured_n_positions.short) = configured;
+        bt.coin_trade_start_idx.fill(2);
+        assert!(!bt.update_n_positions_and_wallet_exposure_limits(0));
+        bt.coin_trade_start_idx.fill(0);
+
+        bt.eligibility = Some(eligibility.view());
+        for (k, long, short) in [(0, 1, 1), (1, 1, 1), (2, 3, 4), (3, 3, 4), (4, 3, 4)] {
+            bt.update_n_positions_and_wallet_exposure_limits(k);
+            assert_eq!(bt.effective_n_positions.long, long);
+            assert_eq!(bt.effective_n_positions.short, short);
+            // An explicit per-coin WEL remains authoritative when retired.
+            assert_eq!(
+                bt.runtime_budget[0].long.effective_wallet_exposure_limit,
+                0.2
+            );
+            assert!(
+                (bt.runtime_budget[1].short.effective_wallet_exposure_limit - 2.0 / short as f64)
+                    .abs()
+                    < 1e-12
+            );
+        }
+        let initial = bt.get_orchestrator_input_cached(0, None, None);
+        assert_eq!(initial.symbols[0].long.mode, None);
+        assert_eq!(
+            initial.symbols[1].long.mode,
+            Some(orchestrator::TradingMode::GracefulStop)
+        );
+        bt.orchestrator_input_cache = Some(initial);
+        let rotated = bt.get_orchestrator_input_cached(1, None, None);
+        assert_eq!(
+            rotated.symbols[0].long.mode,
+            Some(orchestrator::TradingMode::GracefulStop)
+        );
+        assert_eq!(rotated.symbols[1].long.mode, None);
+        let mut long = Some(orchestrator::TradingMode::Panic);
+        let mut short = Some(orchestrator::TradingMode::Normal);
+        bt.apply_organillo_modes(0, 1, &mut long, &mut short);
+        assert_eq!(long, Some(orchestrator::TradingMode::Panic));
+        assert_eq!(short, Some(orchestrator::TradingMode::GracefulStop));
+    }
+
+    #[test]
+    fn organillo_execution_candle_blocks_flat_but_manages_held_on_both_sides() {
+        let hlcvs = Array3::from_shape_vec(
+            (3, 1, 4),
+            vec![
+                100.005,
+                99.995,
+                100.0,
+                1.0,
+                100.0 * (1.0 + 0.0001),
+                100.0 * (1.0 - 0.0001),
+                100.0,
+                1.0,
+                100.02,
+                99.98,
+                100.0,
+                1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 3]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        bp_pair.short = bp_pair.long.clone();
+        bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
+        bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.00099,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
+            hsl_detailed_report: false,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: true,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0001,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let eligibility = ndarray::array![[1u8], [0], [1]];
+        let rows = Array1::from_vec(vec![0i32, 1, 2]);
+        let mut bt = BacktestEngine::<true>::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams {
+                maker_fee: 0.0002,
+                ..Default::default()
+            }],
+            &backtest_params,
+        );
+        bt.eligibility = Some(eligibility.view());
+        bt.eligibility_rows = Some(rows.view());
+        let order = |qty, order_type| BacktestOrder {
+            order: Order {
+                qty,
+                price: 100.0,
+                order_type,
+            },
+            execution_type: orchestrator::ExecutionType::Market,
+        };
+        bt.open_orders.long[0]
+            .entries
+            .push(order(1.0, OrderType::EntryGridNormalLong));
+        bt.open_orders.short[0]
+            .entries
+            .push(order(-1.0, OrderType::EntryGridNormalShort));
+        // These orders were admitted at k=0 but execute on a newly ineligible candle.
+        bt.check_for_fills(1).unwrap();
+        assert_eq!(bt.positions.long[0].size, 0.0);
+        assert_eq!(bt.positions.short[0].size, 0.0);
+        // Held coins can still increase (configured DCA) while ineligible.
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 100.0,
+        };
+        bt.positions.short[0] = Position {
+            size: -1.0,
+            price: 100.0,
+        };
+        bt.check_for_fills(1).unwrap();
+        assert_eq!(bt.positions.long[0].size, 2.0);
+        assert_eq!(bt.positions.short[0].size, -2.0);
+        bt.open_orders.long[0]
+            .closes
+            .push(order(-2.0, OrderType::CloseGridLong));
+        bt.open_orders.short[0]
+            .closes
+            .push(order(2.0, OrderType::CloseGridShort));
+        // Closes execute first; stale entries cannot reopen in the same candle.
+        bt.check_for_fills(1).unwrap();
+        assert_eq!(bt.positions.long[0].size, 0.0);
+        assert_eq!(bt.positions.short[0].size, 0.0);
+        bt.check_for_fills(2).unwrap();
+        assert_eq!(bt.positions.long[0].size, 1.0);
+        assert_eq!(bt.positions.short[0].size, -1.0);
+    }
+
+    #[test]
     fn dynamic_wel_by_tradability_uses_non_shrinking_tradable_count() {
         let hlcvs = Array3::from_shape_vec((6, 3, 4), vec![1.0; 6 * 3 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0; 6]);
@@ -7394,7 +7729,10 @@ mod tests {
         // Exposure diagnostics read the retained runtime budget for a held,
         // nontradable coin, independently of cached order-generation inputs.
         bt.runtime_budget[1].long.effective_wallet_exposure_limit = 0.75;
-        bt.positions.long[1] = Position { size: 5.0, price: 100.0 };
+        bt.positions.long[1] = Position {
+            size: 5.0,
+            price: 100.0,
+        };
         assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
         bt.record_total_wallet_exposure();
         let mut analysis = crate::types::Analysis::default();

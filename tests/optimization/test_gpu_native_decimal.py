@@ -5,8 +5,11 @@ import pytest
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("coins", [1, 2])
-@pytest.mark.parametrize("case", ["half", "below_half", "tick", "off_tick", "sub_ulp_tick", "compound_entry", "compound_close", "compound_offgrid_close"])
-def test_native_decimal_boundaries_match_rust_without_cpu_substitution(monkeypatch, side, coins, case):
+@pytest.mark.parametrize("case", ["half", "below_half", "tick", "off_tick", "sub_ulp_tick",
+                                  "compound_entry", "compound_close", "compound_offgrid_close"])
+@pytest.mark.parametrize("eligibility", [False, True])
+def test_native_decimal_boundaries_match_rust_without_cpu_substitution(
+        monkeypatch, tmp_path, side, coins, case, eligibility):
     torch = pytest.importorskip("torch")
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip("Metal or CUDA required")
@@ -39,12 +42,27 @@ def test_native_decimal_boundaries_match_rust_without_cpu_substitution(monkeypat
             threshold=.044 + (1e-12 if case == "off_tick" else 0.0),
             low=2.385, high=2.615)
     config, candles, markets, btc, timestamps = inputs
+    if eligibility:
+        from datetime import datetime, timezone
+        import numpy as np
+        from organillo import DAY_MS, freeze_config
+        names = config["backtest"]["coins"]["bybit"]
+        rows = ["date," + ",".join(names)]
+        for day in np.unique(timestamps // DAY_MS * DAY_MS):
+            date = datetime.fromtimestamp(int(day) / 1000, timezone.utc).strftime("%Y-%m-%d")
+            rows.append(date + "," + ",".join("1" for _ in names))
+        path = tmp_path / "selection.csv"
+        path.write_text("\n".join(rows) + "\n")
+        config["backtest"]["organillo_csv"] = str(path)
+        freeze_config(config)
     fills, _, _ = backtest.run_backtest(candles, markets, config, "bybit", btc, timestamps)
     expected_size = abs(sum(float(fill[9]) for fill in fills))
     proxy = MpsMulticoinProxy(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="bybit", batch_size=1,
         needed_metrics={"adg_strategy_eq"}, factual_hsl=True)
     runner = proxy.runners[side]
+    assert runner.organillo_enabled is eligibility
+    assert len(runner.organillo_buffers) == (2 if eligibility else 0)
     original = runner.run
     captured = []
 

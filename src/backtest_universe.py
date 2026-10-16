@@ -72,4 +72,13 @@ def effective_backtest_approved_coins_by_side(config: dict) -> dict[str, list[st
 
 def effective_backtest_data_coins(config: dict) -> list[str]:
     approved_by_side = effective_backtest_approved_coins_by_side(config)
-    return sorted(set().union(*(set(approved_by_side[pside]) for pside in POSITION_SIDES)))
+    coins = set().union(*(set(approved_by_side[pside]) for pside in POSITION_SIDES))
+    if config["backtest"].get("organillo_csv") is not None:
+        from organillo import period_coins
+        approved = require_live_value(config, "approved_coins")
+        known = set().union(*(_normalize_coin_list(approved[side]) for side in POSITION_SIDES))
+        candidates = period_coins(config, known)
+        coins &= candidates
+        if not coins:
+            raise ValueError("Organillo CSV has no coin identities in the approved backtest universe")
+    return sorted(coins)

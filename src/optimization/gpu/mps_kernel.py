@@ -1168,6 +1168,7 @@ def _ema_anchor_multicoin_shader_library(
     temporal_chunking: bool = False,
     hsl_native_cache_capacity: int = 0,
     exposure_rms_enabled: bool = False,
+    organillo_enabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1206,6 +1207,8 @@ def _ema_anchor_multicoin_shader_library(
         source = "#define PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED 1\n" + source
     if weighted_volume_enabled:
         source = "#define PASSIVBOT_WEIGHTED_VOLUME_ENABLED 1\n" + source
+    if organillo_enabled:
+        source = "#define PASSIVBOT_ORGANILLO 1\n" + source
     source = _with_dynamic_wel_by_tradability(source, dynamic_wel_by_tradability)
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
@@ -1256,6 +1259,7 @@ def _trailing_martingale_multicoin_shader_library(
     exposure_rms_enabled: bool = False,
     coin_overrides_absent: bool = False,
     hsl_native_coin_cache: bool = False,
+    organillo_enabled: bool = False,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1298,6 +1302,8 @@ def _trailing_martingale_multicoin_shader_library(
         source = "#define PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED 1\n" + source
     if weighted_volume_enabled:
         source = "#define PASSIVBOT_WEIGHTED_VOLUME_ENABLED 1\n" + source
+    if organillo_enabled:
+        source = "#define PASSIVBOT_ORGANILLO 1\n" + source
     source = _with_dynamic_wel_by_tradability(source, dynamic_wel_by_tradability)
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
@@ -2401,6 +2407,8 @@ class _MulticoinReplayRunner:
 
     scalar_cols = MPS_MULTICOIN_SCALAR_COLS
     replay_sides = 1
+    organillo_enabled = False
+    organillo_buffers = ()
     side_specialization = True
     cuda_whole_group_size = None
     temporal_chunk_bar_limit = MPS_TM_MULTICOIN_CHUNK_BARS
@@ -2453,6 +2461,7 @@ class _MulticoinReplayRunner:
         factual_hsl: bool = False,
         exposure_rms_enabled: bool = False,
         interrupt_check=None,
+        selection=None,
     ):
         if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
             raise ValueError("max_dispatch_candidate_bars must be positive")
@@ -2629,6 +2638,19 @@ class _MulticoinReplayRunner:
         self.touch_min_qty_relation = data["touch_min_qty_relation"]
         self.hour_log_ranges = data["hour_log_ranges"]
         self.coin_settings = data["coin_settings"]
+        self.organillo_enabled = selection is not None
+        self.organillo_buffers = ()
+        if selection is not None:
+            from organillo import validate_buffers
+            validate_buffers(selection.values, selection.rows, self.n, self.n_coins)
+            # Immutable data is shared by directional/fused runners and reused on residency.
+            key = tuple((key, str(value)) for key, value in selection.identity.items())
+            cache = data.setdefault("organillo_buffers", {})
+            if key not in cache:
+                cache.clear()
+                cache[key] = (torch.tensor(selection.values, dtype=torch.uint8, device=gpu_device()),
+                              torch.tensor(selection.rows, dtype=torch.int32, device=gpu_device()))
+            self.organillo_buffers = cache[key]
         if coin_overrides is None:
             coin_overrides = np.full(
                 (self.n_coins, self.coin_override_cols), np.nan, dtype=np.float32
@@ -3755,6 +3777,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             self.touch_ticks,
             self.hour_log_ranges,
             self.coin_settings,
+            *self.organillo_buffers,
             self.coin_overrides,
             params_mps,
             self.settings,
@@ -3831,6 +3854,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             self._temporal_replay_enabled(),
             self._hsl_native_cache_capacity(),
             getattr(self, "exposure_rms_enabled", False),
+            self.organillo_enabled,
         )
 
 
@@ -3883,6 +3907,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         factual_hsl: bool = False,
         exposure_rms_enabled: bool = False,
         interrupt_check=None,
+        selection=None,
     ):
         super().__init__(
             run,
@@ -3916,6 +3941,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
             exposure_rms_enabled=exposure_rms_enabled,
+            selection=selection,
             interrupt_check=interrupt_check,
         )
         if short_coin_overrides is None:
@@ -4029,6 +4055,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             self.touch_ticks,
             self.hour_log_ranges,
             self.coin_settings,
+            *self.organillo_buffers,
             self.coin_overrides,
             self.short_coin_overrides,
             params_mps,
@@ -4185,6 +4212,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         factual_hsl: bool = False,
         exposure_rms_enabled: bool = False,
         interrupt_check=None,
+        selection=None,
     ):
         self.loss_gate_enabled = _encode_max_realized_loss_pct(max_realized_loss_pct) < 1.0
         self.loss_gate_specialization = True
@@ -4220,6 +4248,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
             exposure_rms_enabled=exposure_rms_enabled,
+            selection=selection,
             interrupt_check=interrupt_check,
         )
 
@@ -4277,6 +4306,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             getattr(self, "exposure_rms_enabled", False),
             getattr(self, "coin_overrides_absent", False),
             bool(self._hsl_native_cache_capacity() and self._hsl_native_coin_cache_selected()),
+            self.organillo_enabled,
         )
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -4309,6 +4339,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             self.touch_min_qty_relation,
             self.hour_log_ranges,
             self.coin_settings,
+            *self.organillo_buffers,
             self.coin_overrides,
             params_mps,
             self.settings,
@@ -4389,6 +4420,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         factual_hsl: bool = False,
         exposure_rms_enabled: bool = False,
         interrupt_check=None,
+        selection=None,
     ):
         super().__init__(
             run,
@@ -4422,6 +4454,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
             exposure_rms_enabled=exposure_rms_enabled,
+            selection=selection,
             interrupt_check=interrupt_check,
         )
         if short_coin_overrides is None:
@@ -4533,6 +4566,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             self.touch_min_qty_relation,
             self.hour_log_ranges,
             self.coin_settings,
+            *self.organillo_buffers,
             self.coin_overrides,
             self.short_coin_overrides,
             params_mps,

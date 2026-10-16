@@ -434,7 +434,7 @@ impl Report {
     }
 }
 
-impl Backtest<'_> {
+impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
     /// Reporting survives result-array draining and never supplies replay input.
     pub fn hsl_report_metadata(&self) -> Result<Option<serde_json::Value>, String> {
         let Some(config) = &self.backtest_params.equity_hard_stop_loss.hsl else {

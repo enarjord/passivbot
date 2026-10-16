@@ -106,7 +106,7 @@ class NativeBacktestService:
         def factory():
             from optimization.gpu.service import MpsMulticoinProxy
 
-            with dataset.attach() as (candles, btc, timestamps):
+            with dataset.attach() as (candles, btc, timestamps), dataset.attach_selection() as selection:
                 indices = dataset.coin_indices
                 if indices != tuple(range(dataset.hlcvs.shape[1])):
                     key = (dataset.hlcvs, dataset.time_range, indices)
@@ -119,7 +119,7 @@ class NativeBacktestService:
                     needed_metrics=dataset.metrics, batch_size=self._batch_size,
                     max_dispatch_candidate_bars=self._dispatch_budget,
                     interrupt_check=self._interrupt_check, prepared_data_cache=self._prepared_cache,
-                    factual_hsl=True,
+                    factual_hsl=True, selection=selection,
                     factual_capacity_hints=capacity_hints,
                     automatic_scratch_budget=self._batch_tuner is not None,
                 )

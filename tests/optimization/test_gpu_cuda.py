@@ -295,7 +295,15 @@ def test_disabled_hsl_source_removes_hsl_portfolio_scans():
         "#if PASSIVBOT_HSL_DISABLED\n        float hsl_equity_before_fills = 0.0f;"
         in source
     )
-    assert "#if !PASSIVBOT_HSL_DISABLED\n        if (can_generate && alive" in source
+    assert (
+        "#if !PASSIVBOT_HSL_DISABLED\n        if (ORGANILLO_ACCOUNTING_GATE("
+        "can_generate, (equity_started && past_activation_guard))\n            && alive"
+        in source
+    )
+    macros = (Path(__file__).parents[2]
+              / "passivbot-rust/src/gpu/mps_organillo.metal").read_text()
+    disabled_macros = macros.split("#else\n", 1)[1]
+    assert "#define ORGANILLO_ACCOUNTING_GATE(ordinary, ready) ordinary" in disabled_macros
     assert "#if !PASSIVBOT_HSL_DISABLED\n    bind_hsl_multicoin_hsl" in source
 
 

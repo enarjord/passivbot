@@ -136,6 +136,11 @@ def build_evaluation_contract(config: dict) -> dict:
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }
+    if effective.get("backtest", {}).get("organillo_csv") is not None:
+        digest = effective["backtest"].get("organillo_sha256")
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError("Organillo requires a validated SHA-256 before saving evaluation fitness")
+        contract["organillo"] = {"sha256": digest, "contract": 1}
     policy = resolve_prefilter(config.get("optimize", {}).get("prefilter"))
     if prefilter_enabled(policy):
         contract["prefilter"] = {"version": PREFILTER_VERSION, "policy": policy}
