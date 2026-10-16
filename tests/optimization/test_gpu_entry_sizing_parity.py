@@ -268,3 +268,106 @@ kernel void partial_top_up_probe(
     compile_shader(probe).partial_top_up_probe(packed, output, threads=len(cases))
     synchronize()
     np.testing.assert_array_equal(output.cpu().numpy(), np.asarray(expected, dtype=np.float32))
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("coin_count", [1, 2])
+@pytest.mark.parametrize("market_allowed", [False, True])
+@pytest.mark.parametrize("ladder", ["entry", "close"])
+def test_passive_recursive_ladders_do_not_require_market_permission(
+    side, coin_count, market_allowed, ladder
+):
+    config, candles, markets, btc, timestamps = _fixture(side, coin_count, "initial")
+    config["live"].update(market_orders_allowed=market_allowed,
+                          market_order_near_touch_threshold=0.0)
+    config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
+                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    strategy = config["bot"][side]["strategy"]["trailing_martingale"]
+    strategy["entry"].update(initial_qty_pct=0.1, threshold_base_pct=0.01 if ladder == "entry" else 0.5,
+                             retracement_base_pct=0.0, double_down_factor=1.0,
+                             threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0,
+                             threshold_volatility_1m_weight=0.0)
+    strategy["close"].update(threshold_base_pct=0.02005 if ladder == "close" else 0.5,
+                             retracement_base_pct=0.0, qty_pct=0.01,
+                             threshold_we_weight=-0.1 if ladder == "close" else 0.0,
+                             threshold_volatility_1h_weight=0.0,
+                             threshold_volatility_1m_weight=0.0)
+    # Keep both events away from warmup and the final trading bar.
+    candles = np.tile(candles[:1], (12, 1, 1))
+    candles[:, :, :3] = 100.0
+    btc = np.full(12, 50_000.0)
+    timestamps = timestamps[0] + np.arange(12, dtype=np.int64) * 60_000
+    # Keep later partial top-ups out of the close-ladder trace.
+    if ladder == "close":
+        config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
+    short = side == "short"
+    candles[4, :, 0 if short else 1] = (
+        101.4 if short else 98.6
+    ) if ladder == "entry" else (100.1 if short else 99.9)
+    if ladder == "close":
+        candles[5, :, 1 if short else 0] = 98.65 if short else 101.35
+    for coin, market in markets.items():
+        if coin != "__meta__":
+            market.update(qty_step=0.001, price_step=0.1, min_qty=0.001,
+                          min_cost=1.0, last_valid_index=11)
+    out, fills = _evaluate(side, (config, candles, markets, btc, timestamps))
+    expected_count = (2 if ladder == "entry" else 4) * coin_count
+    expected_size = (2.0 if short else 2.01) if ladder == "entry" else 0.7
+    assert len(fills) == expected_count, fills
+    assert abs(sum(float(fill[9]) for fill in fills)) == pytest.approx(
+        expected_size * coin_count, abs=1e-10, rel=0
+    ), fills
+    expected_balance = 1000.0
+    if ladder == "close":
+        expected_balance += 0.36 * coin_count
+    assert out["fill_count"].item() == expected_count
+    key = "short_psize" if short else "psize"
+    assert out[key].item() == pytest.approx(expected_size * coin_count, abs=1e-5, rel=0)
+    # At most one float32 ULP per balance update; a missed tick is much larger.
+    allowance = float(np.spacing(np.float32(expected_balance))) * expected_count
+    assert out["balance"].item() == pytest.approx(expected_balance, abs=allowance, rel=0)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("entry_gate", [False, True])
+@pytest.mark.parametrize("hysteresis", [0.0, 0.02])
+def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hysteresis):
+    config, candles, markets, _, timestamps = _fixture(side, 2, "initial")
+    config["live"].update(market_orders_allowed=False, forager_score_hysteresis_pct=hysteresis)
+    config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
+                             taker_fee_override=0.0, market_order_slippage_pct=0.0)
+    bot = config["bot"][side]
+    bot["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0,
+                       total_exposure_entry_gate_enabled=entry_gate)
+    bot["forager"].update(score_weights={"volume": 0.01, "volatility": 0.99, "ema_readiness": 0.0},
+                          volume_ema_span_1m=1.0, volatility_ema_span_1m=1.0,
+                          volume_drop_pct=0.0)
+    bot["strategy"]["trailing_martingale"]["entry"].update(
+        initial_qty_pct=0.1, initial_ema_dist=0.25, ema_gate_mode="initial",
+        threshold_base_pct=0.5, retracement_base_pct=0.0,
+        threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0,
+        threshold_volatility_1m_weight=0.0)
+    candles = np.tile(candles[:1], (12, 1, 1))
+    candles[:, :, :3] = 100.0
+    # BTC owns the resting entry before ETH becomes slightly more attractive.
+    candles[:5, :, 3] = [200.0, 100.0]
+    candles[5:, :, 3] = [100.0, 200.0]
+    short = side == "short"
+    # Only BTC reaches its resting entry after the score change.
+    candles[8, 0, 0 if short else 1] = 125.25 if short else 74.75
+    btc = np.full(12, 50_000.0)
+    timestamps = timestamps[0] + np.arange(12, dtype=np.int64) * 60_000
+    for coin, market in markets.items():
+        if coin != "__meta__":
+            market.update(qty_step=0.001, price_step=0.25, min_qty=0.001,
+                          min_cost=1.0, last_valid_index=11)
+    out, fills = _evaluate(side, (config, candles, markets, btc, timestamps))
+    expected_count = int(hysteresis > 0.0)
+    assert len(fills) == expected_count, fills
+    expected_size = (0.8 if short else 1.333) if expected_count else 0.0
+    if expected_count:
+        assert fills[0][2] == "BTC", fills
+        assert abs(float(fills[0][9])) == pytest.approx(expected_size, abs=1e-12, rel=0)
+    assert out["fill_count"].item() == expected_count
+    key = "short_psize" if short else "psize"
+    assert out[key].item() == pytest.approx(expected_size, abs=1e-5, rel=0)

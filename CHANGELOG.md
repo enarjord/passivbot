@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Replay multicoin GPU trailing-martingale passive entry and close ladders when
+  market orders are disabled. Market permission governs execution promotion;
+  reachable passive recursive fills remain part of the strategy. Preserve an
+  unfilled gated entry until Forager applies incumbent score hysteresis.
+
 - Reduce GPU trailing-martingale entry quantities at strict exposure-cap boundaries
   without losing an extra venue step to binary rounding. Above float32's exact unit-count
   range, retain a representably smaller quantity so the reduction cannot round away.

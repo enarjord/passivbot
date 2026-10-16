@@ -2176,7 +2176,8 @@ inline bool process_tm_multicoin_side_fills(
                     ? max(sim_touch_tick, candidate.ticks)
                     : min(sim_touch_tick, candidate.ticks);
             }
-            entry_qty[c] = 0.0f;
+            // Forager still needs an unfilled plan for incumbent hysteresis.
+            if (filled_entry) entry_qty[c] = 0.0f;
         } else if (filled_entry && entry_recursive_market_mode[c]) {
             float sim_psize = entry_gen_psize[c];
             float sim_pprice = entry_gen_pprice[c];
@@ -4235,8 +4236,7 @@ inline void generate_tm_multicoin_side_orders(
             entry_gen_initial_price[c] = initial_sizing_price;
             entry_gen_touch_tick[c] = entry_touch;
         }
-        if (coin_entry_retracement_base <= 0.0f && quantity > 0.0f
-            && market_orders_allowed) {
+        if (coin_entry_retracement_base <= 0.0f && quantity > 0.0f) {
             entry_recursive_market_mode[c] = true;
         }
         minimum_entry[c] = executable_entry_min;
@@ -4374,8 +4374,7 @@ inline void generate_tm_multicoin_side_orders(
                 && (!trailing_close || close_triggered)
             ? clip : 0.0f;
         close_tick[c] = candidate_close_tick;
-        if (!trailing_close && close_qty[c] > 0.0f
-            && market_orders_allowed) {
+        if (!trailing_close && close_qty[c] > 0.0f) {
             // Preserve the passive recursive strategy snapshot. On the next
             // candle it alone decides whether the full suffix is emitted;
             // ordinary market promotion is applied only after that decision.
