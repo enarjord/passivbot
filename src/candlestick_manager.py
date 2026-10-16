@@ -2927,6 +2927,7 @@ class CandlestickManager:
             )
             # Load and merge with coarse progress updates to show activity for large ranges.
             arrays: List[np.ndarray] = []
+            all_sources_loaded = True
             t0 = time.monotonic()
             last_progress_log = t0
             for i, (day_key, path) in enumerate(sorted(load_keys), start=1):
@@ -2943,10 +2944,16 @@ class CandlestickManager:
                         if strict:
                             raise
                         primary_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+                    # Certify both constituents before merging: surviving rows must
+                    # not hide an empty/failed source from the reuse eligibility check.
+                    all_sources_loaded = (
+                        all_sources_loaded and bool(legacy_arr.size) and bool(primary_arr.size)
+                    )
                     # Keep legacy canonical: primary should only fill legacy gaps.
                     a = self._merge_overwrite(primary_arr, legacy_arr)
                 else:
                     a = self._load_shard(path, strict=strict)
+                    all_sources_loaded = all_sources_loaded and bool(a.size)
 
                 # NOTE: We intentionally do NOT write legacy data into primary shards.
                 # Primary is only used to fill gaps where legacy is missing/incomplete.
@@ -3038,7 +3045,7 @@ class CandlestickManager:
                 # Disk-load telemetry must never break cache loading.
                 pass
             # Do not retain failed/empty shards or facts rewritten during this read.
-            if (not strict and len(arrays) == len(load_keys) and signature is not None
+            if (not strict and all_sources_loaded and signature is not None
                     and signature == self._disk_rows_signature(load_keys, day_ctx, symbol, tf_norm)):
                 self._remember_disk_rows(reuse_key, signature, merged_disk)
             if tf_norm == "1m":

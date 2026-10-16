@@ -457,8 +457,10 @@ A manager may retain immutable parsed source rows for up to 16 exact ranges and
 8 MiB total. Every reuse rechecks the selected source paths and index using file
 identity, size, modification time and change time, including atomic replacements
 and in-place corrections whose modification time is restored. Failed/empty shard
-reads and changes during parsing are not certified. Strict audits always read the
-source again. Clearing the cache or restarting reconstructs identical rows.
+reads and changes during parsing are not certified. For a legacy/primary overlay,
+every constituent must return nonempty rows before the merged result is certified;
+a surviving source cannot mask a failed or empty constituent. Strict audits always
+read the source again. Clearing the cache or restarting reconstructs identical rows.
 
 Only factual source rows are cached. Mutable consumer arrays and the one-minute
 memory cache never alias retained immutable rows. One-minute reads still merge
