@@ -20549,12 +20549,16 @@ def test_multicoin_pipeline_lookup_is_profiled_only_when_enabled(monkeypatch, pr
     class Library:
         @property
         def replay(self):
-            return lambda *args, **kwargs: calls.append((args, kwargs))
+            def kernel(*args, **kwargs):
+                calls.append((args, kwargs))
+            kernel.max_threads_per_threadgroup = 1024
+            kernel.thread_execution_width = 32
+            return kernel
     monkeypatch.setattr(mps_kernel.time, "perf_counter", tick)
     monkeypatch.setattr(mps_kernel, "gpu_device", lambda *_: "mps")
     runner._dispatch_replay(Library(), ("input",), None, batch_size=2, scalars=None)
     assert runner._pipeline_seconds == (3.0 if profile else 0.0)
-    assert calls == [(("input",), {"threads": (2, 1, 1)})]
+    assert calls == [(("input",), {"threads": (2, 1, 1), "group_size": (2, 1, 1)})]
 
 
 @pytest.mark.parametrize("profile", [False, True])

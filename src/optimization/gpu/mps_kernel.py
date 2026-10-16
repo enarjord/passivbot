@@ -1468,6 +1468,19 @@ class HslFactHistoryOverflow(RuntimeError):
     """A rejected GPU attempt may be repeated with larger worker-owned storage."""
 
 
+def _metal_replay_group_options(kernel, batch_size):
+    if gpu_device(torch) != "mps":
+        return {}
+    maximum = int(kernel.max_threads_per_threadgroup)
+    width = int(kernel.thread_execution_width)
+    if maximum < 1 or width < 1 or batch_size < 1:
+        raise RuntimeError("Metal replay has invalid dispatch limits")
+    # The API's implicit group may reserve private state for many inactive
+    # lanes. Bound a state-heavy portfolio group by its actual candidates and
+    # one execution width, retaining the compiled pipeline's limit as well.
+    return {"group_size": (min(batch_size, maximum, width), 1, 1)}
+
+
 def _require_available_held_valuation(scalars):
     # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
     # Metal writes -2 and returns immediately if a held coin has no price.
@@ -3305,6 +3318,7 @@ class _MulticoinReplayRunner:
             self._pipeline_seconds += pipeline_seconds
         if not self._temporal_replay_enabled():
             dispatch_options = {"threads": (batch_size, 1, 1)}
+            dispatch_options.update(_metal_replay_group_options(kernel, batch_size))
             if gpu_device(torch) == "cuda" and self.replay_sides == 1 and self.cuda_whole_group_size is not None:
                 # Spread independent, state-heavy candidates across more SMs.
                 dispatch_options["group_size"] = self.cuda_whole_group_size
