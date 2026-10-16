@@ -30,7 +30,7 @@ def build_coin_override_parameters(
 ):
     """Encode ordered coin pins from an already resolved canonical payload.
 
-    Preserve exact patches separately from float32 transport values for execution
+    Preserve exact patches separately from shader transport values for execution
     identity. Eligibility and forced-active sentinels are payload-owned even when
     no authored pin is present. No configuration or payload is mutated.
     """
@@ -55,7 +55,8 @@ def build_coin_override_parameters(
 
         resolve_override = _get_backtest_coin_override
 
-    matrix = np.full((len(coins), column("COLS")), np.nan, dtype=np.float32)
+    matrix = np.full((len(coins), column("COLS")), np.nan,
+                     dtype=np.float64 if strategy_kind == "trailing_martingale" else np.float32)
     exact_overrides = []
     coupled = unstuck_ema_spans_coupled(config)
     for row, coin in enumerate(coins):
@@ -72,8 +73,6 @@ def build_coin_override_parameters(
         for index, (key, path) in enumerate(strategy_paths):
             if _lookup(strategy_patch, path) is not _MISSING:
                 value = float(effective_strategy[key])
-                if key in {"entry_retracement_base_pct", "close_retracement_base_pct"}:
-                    value = model.encode_tm_retracement_base_pct(value)
                 matrix[row, index] = value
         if (strategy_kind == "trailing_martingale"
                 and _lookup(strategy_patch, ("entry", "ema_gate_mode")) is not _MISSING):

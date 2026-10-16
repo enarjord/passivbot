@@ -1307,3 +1307,20 @@ def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel
     runner._prepare_native_factual_hsl(matrix)
     assert runner.hsl_fact_capacity == 0 and not runner.hsl_factual_replay
     assert runner.hsl_fact_capacity_learned == 512
+
+
+def test_cuda_decimal_proofs_keep_metal_signed_64_bit_arithmetic():
+    source = """#include <metal_stdlib>
+using namespace metal;
+struct DecimalOperand { long coefficient; int exponent; };
+kernel void signed_decimal_probe(constant long* input, device long* output,
+                                 uint b [[thread_position_in_grid]]) {
+    output[b] = input[b] * long(1);
+}
+"""
+    lowered = cuda_source(source)
+    assert "using PBLong = long long;" in lowered
+    assert "PBLong coefficient" in lowered
+    assert "const PBLong* input" in lowered
+    assert "PBLong* output" in lowered
+    assert "input[b] * PBLong(1)" in lowered

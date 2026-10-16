@@ -23,6 +23,13 @@ from optimization.gpu.entry_intervals import (
 )
 
 from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
+from optimization.gpu.decimal import (
+    _TM_DECIMAL_KEYS,
+    _TM_DECIMAL_WORDS,
+    _pack_tm_parameter_matrix,
+    _tm_decimal_metadata,
+    _tm_modifier_masks,
+)
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import record_replay_chunk, ReplayDurationController
 from optimization.gpu.runtime import (
@@ -60,7 +67,6 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
-    encode_tm_retracement_base_pct,
     single_coin_shader_topology,
 )
 
@@ -355,29 +361,6 @@ def _btc_risk_price_tensor(btc_prices, *, expected_count: int):
     return torch.as_tensor(values, dtype=torch.float32, device=gpu_device())
 
 
-def _pack_tm_parameter_matrix(
-    params: np.ndarray, keys: tuple[str, ...], *, sides: int
-) -> np.ndarray:
-    """Pack TM rows while preserving each candidate's retracement mode sign."""
-
-    matrix = np.ascontiguousarray(params, dtype=np.float32)
-    side_width = len(keys)
-    for side_index in range(sides):
-        offset = side_index * side_width
-        for key in (
-            "entry_retracement_base_pct",
-            "close_retracement_base_pct",
-        ):
-            column = offset + keys.index(key)
-            positive_underflow = (params[:, column] > 0.0) & (
-                matrix[:, column] == np.float32(0.0)
-            )
-            if np.any(positive_underflow):
-                matrix[positive_underflow, column] = encode_tm_retracement_base_pct(
-                    np.finfo(np.float64).tiny
-                )
-    return matrix
-
 
 def _tm_dispatch_specialization(
     matrix: np.ndarray,
@@ -389,7 +372,7 @@ def _tm_dispatch_specialization(
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
     """Prove dispatch-wide TM features before compiling away inactive paths."""
 
-    side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
+    side_width = matrix.shape[1] // 2
     active_offsets = [
         side_index * side_width
         for side_index, enabled in enumerate((long_enabled, short_enabled))
@@ -1796,7 +1779,7 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
 
 
 def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
-    width = len(keys)
+    width = params.shape[1] // 2
     for side, active in enumerate((runner.long_enabled, runner.short_enabled)):
         if not active:
             continue
@@ -2422,6 +2405,7 @@ class _MulticoinReplayRunner:
     cuda_whole_group_size = None
     temporal_chunk_bar_limit = MPS_TM_MULTICOIN_CHUNK_BARS
     supports_entry_interval = False
+    decimal_coin_overrides = False
     specialize_metal_coin_capacity = False
     _validate_hsl_params = _validate_hsl_params
 
@@ -2649,7 +2633,7 @@ class _MulticoinReplayRunner:
             coin_overrides = np.full(
                 (self.n_coins, self.coin_override_cols), np.nan, dtype=np.float32
             )
-        coin_overrides = np.asarray(coin_overrides, dtype=np.float32)
+        coin_overrides = np.asarray(coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         if coin_overrides.shape != (self.n_coins, self.coin_override_cols):
             raise ValueError(
                 f"expected multicoin {self.coin_override_label} override matrix shaped "
@@ -2674,7 +2658,7 @@ class _MulticoinReplayRunner:
         prepared_overrides = self._prepare_coin_overrides(coin_overrides)
         # Only immutable dataset values specialize lookup; candidate fallbacks
         # stay in the Rust-owned shader and may differ on every dispatch.
-        self.coin_overrides_absent = not bool(np.isfinite(prepared_overrides).any())
+        self.coin_overrides_absent = not bool(np.isfinite(coin_overrides).any())
         self.coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         forager_score_hysteresis_pct = float(forager_score_hysteresis_pct)
         if not np.isfinite(forager_score_hysteresis_pct) or (
@@ -3520,9 +3504,12 @@ class _MulticoinReplayRunner:
     ) -> dict:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
-        self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(matrix)
-        self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(matrix)
-        self.dispatch_unstuck_enabled = self._unstuck_required(matrix)
+        # Host feature proofs consume public policy columns; the shader matrix
+        # additionally carries private decimal operands after each side block.
+        policy_matrix = np.asarray(params, dtype=np.float32)
+        self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(policy_matrix)
+        self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(policy_matrix)
+        self.dispatch_unstuck_enabled = self._unstuck_required(policy_matrix)
         packed = time.perf_counter() if profile else 0.0
         loader, library_args = self._library_cache_call()
         library, cold = _cached_library_with_miss(loader, *library_args)
@@ -3937,7 +3924,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 np.nan,
                 dtype=np.float32,
             )
-        short_coin_overrides = np.asarray(short_coin_overrides, dtype=np.float32)
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         expected_shape = (self.n_coins, self.coin_override_cols)
         if short_coin_overrides.shape != expected_shape:
             raise ValueError(
@@ -4143,6 +4130,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     parameter_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
+    decimal_coin_overrides = True
     coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
     coin_override_cooldown_column = TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
     coin_override_hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
@@ -4151,7 +4139,16 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     specialize_metal_coin_capacity = True
 
     def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
-        return _scale_tm_multicoin_coin_overrides(coin_overrides, self.interval_minutes)
+        scaled = _scale_tm_multicoin_coin_overrides(coin_overrides, self.interval_minutes)
+        keys = [key for key, _ in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS]
+        columns = [keys.index(key) for key in _TM_DECIMAL_KEYS]
+        metadata = _tm_decimal_metadata(coin_overrides[:, columns]).reshape(len(scaled), -1)
+        flags = _tm_modifier_masks(coin_overrides, keys, overrides=True)
+        for key in ("entry_retracement_base_pct", "close_retracement_base_pct"):
+            column = keys.index(key)
+            underflow = (coin_overrides[:, column] > 0.0) & (scaled[:, column] == 0.0)
+            scaled[underflow, column] = np.finfo(np.float32).tiny
+        return np.ascontiguousarray(np.concatenate((scaled, metadata, flags), axis=1), dtype=np.float32)
 
     def __init__(
         self,
@@ -4433,7 +4430,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 np.nan,
                 dtype=np.float32,
             )
-        short_coin_overrides = np.asarray(short_coin_overrides, dtype=np.float32)
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         expected_shape = (self.n_coins, self.coin_override_cols)
         if short_coin_overrides.shape != expected_shape:
             raise ValueError(
@@ -4456,7 +4453,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
         prepared_overrides = self._prepare_coin_overrides(short_coin_overrides)
         self.coin_overrides_absent = (
-            self.coin_overrides_absent and not bool(np.isfinite(prepared_overrides).any())
+            self.coin_overrides_absent and not bool(np.isfinite(short_coin_overrides).any())
         )
         self.short_coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(

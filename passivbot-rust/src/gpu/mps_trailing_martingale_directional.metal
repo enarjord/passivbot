@@ -39,7 +39,7 @@ constant int SCALAR_COLS = 68;
 constant int SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 512;
-constant int SIDE_PARAMS = 57;
+constant int SIDE_PARAMS = 81;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
@@ -48,6 +48,8 @@ inline int elapsed_fill_day_bucket(float k, float first_eq_k, float interval_ms)
     const float fill_day_candles = 86400000.0f / interval_ms;
     return int((k - first_eq_k) / fill_day_candles);
 }
+
+// PASSIVBOT_DECIMAL_ROUNDING
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -311,6 +313,9 @@ struct TmSide {
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
     float alpha1m, alpha1h;
 #endif
+    GpuDecimal decimals[5];
+    bool decimal_static_entry, decimal_static_entry_retracement;
+    bool decimal_static_close, decimal_static_close_retracement;
     float ddf, initial_ema_dist, initial_qty_pct;
     float entry_threshold_base, entry_threshold_we;
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
@@ -354,6 +359,7 @@ struct TmSide {
     float vol1m, vol1h;
 #endif
     float psize, pprice, last_inc_k, pos_open_k;
+    int pprice_tick, entry_gen_pprice_tick, close_gen_pprice_tick;
     int entry_ticks, close_ticks, secondary_close_ticks;
     float entry_price, close_price, entry_qty, entry_strategy_qty, close_qty;
     float secondary_close_price, secondary_close_qty;
@@ -470,6 +476,11 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.alpha1h = p[o + 2] > 0.0f ? 2.0f / (fmax(p[o + 2], 1.0f) + 1.0f) : 0.0f;
     s.alpha1m = p[o + 3] > 0.0f ? clamp(2.0f / (p[o + 3] + 1.0f), 0.0f, 1.0f) : 0.0f;
 #endif
+    for (int i = 0; i < 5; ++i) s.decimals[i] = load_gpu_decimal(p, o + 57 + i * 4);
+    s.decimal_static_entry = p[o + 77] == 0.0f;
+    s.decimal_static_entry_retracement = p[o + 78] == 0.0f;
+    s.decimal_static_close = p[o + 79] == 0.0f;
+    s.decimal_static_close_retracement = p[o + 80] == 0.0f;
     s.ddf = p[o + 4];
     s.initial_ema_dist = p[o + 5];
     s.initial_qty_pct = p[o + 6];
@@ -554,6 +565,7 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.vol1m = 0.0f; s.vol1h = 0.0f;
 #endif
     s.psize = 0.0f; s.pprice = 0.0f;
+    s.pprice_tick = s.entry_gen_pprice_tick = s.close_gen_pprice_tick = -1;
     s.last_inc_k = -1.0f; s.pos_open_k = -1.0f;
     s.entry_ticks = 0; s.entry_qty = 0.0f; s.entry_strategy_qty = 0.0f;
     s.close_ticks = 0; s.close_qty = 0.0f;
@@ -940,6 +952,7 @@ inline void generate_orders(
     float qty_step, float price_step, float min_qty, float min_cost, float c_mult,
     float kf, bool block_initial
 ) {
+    if (s.psize <= 0.0f) s.pprice_tick = -1;
     bool entry_up = !is_long;
     bool close_up = is_long;
     float band = is_long ? fmin(s.ema0, fmin(s.ema1, s.ema2))
@@ -951,12 +964,14 @@ inline void generate_orders(
     s.entry_gen_balance = balance;
     s.entry_gen_psize = s.psize;
     s.entry_gen_pprice = s.pprice;
+    s.entry_gen_pprice_tick = s.pprice_tick;
     s.entry_gen_kf = kf;
     s.entry_gen_touch_ticks = entry_touch;
     s.entry_gen_market_price = price_now;
     s.close_gen_balance = balance;
     s.close_gen_psize = s.psize;
     s.close_gen_pprice = s.pprice;
+    s.close_gen_pprice_tick = s.pprice_tick;
     s.close_gen_market_price = price_now;
     s.close_gen_touch_down_ticks = touch_down_ticks;
     s.close_gen_touch_up_ticks = touch_up_ticks;
@@ -1027,10 +1042,8 @@ inline void generate_orders(
 #if PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY
     const bool trailing_entry = false;
     bool entry_triggered = true;
-    float reentry_target = s.pprice * (
-        is_long ? 1.0f - s.entry_threshold_base * tm
-                : 1.0f + s.entry_threshold_base * tm
-    );
+    float reentry_target = fma(s.pprice,
+        is_long ? -s.entry_threshold_base * tm : s.entry_threshold_base * tm, s.pprice);
 #else
     float retracement = fmax(s.entry_retracement_base, 0.0f) * rm;
     const bool trailing_entry = PASSIVBOT_TM_TRAILING_ENTRY_ONLY
@@ -1042,28 +1055,35 @@ inline void generate_orders(
         ? s.min_since_open < s.pprice * (1.0f - threshold)
         : s.max_since_open > s.pprice * (1.0f + threshold);
     bool entry_triggered = true;
-    float reentry_target = s.pprice * (
-        is_long ? 1.0f - s.entry_threshold_base * tm
-                : 1.0f + s.entry_threshold_base * tm
-    );
+    float reentry_target = fma(s.pprice,
+        is_long ? -s.entry_threshold_base * tm : s.entry_threshold_base * tm, s.pprice);
     if (trailing_entry) {
         if (threshold <= 0.0f) {
             entry_triggered = retracement > 0.0f && retraced_entry;
             reentry_target = price_now;
         } else if (retracement <= 0.0f) {
-            reentry_target = s.pprice * (is_long ? 1.0f - threshold : 1.0f + threshold);
+            reentry_target = fma(s.pprice, is_long ? -threshold : threshold, s.pprice);
         } else {
             entry_triggered = crossed_entry && retraced_entry;
-            reentry_target = s.pprice * (
-                is_long ? 1.0f - threshold + retracement
-                        : 1.0f + threshold - retracement
-            );
+            reentry_target = fma(s.pprice,
+                is_long ? -threshold + retracement : threshold - retracement, s.pprice);
         }
     }
 #endif
     bool reentry_target_is_touch = trailing_entry && threshold <= 0.0f;
     int raw_reentry_ticks = reentry_target_is_touch
         ? entry_touch : directional_ticks(reentry_target, price_step, entry_up);
+    bool static_entry_distance = s.decimal_static_entry && s.entry_threshold_we == 0.0f
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+        && s.entry_threshold_v1h == 0.0f && s.entry_threshold_v1m == 0.0f
+#endif
+        && (!(trailing_entry && s.entry_retracement_base > 0.0f)
+            || s.decimal_static_entry_retracement);
+    if (!reentry_target_is_touch && static_entry_distance) {
+        int proven = canonical_gpu_relative_ticks(s.pprice_tick, s.decimals[1], s.decimals[2],
+            is_long, trailing_entry && s.entry_retracement_base > 0.0f, entry_up);
+        if (proven >= 0) raw_reentry_ticks = proven;
+    }
     bool reentry_touch_controls = reentry_target_is_touch || (entry_up
         ? touch_down_ticks >= raw_reentry_ticks
         : touch_up_ticks <= raw_reentry_ticks);
@@ -1084,7 +1104,7 @@ inline void generate_orders(
         : min_entry_qty(reentry_sizing_price, qty_step, min_qty, min_cost, c_mult);
     float rq = fmax(iq_effective, fmax(min_rq, round_step(
         fmax(
-            s.psize * s.ddf,
+            rounded_gpu_reentry_product(s.psize, s.ddf, qty_step, s.decimals[0]),
             balance * s.allowed_wel * s.initial_qty_pct
                 / fmax(reentry_sizing_price * c_mult, 1.0e-12f)
         ), qty_step
@@ -1244,6 +1264,17 @@ inline void generate_orders(
         }
     }
     int target_ticks = directional_ticks(close_target, price_step, close_up);
+    bool static_close_distance = s.decimal_static_close && s.close_threshold_we == 0.0f
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+        && s.close_threshold_v1h == 0.0f && s.close_threshold_v1m == 0.0f
+#endif
+        && (!(trailing_close && s.close_retracement_base > 0.0f)
+            || s.decimal_static_close_retracement);
+    if (!(trailing_close && ct <= 0.0f) && static_close_distance) {
+        int proven = canonical_gpu_relative_ticks(s.pprice_tick, s.decimals[3], s.decimals[4],
+            !is_long, trailing_close && s.close_retracement_base > 0.0f, close_up);
+        if (proven >= 0) target_ticks = proven;
+    }
     int close_touch = close_up ? touch_up_ticks : touch_down_ticks;
     // Compare the float64-derived directional touch ticks before choosing the
     // raw touch. Nearby raw and tick prices may be equal after float32
@@ -1441,6 +1472,7 @@ inline int recursive_close_groups(
     TmSide sim = source;
     sim.psize = source.close_gen_psize;
     sim.pprice = source.close_gen_pprice;
+    sim.pprice_tick = source.close_gen_pprice_tick;
     // Reconstruct Rust's passive strategy ladder first. Ordinary market
     // execution is a policy applied to each completed price group against the
     // market captured at generation time; applying it inside generate_orders
@@ -1729,6 +1761,7 @@ inline bool recursive_strategy_close_would_expand(
     TmSide sim = source;
     sim.psize = source.close_gen_psize;
     sim.pprice = source.close_gen_pprice;
+    sim.pprice_tick = source.close_gen_pprice_tick;
     sim.market_orders_allowed = false;
     sim.twel_enforcer_enabled = false;
     sim.unstuck_enabled = false;
@@ -3051,6 +3084,7 @@ inline void passivbot_single_coin_impl(
             TmSide ladder_side = long_side;
             ladder_side.psize = long_side.entry_gen_psize;
             ladder_side.pprice = long_side.entry_gen_pprice;
+            ladder_side.pprice_tick = long_side.entry_gen_pprice_tick;
             // Rust constructs the immutable recursive strategy ladder before
             // orchestration promotes individual rungs to market execution.
             ladder_side.market_orders_allowed = false;
@@ -3144,6 +3178,8 @@ inline void passivbot_single_coin_impl(
                     if (was_flat) long_side.pos_open_k = kf;
                     long_side.psize = new_psize;
                     long_side.pprice = new_pprice;
+                    long_side.pprice_tick = !entry_market && was_flat
+                        ? entry_ticks : -1;
                     long_side.last_inc_k = kf;
                     day_volume += fabs(eq) * entry_fill_price / balance;
                     long_entry_fill = true;
@@ -3162,6 +3198,7 @@ inline void passivbot_single_coin_impl(
                                 eq / fmax(gate_psize, 1.0e-12f)
                             );
                         gate_side.psize = gate_psize;
+                        gate_side.pprice_tick = -1;
                     }
                 }
                 // Exact Rust keeps at most one partially retained boundary
@@ -3177,6 +3214,7 @@ inline void passivbot_single_coin_impl(
                         * (ladder_side.psize / fmax(sim_psize, 1.0e-12f))
                         + ep * (strategy_eq / fmax(sim_psize, 1.0e-12f));
                 ladder_side.psize = sim_psize;
+                ladder_side.pprice_tick = sim_flat ? entry_ticks : -1;
                 previous_ticks = entry_ticks;
                 ladder_touch_ticks = min(ladder_touch_ticks, entry_ticks);
                 // Exact Rust expands the immutable recursive ladder only when
@@ -3820,6 +3858,7 @@ inline void passivbot_single_coin_impl(
             TmSide ladder_side = short_side;
             ladder_side.psize = short_side.entry_gen_psize;
             ladder_side.pprice = short_side.entry_gen_pprice;
+            ladder_side.pprice_tick = short_side.entry_gen_pprice_tick;
             ladder_side.market_orders_allowed = false;
             const float ladder_balance = short_side.entry_gen_balance;
             const float ladder_kf = short_side.entry_gen_kf;
@@ -3913,6 +3952,8 @@ inline void passivbot_single_coin_impl(
                     if (was_flat) short_side.pos_open_k = kf;
                     short_side.psize = new_psize;
                     short_side.pprice = new_pprice;
+                    short_side.pprice_tick = !entry_market && was_flat
+                        ? entry_ticks : -1;
                     short_side.last_inc_k = kf;
                     day_volume += fabs(eq) * entry_fill_price / balance;
                     short_entry_fill = true;
@@ -3931,6 +3972,7 @@ inline void passivbot_single_coin_impl(
                                 eq / fmax(gate_psize, 1.0e-12f)
                             );
                         gate_side.psize = gate_psize;
+                        gate_side.pprice_tick = -1;
                     }
                 }
                 if (twel_boundary_partial) break;
@@ -3944,6 +3986,7 @@ inline void passivbot_single_coin_impl(
                         * (ladder_side.psize / fmax(sim_psize, 1.0e-12f))
                         + ep * (strategy_eq / fmax(sim_psize, 1.0e-12f));
                 ladder_side.psize = sim_psize;
+                ladder_side.pprice_tick = sim_flat ? entry_ticks : -1;
                 previous_ticks = entry_ticks;
                 ladder_touch_ticks = max(ladder_touch_ticks, entry_ticks);
                 if (rung == 0 && !short_entry_passive_reachable) break;

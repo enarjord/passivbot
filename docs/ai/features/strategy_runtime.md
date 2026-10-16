@@ -173,6 +173,16 @@ another physical-value rescaling. Nearest rounding resolves quotient ties with c
 arithmetic when possible; directional rounding only recovers provably aligned inputs and keeps
 physical rounding for other intermediate values.
 
+GPU TM replay transports original decimal DDF and base threshold/retracement operands from Rust
+as finite integer limbs, separately from the ordinary float32 parameters. Checked unit arithmetic
+resolves near-half quantities only for uniquely recoverable counts below 2^24. Static price-distance
+proofs additionally require a passive initial-fill tick lineage; partial closes retain that lineage,
+while every weighted increase, market fill, and full flatten invalidates it. Recursive snapshots
+and temporal replay preserve the same proof state. Per-modifier masks preserve original-precision nonzero values and explicit coin pins, so an
+effective static group remains provable when pinned zeros replace nonzero global modifiers. Coefficients outside 60 bits, decimal exponents outside [-18, 18], checked
+integer overflow, weighted prices, and dynamic distances retain fused physical float32 arithmetic.
+These bounded proofs do not establish general GPU numerical acceptance or native migration readiness.
+
 Auto-unstuck has its own EMA trigger toggle:
 `bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure

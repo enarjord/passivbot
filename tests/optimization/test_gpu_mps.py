@@ -72,6 +72,7 @@ from optimization.gpu.mps_kernel import (
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
+    _TM_DECIMAL_WORDS,
     _tm_dispatch_specialization,
     _scale_directional_minute_parameters,
     _scale_ema_multicoin_coin_overrides,
@@ -95,6 +96,32 @@ from optimization.gpu.metrics import (
     compute_objectives,
 )
 from optimization.gpu.service import MpsMulticoinEmaProxy
+
+
+def _tm_probe_tensor(values, **kwargs):
+    """Direct shader probes use the same private parameter packing as replay."""
+    raw = np.asarray(values, dtype=np.float64)
+    width = raw.shape[-1]
+    if width in (len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS),
+                 2 * len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)):
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+    elif width in (len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS),
+                   2 * len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)):
+        keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    else:
+        return torch.tensor(values, **kwargs)
+    packed = _pack_tm_parameter_matrix(raw.reshape(-1, width), keys, sides=width // len(keys))
+    return torch.tensor(packed, **kwargs)
+
+
+def _tm_probe_full(shape, value, **kwargs):
+    from types import SimpleNamespace
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
+
+    raw = np.full(shape, value, dtype=np.float64)
+    packed = MpsTrailingMartingaleMulticoinRunner._prepare_coin_overrides(
+        SimpleNamespace(interval_minutes=1.0), raw)
+    return torch.tensor(packed, **kwargs)
 
 
 @pytest.mark.parametrize(
@@ -203,9 +230,10 @@ def test_tm_parameter_packing_preserves_positive_underflow_mode_per_side():
     )
 
     assert packed[0, entry_column] == np.finfo(np.float32).tiny
-    assert packed[0, width + close_column] == np.finfo(np.float32).tiny
+    packed_width = packed.shape[1] // 2
+    assert packed[0, packed_width + close_column] == np.finfo(np.float32).tiny
     assert packed[0, close_column] == 0.0
-    assert packed[0, width + entry_column] == 0.0
+    assert packed[0, packed_width + entry_column] == 0.0
 
 
 @pytest.mark.parametrize(
@@ -271,7 +299,7 @@ def test_mps_single_coin_wallet_exposure_override_keeps_twel_separate(
             "hsl_scale_budget_with_excess_allowance": float(scale_budget),
         }
     )
-    params = torch.tensor(
+    params = _tm_probe_tensor(
         [values[key] for key in keys], dtype=torch.float32, device=gpu_device()
     )
     output = torch.zeros(2, dtype=torch.float32, device=gpu_device())
@@ -2000,7 +2028,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
     coin_settings[0, 2] = 1.0
     coin_settings[0, 4] = 1.0
     coin_settings[0, 7] = 10.0
-    coin_overrides = torch.full(
+    coin_overrides = _tm_probe_full(
         (1, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         float("nan"),
         dtype=torch.float32,
@@ -2178,7 +2206,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     coin_settings = torch.zeros((3, 13), dtype=torch.float32, device=gpu_device())
     coin_settings[:, 7] = 10.0
     coin_settings[1, 7] = 1.0
-    coin_overrides = torch.full(
+    coin_overrides = _tm_probe_full(
         (3, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         float("nan"),
         dtype=torch.float32,
@@ -2297,7 +2325,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
     short_row[
         TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("entry_initial_qty_pct")
     ] = 0.5
-    params = torch.tensor([row, short_row], dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor([row, short_row], dtype=torch.float32, device=gpu_device())
     bars = torch.tensor(
         [[[100.0, 100.0, 100.0, 1.0]], [[101.0, 99.0, 100.0, 1.0]]],
         dtype=torch.float32,
@@ -2325,7 +2353,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
     coin_settings[0, 7] = 10.0
     coin_settings[0, 9] = 100.0
     coin_settings[0, 10] = 1.0
-    coin_overrides = torch.full(
+    coin_overrides = _tm_probe_full(
         (1, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         float("nan"),
         dtype=torch.float32,
@@ -2612,7 +2640,7 @@ kernel void passivbot_tm_multicoin_candle_helpers_probe(
     coin_settings = torch.zeros((2, 13), dtype=torch.float32, device=gpu_device())
     coin_settings[:, 4] = 1.0
     coin_settings[:, 7] = 10.0
-    coin_overrides = torch.full(
+    coin_overrides = _tm_probe_full(
         (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         float("nan"),
         dtype=torch.float32,
@@ -5894,7 +5922,7 @@ kernel void passivbot_multicoin_candidate_recovery_probe(
     output[5] = candidate_side.selected[1] ? 1.0f : 0.0f;
 }}
 """
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     output = torch.zeros(6, dtype=torch.float32, device=gpu_device())
     library = compile_shader(source + probe_kernel)
     library.passivbot_multicoin_candidate_recovery_probe(
@@ -6040,7 +6068,7 @@ def test_mps_tm_recursive_entry_twel_gate_does_not_expand_invalid_coin(
             "twel_enforcer_threshold": 1.0,
         }
     )
-    params = torch.tensor(
+    params = _tm_probe_tensor(
         [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS],
         dtype=torch.float32,
         device=gpu_device(),
@@ -6280,7 +6308,7 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
             "unstuck_threshold": 0.1,
         }
     )
-    params = torch.tensor(
+    params = _tm_probe_tensor(
         [values[key] for key in keys], dtype=torch.float32, device=gpu_device()
     )
     output = torch.zeros(8, dtype=torch.float32, device=gpu_device())
@@ -10789,14 +10817,14 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin" in source
-    assert f"constant int PARAM_COLS = {len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)}" in source
+    assert f"constant int PARAM_COLS = {len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS) + _TM_DECIMAL_WORDS}" in source
     assert "effective_n_positions" in source
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
     assert "close_retracement_base" in source
     assert "as_type<float>(touch_min_qty_bits[k * C + c])" in source
     assert (
-        f"constant int OVERRIDE_COLS = {TRAILING_MARTINGALE_COIN_OVERRIDE_COLS}"
+        f"constant int OVERRIDE_COLS = {TRAILING_MARTINGALE_COIN_OVERRIDE_COLS + _TM_DECIMAL_WORDS}"
         in source
     )
     assert "allowed_wallet_exposure_limit" in source
@@ -12944,7 +12972,7 @@ def test_mps_tm_recursive_close_sizing_uses_generation_market(side):
     row[17] = 0.01 if side == "long" else -0.01
     row[20] = 0.0
     row[24] = 0.01
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_close_generation_market_probe(
     constant float* params,
@@ -13019,7 +13047,7 @@ def test_mps_tm_recursive_close_group_uses_market_touch_minimum(side):
     row[16] = 0.001
     row[17] = 0.1
     row[20] = 0.0
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_close_market_minimum_probe(
     constant float* params,
@@ -13095,7 +13123,7 @@ def test_mps_tm_recursive_wel_seed_precedes_market_resize():
         wel_enforcer_enabled=True,
         wel_enforcer_threshold=0.049,
     )
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_wel_seed_probe(
     constant float* params,
@@ -13154,7 +13182,7 @@ def test_mps_tm_recursive_expansion_keeps_pregate_wel_reachability(side):
     row[16] = 0.1
     row[17] = 0.0
     row[20] = 0.0
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_close_pregate_wel_probe(
     constant float* params,
@@ -13374,7 +13402,7 @@ def test_mps_tm_recursive_reselects_after_candidate_finalization():
     row[17] = 0.0
     row[20] = 0.0
     row[23] = 100.0
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_candidate_reselection_probe(
     constant float* params,
@@ -13461,7 +13489,7 @@ def test_mps_tm_recursive_finalization_drops_mixed_minimum_reducer():
     row[16] = 1.0
     row[17] = 0.0
     row[20] = 0.0
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_mixed_minimum_reducer_probe(
     constant float* params,
@@ -13525,7 +13553,7 @@ def test_mps_tm_recursive_reducer_gate_falls_back_to_next_candidate(side):
     import passivbot_rust
 
     row = _tm_single_row()
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_reducer_gate_fallback_probe(
     constant float* params,
@@ -13579,7 +13607,7 @@ def test_mps_tm_recursive_reducer_gate_uses_generation_market_snapshot(side):
     import passivbot_rust
 
     row = _tm_single_row()
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_reducer_generation_gate_probe(
     constant float* params,
@@ -13640,7 +13668,7 @@ def test_mps_tm_recursive_reducer_gate_uses_generation_pnl_snapshot(side):
     import passivbot_rust
 
     row = _tm_single_row()
-    params = torch.tensor(row, dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(row, dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_recursive_reducer_generation_pnl_probe(
     constant float* params,
@@ -13701,7 +13729,7 @@ kernel void passivbot_tm_recursive_reducer_generation_pnl_probe(
 def test_mps_tm_hsl_panic_replacement_clears_ordinary_market_state(side):
     import passivbot_rust
 
-    params = torch.tensor(_tm_single_row(), dtype=torch.float32, device=gpu_device())
+    params = _tm_probe_tensor(_tm_single_row(), dtype=torch.float32, device=gpu_device())
     probe_kernel = r"""
 kernel void passivbot_tm_hsl_panic_state_probe(
     constant float* params,
@@ -16384,7 +16412,7 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
             "wel_enforcer_threshold": 0.99,
         }
     )
-    params = torch.tensor(
+    params = _tm_probe_tensor(
         [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS],
         dtype=torch.float32,
         device=gpu_device(),
@@ -16411,7 +16439,7 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
     coin_settings[0, 3] = 100.0
     coin_settings[0, 4] = 1.0
     coin_settings[0, 7] = 10.0
-    coin_overrides = torch.full(
+    coin_overrides = _tm_probe_full(
         (1, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         float("nan"),
         dtype=torch.float32,
@@ -16517,7 +16545,7 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
             "unstuck_threshold": 0.5,
         }
     )
-    params = torch.tensor(
+    params = _tm_probe_tensor(
         [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS],
         dtype=torch.float32,
         device=gpu_device(),
@@ -16544,7 +16572,7 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
     coin_settings[0, 3] = 100.0
     coin_settings[0, 4] = 1.0
     coin_settings[0, 7] = 10.0
-    coin_overrides = torch.full(
+    coin_overrides = _tm_probe_full(
         (1, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         float("nan"),
         dtype=torch.float32,
@@ -16758,7 +16786,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
             "close_retracement_base_pct": 0.0,
         }
     )
-    params = torch.tensor(
+    params = _tm_probe_tensor(
         [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS],
         dtype=torch.float32,
         device=gpu_device(),
@@ -16785,7 +16813,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
     coin_settings[0, 3] = 40.0
     coin_settings[0, 4] = 1.0
     coin_settings[0, 7] = 10.0
-    coin_overrides = torch.full(
+    coin_overrides = _tm_probe_full(
         (1, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         float("nan"),
         dtype=torch.float32,
@@ -18729,7 +18757,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert f"constant int SIDE_PARAMS = {len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)}" in source
+    assert f"constant int SIDE_PARAMS = {len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS) + _TM_DECIMAL_WORDS}" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source
@@ -18836,6 +18864,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     # retain their ban on physical-price perturbations.
     before_quantity, quantity_and_rest = source.split("inline float aligned_qty_difference(", 1)
     _, after_quantity = quantity_and_rest.split("inline float min_entry_qty(", 1)
+    before_quantity = before_quantity.split("// PASSIVBOT_DECIMAL_ROUNDING_END", 1)[-1]
     assert "nextafter(" not in before_quantity
     assert "nextafter(" not in after_quantity
 

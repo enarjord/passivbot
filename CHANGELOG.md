@@ -49,6 +49,9 @@ since the latest release tag; these features may already be available when insta
   ambiguous and genuinely fractional positions retain physical-unit rounding.
   Venue rounding preserves its chosen integer count through decimal conversion,
   including fine steps with large quantities.
+  GPU replay preserves original decimal factors and static distances through parameter and
+  coin-override packing. Recoverable venue counts and proven passive initial-fill price ticks
+  retain aligned boundaries without snapping authored near-half or off-grid values.
   Directional and multicoin GPU top-ups after partial closes also subtract
   recoverable venue-unit counts without losing a quantity step.
 

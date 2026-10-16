@@ -181,6 +181,32 @@ impl DecimalParts {
     }
 }
 
+/// Lossless finite-limb transport for the canonical decimal operands used by
+/// GPU venue proofs. The sentinel declines a proof; physical arithmetic remains
+/// available for coefficients/exponents outside the checked GPU integer domain.
+#[pyfunction]
+pub fn gpu_decimal_metadata_py(values: Vec<f64>) -> Vec<(u32, u32, u32, i32)> {
+    values
+        .into_iter()
+        .map(|value| {
+            let Some(parts) = DecimalParts::from_float(value) else {
+                return (0, 0, 0, 2048);
+            };
+            let coefficient = parts.coefficient.unsigned_abs();
+            if coefficient >= 1_u128 << 60 || !(-18..=18).contains(&parts.exponent) {
+                return (0, 0, 0, 2048);
+            }
+            let mask = (1_u128 << 20) - 1;
+            (
+                (coefficient & mask) as u32,
+                ((coefficient >> 20) & mask) as u32,
+                ((coefficient >> 40) & mask) as u32,
+                parts.exponent + if parts.coefficient < 0 { 1024 } else { 0 },
+            )
+        })
+        .collect()
+}
+
 // The smallest exact decimal scale keeps ordinary venue steps on a cheap
 // integer path. Equality here is required; a tolerance cannot prove a step.
 fn exact_step_scale(step: f64) -> Option<(f64, f64)> {
@@ -834,6 +860,34 @@ mod tests {
         assert_eq!(round_(1e-10, 3e-12), 9.9e-11);
         assert_eq!(round_dn(0.999999999999, 3e-12), 0.999999999999);
         assert_eq!(round_up(1.000000000001, 3e-12), 1.000000000002);
+    }
+
+    #[test]
+    fn gpu_decimal_transport_preserves_authored_sides_of_boundaries() {
+        use super::gpu_decimal_metadata_py;
+        let input = [1.15, 1.15 - 1e-12, 1.15 + 1e-12, -0.044, 0.0];
+        let metadata = gpu_decimal_metadata_py(input.to_vec());
+        assert_ne!(metadata[0], metadata[1]);
+        assert_ne!(metadata[0], metadata[2]);
+        for (value, (lo, mid, hi, encoded)) in input.into_iter().zip(metadata) {
+            assert!(lo < 1 << 20 && mid < 1 << 20 && hi < 1 << 20);
+            let magnitude = lo as u64 | (mid as u64) << 20 | (hi as u64) << 40;
+            let negative = encoded >= 512;
+            let exponent = encoded - if negative { 1024 } else { 0 };
+            let restored: f64 = format!(
+                "{}{}e{}",
+                if negative { "-" } else { "" },
+                magnitude,
+                exponent
+            )
+            .parse()
+            .unwrap();
+            assert_eq!(restored, value);
+        }
+        assert_eq!(
+            gpu_decimal_metadata_py(vec![f64::NAN, 1e-100, 1e100]),
+            vec![(0, 0, 0, 2048); 3]
+        );
     }
 
     #[test]
