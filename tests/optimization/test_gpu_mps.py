@@ -18832,7 +18832,12 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "int cticks = touch_controls ? touch_nearest_ticks : target_ticks" in source
     assert "entry_raw_touch" not in source
     assert "close_raw_touch" not in source
-    assert "nextafter(" not in source
+    # Quantity-unit recovery checks float spacing; price tick comparisons
+    # retain their ban on physical-price perturbations.
+    before_quantity, quantity_and_rest = source.split("inline float aligned_qty_difference(", 1)
+    _, after_quantity = quantity_and_rest.split("inline float min_entry_qty(", 1)
+    assert "nextafter(" not in before_quantity
+    assert "nextafter(" not in after_quantity
 
     count = 8
     close = np.full(count, 100.0)
