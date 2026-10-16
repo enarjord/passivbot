@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix GPU trailing-martingale recursive closes moving or merging adjacent price ticks through intermediate relative-price rounding.
+
 - Bound whole-history multicoin Metal dispatch groups by the candidate batch and
   pipeline execution width, preventing zeroed replay results on large coin-state layouts.
 
