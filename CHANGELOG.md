@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Index owned historical candle-gap metadata by range and mutation revision, avoiding full-history normalization and candle copies on unrelated recent reads and warm EMA projection hits. Preserve overlapping coverage, retry clocks, legacy timestamp defaults and external-writer invalidation.
+
+- Reuse unchanged parsed candle shards with bounded memory and file-identity invalidation, and avoid sorting the full retained history when overlapping source rows are identical. Partial reads that lose either a legacy shard or its primary overlay remain retryable. Native Windows keeps ordinary disk reads because its file creation clock cannot safely invalidate in-place corrections. Corrections, strict audits, mutable consumer arrays and restart reconstruction retain their existing behavior.
+- Avoid a second HSL history reconstruction when a complete native minute grid lacks only the non-minute current endpoint. Preserve current-fact validation, decisions, lifecycle events and estimator diagnostics in live and simulator evaluation.
+
 - Initialize every member of a fresh GPU optimizer population randomly, matching the CPU backends, instead of implicitly inserting the input bot as the first candidate. Explicit `--start` configs and checkpoint resume remain supported.
 
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.

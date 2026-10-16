@@ -265,6 +265,173 @@ class GapEntry(TypedDict, total=False):
     last_contextual_retry_at: int  # Latest KuCoin boundary-proof attempt (ms)
 
 
+class _GapMetadataDict(dict):
+    """Owned JSON record whose mutations invalidate the containing range view."""
+
+    __slots__ = ("_revision",)
+
+    def __init__(self, values, revision):
+        self._revision = revision
+        super().__init__((key, _track_gap_value(value, revision)) for key, value in values.items())
+
+    def __setitem__(self, key, value):
+        self._revision[0] += 1
+        super().__setitem__(key, _adopt_gap_value(value, self._revision))
+
+    def __delitem__(self, key):
+        self._revision[0] += 1
+        super().__delitem__(key)
+
+    def clear(self):
+        self._revision[0] += 1
+        super().clear()
+
+    def pop(self, *args):
+        self._revision[0] += 1
+        return super().pop(*args)
+
+    def popitem(self):
+        self._revision[0] += 1
+        return super().popitem()
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def update(self, *args, **kwargs):
+        for key, value in dict(*args, **kwargs).items():
+            self[key] = value
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+
+class _GapMetadataList(list):
+    """Owned metadata with one revision-bound range index, never a retry decision."""
+
+    __slots__ = ("_revision", "_range_revision", "_range_index")
+
+    def __init__(self, values=(), revision=None):
+        self._revision = [0, True] if revision is None else revision
+        self._range_revision = None
+        self._range_index = None
+        super().__init__(_track_gap_value(value, self._revision) for value in values)
+
+    def __setitem__(self, key, value):
+        value = ([_adopt_gap_value(item, self._revision) for item in value]
+                 if isinstance(key, slice) else _adopt_gap_value(value, self._revision))
+        self._revision[0] += 1
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key):
+        self._revision[0] += 1
+        super().__delitem__(key)
+
+    def append(self, value):
+        self._revision[0] += 1
+        super().append(_adopt_gap_value(value, self._revision))
+
+    def extend(self, values):
+        # Materialize first, including self-extension, before changing the list.
+        values = [_adopt_gap_value(value, self._revision) for value in values]
+        self._revision[0] += 1
+        super().extend(values)
+
+    def insert(self, index, value):
+        self._revision[0] += 1
+        super().insert(index, _adopt_gap_value(value, self._revision))
+
+    def pop(self, index=-1):
+        self._revision[0] += 1
+        return super().pop(index)
+
+    def remove(self, value):
+        self._revision[0] += 1
+        super().remove(value)
+
+    def clear(self):
+        self._revision[0] += 1
+        super().clear()
+
+    def reverse(self):
+        self._revision[0] += 1
+        super().reverse()
+
+    def sort(self, *args, **kwargs):
+        # Even a failed sort may leave the list modified.
+        self._revision[0] += 1
+        super().sort(*args, **kwargs)
+
+    def __iadd__(self, values):
+        self.extend(values)
+        return self
+
+    def __imul__(self, count):
+        self._revision[0] += 1
+        super().__imul__(count)
+        return self
+
+    def _build_range_index(self):
+        entries = []
+        for ordinal, value in enumerate(self):
+            try:
+                if isinstance(value, dict):
+                    first = int(value.get("start_ts", 0))
+                    last = int(value.get("end_ts", 0))
+                elif isinstance(value, (list, tuple)) and len(value) >= 2:
+                    first, last = int(value[0]), int(value[1])
+                else:
+                    continue
+                if first <= last:
+                    entries.append((first, last, ordinal, value))
+            except Exception:
+                continue
+        entries.sort(key=lambda entry: entry[0])
+        prefix_ends = []
+        maximum = None
+        for _, last, _, _ in entries:
+            maximum = last if maximum is None else max(maximum, last)
+            prefix_ends.append(maximum)
+        return entries, prefix_ends
+
+    def overlapping_records(self, start, end):
+        if self._range_revision != self._revision[0]:
+            self._range_index = self._build_range_index()
+            self._range_revision = self._revision[0]
+        entries, prefix_ends = self._range_index
+        matches = []
+        for i in range(bisect_left(prefix_ends, int(start)), len(entries)):
+            first, last, ordinal, record = entries[i]
+            if first > int(end):
+                break
+            if last >= int(start):
+                matches.append((ordinal, record))
+        # Preserve source order, including duplicate and nested intervals.
+        return [record for _, record in sorted(matches, key=lambda item: item[0])]
+
+
+def _adopt_gap_value(value, revision):
+    """Preserve inserted aliases; an externally owned container disables reuse."""
+    if isinstance(value, (_GapMetadataDict, _GapMetadataList)) and value._revision is revision:
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        revision[1] = False
+    return value
+
+
+def _track_gap_value(value, revision):
+    """Detach owned JSON containers and share their mutation revision."""
+    if isinstance(value, dict):
+        return _GapMetadataDict(value, revision)
+    if isinstance(value, list):
+        return _GapMetadataList(value, revision)
+    if isinstance(value, tuple):
+        return tuple(_track_gap_value(item, revision) for item in value)
+    return value
+
+
 class _KnownGapIndex:
     """Read-cohort index preserving ordered, overlapping gap records and clocks."""
 
@@ -1071,6 +1238,9 @@ class CandlestickManager:
         # Cache of primary shard paths per (symbol, tf) - avoids redundant glob scans
         self._shard_paths_cache: Dict[Tuple[str, str], Dict[str, str]] = {}
 
+        # Parsed disk rows only, never projected candles, EMA values or permissions.
+        # File identities are checked on every use; returned arrays are detached.
+        self._disk_rows_cache = OrderedDict()
         self._cache: Dict[str, np.ndarray] = {}
         # Recent public websocket observations are RAM-only provenance used to
         # distinguish a fresh/changed CCXT update from rows repeated out of
@@ -2126,6 +2296,8 @@ class CandlestickManager:
                     timeframe=tf_norm,
                     removed=removed,
                 )
+            if isinstance(meta.get("known_gaps"), list):
+                meta["known_gaps"] = _GapMetadataList(meta["known_gaps"])
             self._index[key] = idx
             self._index_mtime[key] = current_mtime
             if migrated_pre_inception:
@@ -2605,6 +2777,40 @@ class CandlestickManager:
         self._legacy_day_quality_cache[cache_key] = bool(ok)
         return bool(ok)
 
+    def _disk_rows_signature(self, load_keys, day_ctx, symbol, tf_norm):
+        """Identify every selected shard and index, including atomic replacements."""
+        if sys.platform.startswith("win"):
+            # Windows ctime is creation time on supported Python versions. It
+            # cannot invalidate same-size corrections with restored mtime.
+            return None
+        paths = [self._index_path(symbol, tf=tf_norm)]
+        for day, path in load_keys:
+            paths.append(path)
+            ctx = day_ctx[day]
+            if ctx["source"] == "merge" and ctx["primary_path"]:
+                paths.append(ctx["primary_path"])
+        signature = []
+        for path in paths:
+            try:
+                stat = os.stat(path)
+            except OSError:
+                return None  # Never certify a partial or inaccessible source.
+            signature.append((str(path), stat.st_dev, stat.st_ino, stat.st_size,
+                              stat.st_mtime_ns, stat.st_ctime_ns))
+        return tuple(signature)
+
+    def _remember_disk_rows(self, key, signature, rows):
+        """Bound immutable parsed-source reuse to 16 ranges and eight MiB total."""
+        if signature is None or rows.nbytes > 8 * 1024 * 1024:
+            return
+        cached = rows.copy()
+        cached.flags.writeable = False
+        self._disk_rows_cache[key] = (signature, cached)
+        self._disk_rows_cache.move_to_end(key)
+        while (len(self._disk_rows_cache) > 16 or
+               sum(value[1].nbytes for value in self._disk_rows_cache.values()) > 8 * 1024 * 1024):
+            self._disk_rows_cache.popitem(last=False)
+
     @ema_timing.timed("disk_load")
     def _load_from_disk(
         self,
@@ -2699,6 +2905,20 @@ class CandlestickManager:
                     }
             if not load_keys:
                 return
+            reuse_key = (symbol, tf_norm, int(start_ts), int(end_ts))
+            signature = None if strict else self._disk_rows_signature(
+                load_keys, day_ctx, symbol, tf_norm
+            )
+            cached = self._disk_rows_cache.get(reuse_key)
+            if signature is not None and cached is not None and cached[0] == signature:
+                self._disk_rows_cache.move_to_end(reuse_key)
+                merged_disk = cached[1]
+                if tf_norm == "1m" and merge_memory_cache:
+                    merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), merged_disk)
+                    self._cache[symbol] = merged
+                    return merged
+                return merged_disk.copy()
+            self._disk_rows_cache.pop(reuse_key, None)
             self._log(
                 "debug",
                 "disk_load_plan",
@@ -2711,6 +2931,7 @@ class CandlestickManager:
             )
             # Load and merge with coarse progress updates to show activity for large ranges.
             arrays: List[np.ndarray] = []
+            all_sources_loaded = True
             t0 = time.monotonic()
             last_progress_log = t0
             for i, (day_key, path) in enumerate(sorted(load_keys), start=1):
@@ -2727,10 +2948,16 @@ class CandlestickManager:
                         if strict:
                             raise
                         primary_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+                    # Certify both constituents before merging: surviving rows must
+                    # not hide an empty/failed source from the reuse eligibility check.
+                    all_sources_loaded = (
+                        all_sources_loaded and bool(legacy_arr.size) and bool(primary_arr.size)
+                    )
                     # Keep legacy canonical: primary should only fill legacy gaps.
                     a = self._merge_overwrite(primary_arr, legacy_arr)
                 else:
                     a = self._load_shard(path, strict=strict)
+                    all_sources_loaded = all_sources_loaded and bool(a.size)
 
                 # NOTE: We intentionally do NOT write legacy data into primary shards.
                 # Primary is only used to fill gaps where legacy is missing/incomplete.
@@ -2821,6 +3048,10 @@ class CandlestickManager:
             except Exception:
                 # Disk-load telemetry must never break cache loading.
                 pass
+            # Do not retain failed/empty shards or facts rewritten during this read.
+            if (not strict and all_sources_loaded and signature is not None
+                    and signature == self._disk_rows_signature(load_keys, day_ctx, symbol, tf_norm)):
+                self._remember_disk_rows(reuse_key, signature, merged_disk)
             if tf_norm == "1m":
                 if not merge_memory_cache:
                     return merged_disk
@@ -3215,6 +3446,14 @@ class CandlestickManager:
         ):
             prefix = a[:-1] if b["ts"][0] == a["ts"][-1] else a
             return np.concatenate([prefix, b])
+        # Unchanged daily shards commonly overlap a much larger live history.
+        # Compare their exact rows before sorting/copying the concatenated history.
+        # Preserve last-write-wins and detached-array ownership on every path.
+        if (np.all(a["ts"][1:] > a["ts"][:-1])
+                and np.all(b["ts"][1:] > b["ts"][:-1])):
+            indices = np.searchsorted(a["ts"], b["ts"])
+            if (np.all(indices < len(a)) and np.array_equal(a[indices], b)):
+                return a.copy()
         # Put existing first, then new; then keep last seen per ts to prefer new.
         # Sort the scalar timestamp vector rather than structured rows: NumPy
         # may use unspecified structured fields as tie-breakers even when
@@ -3279,6 +3518,23 @@ class CandlestickManager:
         """Return known gaps as enhanced GapEntry objects with full metadata."""
         idx = self._ensure_symbol_index(symbol)
         gaps = idx.get("meta", {}).get("known_gaps", [])
+        return self._normalize_gap_entries(gaps)
+
+    def _get_known_gaps_in_range(self, symbol: str, start_ts: int, end_ts: int) -> List[GapEntry]:
+        """Normalize only relevant records; defaults and retry clocks stay current."""
+        idx = self._ensure_symbol_index(symbol)
+        return self._normalize_gap_entries(self._gap_records_in_range(idx, start_ts, end_ts))
+
+    @staticmethod
+    def _gap_records_in_range(idx: dict, start_ts: int, end_ts: int):
+        """Use the owned revision index; unowned/injected lists retain full-scan semantics."""
+        gaps = idx.get("meta", {}).get("known_gaps", [])
+        if isinstance(gaps, _GapMetadataList) and gaps._revision[1]:
+            return gaps.overlapping_records(start_ts, end_ts)
+        return gaps
+
+    def _normalize_gap_entries(self, gaps) -> List[GapEntry]:
+        """Produce detached enhanced entries, evaluating legacy defaults on every read."""
         out: List[GapEntry] = []
         now_ms = self._now_ms()
         for it in gaps:
@@ -3445,7 +3701,7 @@ class CandlestickManager:
                     ),
                 }
         idx = self._ensure_symbol_index(symbol)
-        idx["meta"]["known_gaps"] = [
+        idx["meta"]["known_gaps"] = _GapMetadataList([
             {
                 "start_ts": int(g["start_ts"]),
                 "end_ts": int(g["end_ts"]),
@@ -3460,7 +3716,7 @@ class CandlestickManager:
                 ),
             }
             for g in merged
-        ]
+        ])
         self._index[symbol] = idx
         if not defer_index:
             self._save_index(symbol)
@@ -3839,7 +4095,7 @@ class CandlestickManager:
     ) -> List[Tuple[int, int]]:
         """Return unresolved unknown gaps that must remain unavailable."""
         ranges: List[Tuple[int, int]] = []
-        for gap in self._get_known_gaps_enhanced(symbol):
+        for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts):
             if str(gap.get("reason", GAP_REASON_AUTO)) not in {
                 GAP_REASON_AUTO,
                 GAP_REASON_FETCH_FAILED,
@@ -3864,6 +4120,16 @@ class CandlestickManager:
         the remaining contiguous outage, not either the caller-clipped overlap
         or stale outer metadata bounds.
         """
+        gaps = [
+            gap
+            for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts)
+            if str(gap.get("reason", GAP_REASON_AUTO))
+            in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+            and int(gap["start_ts"]) <= int(end_ts)
+            and int(gap["end_ts"]) >= int(start_ts)
+        ]
+        if not gaps:
+            return []
         cached = self._cache.get(symbol)
         if cached is None or cached.size == 0:
             cached = np.empty((0,), dtype=CANDLE_DTYPE)
@@ -3879,16 +4145,9 @@ class CandlestickManager:
                 ]
 
         missing: List[Tuple[int, int]] = []
-        for gap in self._get_known_gaps_enhanced(symbol):
-            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
-                GAP_REASON_AUTO,
-                GAP_REASON_FETCH_FAILED,
-            }:
-                continue
+        for gap in gaps:
             gap_start = int(gap["start_ts"])
             gap_end = int(gap["end_ts"])
-            if gap_start > int(end_ts) or gap_end < int(start_ts):
-                continue
             gap_rows = self._slice_ts_range(
                 cached,
                 gap_start,
@@ -3924,7 +4183,7 @@ class CandlestickManager:
         if now_ms is None:
             now_ms = self._now_ms()
         ranges: List[Tuple[int, int]] = []
-        for gap in self._get_known_gaps_enhanced(symbol):
+        for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts):
             if str(gap.get("reason", GAP_REASON_AUTO)) not in {
                 GAP_REASON_AUTO,
                 GAP_REASON_FETCH_FAILED,
@@ -9300,7 +9559,7 @@ class CandlestickManager:
         gap_state: List[Tuple[int, int, str]] = []
         known_gaps = idx.get("meta", {}).get("known_gaps", [])
         if isinstance(known_gaps, list):
-            for gap in known_gaps:
+            for gap in self._gap_records_in_range(idx, start_ts, end_ts):
                 try:
                     if isinstance(gap, dict):
                         gap_start = int(gap.get("start_ts", 0))

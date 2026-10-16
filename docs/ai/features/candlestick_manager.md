@@ -450,3 +450,42 @@ loading when it is zero. Position symbols remain first in the ordered list. It d
 after preparing each symbol, but yields to other tasks without delay. The candle manager enforces the configured process-local spacing at
 actual CCXT OHLCV requests, so cache-only preparation incurs no artificial per-symbol pause.
 See [EMA preparation timings](live_events.md#ema-preparation-timings) for structured attribution.
+
+### Parsed disk-row reuse
+
+A manager may retain immutable parsed source rows for up to 16 exact ranges and
+8 MiB total. Every reuse rechecks the selected source paths and index using file
+identity, size, modification time and change time, including atomic replacements
+and in-place corrections whose modification time is restored. Failed/empty shard
+reads and changes during parsing are not certified. For a legacy/primary overlay,
+every constituent must return nonempty rows before the merged result is certified;
+a surviving source cannot mask a failed or empty constituent. Strict audits always
+read the source again. Native Windows bypasses parsed-row reuse because its stat
+ctime currently reports creation time, which cannot detect same-size in-place
+corrections with restored mtime. Ordinary disk reads remain authoritative there.
+Clearing the cache or restarting reconstructs identical rows.
+
+Only factual source rows are cached. Mutable consumer arrays and the one-minute
+memory cache never alias retained immutable rows. One-minute reads still merge
+against the current memory state; identical sorted overlaps may bypass the
+concatenate/sort/deduplicate work while preserving detached-array ownership and
+last-write-wins behavior. Projections, synthetic gaps, EMA values and trading
+permissions are not part of this cache.
+
+### Historical gap range views
+
+JSON-loaded and newly persisted gap lists own a single lazily built interval view.
+The view indexes only factual interval bounds, preserves source record order,
+and invalidates on list/record mutations or shared index replacement. It lives
+with its metadata cohort; no per-window views accumulate. Injected unowned lists
+retain conservative full-scan behavior instead of assuming identity/length proves
+unchanged content. The persisted JSON schema is unchanged.
+
+Recent-range checks and projection signatures select overlapping records before
+normalizing metadata. Legacy defaults are evaluated at read time, returned enhanced
+records remain detached, and retry eligibility is always computed from current
+clocks. Unknown-gap coverage retains full missing interval widths and excludes
+synthetic candles when determining real coverage. A window without unknown gaps
+skips copying/sorting the retained candle history. This optimization neither
+deletes stale historical gaps nor changes fetch, synthesis, retry or trading policy.
+Full metadata reads and index serialization still scale with total history.
