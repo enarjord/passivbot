@@ -27,6 +27,7 @@ from optimization.backends.gpu_backend import (
     _canonical_vector_hash,
     _build_anchor_parameter_context,
     _build_gpu_nsga2,
+    _build_random_sampling,
     _build_proxy_parameter_dicts,
     _checkpoint_signature,
     _checkpoint_gpu_interrupt,
@@ -1079,6 +1080,31 @@ def test_resume_budget_accepts_truthful_broad_probe_scarcity():
             "drift_probes": 4,
         },
     )
+
+
+@pytest.mark.parametrize("seed", [1, 19, 2026])
+def test_fresh_gpu_population_has_no_implicit_input_config(seed):
+    """NSGA-II receives random values in every slot, including its first member."""
+    from pymoo.core.problem import Problem
+
+    config = _long_only_ema_config()
+    sampling = _build_random_sampling(np.random.default_rng(seed), 8, 5)
+    algorithm = _build_gpu_nsga2(config, sampling=sampling, population_size=8, n_params=5)
+    algorithm.setup(Problem(n_var=5, n_obj=2, n_ieq_constr=1, xl=0.0, xu=1.0), seed=seed)
+    population = algorithm.ask().get("X")
+
+    expected = np.random.default_rng(seed).random((8, 5))
+    np.testing.assert_array_equal(population, expected)
+    assert not np.any(np.all(population == np.full(5, 0.5), axis=1))
+
+
+def test_fresh_gpu_population_is_reproducible_and_changes_with_seed():
+    """Fresh starts retain deterministic replay while different seeds explore new members."""
+    first = _build_random_sampling(np.random.default_rng(19), 8, 5)
+    repeated = _build_random_sampling(np.random.default_rng(19), 8, 5)
+    different = _build_random_sampling(np.random.default_rng(20), 8, 5)
+    np.testing.assert_array_equal(first, repeated)
+    assert np.all(np.any(first != different, axis=1))
 
 
 def test_gpu_nsga2_uses_configured_pymoo_variation_operators():
