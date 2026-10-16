@@ -1922,6 +1922,8 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
 @pytest.mark.parametrize(
     "position, clip, step, minimum, retain_partial",
     [
+        (8192.0, 8191.999999999999, 1e-12, 0.0, True),
+        (math.nextafter(32768.0, 0.0), 32767.99999999999, 1e-12, 0.0, True),
         (0.018, 0.009, 0.001, 0.009, True),
         (32768.0, 32767.991, 0.001, 0.009, True),
         (40_000_000.0 + 1e-8, 40_000_000.0, 1e-8, 1e-8, True),
@@ -1935,7 +1937,7 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
         (math.nextafter(32768.0, 0.0), 32767.991, 0.001, 0.009, False),
     ],
     ids=[
-        "ordinary-minimum", "large-position", "large-step-ratio", "one-step-deficit",
+        "zero-minimum-binade", "zero-minimum-off-grid", "ordinary-minimum", "large-position", "large-step-ratio", "one-step-deficit",
         "off-grid-deficit", "large-ratio-step-deficit", "unresolvable-steps",
         "large-canonical-grid", "large-off-grid-neighbor", "large-off-grid-deficit",
         "ordinary-off-grid-neighbor",

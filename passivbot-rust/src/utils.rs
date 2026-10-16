@@ -141,6 +141,15 @@ where
 {
     let total_abs: f64 = clips.clone().sum();
     let remainder = position_size_abs - total_abs;
+    // A zero requirement cannot leave subminimum dust. Preserve every positive
+    // remainder without requiring venue-grid proof of otherwise valid operands.
+    if min_qty == 0.0 {
+        return if remainder > 0.0 {
+            CloseWaveRemainder::MeetsMinimum
+        } else {
+            CloseWaveRemainder::NoRemainder
+        };
+    }
     // This selects the proof path; it never grants a quantity tolerance.
     // Include every addition in the naive close-wave sum's error bound.
     let representation_tolerance = f64::EPSILON
@@ -629,6 +638,25 @@ pub fn calc_ema_price_ask(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn zero_close_minimum_needs_no_operand_grid_proof() {
+        use super::{classify_close_wave_remainder, CloseWaveRemainder};
+        for (position, clips, step) in [
+            (8192.0, vec![8191.999999999999], 1e-12),
+            (f64::from_bits(32768.0_f64.to_bits() - 1), vec![32767.99999999999], 1e-12),
+            (8192.0, vec![4096.0, 4095.999999999999], 1e-12),
+        ] {
+            assert_eq!(
+                classify_close_wave_remainder(position, clips.into_iter(), 0.0, step),
+                CloseWaveRemainder::MeetsMinimum
+            );
+        }
+        assert_eq!(
+            classify_close_wave_remainder(8192.0, std::iter::once(8192.0), 0.0, 1e-12),
+            CloseWaveRemainder::NoRemainder
+        );
+    }
+
     #[test]
     fn close_remainder_requires_unique_operand_grid_roundtrips() {
         let step = 0.001;
