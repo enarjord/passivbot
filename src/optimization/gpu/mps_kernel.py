@@ -2073,6 +2073,8 @@ class MpsEmaAnchorMulticoinRunner:
     coin_override_label = "EMA"
     scalar_cols = MPS_MULTICOIN_SCALAR_COLS
 
+    decimal_coin_overrides = False
+
     def __init__(
         self,
         run: ProxyRun,
@@ -2202,7 +2204,7 @@ class MpsEmaAnchorMulticoinRunner:
         if (
             self.hsl_capacity
             and self.bars.device.type == "mps"
-            and self.coin_override_label == "Trailing Martingale"
+            and self.decimal_coin_overrides
         ):
             if not 1 <= self.n_coins <= MPS_MULTICOIN_MAX_COINS:
                 raise ValueError("Metal coin count exceeds the multicoin shader limit")
@@ -2223,7 +2225,7 @@ class MpsEmaAnchorMulticoinRunner:
             coin_overrides = np.full(
                 (self.n_coins, self.coin_override_cols), np.nan, dtype=np.float32
             )
-        coin_overrides = np.asarray(coin_overrides, dtype=(np.float64 if self.coin_override_label == "Trailing Martingale" else np.float32))
+        coin_overrides = np.asarray(coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         if coin_overrides.shape != (self.n_coins, self.coin_override_cols):
             raise ValueError(
                 f"expected multicoin {self.coin_override_label} override matrix shaped "
@@ -2231,11 +2233,11 @@ class MpsEmaAnchorMulticoinRunner:
                 f"got {coin_overrides.shape}"
             )
         wel_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
-                      if self.coin_override_label == "Trailing Martingale"
+                      if self.decimal_coin_overrides
                       else EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN)
         self.rms_ranking_coin_counts = (int(np.count_nonzero(coin_overrides[:, wel_column] != 0.0)),)
         cooldown_column = (TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
-                           if self.coin_override_label == "Trailing Martingale"
+                           if self.decimal_coin_overrides
                            else EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN)
         self.rms_cooldown_coin_overrides = (coin_overrides[:, [
             cooldown_column, self.coin_override_cols - 4, self.coin_override_cols - 3,
@@ -2623,7 +2625,7 @@ class MpsEmaAnchorMulticoinRunner:
         if self.hsl_capacity:
             keys = (
                 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-                if self.coin_override_label == "Trailing Martingale"
+                if self.decimal_coin_overrides
                 else EMA_ANCHOR_MULTICOIN_PARAM_KEYS
             )
             policy_matrix = np.asarray(params, dtype=np.float32)
@@ -2794,7 +2796,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 np.nan,
                 dtype=np.float32,
             )
-        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.coin_override_label == "Trailing Martingale" else np.float32))
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         expected_shape = (self.n_coins, self.coin_override_cols)
         if short_coin_overrides.shape != expected_shape:
             raise ValueError(
@@ -2978,6 +2980,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
 
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
+    decimal_coin_overrides = True
 
     def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
         scaled = _scale_tm_multicoin_coin_overrides(coin_overrides, self.interval_minutes)
@@ -3349,7 +3352,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 np.nan,
                 dtype=np.float32,
             )
-        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.coin_override_label == "Trailing Martingale" else np.float32))
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=(np.float64 if self.decimal_coin_overrides else np.float32))
         expected_shape = (self.n_coins, self.coin_override_cols)
         if short_coin_overrides.shape != expected_shape:
             raise ValueError(
