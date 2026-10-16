@@ -6,7 +6,7 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Fix GPU trailing-martingale recursive closes moving or merging adjacent price ticks through intermediate relative-price rounding.
+- Fix GPU trailing-martingale grid and positive-retracement closes moving or merging adjacent price ticks through intermediate relative-price rounding.
 
 - Bound whole-history multicoin Metal dispatch groups by the candidate batch and
   pipeline execution width, preventing zeroed replay results on large coin-state layouts.
@@ -37,7 +37,7 @@ since the latest release tag; these features may already be available when insta
   including fine steps with large quantities.
   Directional and multicoin GPU top-ups after partial closes also subtract
   recoverable venue-unit counts without losing a quantity step.
-  Preserve valid quantity steps when topping up partial initial entries.
+  Preserve valid quantity steps when topping up partial initial entries. Recover partial top-ups at power-of-two quantity boundaries using inward floating-point spacing.
 
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 

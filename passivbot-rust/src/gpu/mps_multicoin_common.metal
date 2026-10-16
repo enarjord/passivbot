@@ -71,7 +71,7 @@ inline float aligned_qty_difference(float total, float held, float step) {
     float held_count = rint(held / step);
     bool counts_resolvable = total_count >= 0.0f && total_count < 0x1p24f
         && held_count >= 0.0f && held_count < 0x1p24f
-        && nextafter(total, INFINITY) - total <= step
+        && total - nextafter(total, -INFINITY) <= step
         && nextafter(held, INFINITY) - held <= step;
     bool on_grid = total_count * step == total && held_count * step == held;
     if (counts_resolvable && on_grid) {

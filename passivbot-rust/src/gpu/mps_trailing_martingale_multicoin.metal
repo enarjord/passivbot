@@ -4336,9 +4336,9 @@ inline void generate_tm_multicoin_side_orders(
                 close_target = price_now;
             } else if (close_retracement > 0.0f) {
                 close_triggered = crossed_close && retraced_close;
-                close_target = pprice[c] * (short_side
-                    ? 1.0f - close_threshold + close_retracement
-                    : 1.0f + close_threshold - close_retracement);
+                close_target = fma(pprice[c], short_side
+                    ? -close_threshold + close_retracement
+                    : close_threshold - close_retracement, pprice[c]);
             }
         }
         int close_touch = short_side ? touch_down : touch_up;
