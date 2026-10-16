@@ -8,7 +8,7 @@ import pytest
 
 @pytest.mark.parametrize("interval_ms", [60_000, 300_000])
 def test_native_equity_clocks_decode_indices_before_float64_scaling(interval_ms):
-    import torch
+    torch = pytest.importorskip("torch")
     from optimization.gpu.mps_kernel import _decode_outputs
     from optimization.gpu.metrics import _with_native_equity_timestamps
 
@@ -27,7 +27,7 @@ def test_native_equity_clocks_decode_indices_before_float64_scaling(interval_ms)
 
 
 def test_legacy_equity_clock_abi_keeps_millisecond_columns():
-    import torch
+    torch = pytest.importorskip("torch")
     from optimization.gpu.mps_kernel import _decode_outputs
     from optimization.gpu.metrics import _with_native_equity_timestamps
 
@@ -42,7 +42,7 @@ def test_legacy_equity_clock_abi_keeps_millisecond_columns():
 
 
 def test_native_equity_clock_missing_sentinels_remain_missing():
-    import torch
+    torch = pytest.importorskip("torch")
     from optimization.gpu.mps_kernel import _decode_outputs
     from optimization.gpu.metrics import _with_native_equity_timestamps
 
@@ -111,7 +111,7 @@ def test_native_long_history_equity_clock_transport(strategy, sides, coin_count)
 
 @pytest.mark.parametrize("first, last", [(-2, -1), (1, -1), (4, 3)])
 def test_native_equity_clock_pairs_reject_invalid_producer_values(first, last):
-    import torch
+    torch = pytest.importorskip("torch")
     from optimization.gpu.metrics import _with_native_equity_timestamps
 
     out = {"first_eq_step": torch.tensor([first], dtype=torch.int64),
