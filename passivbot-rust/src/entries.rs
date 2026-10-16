@@ -1686,6 +1686,119 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_partial_initial_quantity_uses_inward_spacing() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-12,
+            price_step: 0.01,
+            min_qty: 1e-12,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 819200.0,
+            order_book: OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = make_runtime_context();
+        for retracement in [0.0, 0.001] {
+            let params = TrailingMartingaleEntryParams {
+                initial_qty_pct: 1.0,
+                ema_gate_mode: EmaGateMode::Disabled,
+                threshold_base_pct: 0.5,
+                retracement_base_pct: retracement,
+                ..Default::default()
+            };
+            for short in [false, true] {
+                let position = Position {
+                    size: if short {
+                        -4217.878608603804
+                    } else {
+                        4217.878608603804
+                    },
+                    price: 100.0,
+                };
+                let order = if short {
+                    calc_next_entry_short(
+                        &exchange,
+                        &state,
+                        &bot,
+                        &runtime,
+                        &params,
+                        &position,
+                        &TrailingPriceBundle::default(),
+                    )
+                } else {
+                    calc_next_entry_long(
+                        &exchange,
+                        &state,
+                        &bot,
+                        &runtime,
+                        &params,
+                        &position,
+                        &TrailingPriceBundle::default(),
+                    )
+                };
+                assert_eq!(
+                    order.qty,
+                    if short {
+                        -3974.121391396196
+                    } else {
+                        3974.121391396196
+                    }
+                );
+                assert_eq!(order.price, 100.0);
+            }
+        }
+    }
+
+    #[test]
+    fn reviewed_reentry_quantity_does_not_infer_adjacent_large_count() {
+        let exchange = ExchangeParams {
+            qty_step: 3e-12,
+            price_step: 0.01,
+            min_qty: 3e-12,
+            min_cost: 1.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = make_runtime_context();
+        let params = TrailingMartingaleEntryParams {
+            initial_qty_pct: 1e-6,
+            ..Default::default()
+        };
+        for sign in [-1.0, 1.0] {
+            assert_eq!(
+                calc_reentry_qty(
+                    100.0,
+                    1e7,
+                    sign * 9045.269825510173,
+                    0.5,
+                    &exchange,
+                    &bot,
+                    &runtime,
+                    &params,
+                    1.0
+                ),
+                4522.634912755086
+            );
+        }
+    }
+
+    #[test]
     fn reentry_unit_recovery_preserves_genuine_off_grid_sizes() {
         for sign in [-1.0, 1.0] {
             let size = sign * 0.477_f64.next_down();

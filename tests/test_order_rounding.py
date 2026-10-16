@@ -360,3 +360,32 @@ def test_trailing_reentry_preserves_exact_ticks_without_absorbing_off_tick_targe
     expected = (100.11 if offset == 0.0 else 100.12) if short else (131.04 if offset == 0.0 else 131.03)
     assert abs(order[0]) > 0.0
     assert order[1] == pytest.approx(expected, abs=1e-12)
+
+@requires_extension
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("retracement", [0.0, 0.001])
+def test_partial_initial_qty_at_power_of_two_uses_inward_spacing(side, retracement):
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    short = side == "short"
+    params = dict(
+        qty_step=1e-12, price_step=0.01, min_qty=1e-12, min_cost=0.0, c_mult=1.0,
+        entry_grid_double_down_factor=1.0, entry_grid_spacing_pct=0.5,
+        entry_initial_ema_dist=0.0, entry_initial_qty_pct=1.0,
+        entry_trailing_double_down_factor=1.0,
+        entry_trailing_retracement_pct=retracement, entry_trailing_threshold_pct=0.5,
+        entry_weight_volatility_1h=0.0, entry_weight_volatility_1m=0.0, entry_we_weight=0.0,
+        wallet_exposure_limit=1.0, risk_we_excess_allowance_pct=0.0,
+        balance=819200.0, position_size=(-1 if short else 1) * 4217.878608603804,
+        position_price=100.0, min_since_open=100.0, max_since_min=100.0,
+        max_since_open=100.0, min_since_max=100.0,
+        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+    )
+    params["ema_bands_upper" if short else "ema_bands_lower"] = 100.0
+    params["order_book_ask" if short else "order_book_bid"] = 100.0
+    orders = (pbr.calc_entries_short_py if short else pbr.calc_entries_long_py)(**params)
+    assert len(orders) == 1
+    qty, price, _ = orders[0]
+    assert qty == (-1 if short else 1) * 3974.121391396196
+    assert price == 100.0
