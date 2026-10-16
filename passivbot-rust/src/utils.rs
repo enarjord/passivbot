@@ -296,6 +296,37 @@ fn decimal_aligned_price(base: f64, distance: f64, step: f64) -> Option<f64> {
     target.to_float()
 }
 
+pub(crate) fn round_qty_unit_product(units: f64, factor: f64, step: f64) -> Option<f64> {
+    if !units.is_finite() || units < 0.0 || units.fract() != 0.0 || units >= (1_u64 << 53) as f64 {
+        return None;
+    }
+    // An exact integer numerator below this bound keeps distinct decimal
+    // sides of a half-step several floats apart after division.
+    if let Some((coefficient, multiplier)) = exact_step_scale(factor) {
+        let numerator = units * coefficient;
+        if numerator < (1_u64 << 50) as f64 {
+            return Some(venue_value(
+                (numerator / multiplier).round(),
+                step,
+                exact_step_scale(step),
+            ));
+        }
+    }
+    let product = DecimalParts {
+        coefficient: units as i128,
+        exponent: 0,
+    }
+    .multiply(DecimalParts::from_float(factor)?)?;
+    let count = product.rounded_ratio(
+        DecimalParts {
+            coefficient: 1,
+            exponent: 0,
+        },
+        RoundingMode::Nearest,
+    )?;
+    Some(venue_value(count as f64, step, exact_step_scale(step)))
+}
+
 /// Recover an exact decimal venue count only when both physical neighbors
 /// remain distinguishable. Fractional or ambiguous inputs retain physical
 /// arithmetic at their caller.

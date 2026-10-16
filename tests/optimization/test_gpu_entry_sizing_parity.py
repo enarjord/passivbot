@@ -272,14 +272,14 @@ kernel void partial_top_up_probe(
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("coin_count", [1, 2])
-@pytest.mark.parametrize("market_allowed", [False, True])
+@pytest.mark.parametrize("market_allowed, near_touch", [(False, 0.0), (True, 0.0), (False, 0.02)])
 @pytest.mark.parametrize("ladder", ["entry", "close"])
 def test_passive_recursive_ladders_do_not_require_market_permission(
-    side, coin_count, market_allowed, ladder
+    side, coin_count, market_allowed, near_touch, ladder
 ):
     config, candles, markets, btc, timestamps = _fixture(side, coin_count, "initial")
     config["live"].update(market_orders_allowed=market_allowed,
-                          market_order_near_touch_threshold=0.0)
+                          market_order_near_touch_threshold=near_touch)
     config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
                              taker_fee_override=0.0, market_order_slippage_pct=0.0)
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]

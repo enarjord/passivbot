@@ -828,6 +828,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
     int k,
     int C,
     bool short_side,
+    bool market_orders_allowed,
     float market_order_near_touch_threshold
 ) {
     if (!side.entry_deferred_twel_gate) return;
@@ -915,7 +916,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             coin_settings[coin_offset + 0],
             coin_settings[coin_offset + 1],
             coin_settings[coin_offset + 2],
-            coin_settings[coin_offset + 3], c_mult, true,
+            coin_settings[coin_offset + 3], c_mult, market_orders_allowed,
             market_order_near_touch_threshold
         );
         suffix_valid[c] = suffix[c].ticks > 1
@@ -989,10 +990,9 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
                 room_cost / fmax(gate_price * c_mult, 1.0e-12f),
                 qty_step
             );
-            if (retained_cost + kept_qty * gate_price * c_mult
-                >= cap_cost) {
-                kept_qty = decrement_aligned_qty_step(kept_qty, qty_step);
-            }
+            kept_qty = strict_cap_quantity(
+                kept_qty, qty_step, retained_cost, cap_cost, gate_price, c_mult
+            );
             float executable_min = min_entry_qty(
                 gate_price, qty_step, min_qty, min_cost, c_mult
             );
@@ -1047,7 +1047,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             sim_touch_tick[best_coin],
             side.entry_gen_market_price[best_coin],
             qty_step, coin_settings[coin_offset + 1], min_qty, min_cost,
-            c_mult, true, market_order_near_touch_threshold
+            c_mult, market_orders_allowed, market_order_near_touch_threshold
         );
         suffix_valid[best_coin] = suffix[best_coin].ticks > 1
             && suffix[best_coin].ticks != previous_tick[best_coin]
@@ -1529,6 +1529,7 @@ inline bool process_tm_multicoin_side_fills(
     bool loss_gate_enabled,
     float max_realized_loss_pct,
     float market_order_slippage_pct,
+    bool market_orders_allowed,
     float market_order_near_touch_threshold,
     bool hsl_panic_market,
     thread float& hsl_equity_before_fills,
@@ -1589,7 +1590,7 @@ inline bool process_tm_multicoin_side_fills(
     for (int c = 0; c < C; ++c) filled_coin[c] = false;
     apply_tm_multicoin_recursive_entry_twel_gate(
         side, config, bars, fill_ticks, coin_settings, coin_overrides,
-        k, C, short_side, market_order_near_touch_threshold
+        k, C, short_side, market_orders_allowed, market_order_near_touch_threshold
     );
     for (int c = 0; c < C; ++c) {
         const int coin_offset = c * COIN_COLS;
@@ -1743,7 +1744,7 @@ inline bool process_tm_multicoin_side_fills(
                     close_grid_max_rungs[c],
                     -1,
                     close_gen_market_price[c],
-                    close_recursive_market_mode[c],
+                    market_orders_allowed,
                     market_order_near_touch_threshold,
                     grid_gen_psize,
                     group
@@ -1802,7 +1803,7 @@ inline bool process_tm_multicoin_side_fills(
                     close_grid_max_rungs[c],
                     wanted,
                     close_gen_market_price[c],
-                    close_recursive_market_mode[c],
+                    market_orders_allowed,
                     market_order_near_touch_threshold,
                     grid_gen_psize,
                     group
@@ -1888,7 +1889,7 @@ inline bool process_tm_multicoin_side_fills(
                     close_grid_max_rungs[c],
                     wanted,
                     close_gen_market_price[c],
-                    close_recursive_market_mode[c],
+                    market_orders_allowed,
                     market_order_near_touch_threshold,
                     grid_gen_psize,
                     group
@@ -2108,7 +2109,7 @@ inline bool process_tm_multicoin_side_fills(
                         entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
-                        true, market_order_near_touch_threshold
+                        market_orders_allowed, market_order_near_touch_threshold
                     );
                     int suffix_index = rung - 1;
                     if (suffix_index == suffix_partial_rank) {
@@ -2199,7 +2200,7 @@ inline bool process_tm_multicoin_side_fills(
                         entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
-                        true, market_order_near_touch_threshold
+                        market_orders_allowed, market_order_near_touch_threshold
                     );
                 }
                 if (!(candidate.strategy_qty > 0.0f
@@ -5123,7 +5124,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             int(b), k, C, false, alive,
             collect_coin_fill_counts, loss_gate_enabled,
             max_realized_loss_pct, market_order_slippage_pct,
-            market_order_near_touch_threshold,
+            market_orders_allowed, market_order_near_touch_threshold,
             long_hsl_panic_market, long_hsl_equity_before_fills,
             &short_side.hsl, tm_multicoin_side_has_position(short_side, C)
         );
@@ -5150,7 +5151,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             int(b), k, C, true, alive,
             collect_coin_fill_counts, loss_gate_enabled,
             max_realized_loss_pct, market_order_slippage_pct,
-            market_order_near_touch_threshold,
+            market_orders_allowed, market_order_near_touch_threshold,
             short_hsl_panic_market, short_hsl_equity_before_fills,
             &long_side.hsl, tm_multicoin_side_has_position(long_side, C)
         );
@@ -6197,7 +6198,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             int(b), k, C, short_side, alive,
             collect_coin_fill_counts, loss_gate_enabled,
             max_realized_loss_pct, market_order_slippage_pct,
-            market_order_near_touch_threshold,
+            market_orders_allowed, market_order_near_touch_threshold,
             hsl_panic_market, hsl_equity_before_fills
         );
         update_tm_multicoin_side_indicators(

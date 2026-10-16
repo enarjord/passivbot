@@ -14,13 +14,15 @@ since the latest release tag; these features may already be available when insta
 - Reduce GPU trailing-martingale entry quantities at strict exposure-cap boundaries
   without losing an extra venue step to binary rounding. Above float32's exact unit-count
   range, retain a representably smaller quantity so the reduction cannot round away.
+  Recheck the final strict-cap cost after clipping; a bounded search handles
+  cases where one quantity decrement still rounds onto the exposure cap.
 
 - Preserve valid tick-aligned trailing-martingale grid/trailing entry and close prices
   using a fused relative-price expression and provable decimal venue alignment.
   Genuine off-tick targets retain directional rounding even at tiny tick sizes.
   Round aligned reentry
-  quantity products in venue units, recovering half-step representation noise
-  without snapping resolvable products below the half-step. Exact decimal venue
+  quantity products in venue units, resolving half-step boundaries from their
+  decimal operands without snapping genuinely smaller products. Exact decimal venue
   quantities retain unit arithmetic where the operation's neighbors are resolvable;
   ambiguous and genuinely fractional positions retain physical-unit rounding.
   Venue rounding preserves its chosen integer count through decimal conversion,
