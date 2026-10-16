@@ -176,6 +176,18 @@ async def test_gpu_suite_cli_dates_exact_validation_and_resume(
             candidate["bot"]["long"]["hsl"]["red_threshold"] = 0.02 + index * 0.02
             (seeds / f"seed_{index}.json").write_text(json.dumps(candidate))
         starting_args = ["-t", str(seeds)]
+    original_build = gpu_backend._build_gpu_nsga2
+
+    def check_initial_population(config, **kwargs):
+        """Exercise the actual CLI/backend handoff, including the first random member."""
+        if not starting_args:
+            expected = np.random.default_rng(config["optimize"]["seed"]).random(
+                (kwargs["population_size"], kwargs["n_params"])
+            )
+            np.testing.assert_array_equal(kwargs["sampling"], expected)
+        return original_build(config, **kwargs)
+
+    monkeypatch.setattr(gpu_backend, "_build_gpu_nsga2", check_initial_population)
     monkeypatch.setattr(
         sys,
         "argv",
