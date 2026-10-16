@@ -10,7 +10,13 @@ since the latest release tag; these features may already be available when insta
 
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
-- Fix GPU trailing-martingale grid and positive-retracement closes moving or merging adjacent price ticks through intermediate relative-price rounding.
+- Preserve venue-aligned trailing-martingale entry/close prices and reentry quantities
+  without snapping genuinely off-grid or below-half values. Use fused relative-price
+  expressions, checked decimal boundary arithmetic, unique unit-count recovery and
+  direct decimal count conversion. GPU replay preserves original factors and static
+  distances through candidate and coin-override packing; price proofs require a known
+  passive initial-fill tick. Unsupported proofs retain physical arithmetic. Partial
+  initial top-ups preserve recoverable quantity steps, including power-of-two boundaries.
 
 - Bound whole-history multicoin Metal dispatch groups by the candidate batch and
   pipeline execution width, preventing zeroed replay results on large coin-state layouts.
@@ -28,23 +34,6 @@ since the latest release tag; these features may already be available when insta
   range, retain a representably smaller quantity so the reduction cannot round away.
   Recheck the final strict-cap cost after clipping; a bounded search handles
   cases where one quantity decrement still rounds onto the exposure cap.
-
-- Preserve valid tick-aligned trailing-martingale grid/trailing entry and close prices
-  using a fused relative-price expression and provable decimal venue alignment.
-  Genuine off-tick targets retain directional rounding even at tiny tick sizes.
-  Round aligned reentry
-  quantity products in venue units, resolving half-step boundaries from their
-  decimal operands without snapping genuinely smaller products. Exact decimal venue
-  quantities retain unit arithmetic where the operation's neighbors are resolvable;
-  ambiguous and genuinely fractional positions retain physical-unit rounding.
-  Venue rounding preserves its chosen integer count through decimal conversion,
-  including fine steps with large quantities.
-  GPU replay preserves original decimal factors and static distances through parameter and
-  coin-override packing. Recoverable venue counts and proven passive initial-fill price ticks
-  retain aligned boundaries without snapping authored near-half or off-grid values.
-  Directional and multicoin GPU top-ups after partial closes also subtract
-  recoverable venue-unit counts without losing a quantity step.
-  Preserve valid quantity steps when topping up partial initial entries. Recover partial top-ups at power-of-two quantity boundaries using inward floating-point spacing.
 
 - Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
 
