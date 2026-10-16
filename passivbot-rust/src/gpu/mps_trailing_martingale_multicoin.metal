@@ -1414,10 +1414,9 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
                 room_cost / fmax(gate_price * c_mult, 1.0e-12f),
                 qty_step
             );
-            if (retained_cost + kept_qty * gate_price * c_mult
-                >= cap_cost) {
-                kept_qty = decrement_aligned_qty_step(kept_qty, qty_step);
-            }
+            kept_qty = strict_cap_quantity(
+                kept_qty, qty_step, retained_cost, cap_cost, gate_price, c_mult
+            );
             float executable_min = min_entry_qty(
                 gate_price, qty_step, min_qty, min_cost, c_mult
             );
@@ -6401,12 +6400,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
     scalars[scalar_offset + 6] = last_high_k >= 0.0f
         ? last_high_k * interval_ms : -1.0f;
-    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
-        ? first_eq_k * interval_ms : -1.0f;
-    #if PASSIVBOT_HSL_FACTUAL_ONLY
-    // Candle indices are exact within the admitted native replay length.
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Both indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 7] = first_eq_k;
     scalars[scalar_offset + 8] = last_eq_k;
 #else
+    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
+        ? first_eq_k * interval_ms : -1.0f;
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
 #endif
@@ -7512,12 +7512,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
     scalars[scalar_offset + 6] = last_high_k >= 0.0f
         ? last_high_k * interval_ms : -1.0f;
-    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
-        ? first_eq_k * interval_ms : -1.0f;
-    #if PASSIVBOT_HSL_FACTUAL_ONLY
-    // Candle indices are exact within the admitted native replay length.
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Both indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 7] = first_eq_k;
     scalars[scalar_offset + 8] = last_eq_k;
 #else
+    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
+        ? first_eq_k * interval_ms : -1.0f;
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
 #endif

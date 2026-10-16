@@ -1628,10 +1628,11 @@ def _decode_outputs(
         )):
             output[name] = rms_scalars[:, i]
     if native_factual_hsl:
-        # Native shaders transport the candle index before f32 millisecond
-        # multiplication loses precision. Keep legacy timestamp consumers intact.
-        output["last_eq_step"] = scalars[:, 8].to(torch.int64)
-        output["last_eq_ts"] = timestamp_column(8) * float(interval_ms)
+        # Preserve exact indices on-device. Host metric reduction restores
+        # float64 timestamps after transfer; legacy raw timestamp views remain.
+        for name, column in (("first_eq", 7), ("last_eq", 8)):
+            output[f"{name}_step"] = scalars[:, column].to(torch.int64)
+            output[f"{name}_ts"] = timestamp_column(column) * float(interval_ms)
         # Column 17 is unused by legacy shared replay. Native reporting owns a
         # distinct portfolio maximum, since unified side signals are zero.
         output["hsl_drawdown_ema_max_portfolio"] = scalars[:, 17]
@@ -3085,16 +3086,24 @@ class _MulticoinReplayRunner:
         if not self.weighted_equity_cols:
             return {}
         interval = self.run_config.interval_ms
-        dtype = torch.float32 if samples.device.type == "mps" else torch.float64
-        first = output["first_eq_ts"].to(dtype)
-        last = output["last_eq_ts"].to(dtype)
-        observed = torch.isfinite(first)
-        if bool((observed != torch.isfinite(last)).any()):
-            raise RuntimeError("GPU weighted equity observation clocks disagree")
-        # Relative f32 millisecond clocks can lose low bits over long histories.
-        # Restore their integer bar grid before adding the absolute UTC origin.
-        first_step = torch.round(torch.where(observed, first, 0) / interval)
-        last_step = torch.round(torch.where(observed, last, 0) / interval)
+        if "first_eq_step" in output:
+            first_step = output["first_eq_step"]
+            last_step = output["last_eq_step"]
+            observed = first_step >= 0
+            if bool((observed != (last_step >= 0)).any()):
+                raise RuntimeError("GPU weighted equity observation clocks disagree")
+            first_step = torch.where(observed, first_step, 0)
+            last_step = torch.where(observed, last_step, 0)
+        else:
+            dtype = torch.float32 if samples.device.type == "mps" else torch.float64
+            first = output["first_eq_ts"].to(dtype)
+            last = output["last_eq_ts"].to(dtype)
+            observed = torch.isfinite(first)
+            if bool((observed != torch.isfinite(last)).any()):
+                raise RuntimeError("GPU weighted equity observation clocks disagree")
+            # Legacy relative millisecond clocks need their bar grid restored.
+            first_step = torch.round(torch.where(observed, first, 0) / interval)
+            last_step = torch.round(torch.where(observed, last, 0) / interval)
         counts = torch.where(observed, last_step - first_step + 1, 0).to(torch.long)
         timestamps = first_step.to(torch.int64) * interval + self.run_config.first_ts_ms
         kwargs = dict(

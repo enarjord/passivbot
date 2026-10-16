@@ -166,8 +166,8 @@ A representation residual is corrected only when checked decimal arithmetic prov
 alignment; genuine off-grid targets keep directional rounding. Quantity-unit recovery requires exact
 decimal divisibility below 2^53 units and distinguishable neighbors in the operation's direction.
 Ambiguous counts, unproven alignment, and checked-arithmetic overflow keep physical-unit rounding.
-Half-step recovery is bounded by the measured multiplication residual and half a factor ULP,
-and is disabled when that bound reaches a quarter-step.
+Near-half quantity products use checked decimal operand arithmetic, including products rounded
+onto the boundary. Unproven products retain physical-unit rounding.
 Venue rounding converts the chosen integer count directly to its decimal step value, avoiding
 another physical-value rescaling. Nearest rounding resolves quotient ties with checked decimal
 arithmetic when possible; directional rounding only recovers provably aligned inputs and keeps

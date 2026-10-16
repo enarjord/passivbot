@@ -70,6 +70,34 @@ inline float decrement_aligned_qty_step(float quantity, float step) {
     return fmax(fmin(result, nextafter(quantity, 0.0f)), 0.0f);
 }
 
+inline float strict_cap_quantity(
+    float quantity, float step, float retained_cost, float cap_cost,
+    float gate_price, float c_mult
+) {
+    if (retained_cost + quantity * gate_price * c_mult < cap_cost)
+        return quantity;
+    quantity = decrement_aligned_qty_step(quantity, step);
+    if (retained_cost + quantity * gate_price * c_mult < cap_cost)
+        return quantity;
+    // A retained-cost ULP can cover millions of venue increments. Search the
+    // ordered positive float encodings of unit counts, rather than decrementing
+    // each increment. Floor maps fractional count encodings to whole units.
+    // Positive multiplication/addition and this map are monotone. At most 31
+    // bisections cover every nonnegative finite float count (including an
+    // infinite upper sentinel); every accepted candidate satisfies the cap.
+    uint lower = 0;
+    uint upper = as_type<uint>(fmax(rint(quantity / step), 0.0f));
+    while (lower < upper) {
+        uint middle = lower + (upper - lower + 1) / 2;
+        float candidate = floor(as_type<float>(middle)) * step;
+        bool accepted = candidate <= quantity
+            && retained_cost + candidate * gate_price * c_mult < cap_cost;
+        if (accepted) lower = middle;
+        else upper = middle - 1;
+    }
+    return floor(as_type<float>(lower)) * step;
+}
+
 // Quantities produced by venue rounding can recover their integer counts.
 // Require a unique round-trip before subtracting counts; otherwise preserve
 // physical-unit directional rounding for representations outside that domain.

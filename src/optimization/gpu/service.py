@@ -142,6 +142,7 @@ CORE_OUTPUT_KEYS = {
     "last_high_ts",
     "first_eq_ts",
     "last_eq_ts",
+    "first_eq_step",
     "last_eq_step",
     "liq_step",
     "profit_sum",
@@ -1715,6 +1716,8 @@ def _combine_hedged_multicoin_outputs(
     combined["last_eq_ts"] = last_eq_ts.minimum(complete_tail_ms).where(
         liquidated, last_eq_ts
     )
+    if "first_eq_step" in long or "first_eq_step" in short:
+        combined["first_eq_step"] = long["first_eq_step"].maximum(short["first_eq_step"])
     if "last_eq_step" in long or "last_eq_step" in short:
         last_step = long["last_eq_step"].minimum(short["last_eq_step"])
         # Keep the existing conservative day boundary for independent side

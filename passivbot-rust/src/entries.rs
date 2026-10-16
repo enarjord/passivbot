@@ -7,7 +7,8 @@ use crate::types::{
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
     calc_wallet_exposure_if_filled, canonical_qty_units, cost_to_qty, floor_qty_difference,
-    interpolate, quantize_price, quantize_qty, round_, round_price_distance, RoundingMode,
+    interpolate, quantize_price, quantize_qty, round_, round_price_distance,
+    round_qty_unit_product, RoundingMode,
 };
 
 pub fn wallet_exposure_limit_with_allowance(
@@ -317,33 +318,20 @@ pub fn calc_cropped_reentry_qty(
     }
 }
 
-// Multiplying physical quantities can push an exact half-step below its
-// rounding boundary. Aligned positions are an integer number of venue steps;
-// round their DDF product in those units. Preserve off-grid input behavior.
+// Multiplication can cross a half-step or land on it after rounding.
+// Resolve boundary products from canonical decimal operands in venue units;
+// preserve physical-unit behavior when that proof is unavailable.
 fn rounded_position_reentry_qty(position_size: f64, factor: f64, step: f64) -> f64 {
     if let Some(aligned) = canonical_qty_units(position_size.abs(), step) {
         let product = aligned * factor;
         let half_step = product.floor() + 0.5;
-        let gap = half_step - product;
-        // The cheap relative check only identifies possible boundaries. Decide
-        // with the measured multiplication residual and at most half an input
-        // factor ULP; a count-scaled epsilon can erase genuine sub-half units.
-        let rounded_product = if gap > 0.0 && gap <= f64::EPSILON * product.abs() * 4.0 {
-            let factor_half_ulp = (factor.next_up() - factor)
-                .abs()
-                .max((factor - factor.next_down()).abs())
-                * 0.5;
-            let multiplication_error = aligned.mul_add(factor, -product).abs();
-            let tolerance = aligned.abs().mul_add(factor_half_ulp, multiplication_error);
-            if tolerance < 0.25 && gap <= tolerance {
-                half_step
-            } else {
-                product
-            }
-        } else {
-            product
-        };
-        rounded_product.round() * step
+        // Multiplication can land on either side of a half-step, or on it.
+        // The bound selects proof candidates; decimal operands decide rounding.
+        if (half_step - product).abs() <= f64::EPSILON * product.abs() * 4.0 {
+            return round_qty_unit_product(aligned, factor, step)
+                .unwrap_or_else(|| position_size.abs() * factor);
+        }
+        product.round() * step
     } else {
         position_size.abs() * factor
     }
@@ -1756,6 +1744,50 @@ mod tests {
                     }
                 );
                 assert_eq!(order.price, 100.0);
+            }
+        }
+    }
+
+    #[test]
+    fn reentry_product_rounded_onto_half_preserves_which_side_it_came_from() {
+        let exchange = ExchangeParams {
+            qty_step: 1e-8,
+            price_step: 0.01,
+            min_qty: 1e-8,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let runtime = make_runtime_context();
+        let params = TrailingMartingaleEntryParams {
+            initial_qty_pct: 1e-8,
+            ..Default::default()
+        };
+        for (factor, expected) in [
+            (0.12345674999999999, 0.01234567),
+            (0.12345675, 0.01234568),
+            (0.12345675000000001, 0.01234568),
+        ] {
+            for sign in [-1.0, 1.0] {
+                assert_eq!(
+                    calc_reentry_qty(
+                        100.0,
+                        1000.0,
+                        sign * 0.1,
+                        factor,
+                        &exchange,
+                        &bot,
+                        &runtime,
+                        &params,
+                        1.0
+                    ),
+                    expected
+                );
             }
         }
     }

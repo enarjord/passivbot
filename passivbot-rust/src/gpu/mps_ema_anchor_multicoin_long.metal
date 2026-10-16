@@ -3866,12 +3866,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
     scalars[scalar_offset + 6] = last_high_k >= 0.0f
         ? last_high_k * interval_ms : -1.0f;
-    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
-        ? first_eq_k * interval_ms : -1.0f;
-    #if PASSIVBOT_HSL_FACTUAL_ONLY
-    // Candle indices are exact within the admitted native replay length.
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Both indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 7] = first_eq_k;
     scalars[scalar_offset + 8] = last_eq_k;
 #else
+    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
+        ? first_eq_k * interval_ms : -1.0f;
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
 #endif
@@ -5242,12 +5243,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
     scalars[scalar_offset + 6] = last_high_k >= 0.0f
         ? last_high_k * interval_ms : -1.0f;
-    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
-        ? first_eq_k * interval_ms : -1.0f;
-    #if PASSIVBOT_HSL_FACTUAL_ONLY
-    // Candle indices are exact within the admitted native replay length.
+#if PASSIVBOT_HSL_FACTUAL_ONLY
+    // Both indices are exact within the admitted native replay length.
+    scalars[scalar_offset + 7] = first_eq_k;
     scalars[scalar_offset + 8] = last_eq_k;
 #else
+    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
+        ? first_eq_k * interval_ms : -1.0f;
     scalars[scalar_offset + 8] = last_eq_k >= 0.0f
         ? last_eq_k * interval_ms : -1.0f;
 #endif

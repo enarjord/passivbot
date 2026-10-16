@@ -1,0 +1,120 @@
+"""Native equity clocks retain exact candle indices through host decoding."""
+
+from datetime import datetime, timezone
+
+import numpy as np
+import pytest
+
+
+@pytest.mark.parametrize("interval_ms", [60_000, 300_000])
+def test_native_equity_clocks_decode_indices_before_float64_scaling(interval_ms):
+    import torch
+    from optimization.gpu.mps_kernel import _decode_outputs
+    from optimization.gpu.metrics import _with_native_equity_timestamps
+
+    first, last = 54_001, 98_639
+    daily = torch.zeros((1, 1, 9), dtype=torch.float32)
+    scalars = torch.zeros((1, 72), dtype=torch.float32)
+    scalars[0, 7], scalars[0, 8] = first, last
+    out = _decode_outputs(daily, scalars, torch.zeros((1, 512)),
+                          native_factual_hsl=True, interval_ms=interval_ms)
+    out = _with_native_equity_timestamps(out, interval_ms)
+    for name, expected in (("first_eq", first), ("last_eq", last)):
+        assert out[f"{name}_ts"].dtype == torch.float64
+        assert out[f"{name}_ts"].item() == expected * interval_ms
+        assert out[f"{name}_step"].item() == expected
+    assert (out["last_eq_ts"] - out["first_eq_ts"]).item() == (last - first) * interval_ms
+
+
+def test_legacy_equity_clock_abi_keeps_millisecond_columns():
+    import torch
+    from optimization.gpu.mps_kernel import _decode_outputs
+    from optimization.gpu.metrics import _with_native_equity_timestamps
+
+    daily = torch.zeros((1, 1, 9), dtype=torch.float32)
+    scalars = torch.zeros((1, 72), dtype=torch.float32)
+    scalars[0, 7], scalars[0, 8] = 54_001 * 60_000, 98_639 * 60_000
+    out = _decode_outputs(daily, scalars, torch.zeros((1, 512)))
+    assert out["first_eq_ts"].item() == scalars[0, 7].item()
+    assert out["last_eq_ts"].item() == scalars[0, 8].item()
+    assert "first_eq_step" not in out and "last_eq_step" not in out
+    assert _with_native_equity_timestamps(out, 60_000) is out
+
+
+def test_native_equity_clock_missing_sentinels_remain_missing():
+    import torch
+    from optimization.gpu.mps_kernel import _decode_outputs
+    from optimization.gpu.metrics import _with_native_equity_timestamps
+
+    daily = torch.zeros((1, 1, 9), dtype=torch.float32)
+    scalars = torch.zeros((1, 72), dtype=torch.float32)
+    scalars[0, 7:9] = -1
+    out = _decode_outputs(daily, scalars, torch.zeros((1, 512)),
+                          native_factual_hsl=True)
+    out = _with_native_equity_timestamps(out, 60_000)
+    assert torch.isnan(out["first_eq_ts"]).all()
+    assert torch.isnan(out["last_eq_ts"]).all()
+    assert out["first_eq_step"].item() == out["last_eq_step"].item() == -1
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides", ["long", "short", "both"])
+@pytest.mark.parametrize("coin_count", [1, 2])
+def test_native_long_history_equity_clock_transport(strategy, sides, coin_count):
+    torch = pytest.importorskip("torch")
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip("GPU required")
+    from optimization.gpu.service import MpsMulticoinProxy
+    from tools.gpu_parity import build_parser, fixture_inputs
+    from test_gpu_hsl_multicoin import raw
+
+    config, _, markets, _, _ = fixture_inputs(build_parser().parse_args([
+        "--fixture", strategy, "--sides", sides, "--coins", str(coin_count),
+        "--bars", "128", "--hsl", "disabled",
+    ]))
+    count, first = 98_640, 54_001
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    candles = np.full((count, coin_count, 4), 100.0)
+    candles[:, :, 3] = 1.0
+    config["live"]["max_warmup_minutes"] = 1
+    config["backtest"].update(
+        start_date=datetime.fromtimestamp(int(timestamps[first]) / 1000,
+                                          timezone.utc).isoformat(),
+        end_date=datetime.fromtimestamp((int(timestamps[-1]) + 60_000) / 1000,
+                                        timezone.utc).isoformat(),
+    )
+    for coin, market in markets.items():
+        if coin != "__meta__":
+            market.update(first_valid_index=0, last_valid_index=count - 1,
+                          warmup_minutes=1, warmup_minutes_source="history")
+    markets["__meta__"] = {"requested_start_ts": int(timestamps[first])}
+    proxy = MpsMulticoinProxy(
+        config=config, hlcvs=candles, mss=markets,
+        btc=np.full(count, 50_000.0), timestamps=timestamps,
+        exchange="binance", batch_size=1,
+        needed_metrics={"adg_strategy_eq"}, factual_hsl=True,
+    )
+    _, device_out = raw(proxy, [{}])
+    from optimization.gpu.metrics import _with_native_equity_timestamps
+    out = _with_native_equity_timestamps(
+        {key: value.cpu() if isinstance(value, torch.Tensor) else value
+         for key, value in device_out.items()}, 60_000
+    )
+    assert out["first_eq_step"].item() == first
+    # Rust Backtest::run iterates 1..(n - 1); the final candle is lookahead.
+    last = count - 2
+    assert out["last_eq_step"].item() == last
+    assert out["first_eq_ts"].item() == first * 60_000
+    assert out["last_eq_ts"].item() == last * 60_000
+    assert (out["last_eq_ts"] - out["first_eq_ts"]).item() == (last - first) * 60_000
+
+
+@pytest.mark.parametrize("first, last", [(-2, -1), (1, -1), (4, 3)])
+def test_native_equity_clock_pairs_reject_invalid_producer_values(first, last):
+    import torch
+    from optimization.gpu.metrics import _with_native_equity_timestamps
+
+    out = {"first_eq_step": torch.tensor([first], dtype=torch.int64),
+           "last_eq_step": torch.tensor([last], dtype=torch.int64)}
+    with pytest.raises(RuntimeError, match="equity observation clocks"):
+        _with_native_equity_timestamps(out, 60_000)

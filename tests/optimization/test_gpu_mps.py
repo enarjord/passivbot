@@ -20612,3 +20612,46 @@ kernel void passivbot_quantity_decrement_probe(
     assert np.all(returned_counts[large] < counts[large])
     assert bool(torch.all(output[quantity > 0] < quantity[quantity > 0]).item())
     assert bool(torch.all(output >= 0).item())
+
+
+def test_gpu_strict_entry_gate_rechecks_the_recomputed_total():
+    import torch
+    import passivbot_rust
+    from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
+    source=passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+    def function(name):
+        start=source.index("inline float "+name+"(")
+        end=source.index("\n}",start)+2
+        return source[start:end]
+    start=source.index("inline void apply_tm_multicoin_recursive_entry_twel_gate(")
+    first=source.index("            float room_cost =",start)
+    last=source.index("            float executable_min =",first)
+    arithmetic=source[first:last]
+    helpers=function("floor_step")+"\n"+function("decrement_aligned_qty_step")
+    helpers+="\n"+function("strict_cap_quantity")
+    probe=("#include <metal_stdlib>\nusing namespace metal;\n"+helpers+"""
+kernel void strict_cap_probe(constant float* inputs, device float* output,
+ uint b [[thread_position_in_grid]]) {
+    float retained_cost=inputs[b*5],cap_cost=inputs[b*5+1],gate_price=inputs[b*5+2];
+    float c_mult=inputs[b*5+3],qty_step=inputs[b*5+4],kept_qty=0;
+"""+arithmetic+"""
+    output[b*2]=kept_qty;
+    output[b*2+1]=retained_cost+kept_qty*gate_price*c_mult;
+}
+""")
+    cap=np.nextafter(np.float32(1e6),np.float32(np.inf))
+    rows=np.asarray([
+        [384.41486,438.61206,.01,1,.001],
+        [1e6,cap,1,1,1e-10],
+        [.25,.5,1,1,.25],
+        [0,100,1,1,1],
+    ],dtype=np.float32)
+    device=gpu_device()
+    inputs=torch.as_tensor(rows,device=device)
+    outputs=torch.empty((len(rows),2),dtype=torch.float32,device=device)
+    compile_shader(probe).strict_cap_probe(inputs,outputs,threads=len(rows))
+    synchronize()
+    result=outputs.cpu().numpy()
+    assert np.all(np.isfinite(result))
+    assert np.all(result[:,0]>=0)
+    assert np.all(result[:,1]<rows[:,1])
