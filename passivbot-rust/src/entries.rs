@@ -1686,7 +1686,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_partial_initial_quantity_uses_inward_spacing() {
+    fn partial_initial_quantity_uses_inward_spacing() {
         let exchange = ExchangeParams {
             qty_step: 1e-12,
             price_step: 0.01,
@@ -1761,7 +1761,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_reentry_quantity_does_not_infer_adjacent_large_count() {
+    fn reentry_quantity_does_not_infer_adjacent_large_count() {
         let exchange = ExchangeParams {
             qty_step: 3e-12,
             price_step: 0.01,
