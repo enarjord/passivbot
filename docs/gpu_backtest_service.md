@@ -465,6 +465,11 @@ factual replay. Cache rejection or loss never clips retained facts or publishes 
 attempt. Numerical conditioning and threshold guards retain the scalar adjudication path.
 Growing factual capacity can disable optional indexing while retaining authoritative history.
 
+Fresh scope composition may skip a flat zero-signal prefix, gap or tail within one
+query. The next causal fill and the current endpoint are always evaluated, logical
+observation counts are preserved, and requested traces retain every observation.
+Native candle projection and prepared-mark validity retain the same admission rules.
+
 Run the offline synthetic matched benchmark with
 `python -m tools.gpu_hsl_coin_cache_benchmark --sides both --bars 8192 --lookback-days 1 --candidates 8`.
 It warms both shader variants before comparing repeated cache-off/cache-on runs,

@@ -11,6 +11,9 @@ since the latest release tag; these features may already be available when insta
 
 - Reuse coin-HSL factual indexes across balance-budget changes while recomputing
   each signal against the current budget; rejected queries use independent replay.
+  Compact exactly flat zero-signal intervals within fresh GPU reconstruction,
+  preserving fill order, endpoint evaluation, observation counts and full debug traces.
+  Reject ineligible CPU idle-window proofs before scanning or allocating fill history.
 
 - Reduce GPU trailing-martingale entry quantities at strict exposure-cap boundaries
   without losing an extra venue step to binary rounding. Above float32's exact unit-count

@@ -3,7 +3,6 @@
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -18,7 +17,7 @@ _BODY = r"""
     int start=info[io+1], end=info[io+2], seed=start+2;
     for(int p=0;p<count;++p) {
 #if CURSOR_GUARD == 12
-        pairs[p].candles=candle_prices+(int(b)*3+p)*160;
+        pairs[p].candles=candles+(int(b)*3+p)*160;
         pairs[p].candle_stride=1; pairs[p].candle_first=0; pairs[p].candle_last=end-1;
         pairs[p].fallback_price=100.0f;
         pairs[p].current_mark=hsl_scope_price_at(pairs[p],seed,start,seed);
@@ -126,23 +125,11 @@ def _library(guard):
     first = source.index("    HslScopeResult result;")
     last = source.index("    int out=int(b)*8;", first)
     source = source[:first] + _BODY + source[last:]
-    if guard == 12:
-        # Metal distinguishes constant candle input from device quote input.
-        # Bind the same read-only tensor twice instead of casting address spaces.
-        original = "device const float* prices, device HslPairEvent* events,"
-        assert source.count(original) == 1
-        source = source.replace(original,
-            "device const float* prices, constant float* candle_prices, device HslPairEvent* events,", 1)
     root = Path(__file__).resolve().parents[2] / "passivbot-rust/src/gpu"
     shared = "\n".join((root / name).read_text() for name in
                        ("mps_hsl_history.metal", "mps_hsl_scope.metal"))
-    library = compile_shader(f"#define CURSOR_GUARD {guard}\n#include <metal_stdlib>\n"
-                             "using namespace metal;\n" + shared + source)
-    if guard == 12:
-        def probe(*args, **kwargs):
-            return library.scope_composer_probe(*args[:5], args[4], *args[5:], **kwargs)
-        return SimpleNamespace(scope_composer_probe=probe)
-    return library
+    return compile_shader(f"#define CURSOR_GUARD {guard}\n#include <metal_stdlib>\n"
+                          "using namespace metal;\n" + shared + source)
 
 
 def _row(short=False, pairs=1, constant=False):
