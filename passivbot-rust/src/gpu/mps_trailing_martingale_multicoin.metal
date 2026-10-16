@@ -292,9 +292,8 @@ inline bool next_tm_close_grid_group(
             + wer * context.close_threshold_we
             + context.volatility_1h * context.close_threshold_v1h
             + context.volatility_1m * context.close_threshold_v1m;
-        float target = context.pprice * (
-            context.short_side ? 1.0f - threshold : 1.0f + threshold
-        );
+        float target = fma(context.pprice,
+            context.short_side ? -threshold : threshold, context.pprice);
         int target_tick = context.short_side
             ? int(floor(target / context.price_step + 1.0e-6f))
             : int(ceil(target / context.price_step - 1.0e-6f));
@@ -428,9 +427,7 @@ inline bool recursive_grid_close_would_expand(
             + wer * close_threshold_we
             + volatility_1h * close_threshold_v1h
             + volatility_1m * close_threshold_v1m;
-        float target = pprice * (
-            short_side ? 1.0f - threshold : 1.0f + threshold
-        );
+        float target = fma(pprice, short_side ? -threshold : threshold, pprice);
         int target_tick = short_side
             ? int(floor(target / price_step + 1.0e-6f))
             : int(ceil(target / price_step - 1.0e-6f));
@@ -4721,8 +4718,8 @@ inline void generate_tm_multicoin_side_orders(
             : max_since_open[c] > pprice[c]
                 * (1.0f + close_threshold);
         bool close_triggered = true;
-        float close_target = pprice[c] * (short_side
-            ? 1.0f - close_threshold : 1.0f + close_threshold);
+        float close_target = fma(pprice[c],
+            short_side ? -close_threshold : close_threshold, pprice[c]);
         if (trailing_close) {
             if (close_threshold <= 0.0f) {
                 close_triggered = close_retracement > 0.0f

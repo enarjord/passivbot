@@ -1122,7 +1122,15 @@ mod tests {
             2
         );
         // Count the five strategy EMA updates independently of shared helpers.
-        assert_eq!(MPS_TRAILING_MARTINGALE_BODY.matches("= fma(").count(), 5);
+        for field in ["vol1h", "vol1m", "ema0", "ema1", "ema2"] {
+            assert_eq!(
+                MPS_TRAILING_MARTINGALE_BODY
+                    .matches(&format!("s.{field} = fma("))
+                    .count(),
+                1
+            );
+        }
+        assert!(source.contains("float close_target = fma(s.pprice, is_long ? ct : -ct, s.pprice)"));
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);

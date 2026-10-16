@@ -273,10 +273,12 @@ kernel void partial_top_up_probe(
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("coin_count", [1, 2])
 @pytest.mark.parametrize("market_allowed, near_touch", [(False, 0.0), (True, 0.0), (False, 0.02)])
-@pytest.mark.parametrize("ladder", ["entry", "close"])
+@pytest.mark.parametrize("ladder", ["entry", "close", "close_on_tick"])
 def test_passive_recursive_ladders_do_not_require_market_permission(
     side, coin_count, market_allowed, near_touch, ladder
 ):
+    close_on_tick = ladder == "close_on_tick"
+    is_close = ladder != "entry"
     config, candles, markets, btc, timestamps = _fixture(side, coin_count, "initial")
     config["live"].update(market_orders_allowed=market_allowed,
                           market_order_near_touch_threshold=near_touch)
@@ -287,9 +289,9 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
                              retracement_base_pct=0.0, double_down_factor=1.0,
                              threshold_we_weight=0.0, threshold_volatility_1h_weight=0.0,
                              threshold_volatility_1m_weight=0.0)
-    strategy["close"].update(threshold_base_pct=0.02005 if ladder == "close" else 0.5,
+    strategy["close"].update(threshold_base_pct=(0.02 if close_on_tick else 0.02005) if is_close else 0.5,
                              retracement_base_pct=0.0, qty_pct=0.01,
-                             threshold_we_weight=-0.1 if ladder == "close" else 0.0,
+                             threshold_we_weight=-0.1 if is_close else 0.0,
                              threshold_volatility_1h_weight=0.0,
                              threshold_volatility_1m_weight=0.0)
     # Keep both events away from warmup and the final trading bar.
@@ -298,14 +300,17 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
     btc = np.full(12, 50_000.0)
     timestamps = timestamps[0] + np.arange(12, dtype=np.int64) * 60_000
     # Keep later partial top-ups out of the close-ladder trace.
-    if ladder == "close":
+    if is_close:
         config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
     short = side == "short"
     candles[4, :, 0 if short else 1] = (
         101.4 if short else 98.6
     ) if ladder == "entry" else (100.1 if short else 99.9)
-    if ladder == "close":
-        candles[5, :, 1 if short else 0] = 98.65 if short else 101.35
+    if is_close:
+        candles[5, :, 1 if short else 0] = (
+            (98.75 if short else 101.25) if close_on_tick
+            else (98.65 if short else 101.35)
+        )
     for coin, market in markets.items():
         if coin != "__meta__":
             market.update(qty_step=0.001, price_step=0.1, min_qty=0.001,
@@ -318,8 +323,8 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
         expected_size * coin_count, abs=1e-10, rel=0
     ), fills
     expected_balance = 1000.0
-    if ladder == "close":
-        expected_balance += 0.36 * coin_count
+    if is_close:
+        expected_balance += (0.33 if close_on_tick else 0.36) * coin_count
     assert out["fill_count"].item() == expected_count
     key = "short_psize" if short else "psize"
     assert out[key].item() == pytest.approx(expected_size * coin_count, abs=1e-5, rel=0)

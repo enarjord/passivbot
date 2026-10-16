@@ -1232,7 +1232,8 @@ inline void generate_orders(
         ? s.max_since_open > s.pprice * (1.0f + ct)
         : s.min_since_open < s.pprice * (1.0f - ct);
     bool close_triggered = true;
-    float close_target = s.pprice * (is_long ? 1.0f + ct : 1.0f - ct);
+    // Match Rust relative-price formation with one arithmetic rounding.
+    float close_target = fma(s.pprice, is_long ? ct : -ct, s.pprice);
     if (trailing_close) {
         if (ct <= 0.0f) {
             close_triggered = cr > 0.0f && retraced_close;

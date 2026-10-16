@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix GPU trailing-martingale recursive closes moving or merging adjacent price ticks through intermediate relative-price rounding.
+
 - Use the same elapsed-time origin for optimizer benchmark tuning windows and
   cohort completions, reporting parameter preparation and service setup separately.
 
