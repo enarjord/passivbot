@@ -181,6 +181,9 @@ while every weighted increase, market fill, and full flatten invalidates it. Rec
 and temporal replay preserve the same proof state. Per-modifier masks preserve original-precision nonzero values and explicit coin pins, so an
 effective static group remains provable when pinned zeros replace nonzero global modifiers. Coefficients outside 60 bits, decimal exponents outside [-18, 18], checked
 integer overflow, weighted prices, and dynamic distances retain fused physical float32 arithmetic.
+Non-aligned rational price proofs additionally decline remainders within a conservative f64
+operand/FMA/tick-conversion envelope, where Rust's fused rounding may cross the decimal boundary.
+Exact aligned proofs and authored offsets outside that envelope retain their existing decision.
 These bounded proofs do not establish general GPU numerical acceptance or native migration readiness.
 
 Auto-unstuck has its own EMA trigger toggle:

@@ -3173,9 +3173,9 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
     assert matrix.shape == (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, 7] == pytest.approx(0.25)
-    assert matrix[1, 11] == np.finfo(np.float32).tiny
+    assert matrix[1, 11] == 1.0e-50  # Preserve authored precision until shader packing.
     assert matrix[1, 15] == pytest.approx(0.5)
-    assert matrix[1, 20] == np.finfo(np.float32).tiny
+    assert matrix[1, 20] == 1.0e-50
     assert matrix[1, TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN] == 0.0
     assert matrix[1, TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN] == 1.0
     assert matrix[1, 23] == pytest.approx(15.0)

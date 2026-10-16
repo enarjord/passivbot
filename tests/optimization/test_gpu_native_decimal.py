@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("coins", [1, 2])
-@pytest.mark.parametrize("case", ["half", "below_half", "tick", "off_tick"])
+@pytest.mark.parametrize("case", ["half", "below_half", "tick", "off_tick", "sub_ulp_tick"])
 def test_native_decimal_boundaries_match_rust_without_cpu_substitution(monkeypatch, side, coins, case):
     torch = pytest.importorskip("torch")
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
@@ -23,6 +23,10 @@ def test_native_decimal_boundaries_match_rust_without_cpu_substitution(monkeypat
             qty_step=.001 if case == "half" else .1,
             factor=1.5 if case == "half" else 1.15 - 1e-12,
             threshold=.01, low=98.9, high=101.1)
+    elif case == "sub_ulp_tick":
+        inputs = _decimal_boundary_inputs(side, coins, price=6532.59, balance=100000.0,
+            initial_pct=.025, qty_step=.001, factor=1.0,
+            threshold=.025626895304925, low=6365.175, high=6700.005)
     else:
         inputs = _decimal_boundary_inputs(side, coins, price=2.5, balance=100.0,
             initial_pct=.025, qty_step=.001, factor=1.0,
