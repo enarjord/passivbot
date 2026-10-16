@@ -1219,6 +1219,19 @@ def strategy_eq_recovery_distribution_from_samples(
     return output * sample_interval_days
 
 
+def _metal_replay_group_options(kernel, batch_size):
+    if gpu_device(torch) != "mps":
+        return {}
+    maximum = int(kernel.max_threads_per_threadgroup)
+    width = int(kernel.thread_execution_width)
+    if maximum < 1 or width < 1 or batch_size < 1:
+        raise RuntimeError("Metal replay has invalid dispatch limits")
+    # The API's implicit group may reserve private state for many inactive
+    # lanes. Bound a state-heavy portfolio group by its actual candidates and
+    # one execution width, retaining the compiled pipeline's limit as well.
+    return {"group_size": (min(batch_size, maximum, width), 1, 1)}
+
+
 def _require_available_held_valuation(scalars):
     # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
     # Metal writes -2 and returns immediately if a held coin has no price.
@@ -2442,9 +2455,11 @@ class MpsEmaAnchorMulticoinRunner:
             kernel_args += (recovery_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
-        library.passivbot_ema_anchor_multicoin(
+        kernel = library.passivbot_ema_anchor_multicoin
+        kernel(
             *kernel_args,
             threads=(batch_size, 1, 1),
+            **_metal_replay_group_options(kernel, batch_size),
         )
 
     def _library(self):
@@ -2916,9 +2931,11 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (recovery_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
-        library.passivbot_ema_anchor_multicoin_fused(
+        kernel = library.passivbot_ema_anchor_multicoin_fused
+        kernel(
             *kernel_args,
             threads=(batch_size, 1, 1),
+            **_metal_replay_group_options(kernel, batch_size),
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
@@ -3181,13 +3198,13 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
         if self.max_dispatch_candidate_bars is None:
+            kernel = library.passivbot_trailing_martingale_multicoin
             dispatch_options = {"threads": (batch_size, 1, 1)}
+            dispatch_options.update(_metal_replay_group_options(kernel, batch_size))
             if gpu_device(torch) == "cuda":
                 # Spread independent, state-heavy candidates across more SMs.
                 dispatch_options["group_size"] = (32, 1, 1)
-            library.passivbot_trailing_martingale_multicoin(
-                *kernel_args, **dispatch_options
-            )
+            kernel(*kernel_args, **dispatch_options)
             return
         chunk_bars = min(
             MPS_TM_MULTICOIN_CHUNK_BARS,
@@ -3455,9 +3472,11 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             kernel_args += self._hsl_buffers(batch_size)
         if self.unstuck_pnl_capacity:
             kernel_args += self._unstuck_history_buffers(batch_size)
-        library.passivbot_trailing_martingale_multicoin_fused(
+        kernel = library.passivbot_trailing_martingale_multicoin_fused
+        kernel(
             *kernel_args,
             threads=(batch_size, 1, 1),
+            **_metal_replay_group_options(kernel, batch_size),
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:

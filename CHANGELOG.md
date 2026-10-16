@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Bound whole-history multicoin Metal dispatch groups by the candidate batch and
+  pipeline execution width, preventing zeroed replay results on large coin-state layouts.
+
 - Exclude newly reconstructed historical HSL breaches from observed stop/restart
   counts when the current permission is GREEN; retain same-time lifecycle events.
 
