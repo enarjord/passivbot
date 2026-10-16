@@ -20451,6 +20451,7 @@ kernel void passivbot_quantity_decrement_probe(
     assert bool(torch.all(output >= 0).item())
 
 
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU required for production fragment")
 def test_gpu_strict_entry_gate_rechecks_the_recomputed_total():
     import torch
     import passivbot_rust
