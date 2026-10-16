@@ -544,6 +544,34 @@ def test_canonical_entry_ticks_keep_authored_off_grid_distances(side, coin_count
     assert out["short_psize" if side == "short" else "psize"].item() == pytest.approx(exact, abs=2e-6)
 
 
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("coin_count", [1, 2])
+@pytest.mark.parametrize("coin_pin", [False, True])
+def test_decimal_price_proof_declines_nonzero_sub_ulp_remainders(side, coin_count, coin_pin):
+    threshold = .025626895304925
+    inputs = _decimal_boundary_inputs(side, coin_count, price=6532.59,
+        balance=100000.0, initial_pct=.025, qty_step=.001, factor=1.0,
+        threshold=threshold, low=6365.175, high=6700.005)
+    if coin_pin:
+        config, _, markets, _, _ = inputs
+        config["bot"][side]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"] = .5
+        config["coin_overrides"] = {
+            coin: {"bot": {side: {"strategy": {"trailing_martingale": {
+                "entry": {"threshold_base_pct": threshold}}}}}}
+            for coin in markets if coin != "__meta__"
+        }
+    out, fills = _evaluate(side, inputs)
+    assert len(fills) == coin_count * 2
+    # The decimal unit products straddle these integers by less than a f64 ULP;
+    # Rust declines decimal alignment and the fused f64 target lands on the tick.
+    reentries = fills[coin_count:]
+    assert all(float(fill[10]) == (6700.0 if side == "short" else 6365.18)
+               for fill in reentries)
+    assert out["fill_count"].item() == len(fills)
+    exact = abs(sum(float(fill[9]) for fill in fills))
+    assert out["short_psize" if side == "short" else "psize"].item() == pytest.approx(exact, abs=2e-6)
+
+
 def test_decimal_metadata_device_proofs_preserve_large_and_near_half_products():
     import passivbot_rust
     from optimization.gpu.runtime import compile_shader, gpu_device, synchronize

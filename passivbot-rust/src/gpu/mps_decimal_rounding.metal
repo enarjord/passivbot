@@ -57,7 +57,8 @@ inline GpuDecimal add_gpu_decimal(GpuDecimal a, GpuDecimal b) {
 // Return an integer rounded from count * decimal, or -1 if proof is outside
 // the checked domain. Long multiplication/division is done as quotient and
 // remainder so the exact numerator need not fit in a machine integer.
-inline long round_gpu_decimal_product(uint count, GpuDecimal value, bool nearest, bool up) {
+inline long round_gpu_decimal_product(uint count, GpuDecimal value, bool nearest, bool up,
+                                      float directional_envelope = 0.0f) {
     if (!gpu_decimal_valid(value) || value.coefficient < 0) return -1;
     ulong coefficient = ulong(value.coefficient), denominator = 1;
     if (value.exponent >= 0) {
@@ -81,6 +82,12 @@ inline long round_gpu_decimal_product(uint count, GpuDecimal value, bool nearest
         }
         if (quotient > limit) return -1;
     }
+    // Rust only overrides fused f64 price arithmetic for decimal alignment.
+    // A nonzero rational remainder inside its arithmetic envelope cannot prove
+    // which side the fused result will choose. Decline; never snap it to a tick.
+    if (directional_envelope > 0.0f && remainder != 0
+        && float(min(remainder, denominator - remainder)) / float(denominator)
+            <= directional_envelope) return -1;
     if (nearest ? remainder >= denominator / 2 + denominator % 2
                 : up && remainder != 0) ++quotient;
     return quotient <= limit ? long(quotient) : -1;
@@ -105,7 +112,23 @@ inline float rounded_gpu_reentry_product(float quantity, float factor, float ste
 
 inline int canonical_gpu_relative_ticks(int base_tick, GpuDecimal threshold,
     GpuDecimal retracement, bool subtract_threshold, bool include_retracement, bool up) {
-    if (base_tick < 1) return -1;
+    if (base_tick < 1 || !gpu_decimal_valid(threshold)
+        || include_retracement && !gpu_decimal_valid(retracement)) return -1;
+    // Conservative f64 operand/FMA/venue-division envelope in tick units. It
+    // includes the separate operands when their difference nearly cancels.
+    float threshold_magnitude = fabs(float(threshold.coefficient));
+    threshold_magnitude = threshold.exponent >= 0
+        ? threshold_magnitude * float(gpu_decimal_power(threshold.exponent))
+        : threshold_magnitude / float(gpu_decimal_power(-threshold.exponent));
+    float retracement_magnitude = 0.0f;
+    if (include_retracement) {
+        retracement_magnitude = fabs(float(retracement.coefficient));
+        retracement_magnitude = retracement.exponent >= 0
+            ? retracement_magnitude * float(gpu_decimal_power(retracement.exponent))
+            : retracement_magnitude / float(gpu_decimal_power(-retracement.exponent));
+    }
+    float directional_envelope = (64.0f * 0x1p-52f * float(base_tick))
+        * (1.0f + threshold_magnitude + retracement_magnitude);
     GpuDecimal one;
     one.coefficient = 1;
     one.exponent = 0;
@@ -115,7 +138,7 @@ inline int canonical_gpu_relative_ticks(int base_tick, GpuDecimal threshold,
         if (!subtract_threshold) retracement.coefficient = -retracement.coefficient;
         factor = add_gpu_decimal(factor, retracement);
     }
-    long count = round_gpu_decimal_product(uint(base_tick), factor, false, up);
+    long count = round_gpu_decimal_product(uint(base_tick), factor, false, up, directional_envelope);
     return count >= 0 ? int(count) : -1;
 }
 
