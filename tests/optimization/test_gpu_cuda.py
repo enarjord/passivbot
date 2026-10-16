@@ -437,7 +437,8 @@ def test_cuda_completion_keeps_short_wait_active(monkeypatch):
 
 
 @pytest.mark.parametrize("device", ["cuda", "mps"])
-def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
+@pytest.mark.parametrize("batch_size", [1, 65])
+def test_tm_unchunked_dispatch_uses_backend_launch_options(monkeypatch, device, batch_size):
     pytest.importorskip("torch")
     from optimization.gpu import mps_kernel
 
@@ -467,19 +468,22 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
         unstuck_pnl_capacity=0,
     )
     calls = []
-    library = SimpleNamespace(
-        passivbot_trailing_martingale_multicoin=lambda *args, **kwargs: calls.append(
-            (args, kwargs)
-        )
-    )
+    def kernel(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    kernel.max_threads_per_threadgroup = 1024
+    kernel.thread_execution_width = 32
+    library = SimpleNamespace(**{"passivbot_trailing_martingale_multicoin": kernel})
     mps_kernel.MpsTrailingMartingaleMulticoinRunner._dispatch(
-        runner, library, *[object() for _ in range(11)], batch_size=65
+        runner, library, *[object() for _ in range(11)], batch_size=batch_size
     )
     assert len(calls) == 1
     assert len(calls[0][0]) == 17
-    expected = {"threads": (65, 1, 1)}
+    expected = {"threads": (batch_size, 1, 1)}
     if device == "cuda":
         expected["group_size"] = (32, 1, 1)
+    if device == "mps":
+        expected["group_size"] = (min(batch_size, 32), 1, 1)
     assert calls[0][1] == expected
 
 
