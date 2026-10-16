@@ -31,27 +31,63 @@ def test_compound_trailing_prices_follow_authored_decimal_alignment(kind, side, 
     raw = Decimal("43.2") * (1 + (distance if increasing else -distance))
     rounding = ROUND_CEILING if increasing else ROUND_FLOOR
     expected = float((raw / Decimal("0.01")).to_integral_value(rounding=rounding) * Decimal("0.01"))
+    assert _compound_trailing_order_price(kind, side, 43.2, threshold, .09375) == expected
+
+
+def _compound_trailing_order_price(kind, side, base, threshold, retracement):
     common = dict(qty_step=.001, price_step=.01, min_qty=.001, min_cost=0., c_mult=1.,
         wallet_exposure_limit=1., risk_we_excess_allowance_pct=0., balance=1000.,
-        position_size=-1. if side == "short" else 1., position_price=43.2,
-        min_since_open=30., max_since_min=40., max_since_open=60., min_since_max=40.,
+        position_size=-1. if side == "short" else 1., position_price=base,
+        min_since_open=base * .5, max_since_min=base * .9,
+        max_since_open=base * 1.4, min_since_max=base * .9,
         volatility_ema_1h=0., volatility_ema_1m=0.)
     if kind == "entry":
         common.update(entry_grid_double_down_factor=.2, entry_grid_spacing_pct=threshold,
             entry_initial_ema_dist=0., entry_initial_qty_pct=.0001,
-            entry_trailing_double_down_factor=.2, entry_trailing_retracement_pct=.09375,
+            entry_trailing_double_down_factor=.2, entry_trailing_retracement_pct=retracement,
             entry_trailing_threshold_pct=threshold, entry_weight_volatility_1h=0.,
             entry_weight_volatility_1m=0., entry_we_weight=0.)
         common["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 1. if side == "short" else 100.
-        common["order_book_ask" if side == "short" else "order_book_bid"] = 30. if side == "short" else 60.
+        common["order_book_ask" if side == "short" else "order_book_bid"] = base * .6 if side == "short" else base * 1.4
     else:
         common.update(close_grid_qty_pct=1., close_trailing_qty_pct=1.,
-            close_trailing_retracement_pct=.09375, close_trailing_threshold_pct=threshold,
+            close_trailing_retracement_pct=retracement, close_trailing_threshold_pct=threshold,
             risk_wel_enforcer_threshold=1.)
-        common["order_book_bid" if side == "short" else "order_book_ask"] = 60. if side == "short" else 30.
+        common["order_book_bid" if side == "short" else "order_book_ask"] = base * 1.4 if side == "short" else base * .6
     orders = getattr(pbr, f"calc_{'entries' if kind == 'entry' else 'closes'}_{side}_py")(**common)
     assert orders and abs(orders[0][0]) > 0.0
-    assert orders[0][1] == expected
+    return orders[0][1]
+
+
+@requires_extension
+@pytest.mark.parametrize("kind", ["entry", "close"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("threshold,retracement", [
+    (.01, .0037499999999999994),
+    (.006927290310531164, .0006772903105311638),
+    (.05788483791847438, .007884837918474379),
+])
+def test_failed_compound_alignment_keeps_fused_physical_rounding(kind, side, threshold, retracement):
+    from decimal import Decimal
+    from fractions import Fraction
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    increasing = (kind == "close") != (side == "short")
+    base = 43.2 if increasing else 11.2
+    sign = 1 if increasing else -1
+    authored = Decimal(str(base)) * (1 + sign * (Decimal(str(threshold)) - Decimal(str(retracement))))
+    assert authored % Decimal("0.01") != 0  # No authored-pair alignment proof.
+    distance = sign * (threshold - retracement)
+    assert abs(distance) in (.00625, .05)  # The composed float misleadingly looks aligned.
+    # Compute one correctly rounded f64 FMA independently of the extension.
+    target = float(Fraction.from_float(base) * Fraction.from_float(distance) + Fraction.from_float(base))
+    units = target / .01
+    count = math.ceil(units) if increasing else math.floor(units)
+    expected = float(Decimal(count) * Decimal("0.01"))
+    assert expected == ((45.37 if increasing else 10.63) if threshold > .05
+                        else (43.48 if increasing else 11.12))
+    assert _compound_trailing_order_price(kind, side, base, threshold, retracement) == expected
 
 
 def _is_step_aligned(value: float, step: float, tol: float = 1e-12) -> bool:

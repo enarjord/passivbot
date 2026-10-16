@@ -693,3 +693,44 @@ kernel void zero_pin_probe(constant float* overrides, constant float* metadata,
     compile_shader(probe).zero_pin_probe(packed, metadata, output, threads=3)
     synchronize()
     assert output.cpu().tolist() == [-1, 239, -1]
+
+
+def test_compound_cancellation_declines_unproven_decimal_corrections():
+    import passivbot_rust
+    from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
+
+    source = passivbot_rust.mps_trailing_martingale_source_py()
+    first = source.index("struct GpuDecimal {")
+    last = source.index("// PASSIVBOT_DECIMAL_ROUNDING_END", first)
+    probe = ("#include <metal_stdlib>\nusing namespace metal;\n" + source[first:last] + """
+kernel void compound_fallback_probe(constant float* values, constant float* metadata,
+    device float* output, uint b [[thread_position_in_grid]]) {
+    bool decreasing = b == 1;
+    float base = values[b * 4], step = values[b * 4 + 1];
+    float threshold = values[b * 4 + 2], retracement = values[b * 4 + 3];
+    int proven = canonical_gpu_relative_ticks(decreasing ? 1120 : 4320,
+        load_gpu_decimal(metadata, int(b) * 8), load_gpu_decimal(metadata, int(b) * 8 + 4),
+        decreasing, true, !decreasing);
+    float distance = decreasing ? -threshold + retracement : threshold - retracement;
+    float target = fma(base, distance, base);
+    output[b * 2] = float(proven);
+    output[b * 2 + 1] = decreasing ? floor(target / step) : ceil(target / step);
+}
+""")
+    device = gpu_device()
+    values = torch.tensor([[43.2, .01, .01, .0037499999999999994],
+                           [11.2, .01, .01, .0037499999999999994],
+                           [43.2, .01, .05788483791847438, .007884837918474379]],
+                          dtype=torch.float32, device=device)
+    metadata = torch.tensor(passivbot_rust.gpu_decimal_metadata_py(
+        [.01, .0037499999999999994, .01, .0037499999999999994,
+         .05788483791847438, .007884837918474379]),
+        dtype=torch.float32, device=device)
+    output = torch.empty(6, device=device)
+    compile_shader(probe).compound_fallback_probe(values, metadata, output, threads=3)
+    synchronize()
+    # The first two rows require unsupported exponent -19. The last row has
+    # valid metadata but a nonzero residual inside the f64 ambiguity envelope.
+    # Neither proves a correction; physical float32 fallback remains approximate
+    # (4347/1113/4536 ticks), not the Rust f64 result 4348/1112/4537.
+    assert output.cpu().tolist() == [-1, 4347, -1, 1113, -1, 4536]
