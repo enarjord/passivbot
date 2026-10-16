@@ -59,6 +59,9 @@ passivbot tool optimizer-benchmark compare \
 The standard/extended catalogue defaults to 128 candidates, seeds 7/43/101 and
 10,080 bars. `--random-seeds N` chooses and records N fresh seeds. Reusing the saved
 workload preserves the actual populations even if a future sampler changes.
+For a targeted repeat, add `run --seed 7` (repeat `--seed` for several seeds) and
+an optional `--case` filter. Selection keeps the original workload hash and saved
+vectors; it never regenerates candidates. The report records selected entry IDs.
 `--boundary-candidates` replaces the first two vectors with repaired low/high
 corners, retaining random candidates. `--bounds-config` reads only `optimize.bounds`
 from a canonical local config. Derived bounds and candidates remain private inputs.

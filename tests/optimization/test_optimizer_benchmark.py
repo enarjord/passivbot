@@ -544,3 +544,55 @@ def test_older_replay_pipeline_timing_remains_explicitly_combined():
     replay.evaluate([])
     assert profiles[0]["pipeline_preparation_measured"] is False
     assert profiles[0]["timings_seconds"] == {"kernel_execution_and_pipeline_preparation": 12.0}
+
+
+@pytest.mark.parametrize("selected_seed, expected_status", [(43, 0), (101, 2)])
+def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, monkeypatch,
+                                                     selected_seed, expected_status):
+    from tools.optimizer_benchmark import __main__ as cli
+
+    directory = tmp_path / "frozen"
+    manifest = freeze(directory, patterns=["trailing_martingale/short/fixed/*"],
+                      candidates=2, bars=128, seeds=[7, 43])
+    original = (directory / "manifest.json").read_bytes()
+    dispatched = []
+    original_run = cli.subprocess.run
+    def preflight(command, **kwargs):
+        if len(command) > 1 and command[1] == "-c":
+            return SimpleNamespace(returncode=0, stdout="{}")
+        return original_run(command, **kwargs)
+    monkeypatch.setattr(cli.subprocess, "run", preflight)
+    original_check_output = cli.subprocess.check_output
+    def check_output(command, **kwargs):
+        return "test-head" if command[0] == "git" else original_check_output(command, **kwargs)
+    monkeypatch.setattr(cli.subprocess, "check_output", check_output)
+
+    def bounded(command, **kwargs):
+        dispatched.append(command[command.index("--entry") + 1])
+        output = Path(command[command.index("--output") + 1])
+        output.write_text(json.dumps(dict(status="unsupported", reason="test worker")))
+        return dict(exit_code=0, termination_reason=None, wall_seconds=0.0)
+
+    monkeypatch.setattr(cli, "bounded_process", bounded)
+    destination = tmp_path / "report"
+    command = ["run", "--workload", str(directory), "--seed", str(selected_seed),
+               "--backend", "before", str(tmp_path), sys.executable,
+               "--backend", "after", str(tmp_path), sys.executable,
+               "--modes", "cpu:1", "--output", str(destination)]
+    if expected_status == 0:
+        assert cli.main(command) == 0
+    else:
+        with pytest.raises(SystemExit) as error:
+            cli.main(command)
+        assert error.value.code == 2
+    assert (directory / "manifest.json").read_bytes() == original
+    expected_ids = [entry["id"] for entry in manifest["entries"]
+                    if entry["seed"] == selected_seed]
+    assert dispatched == [identity for identity in expected_ids for _ in range(2)]
+    if expected_status == 0:
+        report = json.loads((destination / "report.json").read_text())
+        assert report["workload_sha256"] == manifest["sha256"]
+        assert report["selection"]["entry_ids"] == expected_ids
+        assert report["selection"]["seeds"] == [selected_seed]
+    else:
+        assert not destination.exists()

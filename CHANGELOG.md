@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Allow frozen optimizer benchmarks to select existing RNG seeds for targeted reruns without resampling candidates.
+
 - Fix GPU trailing-martingale recursive closes moving or merging adjacent price ticks through intermediate relative-price rounding.
 
 - Use the same elapsed-time origin for optimizer benchmark tuning windows and

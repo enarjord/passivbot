@@ -97,6 +97,14 @@ def run(args):
         raise ValueError("--phase-profile supports frozen replay modes, not production search")
     if getattr(args, "host_profile", False) and any(not engine.startswith("search-") for _, engine, _ in parsed_modes):
         raise ValueError("--host-profile supports production search modes only")
+    import fnmatch
+    selected_seeds = set(getattr(args, "seed", ()))
+    entries = [entry for entry in manifest["entries"]
+               if (not args.case or any(fnmatch.fnmatchcase(entry["case"]["name"], pattern)
+                                        for pattern in args.case))
+               and (not selected_seeds or entry["seed"] in selected_seeds)]
+    if not entries:
+        raise ValueError("case or seed selection is empty")
     if len(args.backend) != 2 or len({item[0] for item in args.backend}) != 2:
         raise ValueError("supply two uniquely labelled --backend LABEL CHECKOUT PYTHON arguments")
     preflight = {}
@@ -123,6 +131,8 @@ def run(args):
     validate_policies(policies)
     report = dict(version=1, workload_sha256=manifest["sha256"],
         harness_sha256=fingerprint,
+        selection=dict(case_patterns=args.case, seeds=sorted(selected_seeds),
+                       entry_ids=[entry["id"] for entry in entries]),
         backends={label: dict(checkout=str(Path(root).resolve()), python=str(Path(python).absolute()),
                              commit=subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip())
                   for label, root, python in args.backend},
@@ -137,11 +147,6 @@ def run(args):
             "Configured feature coverage is not proof that every controller transition occurred.",
             "Physical runner width is observed candidates in runner calls, not hardware occupancy."])
     experiment = 0
-    import fnmatch
-    entries = [entry for entry in manifest["entries"] if not args.case or
-               any(fnmatch.fnmatchcase(entry["case"]["name"], pattern) for pattern in args.case)]
-    if not entries:
-        raise ValueError("case selection is empty")
     for entry_index, entry in enumerate(entries):
         for mode_index, (mode, engine, size) in enumerate(parsed_modes):
             order = list(args.backend)
@@ -200,6 +205,8 @@ def main(argv=None):
     execute = sub.add_parser("run")
     execute.add_argument("--workload", required=True)
     execute.add_argument("--case", action="append", default=[])
+    execute.add_argument("--seed", type=int, action="append", default=[],
+                         help="Select an existing frozen seed; repeat to select several without resampling")
     execute.add_argument("--backend", nargs=3, action="append", required=True, metavar=("LABEL", "CHECKOUT", "PYTHON"))
     execute.add_argument("--output", required=True)
     execute.add_argument("--modes", nargs="+", default=["cpu:1", "cpu:4", "gpu:1", "gpu:8", "gpu:auto"])
