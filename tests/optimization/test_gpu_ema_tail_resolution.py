@@ -220,6 +220,10 @@ def test_native_ema_maximum_reuses_reserved_scalar_without_aliasing_metrics(fuse
     native = decode(daily, scalars, gaps, native_factual_hsl=True)
     assert "hsl_drawdown_ema_max_portfolio" not in legacy
     assert native.pop("hsl_drawdown_ema_max_portfolio").item() == pytest.approx(.2)
+    for name, column in (("first_eq_step", 7), ("last_eq_step", 8)):
+        steps = native.pop(name)
+        assert steps.dtype == torch.int64
+        np.testing.assert_array_equal(steps, scalars[:, column].to(torch.int64))
     assert native.keys() == legacy.keys()
     for name in native:
         np.testing.assert_array_equal(native[name], legacy[name], err_msg=name)

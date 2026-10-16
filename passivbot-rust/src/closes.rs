@@ -6,7 +6,7 @@ use crate::types::{
     TrailingPriceBundle,
 };
 use crate::utils::{
-    calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty, round_, round_price_distance,
+    calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty, round_, round_compound_price_distance, round_price_distance,
     round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step, RoundingMode,
 };
 use serde::Serialize;
@@ -437,9 +437,10 @@ pub fn calc_trailing_close_long(
             {
                 let close_price = f64::max(
                     state_params.order_book.ask,
-                    round_price_distance(
+                    round_compound_price_distance(
                         position.price,
-                        close_trailing_threshold_pct - close_trailing_retracement_pct,
+                        close_trailing_threshold_pct,
+                        -close_trailing_retracement_pct,
                         exchange_params.price_step,
                         RoundingMode::Ceil,
                     ),
@@ -665,9 +666,10 @@ pub fn calc_trailing_close_short(
             {
                 let close_price = f64::min(
                     state_params.order_book.bid,
-                    round_price_distance(
+                    round_compound_price_distance(
                         position.price,
-                        -close_trailing_threshold_pct + close_trailing_retracement_pct,
+                        -close_trailing_threshold_pct,
+                        close_trailing_retracement_pct,
                         exchange_params.price_step,
                         RoundingMode::Floor,
                     ),
