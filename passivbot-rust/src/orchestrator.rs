@@ -7781,6 +7781,88 @@ mod core {
         }
 
         #[test]
+        fn close_finalization_prefers_canonical_counts_to_aliasing_raw_products() {
+            let ob = OrderBook { bid: 1.0, ask: 1.0 };
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.003,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let total_steps = 8_000_000_000_000_014_u64;
+            let quantities = [
+                483726586779.299,
+                3032248018172.914,
+                2064195906022.849,
+                983370306480.099,
+                875635300100.231,
+                560823882444.622,
+            ];
+            for pside in [PositionSide::Long, PositionSide::Short] {
+                let sign = if pside == PositionSide::Long {
+                    -1.0
+                } else {
+                    1.0
+                };
+                for remainder_steps in [1_u64, 3] {
+                    let position_steps = total_steps + remainder_steps;
+                    let position = position_steps as f64 / 1000.0;
+                    let mut closes: Vec<IdealOrder> = quantities
+                        .iter()
+                        .map(|qty| IdealOrder {
+                            symbol_idx: 0,
+                            pside,
+                            qty: sign * qty,
+                            price: 1.0,
+                            order_type: if pside == PositionSide::Long {
+                                OrderType::CloseGridLong
+                            } else {
+                                OrderType::CloseGridShort
+                            },
+                        })
+                        .collect();
+                    let original: Vec<f64> = closes.iter().map(|order| order.qty).collect();
+                    if remainder_steps == 1 {
+                        assert_eq!(
+                            closes.iter().fold(0.0, |sum, order| sum + order.qty.abs()),
+                            position
+                        );
+                        assert_eq!(total_steps as f64 * exchange.qty_step, position);
+                    }
+                    trim_closes_to_position(
+                        pside,
+                        &mut closes,
+                        -sign * position,
+                        &ob,
+                        &exchange,
+                        None,
+                        None,
+                    );
+                    let final_steps: u64 = closes
+                        .iter()
+                        .map(|order| {
+                            format!("{:.3}", order.qty.abs())
+                                .replace('.', "")
+                                .parse::<u64>()
+                                .unwrap()
+                        })
+                        .sum();
+                    if remainder_steps == 3 {
+                        assert_eq!(
+                            closes.iter().map(|order| order.qty).collect::<Vec<_>>(),
+                            original
+                        );
+                        assert_eq!(final_steps, total_steps);
+                    } else {
+                        assert_eq!(final_steps, position_steps);
+                    }
+                }
+            }
+        }
+
+        #[test]
         fn mixed_close_ladder_drops_below_min_leg_and_absorbs_dust() {
             let ob = OrderBook {
                 bid: 25.0,

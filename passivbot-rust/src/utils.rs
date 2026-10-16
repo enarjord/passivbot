@@ -85,15 +85,37 @@ fn close_operand_step_count(quantity: f64, step: f64, upward: bool) -> Option<u6
     if !count.is_finite() || count < 0.0 || count > MAX_EXACT_STEPS {
         return None;
     }
+    let direction = if upward { 1.0 } else { -1.0 };
+    let canonical_matches = |count: f64| canonical_step_value(count, step) == Some(quantity);
+    // Canonical decimal quantities have their own authority. Do not invent
+    // ambiguity by mixing them with a different count's raw binary product.
+    // The binary quotient can select an adjacent count, so inspect both sides.
+    let candidates = if upward {
+        [count + 1.0, count, count - 1.0]
+    } else {
+        [count - 1.0, count, count + 1.0]
+    };
+    let mut canonical_seen = false;
+    for candidate in candidates {
+        if candidate < 0.0 || candidate > MAX_EXACT_STEPS || !canonical_matches(candidate) {
+            continue;
+        }
+        canonical_seen = true;
+        let neighbor = candidate + direction;
+        if neighbor != candidate && !canonical_matches(neighbor) {
+            return Some(candidate as u64);
+        }
+    }
+    if canonical_seen {
+        return None;
+    }
+    // Existing sizing also emits raw products and decimal-cleaned products.
+    // Accept only exact, directionally unique roundtrips in that family.
     let matches = |count: f64| {
         let raw = count * step;
-        quantity == raw
-            || quantity == round_to_step_decimal_places(raw, step)
-            || canonical_step_value(count, step) == Some(quantity)
+        quantity == raw || quantity == round_to_step_decimal_places(raw, step)
     };
-    // Only the neighbor which can reduce the remainder must be unique. At a
-    // binade boundary the opposite neighbor can alias without hiding a deficit.
-    let neighbor = count + if upward { 1.0 } else { -1.0 };
+    let neighbor = count + direction;
     (matches(count) && neighbor != count && !matches(neighbor)).then_some(count as u64)
 }
 
@@ -637,8 +659,14 @@ mod tests {
         // alias while physical float neighbors remain within one venue step.
         let count = 8_000_000_000_000_014.0;
         let quantity = count * step;
-        assert_eq!(super::canonical_step_value(count + 1.0, step), Some(quantity));
-        assert_eq!(super::close_operand_step_count(quantity, step, true), None);
+        assert_eq!(
+            super::canonical_step_value(count + 1.0, step),
+            Some(quantity)
+        );
+        assert_eq!(
+            super::close_operand_step_count(quantity, step, true),
+            Some(count as u64 + 1)
+        );
         // Large count resolution does not justify an off-grid minimum.
         let position = (1_u64 << 53) as f64;
         assert!(!super::close_remainder_meets_minimum(
