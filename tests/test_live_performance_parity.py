@@ -3,6 +3,10 @@ from pathlib import Path
 import builtins
 import json
 import os
+import sys
+from types import SimpleNamespace
+
+import candlestick_manager as candle_module
 
 import numpy as np
 import pytest
@@ -46,6 +50,7 @@ def load(manager, rows, timeframe='1m', **kwargs):
                                    timeframe=timeframe, **kwargs)
 
 
+@pytest.mark.skipif(sys.platform.startswith('win'), reason='parsed-row reuse requires a metadata-change clock')
 @pytest.mark.parametrize('timeframe,step', [('1m',60_000), ('5m',300_000), ('1h',3_600_000)])
 def test_unchanged_shards_are_not_read_again(manager, monkeypatch, timeframe, step):
     """Warm reuse preserves exact rows and does no further shard parsing."""
@@ -97,6 +102,59 @@ def test_changed_or_unusable_sources_match_uncached_loader(manager, tmp_path, ch
         np.testing.assert_array_equal(actual, expected)
 
 
+
+@pytest.mark.parametrize('timeframe,step', [('1m', 60_000), ('5m', 300_000)])
+@pytest.mark.parametrize('merge_memory_cache', [False, True])
+def test_windows_creation_time_cannot_certify_same_metadata_correction(
+    manager, monkeypatch, timeframe, step, merge_memory_cache
+):
+    """Windows metadata can stay identical across a real same-size correction."""
+    rows = candles(step=step)
+    persist(manager, rows, timeframe)
+    path = Path(manager._shard_path(
+        SYMBOL, manager._date_key(int(rows['ts'][-1])), tf=timeframe
+    ))
+    original_stat = os.stat
+    before = original_stat(path)
+
+    def creation_time_stat(candidate, *args, **kwargs):
+        result = original_stat(candidate, *args, **kwargs)
+        if str(candidate) != str(path):
+            return result
+        # Native Windows 3.12 exposes creation time as ctime, so an
+        # in-place rewrite cannot change any field in the reuse signature.
+        return SimpleNamespace(st_dev=result.st_dev, st_ino=result.st_ino,
+                               st_size=result.st_size, st_mtime_ns=result.st_mtime_ns,
+                               st_ctime_ns=before.st_ctime_ns)
+
+    monkeypatch.setattr(candle_module.os, 'stat', creation_time_stat)
+    # Seed an otherwise valid reuse entry, then ensure the Windows policy
+    # also rejects an existing certificate instead of returning stale rows.
+    monkeypatch.setattr(candle_module, 'sys', SimpleNamespace(platform='linux'))
+    for _ in range(3):
+        np.testing.assert_array_equal(
+            load(manager, rows, timeframe, merge_memory_cache=merge_memory_cache), rows
+        )
+    assert manager._disk_rows_cache
+    corrected = rows.copy()
+    corrected['c'][-1] = 88.0
+    with path.open('wb') as handle:
+        np.save(handle, corrected)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = os.stat(path)
+    assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) == (
+        before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns
+    )
+    monkeypatch.setattr(candle_module, 'sys', SimpleNamespace(platform='win32'))
+    for _ in range(2):
+        np.testing.assert_array_equal(
+            load(manager, rows, timeframe, merge_memory_cache=merge_memory_cache), corrected
+        )
+        assert not manager._disk_rows_cache
+
+
+
+@pytest.mark.skipif(sys.platform.startswith('win'), reason='parsed-row reuse requires a metadata-change clock')
 @pytest.mark.parametrize('failed_source', ['primary', 'legacy'])
 @pytest.mark.parametrize('failure', ['empty', 'open_error'])
 @pytest.mark.parametrize('merge_memory_cache', [False, True])

@@ -460,7 +460,10 @@ and in-place corrections whose modification time is restored. Failed/empty shard
 reads and changes during parsing are not certified. For a legacy/primary overlay,
 every constituent must return nonempty rows before the merged result is certified;
 a surviving source cannot mask a failed or empty constituent. Strict audits always
-read the source again. Clearing the cache or restarting reconstructs identical rows.
+read the source again. Native Windows bypasses parsed-row reuse because its stat
+ctime currently reports creation time, which cannot detect same-size in-place
+corrections with restored mtime. Ordinary disk reads remain authoritative there.
+Clearing the cache or restarting reconstructs identical rows.
 
 Only factual source rows are cached. Mutable consumer arrays and the one-minute
 memory cache never alias retained immutable rows. One-minute reads still merge
