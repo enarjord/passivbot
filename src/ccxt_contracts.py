@@ -93,10 +93,6 @@ def get_bot_class(exchange: str):
         from exchanges.binance import BinanceBot
 
         return BinanceBot
-    if exchange in ("binance_portfolio", "binance_pm"):
-        from exchanges.binance_portfolio import BinancePortfolioBot
-
-        return BinancePortfolioBot
     if exchange == "bitget":
         from exchanges.bitget import BitgetBot
 
@@ -323,6 +319,8 @@ async def capture_contract_snapshot(
                 "symbols": symbols,
             }
         }
+        if getattr(bot, "is_portfolio_margin", False):
+            snapshot["meta"]["account_type"] = "portfolio_margin"
         section_set = set(sections)
 
         if "markets" in section_set:

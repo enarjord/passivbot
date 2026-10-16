@@ -1,76 +1,63 @@
-# Binance Portfolio Margin
+# Binance Portfolio Margin: USDT UM perpetuals
 
-Binance Portfolio Margin (PM) unifies risk across spot, margin, USDⓈ-M futures, COIN-M futures,
-and options into a single cross-collateral account, reachable through a separate `papi*` endpoint
-family. A sub-account is either fully on PM or fully on regular margin; there is no per-position
-mix. `BinancePortfolioBot` adds support for running Passivbot's existing grid engine on a PM
-account unchanged, so a PM account can run Passivbot alongside other PM-native activity (for
-example a separate spot+perp hedge) without a second, non-PM sub-account.
+Passivbot supports a restricted Binance Portfolio Margin (PM) account through
+`BinancePortfolioBot`. The account must use only USDT collateral and USDT-settled
+USDⓈ-M perpetuals. Cross-margin borrowing, accrued margin interest, negative
+balances, non-USDT collateral or settlement, and COIN-M positions are unsupported
+and cause an explicit failure before the balance is admitted to trading.
 
-v1 covers UM futures (the grid engine's unchanged symbol universe) and margin/spot. CM futures and
-options under PM are out of scope.
+This connector does not enable general multi-asset PM, Portfolio Margin Pro,
+spot/margin trading, COIN-M trading, or options. Do not share its collateral pool
+with activity outside the supported domain.
 
-## Credentials
+## Account selection
 
-Add `"account_type": "portfolio_margin"` to the account's entry in `api-keys.json`, alongside the
-existing `exchange` field:
+Set `"exchange": "binance"` and `"account_type": "portfolio_margin"` in the
+account entry in `api-keys.json`; `"pm"` is also accepted. Select that account with
+`live.user`. Account type belongs to the account definition, not strategy config.
+Without the PM selector, the existing Binance connector is used.
 
-```json
-{
-  "binance_pm_01": {
-    "exchange": "binance",
-    "account_type": "portfolio_margin",
-    "key": "YOUR_API_KEY",
-    "secret": "YOUR_API_SECRET"
-  }
-}
-```
+## Balance and account truth
 
-This is an account-level credential property, not a strategy parameter, so it lives in
-`api-keys.json` rather than a new `live.*` config field. Omitting it (or any value other than
-`portfolio_margin`/`pm`) uses the regular, non-PM `BinanceBot` connector unchanged — existing
-accounts are unaffected.
+Every balance read fetches both the complete PAPI asset balances and all COIN-M
+position-risk rows. A zero COIN-M wallet or zero unrealized PnL alone does not prove
+that no COIN-M position exists. Missing, duplicate, inconsistent, or non-finite
+required facts remain unavailable; they never become a fabricated zero balance.
 
-Use `live.user = "binance_pm_01"` in your config, same as any other account.
+Within the supported domain, the USDT asset's `totalWalletBalance` is the wallet
+balance. The connector verifies its debt-free components against
+`crossMarginAsset + umWalletBalance` and verifies the cross-margin asset against
+`crossMarginFree + crossMarginLocked`. UM unrealized PnL is kept separate so the
+ordinary Passivbot equity calculation adds it once.
 
-## What's different from regular Binance futures
+PAPI `accountEquity` and `actualEquity` are USD-valued equity figures; the former
+also applies collateral rates. They are not the USDT wallet-balance input.
+No FX conversion, collateral-haircut estimate, or subtraction of only the bot's
+own positions is used to reinterpret them.
 
-Most hooks are unchanged: CCXT's installed `binance.py` already routes position fetching, order
-creation/cancellation, open-order and fill queries, leverage setting, and hedge-mode setting
-through the matching `papi*` endpoint once `options["portfolioMargin"]` is set, with response
-field names matching the regular endpoint. `BinancePortfolioBot` sets that option once in
-`create_ccxt_sessions()`; broker-code attribution from `BinanceBot.create_ccxt_sessions()` is
-preserved unchanged.
+## Requests and execution
 
-The real differences:
+Raw UM position-risk rows feed the existing Binance position normalizer. Income
+history uses PAPI UM income endpoints for both realized PnL and commissions.
+Orders, cancellations, open orders, trades, leverage, and hedge-mode changes use
+CCXT's PM routing. Broker attribution and signed quantity/position-side semantics
+remain the existing Binance contracts. Per-symbol margin-mode writes are omitted;
+required leverage failures propagate to the configuration retry policy.
 
-- **Balance.** PM's balance shape differs from a regular futures account's single
-  `totalCrossWalletBalance` field. `BinancePortfolioBot` reads `papiGetAccount()`'s `accountEquity`
-  directly — a single, precomputed, account-wide figure that already includes unrealized PnL and
-  already accounts for multi-asset collateral by construction.
-- **Margin mode.** PM risk is unified account-wide; there is no per-symbol isolated/cross toggle to
-  set, and CCXT's `set_margin_mode` has no PM routing to call. `update_exchange_config_by_symbols`
-  sets leverage only.
-- **Hedge-mode check.** CCXT's `fetch_position_mode()` has no PM routing and would read the wrong
-  (regular futures) account state. Protective startup calls the raw `papiGetUmPositionSideDual()`
-  endpoint directly instead.
-- **No realtime order stream.** No CCXT Pro websocket class exists for PM, and the regular
-  `binanceusdm` watch stream is backed by the non-PM listen-key flow, so it would not reflect a PM
-  account's real state. `can_watch_orders()` returns `False`, falling back to REST polling — an
-  existing, first-class supported path for exchanges without a watch stream, not PM-specific
-  degradation.
+Protective startup checks the PAPI UM hedge-mode endpoint. Private order updates
+use the existing REST polling path. Detailed per-asset balance-composition
+monitoring currently reports explicit unavailability for the raw PM snapshot.
 
-## Validation
+## Offline validation
 
 ```sh
-PYTHONPATH=src python -m pytest tests/test_setup_bot_fallback.py
+PYTHONPATH=src python -m pytest tests/test_binance_portfolio.py tests/test_setup_bot_fallback.py
 ```
 
-Covers `setup_bot()` dispatching to `BinancePortfolioBot` on `account_type: portfolio_margin` and
-confirms exchange-keyed gates (for example the order-churn gate) are unaffected by account type.
+Tests use synthetic responses and synthetic signing inputs. They intercept the
+installed CCXT transport after signing and verify PAPI endpoint selection,
+request fields, broker attribution, and failure propagation without network or
+account operations. They do not claim authenticated or live execution validation.
 
-Authenticated validation (balance reads, hedge-mode and leverage setting, order placement and
-cancellation across both the UM and margin legs, and a full `setup_bot()`-based boot) was run
-against a funded Portfolio Margin sub-account; see `src/exchanges/binance_portfolio.py`'s class
-docstring for the itemized account. Validating a new account should use a dedicated,
-small-capital PM sub-account before sizing up, same as any other live connector change.
+Primary references: [PAPI account balances and account information](https://developers.binance.com/en/docs/catalog/advanced-trading-derivatives-trading-portfolio-margin/api/rest-api/account),
+[PAPI trade endpoints](https://developers.binance.com/en/docs/catalog/advanced-trading-derivatives-trading-portfolio-margin/api/rest-api/trade).

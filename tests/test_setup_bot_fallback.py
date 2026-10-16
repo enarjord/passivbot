@@ -80,7 +80,8 @@ def test_setup_bot_known_exchange_uses_specific_bot():
             assert result._order_churn_gate_enabled_for_connector is True
 
 
-def test_setup_bot_binance_portfolio_margin_account_type():
+@pytest.mark.parametrize("account_type", ["portfolio_margin", "pm", "PM"])
+def test_setup_bot_binance_portfolio_margin_account_type(account_type):
     """setup_bot() routes to BinancePortfolioBot when account_type is portfolio_margin."""
     from passivbot import setup_bot
 
@@ -88,7 +89,7 @@ def test_setup_bot_binance_portfolio_margin_account_type():
 
     mock_user_info = {
         "exchange": "binance",
-        "account_type": "portfolio_margin",
+        "account_type": account_type,
         "key": "test_key",
         "secret": "test_secret",
     }
