@@ -35,6 +35,79 @@ fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool 
     (value - aligned_value).abs() <= f64::EPSILON * scale * 4.0
 }
 
+/// Whether subtracting a close leaves at least the effective minimum quantity.
+/// Recover only representation noise confirmed by resolvable venue-step counts;
+/// a genuine deficit or an unresolvable quantity remains below the minimum.
+pub fn close_remainder_meets_minimum(
+    position_size_abs: f64,
+    clip_qty: f64,
+    min_qty: f64,
+    qty_step: f64,
+) -> bool {
+    let remainder = position_size_abs - clip_qty;
+    if remainder >= min_qty {
+        return true;
+    }
+    // Only repair subtraction noise, not genuinely undersized remainders.
+    let representation_tolerance = f64::EPSILON
+        * position_size_abs
+            .abs()
+            .max(clip_qty.abs())
+            .max(min_qty.abs())
+        * 4.0;
+    if min_qty - remainder > representation_tolerance {
+        return false;
+    }
+    // Compare aligned cardinalities before accepting a near-minimum
+    // remainder. A fractional-step allowance can hide a real grid deficit
+    // at large operand ratios. Each quantity must resolve adjacent steps;
+    // otherwise keep the ordinary full-close decision.
+    let step = qty_step.abs();
+    let quantities = [position_size_abs, clip_qty, min_qty];
+    // Position decreases and clip increases when testing a smaller
+    // remainder. At a power-of-two boundary those neighbor gaps differ.
+    if !quantities
+        .iter()
+        .zip([false, true, true])
+        .all(|(qty, upward)| {
+            if !qty.is_finite() || *qty <= 0.0 {
+                return false;
+            }
+            let bits = if upward {
+                qty.to_bits() + 1
+            } else {
+                qty.to_bits() - 1
+            };
+            (*qty - f64::from_bits(bits)).abs() <= step
+        })
+    {
+        return false;
+    }
+    let steps = quantities.map(|qty| {
+        let nearest = (qty / step).round();
+        // Division can round before integer rounding at large counts.
+        // A fused residual corrects that double rounding without losing
+        // the low bits again in nearest * step.
+        let residual = (-nearest).mul_add(step, qty);
+        if residual >= step * 0.5 {
+            nearest + 1.0
+        } else if residual < -step * 0.5 {
+            nearest - 1.0
+        } else {
+            nearest
+        }
+    });
+    const MAX_EXACT_STEPS: f64 = 9_007_199_254_740_992.0;
+    if !steps
+        .iter()
+        .all(|value| value.is_finite() && value.abs() <= MAX_EXACT_STEPS)
+        || steps[0] - steps[1] < steps[2]
+    {
+        return false;
+    }
+    true
+}
+
 /// Directionally quantize without truncating valid increments below ten decimals.
 pub fn round_dn_preserve_step(value: f64, step: f64) -> f64 {
     round_to_step_decimal_places((value / step).floor() * step, step)

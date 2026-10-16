@@ -3,7 +3,7 @@ use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
 use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance_from_base};
 use crate::types::{BotParams, ExchangeParams, Order, OrderType, StateParams};
 use crate::utils::{
-    cost_to_qty, qty_to_cost, round_, tolerant_round_dn_preserve_step,
+    close_remainder_meets_minimum, cost_to_qty, qty_to_cost, round_, tolerant_round_dn_preserve_step,
     tolerant_round_up_preserve_step,
 };
 
@@ -209,65 +209,8 @@ fn calc_close_qty(
     if clip_qty <= 0.0 {
         return 0.0;
     }
-    let remainder = position_size_abs - clip_qty;
-    if remainder < min_qty {
-        // Only repair subtraction noise, not genuinely undersized remainders.
-        let representation_tolerance = f64::EPSILON
-            * position_size_abs
-                .abs()
-                .max(clip_qty.abs())
-                .max(min_qty.abs())
-            * 4.0;
-        if min_qty - remainder > representation_tolerance {
-            return position_size_abs;
-        }
-        // Compare aligned cardinalities before accepting a near-minimum
-        // remainder. A fractional-step allowance can hide a real grid deficit
-        // at large operand ratios. Each quantity must resolve adjacent steps;
-        // otherwise keep the ordinary full-close decision.
-        let step = exchange.qty_step.abs();
-        let quantities = [position_size_abs, clip_qty, min_qty];
-        // Position decreases and clip increases when testing a smaller
-        // remainder. At a power-of-two boundary those neighbor gaps differ.
-        if !quantities
-            .iter()
-            .zip([false, true, true])
-            .all(|(qty, upward)| {
-                if !qty.is_finite() || *qty <= 0.0 {
-                    return false;
-                }
-                let bits = if upward {
-                    qty.to_bits() + 1
-                } else {
-                    qty.to_bits() - 1
-                };
-                (*qty - f64::from_bits(bits)).abs() <= step
-            })
-        {
-            return position_size_abs;
-        }
-        let steps = quantities.map(|qty| {
-            let nearest = (qty / step).round();
-            // Division can round before integer rounding at large counts.
-            // A fused residual corrects that double rounding without losing
-            // the low bits again in nearest * step.
-            let residual = (-nearest).mul_add(step, qty);
-            if residual >= step * 0.5 {
-                nearest + 1.0
-            } else if residual < -step * 0.5 {
-                nearest - 1.0
-            } else {
-                nearest
-            }
-        });
-        const MAX_EXACT_STEPS: f64 = 9_007_199_254_740_992.0;
-        if !steps
-            .iter()
-            .all(|value| value.is_finite() && value.abs() <= MAX_EXACT_STEPS)
-            || steps[0] - steps[1] < steps[2]
-        {
-            return position_size_abs;
-        }
+    if !close_remainder_meets_minimum(position_size_abs, clip_qty, min_qty, exchange.qty_step) {
+        return position_size_abs;
     }
     clip_qty
 }

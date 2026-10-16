@@ -59,7 +59,8 @@ mod core {
     };
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
-        calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure, qty_to_cost, round_,
+        calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure,
+        close_remainder_meets_minimum, qty_to_cost, round_,
         round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
     };
     use serde::{Deserialize, Serialize};
@@ -1453,10 +1454,10 @@ mod core {
                 return;
             }
             let remainder = pos_abs - total_abs;
-            if remainder <= EPS {
+            if remainder <= 0.0 {
                 return;
             }
-            if remainder + EPS >= min_req {
+            if close_remainder_meets_minimum(pos_abs, total_abs, min_req, exchange.qty_step) {
                 return;
             }
             // Absorb into furthest-from-fill close (largest diff).
@@ -7571,6 +7572,102 @@ mod core {
             assert_eq!(closes.len(), 1);
             assert!((closes[0].qty - 1.0).abs() < 1e-12);
             assert!((closes[0].price - 0.99).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_finalization_preserves_countable_minimum_remainders() {
+            let ob = OrderBook { bid: 1.0, ask: 1.0 };
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.009,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            for pside in [PositionSide::Long, PositionSide::Short] {
+                let sign = if pside == PositionSide::Long {
+                    -1.0
+                } else {
+                    1.0
+                };
+                for (position, expected_total) in [(32768.0, 32767.991), (32767.999, 32767.999)] {
+                    // Finalization must preserve the valid remainder even when
+                    // it is computed after summing a multi-order close wave.
+                    let mut closes: Vec<IdealOrder> = [16000.0, 16767.991]
+                        .iter()
+                        .map(|qty| IdealOrder {
+                            symbol_idx: 0,
+                            pside,
+                            qty: sign * qty,
+                            price: 1.0,
+                            order_type: if pside == PositionSide::Long {
+                                OrderType::CloseGridLong
+                            } else {
+                                OrderType::CloseGridShort
+                            },
+                        })
+                        .collect();
+                    trim_closes_to_position(
+                        pside,
+                        &mut closes,
+                        -sign * position,
+                        &ob,
+                        &exchange,
+                        None,
+                        None,
+                    );
+                    assert_eq!(closes.len(), 2);
+                    let total = closes.iter().map(|order| order.qty.abs()).sum::<f64>();
+                    assert!((total - expected_total).abs() < exchange.qty_step * 1e-6);
+                }
+            }
+        }
+
+        #[test]
+        fn close_finalization_absorbs_real_dust_below_fixed_epsilon() {
+            let ob = OrderBook { bid: 1.0, ask: 1.0 };
+            let position = 8192.0_f64;
+            let clip = f64::from_bits(position.to_bits() - 1);
+            for pside in [PositionSide::Long, PositionSide::Short] {
+                let sign = if pside == PositionSide::Long {
+                    -1.0
+                } else {
+                    1.0
+                };
+                for (min_qty, expected) in [(1e-12, clip), (2e-12, position)] {
+                    let exchange = ExchangeParams {
+                        qty_step: 1e-12,
+                        price_step: 0.01,
+                        min_qty,
+                        min_cost: 0.0,
+                        c_mult: 1.0,
+                        ..Default::default()
+                    };
+                    let mut closes = vec![IdealOrder {
+                        symbol_idx: 0,
+                        pside,
+                        qty: sign * clip,
+                        price: 1.0,
+                        order_type: if pside == PositionSide::Long {
+                            OrderType::CloseGridLong
+                        } else {
+                            OrderType::CloseGridShort
+                        },
+                    }];
+                    trim_closes_to_position(
+                        pside,
+                        &mut closes,
+                        -sign * position,
+                        &ob,
+                        &exchange,
+                        None,
+                        None,
+                    );
+                    assert_eq!(closes.len(), 1);
+                    assert_eq!(closes[0].qty, sign * expected);
+                }
+            }
         }
 
         #[test]

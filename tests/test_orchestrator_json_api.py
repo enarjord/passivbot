@@ -1918,6 +1918,76 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
     ]
 
 
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize(
+    "position, clip, step, minimum, retain_partial",
+    [
+        (0.018, 0.009, 0.001, 0.009, True),
+        (32768.0, 32767.991, 0.001, 0.009, True),
+        (40_000_000.0 + 1e-8, 40_000_000.0, 1e-8, 1e-8, True),
+        (32767.999, 32767.991, 0.001, 0.009, False),
+        (32768.0 - 1e-6, 32767.991, 0.001, 0.009, False),
+        (40_000_000.0 + 1e-8, 40_000_000.0, 1e-8, 2e-8, False),
+        (8641.024116158516, 8641.024116158515, 1e-12, 2e-12, False),
+    ],
+    ids=[
+        "ordinary-minimum", "large-position", "large-step-ratio", "one-step-deficit",
+        "off-grid-deficit", "large-ratio-step-deficit", "unresolvable-steps",
+    ],
+)
+def test_ema_anchor_final_close_preserves_only_valid_minimum_remainders(
+    pside, position, clip, step, minimum, retain_partial
+):
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 1.0,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    bp = {
+        "wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    symbol = make_symbol(
+        0,
+        bid=1.0,
+        ask=1.0,
+        long_strategy=strategy,
+        short_strategy=strategy,
+        **{
+            pside + "_pos_size": position if pside == "long" else -position,
+            pside + "_pos_price": 1.0,
+            pside + "_mode": "tp_only",
+            pside + "_bp": bp,
+        },
+    )
+    symbol["exchange"].update(
+        qty_step=step, price_step=0.01, min_qty=minimum, min_cost=0.0, c_mult=1.0
+    )
+    inp = make_input(
+        balance=clip,
+        strategy_kind="ema_anchor",
+        symbols=[symbol],
+        global_bp=bot_params_pair(**{pside + "_overrides": bp}),
+    )
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
+    close = [
+        order for order in out["orders"]
+        if order["order_type"] == "close_ema_anchor_" + pside
+    ]
+    assert len(close) == 1
+    expected = (
+        max(clip, pbr.calc_min_entry_qty_py(1.0, 1.0, step, minimum, 0.0))
+        if retain_partial else position
+    )
+    assert close[0]["qty"] == (-expected if pside == "long" else expected)
+
+
 def test_ema_anchor_market_close_uses_executable_touch_minimum():
     import passivbot_rust as pbr
 

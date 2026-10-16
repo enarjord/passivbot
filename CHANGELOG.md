@@ -7,7 +7,8 @@ since the latest release tag; these features may already be available when insta
 ## Unreleased
 
 - Preserve valid minimum-sized EMA Anchor close remainders when binary subtraction
-  lands just below the minimum. Genuinely undersized remainders still close in full.
+  lands just below the minimum, including after final order trimming. Genuinely
+  undersized remainders still close in full.
 
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
