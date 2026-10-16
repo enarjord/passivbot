@@ -430,6 +430,44 @@ pub(crate) fn round_price_distance(base: f64, distance: f64, step: f64, mode: Ro
     canonical(count)
 }
 
+/// Preserve the two effective authored distances through an exact alignment
+/// proof. Non-aligned pairs retain the existing composed-f64/FMA decision.
+pub(crate) fn round_compound_price_distance(
+    base: f64,
+    first: f64,
+    second: f64,
+    step: f64,
+    mode: RoundingMode,
+) -> f64 {
+    let distance = first + second;
+    let target = base.mul_add(distance, base);
+    let nearest = venue_value((target / step).round(), step, exact_step_scale(step));
+    // This bound only selects proof candidates; divisibility decides alignment.
+    // Keep both operand magnitudes because the composed distance may cancel.
+    let candidate_bound =
+        8.0 * f64::EPSILON * base.abs().max(target.abs()) * (1.0 + first.abs() + second.abs());
+    if (target - nearest).abs() <= candidate_bound {
+        let prove = || {
+            let factor = DecimalParts {
+                coefficient: 1,
+                exponent: 0,
+            }
+            .add(DecimalParts::from_float(first)?)?
+            .add(DecimalParts::from_float(second)?)?;
+            let exact_target = DecimalParts::from_float(base)?.multiply(factor)?;
+            let count = exact_target.integer_ratio(DecimalParts::from_float(step)?)?;
+            if count.unsigned_abs() >= 1_u128 << 52 {
+                return None;
+            }
+            exact_target.to_float()
+        };
+        if let Some(aligned) = prove() {
+            return aligned;
+        }
+    }
+    round_price_distance(base, distance, step, mode)
+}
+
 fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool {
     let scale = value.abs().max(aligned_value.abs());
     (value - aligned_value).abs() <= f64::EPSILON * scale * 4.0
@@ -887,6 +925,39 @@ mod tests {
         assert_eq!(
             gpu_decimal_metadata_py(vec![f64::NAN, 1e-100, 1e100]),
             vec![(0, 0, 0, 2048); 3]
+        );
+    }
+
+    #[test]
+    fn compound_price_alignment_preserves_operands_without_snapping_offsets() {
+        use super::{round_compound_price_distance, RoundingMode};
+        for (first, second, floor, ceil) in [
+            (0.1, -0.09375, 43.47, 43.47),
+            (-0.1, 0.09375, 42.93, 42.93),
+            (0.1 + 1e-12, -0.09375, 43.47, 43.48),
+            (0.1 - 1e-12, -0.09375, 43.46, 43.47),
+            (0.1001, -0.09375, 43.47, 43.48),
+        ] {
+            assert_eq!(
+                round_compound_price_distance(43.2, first, second, 0.01, RoundingMode::Floor),
+                floor
+            );
+            assert_eq!(
+                round_compound_price_distance(43.2, first, second, 0.01, RoundingMode::Ceil),
+                ceil
+            );
+        }
+        // Nonaligned decimals can legitimately round onto a tick in the fused
+        // f64 path. An exact-rational directional result must not replace it.
+        assert_eq!(
+            round_compound_price_distance(
+                6532.59,
+                -0.025626895304925,
+                0.0,
+                0.01,
+                RoundingMode::Floor
+            ),
+            6365.18
         );
     }
 

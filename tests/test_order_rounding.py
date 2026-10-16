@@ -17,6 +17,43 @@ requires_extension = pytest.mark.skipif(
 )
 
 
+@requires_extension
+@pytest.mark.parametrize("kind", ["entry", "close"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("threshold", [.1, .1 - 1e-12, .1 + 1e-12, .1001])
+def test_compound_trailing_prices_follow_authored_decimal_alignment(kind, side, threshold):
+    from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
+    increasing = (kind == "close") != (side == "short")
+    distance = Decimal(str(threshold)) - Decimal("0.09375")
+    raw = Decimal("43.2") * (1 + (distance if increasing else -distance))
+    rounding = ROUND_CEILING if increasing else ROUND_FLOOR
+    expected = float((raw / Decimal("0.01")).to_integral_value(rounding=rounding) * Decimal("0.01"))
+    common = dict(qty_step=.001, price_step=.01, min_qty=.001, min_cost=0., c_mult=1.,
+        wallet_exposure_limit=1., risk_we_excess_allowance_pct=0., balance=1000.,
+        position_size=-1. if side == "short" else 1., position_price=43.2,
+        min_since_open=30., max_since_min=40., max_since_open=60., min_since_max=40.,
+        volatility_ema_1h=0., volatility_ema_1m=0.)
+    if kind == "entry":
+        common.update(entry_grid_double_down_factor=.2, entry_grid_spacing_pct=threshold,
+            entry_initial_ema_dist=0., entry_initial_qty_pct=.0001,
+            entry_trailing_double_down_factor=.2, entry_trailing_retracement_pct=.09375,
+            entry_trailing_threshold_pct=threshold, entry_weight_volatility_1h=0.,
+            entry_weight_volatility_1m=0., entry_we_weight=0.)
+        common["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 1. if side == "short" else 100.
+        common["order_book_ask" if side == "short" else "order_book_bid"] = 30. if side == "short" else 60.
+    else:
+        common.update(close_grid_qty_pct=1., close_trailing_qty_pct=1.,
+            close_trailing_retracement_pct=.09375, close_trailing_threshold_pct=threshold,
+            risk_wel_enforcer_threshold=1.)
+        common["order_book_bid" if side == "short" else "order_book_ask"] = 60. if side == "short" else 30.
+    orders = getattr(pbr, f"calc_{'entries' if kind == 'entry' else 'closes'}_{side}_py")(**common)
+    assert orders and abs(orders[0][0]) > 0.0
+    assert orders[0][1] == expected
+
+
 def _is_step_aligned(value: float, step: float, tol: float = 1e-12) -> bool:
     if step <= 0.0 or not math.isfinite(value):
         return True

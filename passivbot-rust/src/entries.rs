@@ -7,8 +7,8 @@ use crate::types::{
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
     calc_wallet_exposure_if_filled, canonical_qty_units, cost_to_qty, floor_qty_difference,
-    interpolate, quantize_price, quantize_qty, round_, round_price_distance,
-    round_qty_unit_product, RoundingMode,
+    interpolate, quantize_price, quantize_qty, round_, round_compound_price_distance,
+    round_price_distance, round_qty_unit_product, RoundingMode,
 };
 
 pub fn wallet_exposure_limit_with_allowance(
@@ -729,9 +729,10 @@ pub fn calc_trailing_entry_long(
                 entry_triggered = true;
                 reentry_price = f64::min(
                     state_params.order_book.bid,
-                    round_price_distance(
+                    round_compound_price_distance(
                         position.price,
-                        -threshold_pct + retracement_pct,
+                        -threshold_pct,
+                        retracement_pct,
                         exchange_params.price_step,
                         RoundingMode::Floor,
                     ),
@@ -1024,9 +1025,10 @@ pub fn calc_trailing_entry_short(
                 entry_triggered = true;
                 reentry_price = f64::max(
                     state_params.order_book.ask,
-                    round_price_distance(
+                    round_compound_price_distance(
                         position.price,
-                        threshold_pct - retracement_pct,
+                        threshold_pct,
+                        -retracement_pct,
                         exchange_params.price_step,
                         RoundingMode::Ceil,
                     ),

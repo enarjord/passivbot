@@ -13,7 +13,8 @@ since the latest release tag; these features may already be available when insta
 - Preserve venue-aligned trailing-martingale entry/close prices and reentry quantities
   without snapping genuinely off-grid or below-half values. Use fused relative-price
   expressions, checked decimal boundary arithmetic, unique unit-count recovery and
-  direct decimal count conversion. GPU replay preserves original factors and static
+  direct decimal count conversion. Keep threshold/retracement operands separate through
+  compound alignment proofs so their subtraction cannot lose a valid authored tick. GPU replay preserves original factors and static
   distances through candidate and coin-override packing; price proofs require a known
   passive initial-fill tick. Unsupported proofs retain physical arithmetic. Partial
   initial top-ups preserve recoverable quantity steps, including power-of-two boundaries.

@@ -172,6 +172,12 @@ another physical-value rescaling. Nearest rounding resolves quotient ties with c
 arithmetic when possible; directional rounding only recovers provably aligned inputs and keeps
 physical rounding for other intermediate values.
 
+Compound trailing-price targets retain the two effective threshold/retracement operands through
+an exact decimal venue-alignment proof. For example, `43.2 * (1 + 0.1 - 0.09375)` proves `43.47`
+before the subtraction introduces a binary residual. Only exact divisibility overrides rounding;
+non-aligned pairs retain the existing composed-f64 distance and fused physical target. Genuine
+authored offsets remain directional inputs, not candidates for tolerance snapping.
+
 GPU TM replay transports original decimal DDF and base threshold/retracement operands from Rust
 as finite integer limbs, separately from the ordinary float32 parameters. Checked unit arithmetic
 resolves near-half quantities only for uniquely recoverable counts below 2^24. Static price-distance
