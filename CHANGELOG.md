@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Initialize every member of a fresh GPU optimizer population randomly, matching the CPU backends, instead of implicitly inserting the input bot as the first candidate. Explicit `--start` configs and checkpoint resume remain supported.
+
 - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
 
 - Fix GPU trailing-martingale grid and positive-retracement closes moving or merging adjacent price ticks through intermediate relative-price rounding.
