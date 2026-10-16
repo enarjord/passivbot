@@ -175,7 +175,9 @@ physical rounding for other intermediate values.
 Compound trailing-price targets retain the two effective threshold/retracement operands through
 an exact decimal venue-alignment proof. For example, `43.2 * (1 + 0.1 - 0.09375)` proves `43.47`
 before the subtraction introduces a binary residual. Only exact divisibility overrides rounding;
-non-aligned pairs retain the existing composed-f64 distance and fused physical target. Genuine
+non-aligned pairs retain the existing composed-f64 distance and fused physical target. A failed
+compound proof must not retry alignment using the already-rounded sum; a physical target equal
+to the canonical venue value remains exact independently of any distance proof. Genuine
 authored offsets remain directional inputs, not candidates for tolerance snapping.
 
 GPU TM replay transports original decimal DDF and base threshold/retracement operands from Rust

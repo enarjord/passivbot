@@ -53,3 +53,11 @@ def test_modifier_masks_distinguish_pinned_zero_inheritance_and_underflow():
     assert encoded.tolist() == [0, 3, 39]
     effective = [(global_mask & ~(value & 7)) | (value >> 3) for value in encoded]
     assert effective == [3, 0, 4]
+
+
+def test_sub_ulp_compound_retracements_decline_the_bounded_metadata_domain():
+    # These authored operands distinguish a fused-f64 cancellation boundary,
+    # but require exponent -19, outside the GPU proof contract.
+    values = [.0037499999999999994, .0006772903105311638]
+    assert all(Decimal(str(value)).as_tuple().exponent == -19 for value in values)
+    assert _tm_decimal_metadata(values)[:, 3].tolist() == [2048, 2048]

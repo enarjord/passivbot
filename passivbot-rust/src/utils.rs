@@ -465,7 +465,20 @@ pub(crate) fn round_compound_price_distance(
             return aligned;
         }
     }
-    round_price_distance(base, distance, step, mode)
+    // The original pair did not prove alignment. Do not re-prove its rounded
+    // sum as if that were an independently authored decimal distance.
+    // An already canonical physical target remains exact even when binary
+    // division by the venue step would land just above an integer.
+    if target == nearest {
+        return nearest;
+    }
+    let units = target / step;
+    let count = match mode {
+        RoundingMode::Nearest => units.round(),
+        RoundingMode::Floor => units.floor(),
+        RoundingMode::Ceil => units.ceil(),
+    };
+    venue_value(count, step, exact_step_scale(step))
 }
 
 fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool {
@@ -1216,6 +1229,67 @@ mod tests {
             ),
             6365.18
         );
+    }
+
+    #[test]
+    fn failed_compound_proof_keeps_the_fused_target_without_reproving_the_sum() {
+        use super::{exact_step_scale, round_compound_price_distance, venue_value, RoundingMode};
+        for (base, first, second) in [
+            (43.2_f64, 0.01_f64, -0.0037499999999999994_f64),
+            (43.2, 0.006927290310531164, -0.0006772903105311638),
+            (43.2, 0.05788483791847438, -0.007884837918474379),
+            (11.2, -0.01, 0.0037499999999999994),
+        ] {
+            let target = base.mul_add(first + second, base);
+            let units = target / 0.01;
+            for (mode, count) in [
+                (RoundingMode::Floor, units.floor()),
+                (RoundingMode::Ceil, units.ceil()),
+                (RoundingMode::Nearest, units.round()),
+            ] {
+                let expected = venue_value(count, 0.01, exact_step_scale(0.01));
+                assert_eq!(
+                    round_compound_price_distance(base, first, second, 0.01, mode),
+                    expected
+                );
+            }
+        }
+        assert_eq!(
+            round_compound_price_distance(
+                43.2,
+                0.01,
+                -0.0037499999999999994,
+                0.01,
+                RoundingMode::Ceil
+            ),
+            43.48
+        );
+        assert_eq!(
+            round_compound_price_distance(
+                11.2,
+                -0.01,
+                0.0037499999999999994,
+                0.01,
+                RoundingMode::Floor
+            ),
+            11.12
+        );
+        // A physical target already equal to the canonical venue value needs
+        // no distance proof. Binary division alone must not promote .07 to .08.
+        let base = 0.07_f64;
+        let distance = 0.01_f64 - 0.009999999999999998_f64;
+        assert_eq!(base.mul_add(distance, base), base);
+        assert!((base / 0.01).ceil() * 0.01 > base);
+        for mode in [
+            RoundingMode::Floor,
+            RoundingMode::Ceil,
+            RoundingMode::Nearest,
+        ] {
+            assert_eq!(
+                round_compound_price_distance(base, 0.01, -0.009999999999999998, 0.01, mode),
+                base
+            );
+        }
     }
 
     #[test]
