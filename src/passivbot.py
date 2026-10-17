@@ -650,6 +650,8 @@ def _log_process_failure(
     if isinstance(exc, RestartBotException):
         failure_state = None  # An intentional restart is not a failed-run incident.
     if failure_state is not None:
+        failure_state.setdefault("first_failure", now)
+        failure_state.update(error_type=bounded_exception_type(exc), stage=stage)
         if failure_state.get("signature") == signature:
             failure_state["repeats"] += 1
             if now - failure_state["last_summary"] < 300:
@@ -688,6 +690,22 @@ def _log_process_failure(
         if detail["truncated"]:
             lines.append("  ... traceback truncated")
         logging.error("%s", "\n".join(lines))
+
+
+def _log_restart_budget_exhausted(restarts, max_restarts, failure_state):
+    """Summarize the existing terminal decision without retaining exception values."""
+    logging.error(
+        "[bot] stopped reason=restart_budget_exhausted restarts=%d limit=%d window=24h",
+        len(restarts),
+        max_restarts,
+    )
+    if failure_state:
+        logging.error(
+            "[bot] last_failure error_type=%s stage=%s failure_span_s=%.0f",
+            failure_state["error_type"],
+            failure_state["stage"],
+            max(0.0, time.monotonic() - failure_state["first_failure"]),
+        )
 
 
 def _log_startup_observer_failure(
@@ -3369,14 +3387,9 @@ class Passivbot:
             boot_stage = "start_background_candle_warmup"
             await self.start_background_candle_warmup()
 
+            boot_stage = "publish_startup_ready"
             Passivbot._startup_timing_mark(self, "startup")
             self._bot_ready = True
-            failure_state = getattr(self, "_process_failure_state", None)
-            if failure_state:
-                logging.info(
-                    "[bot] recovered from previous run failure; trading startup ready"
-                )
-                failure_state.clear()
             ready_ts = utc_ms()
             ready_data = {"debug_mode": bool(self.debug_mode)}
             if live_event_debug_profiles:
@@ -3397,6 +3410,7 @@ class Passivbot:
             )
             await self._monitor_flush_snapshot(force=True, ts=ready_ts)
             if not self.debug_mode:
+                boot_stage = "execution_loop"
                 await self.run_execution_loop()
         except asyncio.CancelledError:
             if self._shutdown_requested():
@@ -3424,12 +3438,26 @@ class Passivbot:
                 int(getattr(self, "_startup_incident_sequence", 0) or 0) + 1
             )
             self._startup_incident_sequence = incident_sequence
-            incident_id = f"startup-{error_ts}-{incident_sequence}"
-            incident_action = "stop_startup"
-            incident_cycle = "not_started"
+            runtime_failure = boot_stage == "execution_loop"
+            phase = "runtime" if runtime_failure else "startup"
+            failure_stage = (
+                _bounded_runtime_stage(self) if runtime_failure else boot_stage
+            )
+            if runtime_failure and failure_stage in {"idle", "unknown"}:
+                failure_stage = "execution_loop"
+            incident_id = f"{phase}-{error_ts}-{incident_sequence}"
+            incident_action = (
+                ("stop" if isinstance(exc, FatalBotException) else "restart")
+                if runtime_failure else "stop_startup"
+            )
+            incident_cycle = (
+                live_event_emitters.current_live_event_cycle_id(self)
+                if runtime_failure
+                else "not_started"
+            )
             incident_fields = {
                 "source": "start_bot",
-                "stage": boot_stage,
+                "stage": failure_stage,
                 "incident_id": incident_id,
                 "error_type": error_type,
                 "status": error_status,
@@ -3439,20 +3467,18 @@ class Passivbot:
                 "cycle": incident_cycle,
             }
             self._startup_failure_context = {
-                "stage": (
-                    boot_stage if not self._bot_ready else _bounded_runtime_stage(self)
-                ),
+                "stage": failure_stage,
                 "incident_id": incident_id,
             }
             self._monitor_record_event(
                 "error.bot",
-                ("error", "bot", "startup"),
+                ("error", "bot", phase),
                 incident_fields,
                 ts=error_ts,
             )
             self._monitor_record_event(
                 "error.bot.detail",
-                ("error", "bot", "startup", "diagnostic"),
+                ("error", "bot", phase, "diagnostic"),
                 {
                     **incident_fields,
                     "traceback": _bounded_traceback_detail(exc),
@@ -3461,9 +3487,11 @@ class Passivbot:
             )
             await self._monitor_flush_snapshot(force=True, ts=error_ts)
             self._monitor_emit_stop(
-                "startup_error",
+                ReasonCodes.RUNTIME_ERROR
+                if runtime_failure
+                else ReasonCodes.STARTUP_ERROR,
                 ts=error_ts,
-                payload={"stage": boot_stage, "error_type": error_type},
+                payload={"stage": failure_stage, "error_type": error_type},
             )
 
             raise
@@ -20661,7 +20689,7 @@ async def _run_live(startup_context: dict):
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
         max_restarts = int(require_live_value(bot.config, "max_n_restarts_per_day"))
         if len(restarts) > max_restarts:
-            logging.info(f"n restarts exceeded {max_restarts} last 24h")
+            _log_restart_budget_exhausted(restarts, max_restarts, failure_state)
             break
 
 

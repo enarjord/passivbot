@@ -225,9 +225,11 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `remote_fetch`
 - `required_candle_disk_coverage`
 - `required_ema_unavailable`
+- `runtime_error`
 - `rust_output_actions`
 - `staged_refresh_progress`
 - `staged_refresh_timing`
+- `startup_error`
 - `startup_phase_ready`
 - `state_change_detected`
 - `submitted_to_exchange`

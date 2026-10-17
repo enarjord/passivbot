@@ -310,6 +310,8 @@ class EventTags:
 
 
 class ReasonCodes:
+    STARTUP_ERROR = "startup_error"
+    RUNTIME_ERROR = "runtime_error"
     CURRENT_BALANCE_UNAVAILABLE = "current_balance_unavailable"
     HSL_SIGNAL_UNAVAILABLE = "hsl_signal_unavailable"
     AUTHORITATIVE_CONFIRMATION = "authoritative_confirmation"

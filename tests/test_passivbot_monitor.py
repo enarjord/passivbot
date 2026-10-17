@@ -3993,7 +3993,8 @@ async def test_authoritative_timed_fetch_emit_failure_preserves_fetch_exception(
     assert "positions" in timings_ms
 
 
-def test_monitor_emit_stop_records_startup_terminal_structured_stopped():
+@pytest.mark.parametrize("reason", ["startup_error", "runtime_error"])
+def test_monitor_emit_stop_records_terminal_structured_stopped(reason):
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -4016,15 +4017,15 @@ def test_monitor_emit_stop_records_startup_terminal_structured_stopped():
 
     bot = FakeBot()
 
-    bot._monitor_emit_stop("startup_error", payload={"stage": "init_markets"})
+    bot._monitor_emit_stop(reason, payload={"stage": "init_markets"})
 
     assert bot.monitor_publisher.events[-1]["kind"] == "bot.stop"
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert [event.event_type for event in sink.events] == [EventTypes.BOT_STOPPED]
     event = sink.events[0]
     assert event.status == "failed"
-    assert event.reason_code == "startup_error"
-    assert event.data["reason"] == "startup_error"
+    assert event.reason_code == reason
+    assert event.data["reason"] == reason
     assert event.data["stage"] == "init_markets"
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 

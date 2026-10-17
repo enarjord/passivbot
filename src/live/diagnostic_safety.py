@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -460,3 +461,16 @@ def bounded_traceback_detail(exc: BaseException) -> dict[str, Any]:
             "includes_exception_text": False,
             "includes_locals": False,
         }
+
+
+def log_process_recovery(bot: Any) -> None:
+    """Clear repeat diagnostics only after an admitted ordinary plan returns."""
+    try:
+        state = getattr(bot, "_process_failure_state", None)
+        if state:
+            logging.info(
+                "[bot] recovered from previous run failure; ordinary execution resumed"
+            )
+            state.clear()
+    except Exception:
+        pass  # Optional diagnostics cannot alter execution or its return value.

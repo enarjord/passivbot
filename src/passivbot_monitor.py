@@ -11,7 +11,7 @@ from typing import Any, Iterable, Optional
 import numpy as np
 import passivbot_rust as pbr
 
-from live.event_bus import EventTypes
+from live.event_bus import EventTypes, ReasonCodes
 from trailing_diagnostics import (
     build_trailing_grid_v7_diagnostic,
     build_trailing_close_diagnostic,
@@ -303,7 +303,11 @@ def _monitor_emit_stop(
         emit_live_event = getattr(self, "_emit_live_event", None)
         if callable(emit_live_event):
             try:
-                status = "failed" if str(reason) == "startup_error" else "skipped"
+                status = (
+                    "failed"
+                    if reason in {ReasonCodes.STARTUP_ERROR, ReasonCodes.RUNTIME_ERROR}
+                    else "skipped"
+                )
                 emit_live_event(
                     EventTypes.BOT_STOPPED,
                     level="info",
