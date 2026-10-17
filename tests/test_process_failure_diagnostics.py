@@ -390,6 +390,7 @@ async def test_restart_budget_and_cooldown_remain_unchanged(caplog, monkeypatch)
     monkeypatch.setattr(pb, "parse_overrides", lambda config, **kw: config)
     monkeypatch.setattr(pb, "compile_runtime_config", lambda config, **kw: config)
     monkeypatch.setattr(pb, "setup_bot", Mock(return_value=bot))
+    monkeypatch.setattr(pb, "bot", None, raising=False)
     sleep = AsyncMock()
     monkeypatch.setattr(pb.asyncio, "sleep", sleep)
     with caplog.at_level(logging.ERROR):
