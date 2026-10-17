@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from live import hsl_runtime as runtime
 from live import position_fill_sync
+from live.diagnostic_safety import log_process_recovery
 from live.market_snapshot import MarketSnapshotUnavailable
 
 
@@ -780,6 +781,8 @@ class Owner:
                     bot._current_planning_snapshot = snapshot
                     phase_started = perf_counter()
                     await bot.execute_order_plan_to_exchange(cancels, creates)
+                    if not self._shutdown_requested():
+                        log_process_recovery(bot)
                     timings["ordinary_execute"] += int(
                         (perf_counter() - phase_started) * 1000
                     )

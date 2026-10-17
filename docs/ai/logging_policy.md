@@ -132,7 +132,10 @@ show diagnostic frames:
    failing phase, stop/restart action, and the startup incident ID when available. Preserve phase
    context before teardown changes observer state. Identical restart failures share suppression
    across bot instances: print the first trace, then a repeat count at most every five minutes.
-   A changed failure prints immediately; successful startup clears suppression and reports recovery.
+   A changed failure prints immediately. Startup readiness alone does not clear suppression;
+   report recovery once an admitted ordinary plan returns from execution (including a no-op plan).
+   Distinguish runtime failures from startup failures and retain the last bounded failure type,
+   phase, and failure span when the restart budget is exhausted.
    Expected restart control flow does not need a traceback. Do not change retry or stop policy
    merely to improve diagnostics.
 
