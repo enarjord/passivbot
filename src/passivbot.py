@@ -650,7 +650,6 @@ def _log_process_failure(
     if isinstance(exc, RestartBotException):
         failure_state = None  # An intentional restart is not a failed-run incident.
     if failure_state is not None:
-        failure_state.setdefault("first_failure", now)
         failure_state.update(error_type=bounded_exception_type(exc), stage=stage)
         if failure_state.get("signature") == signature:
             failure_state["repeats"] += 1
@@ -666,7 +665,9 @@ def _log_process_failure(
             )
             failure_state["last_summary"] = now
             return
-        failure_state.update(signature=signature, repeats=0, last_summary=now)
+        failure_state.update(
+            signature=signature, repeats=0, last_summary=now, first_failure=now
+        )
     logging.error(
         "%s | error_type=%s status=%s code=%s stage=%s origin=%s action=%s incident_id=%s %s",
         label,

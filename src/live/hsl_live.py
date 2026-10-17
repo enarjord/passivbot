@@ -781,7 +781,8 @@ class Owner:
                     bot._current_planning_snapshot = snapshot
                     phase_started = perf_counter()
                     await bot.execute_order_plan_to_exchange(cancels, creates)
-                    log_process_recovery(bot)
+                    if not self._shutdown_requested():
+                        log_process_recovery(bot)
                     timings["ordinary_execute"] += int(
                         (perf_counter() - phase_started) * 1000
                     )

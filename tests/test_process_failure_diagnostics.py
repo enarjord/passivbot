@@ -323,7 +323,10 @@ def test_process_recovery_is_once_and_isolates_sink_failure(caplog, monkeypatch)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "outcome", ["pending", "rejected", "failed", "write_failed", "admitted", "noop"]
+    "outcome", [
+        "pending", "rejected", "failed", "write_failed", "shutdown",
+        "shutdown_in_progress", "admitted", "noop"
+    ]
 )
 async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
     import asyncio
@@ -341,6 +344,11 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
     )
     if outcome == "write_failed":
         bot.execute_order_plan_to_exchange.side_effect = RuntimeError("ordinary failure")
+    elif outcome in {"shutdown", "shutdown_in_progress"}:
+        async def shutdown_during_execute(*args):
+            flag = "stop_signal_received" if outcome == "shutdown" else "_shutdown_in_progress"
+            setattr(bot, flag, True)
+        bot.execute_order_plan_to_exchange.side_effect = shutdown_during_execute
     instance = Owner(bot)
     instance.protect = AsyncMock(return_value=False)
     instance._account_matches = lambda *args: outcome != "rejected"
@@ -361,7 +369,7 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
     assert bool(state) == (not recovered)
     assert ("ordinary execution resumed" in caplog.text) is recovered
     assert bot.execute_order_plan_to_exchange.await_count == int(
-        recovered or outcome == "write_failed"
+        recovered or outcome in {"write_failed", "shutdown", "shutdown_in_progress"}
     )
 
 
@@ -400,3 +408,28 @@ async def test_restart_budget_and_cooldown_remain_unchanged(caplog, monkeypatch)
     assert sleep.await_count == 2 * 61  # Original inclusive 60..0 cooldown.
     assert "restarts=2 limit=1 window=24h" in caplog.text
     assert "RESTART_SECRET" not in caplog.text
+
+
+
+def test_last_failure_span_restarts_when_signature_changes(caplog, monkeypatch):
+    state = {}
+    clock = [10.0]
+    monkeypatch.setattr(pb.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        pb, "bot", SimpleNamespace(_log_silence_watchdog_stage="execution_loop"),
+        raising=False,
+    )
+    with caplog.at_level(logging.ERROR):
+        pb._log_process_failure("passivbot error", RuntimeError(), failure_state=state)
+        clock[0] = 70.0
+        pb._log_process_failure("passivbot error", ValueError(), failure_state=state)
+        clock[0] = 90.0
+        pb._log_process_failure("passivbot error", ValueError(), failure_state=state)
+    assert state["first_failure"] == 70.0
+    assert state["repeats"] == 1
+    caplog.clear()
+    clock[0] = 100.0
+    with caplog.at_level(logging.ERROR):
+        pb._log_restart_budget_exhausted([1, 2, 3], 2, state)
+    assert "last_failure error_type=ValueError" in caplog.text
+    assert "failure_span_s=30" in caplog.text
