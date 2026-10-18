@@ -86,6 +86,25 @@ def matches(scope, symbol, side):
     )
 
 
+@dataclass(frozen=True, eq=False)
+class OrdinaryReceipts:
+    """Strong references to the immutable HSL acquisitions used in preparation."""
+
+    sources: tuple
+    fills: object
+
+    def matches(self, other):
+        return (
+            self.fills is other.fills
+            and len(self.sources) == len(other.sources)
+            and all(
+                symbol == current_symbol and receipt is current_receipt
+                for (symbol, receipt), (current_symbol, current_receipt)
+                in zip(self.sources, other.sources)
+            )
+        )
+
+
 @dataclass(frozen=True)
 class Wave:
     captured_ms: int
@@ -98,6 +117,7 @@ class Wave:
     balance: float
     generation: int
     required_fills: tuple | None = None
+    ordinary_receipts: OrdinaryReceipts | None = None
 
     def permission(self, symbol, side):
         if any(matches(item.scope, symbol, side) for item in self.unavailable):
@@ -221,6 +241,11 @@ class Owner:
     def _account_matches(self, wave, now):
         bot = self.bot
         if self._shutdown_requested() or self._refresh_lock.locked():
+            return False
+        if (
+            wave.ordinary_receipts is not None
+            and not wave.ordinary_receipts.matches(self.ordinary_receipts())
+        ):
             return False
         if (
             wave.required_fills is not None
@@ -611,9 +636,19 @@ class Owner:
             and before[1:] == after[1:]
         )
 
+    def ordinary_receipts(self):
+        # Quotes acquired by preparation are deliberately excluded. HSL candle
+        # and fill acquisitions are immutable; even equal replacement payloads
+        # require a plan prepared against the new actual receipt.
+        return OrdinaryReceipts(
+            tuple(sorted(self.sources.items())),
+            getattr(self.bot, "_hsl_fill_observation", None),
+        )
+
     async def _ordinary_plan(self):
         bot = self.bot
         account = self.account_facts()
+        receipts = self.ordinary_receipts()
         await bot.prepare_planning_universe()
         if not self.same_account_facts(account, self.account_facts()):
             return None
@@ -629,6 +664,8 @@ class Owner:
         cancels, creates = await bot.calc_orders_to_cancel_and_create()
         if not self.same_account_facts(account, self.account_facts()):
             return None
+        if not receipts.matches(self.ordinary_receipts()):
+            return None
         # Preparation may span confirming raw-balance changes. Ordinary Rust
         # risk consumes the latest raw balance at its actual calculation, so
         # reconciliation and submission must retain that exact observation.
@@ -637,7 +674,9 @@ class Owner:
         # Empty plans need the same immutable receipt as nonempty plans. An
         # order dictionary is not the authority for the completed calculation.
         wave = replace(
-            bot._hsl_planning_wave, required_fills=self.required_fill_facts()
+            bot._hsl_planning_wave,
+            required_fills=self.required_fill_facts(),
+            ordinary_receipts=receipts,
         )
         return cancels, creates, bot._current_planning_snapshot, wave
 

@@ -69,6 +69,13 @@ bounded position/fill settling and connector admission. Ordinary strategy, auto-
 and the independent realized-loss gate retain their own readiness requirements.
 Freeze each candle acquisition's requested symbol cohort when scheduling it. Later
 position or fill refreshes cannot remove a source from that in-flight request.
+Ordinary preparation retains the actual immutable HSL candle-source and fill receipts,
+including for empty plans. A replacement receipt invalidates preparation and completed-plan
+acceptance after protection, even when its payload is equal. Quotes refreshed by preparation
+do not invalidate that receipt. These references belong only to the outstanding plan.
+The offline fake runner drains unmet account confirmations and owner-required fill readiness
+within its existing finite pass budget before advancing a bar; exhaustion is explicit and
+cannot certify a completed bar. Optional fill debt does not create a new readiness requirement.
 
 ## Configuration and validation
 

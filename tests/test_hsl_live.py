@@ -1953,6 +1953,7 @@ async def test_completed_plan_invalidated_by_fill_confirmation_is_replanned(
     ledger = bot._ensure_freshness_ledger()
     ledger.begin_epoch()
     ledger.stamp("open_orders", now_ms=NOW)
+    ledger.stamp("fills", now_ms=NOW)
     instance = hsl_live.owner(bot)
     wave = instance.capture(quotes())
     order = dict(symbol=SYMBOL, position_side="long", reduce_only=True)

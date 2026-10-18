@@ -660,14 +660,19 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
 
 
 def _refuse_unsettled_fake_bar(result, summaries, snapshot_dir):
-    if not result.get("input_acquisition_pending", False):
+    reason = (
+        "input_acquisition_pending" if result.get("input_acquisition_pending", False)
+        else "confirmation_pending" if result.get("confirmation_pending", False)
+        else None
+    )
+    if reason is None:
         return
     if snapshot_dir is not None:
         _dump_json(snapshot_dir.parent / "incomplete.json", {
-            "reason": "input_acquisition_pending", "step_summaries": summaries,
+            "reason": reason, "step_summaries": summaries,
             "market_clock_advanced_after_pending": False,
         })
-    raise RuntimeError("fake market bar cannot advance with input acquisition pending")
+    raise RuntimeError(f"fake market bar cannot advance with {reason.replace('_', ' ')}")
 
 
 def _fake_quote_input_tasks(bot, instance):
@@ -812,6 +817,20 @@ async def _run_fake_cycle(bot):
     return await _run_fake_cycle_ready(bot)
 
 
+def _fake_confirmation_pending(bot, instance):
+    pending = getattr(bot, "_authoritative_pending_confirmations", {})
+    account_minima = {surface: pending[surface] for surface in
+                      ("balance", "positions", "open_orders") if surface in pending}
+    if account_minima:
+        ledger = bot._ensure_freshness_ledger()
+        if any(ledger.surfaces[surface].epoch < minimum
+               for surface, minimum in account_minima.items()):
+            return True
+    # Stored optional fill debt does not make fills a required ordinary input.
+    required = instance.required_fill_facts()
+    return required is not None and not required[1]
+
+
 async def _run_fake_cycle_ready(bot):
     from live import hsl_live
 
@@ -840,8 +859,12 @@ async def _run_fake_cycle_ready(bot):
         raise_finished_failures(input_tasks)
         inputs_consumed = all(task in completed_before for task in input_tasks)
         in_flight = any(not task.done() for task in input_tasks)
+        confirmation_pending = (
+            result["updated"] and _fake_confirmation_pending(bot, instance)
+        )
         if ((not result["updated"] and not in_flight)
-                or (result["updated"] and result["ordinary_executed"] and inputs_consumed)):
+                or (result["updated"] and result["ordinary_executed"]
+                    and inputs_consumed and not confirmation_pending)):
             return dict(result, engine="hsl", passes=attempt + 1)
         # A completed ordinary plan does not settle newly scheduled history
         # reads. Give them the same bounded opportunity before advancing the
@@ -862,6 +885,9 @@ async def _run_fake_cycle_ready(bot):
     return dict(
         result, engine="hsl", passes=8, preparation_pending=True,
         input_acquisition_pending=any(not task.done() for task in input_tasks),
+        confirmation_pending=(
+            result["updated"] and _fake_confirmation_pending(bot, instance)
+        ),
     )
 
 

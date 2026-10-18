@@ -16,6 +16,116 @@ from tools.run_fake_live import _FakeHslFactClocks, _refuse_unsettled_fake_bar
 from test_hsl_runtime import NOW, SYMBOL, bot
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pending_surface,required_fills,confirms,expected_passes",
+    [("balance", False, True, 2), ("positions", False, True, 2),
+     ("open_orders", False, True, 2), ("fills", True, True, 2),
+     ("fills", False, True, 1), ("balance", False, False, 1)],
+)
+async def test_fake_success_waits_only_unmet_account_or_required_fill_confirmations(
+    monkeypatch, pending_surface, required_fills, confirms, expected_passes
+):
+    from live import hsl_live
+    from live.freshness import FreshnessLedger
+    from tools.run_fake_live import _run_fake_cycle_ready
+
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    for surface in ("balance", "positions", "open_orders", "fills"):
+        ledger.stamp(surface, now_ms=NOW)
+    value = SimpleNamespace(
+        _ensure_freshness_ledger=lambda: ledger,
+        _authoritative_pending_confirmations={pending_surface: 2 if confirms else 1},
+        _staged_planner_required_surfaces=lambda **kwargs: {"fills"} if required_fills else set(),
+    )
+    instance = Owner(value)
+    calls = []
+
+    async def cycle():
+        calls.append(True)
+        if len(calls) == 2:
+            ledger.begin_epoch()
+            ledger.stamp(pending_surface, now_ms=NOW)
+        return dict(updated=True, ordinary_executed=True, protective_work=True)
+
+    instance.cycle = cycle
+    monkeypatch.setattr(hsl_live, "owner", lambda unused: instance)
+    result = await _run_fake_cycle_ready(value)
+    assert result["passes"] == len(calls) == expected_passes
+    assert result["protective_work"]
+    assert not result.get("confirmation_pending", False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["balance", "positions", "open_orders", "fills"])
+async def test_fake_confirmation_cap_cannot_advance_market_bar(monkeypatch, surface, tmp_path):
+    from live import hsl_live
+    from live.freshness import FreshnessLedger
+    from tools.run_fake_live import _run_fake_cycle_ready
+
+    ledger = FreshnessLedger()
+    value = SimpleNamespace(
+        _ensure_freshness_ledger=lambda: ledger,
+        _authoritative_pending_confirmations={surface: 1},
+        _staged_planner_required_surfaces=lambda **kwargs: {"fills"},
+    )
+    instance = Owner(value)
+    calls = []
+
+    async def cycle():
+        calls.append(True)
+        return dict(updated=True, ordinary_executed=True, protective_work=True)
+
+    instance.cycle = cycle
+    monkeypatch.setattr(hsl_live, "owner", lambda unused: instance)
+    result = await _run_fake_cycle_ready(value)
+    assert result["passes"] == len(calls) == 8
+    assert result["protective_work"] and result["confirmation_pending"]
+    assert not result["input_acquisition_pending"]
+    with pytest.raises(RuntimeError, match="confirmation pending"):
+        _refuse_unsettled_fake_bar(result, [result], tmp_path / "snapshots")
+    incomplete = json.loads((tmp_path / "incomplete.json").read_text())
+    assert incomplete["reason"] == "confirmation_pending"
+    assert not incomplete["market_clock_advanced_after_pending"]
+
+
+@pytest.mark.asyncio
+async def test_final_wait_rechecks_confirmation_requested_by_finished_read(monkeypatch, tmp_path):
+    from live import hsl_live
+    from live.freshness import FreshnessLedger
+    from passivbot import Passivbot
+    from tools.run_fake_live import _run_fake_cycle_ready
+
+    ledger = FreshnessLedger()
+    value = SimpleNamespace(
+        _ensure_freshness_ledger=lambda: ledger,
+        _authoritative_pending_confirmations={},
+        _staged_planner_required_surfaces=lambda **kwargs: set(),
+    )
+    instance = Owner(value)
+    calls = []
+
+    async def late_read():
+        Passivbot._request_authoritative_confirmation(value, {"positions"})
+
+    async def cycle():
+        calls.append(True)
+        if len(calls) == 8:
+            instance._source_task = asyncio.create_task(late_read())
+        return dict(updated=True, ordinary_executed=False, protective_work=True)
+
+    instance.cycle = cycle
+    monkeypatch.setattr(hsl_live, "owner", lambda unused: instance)
+    result = await _run_fake_cycle_ready(value)
+    assert len(calls) == 8 and instance._source_task.done()
+    assert value._authoritative_pending_confirmations == {"positions": 1}
+    assert not result["input_acquisition_pending"]
+    assert result["confirmation_pending"] and result["protective_work"]
+    with pytest.raises(RuntimeError, match="confirmation pending"):
+        _refuse_unsettled_fake_bar(result, [result], tmp_path / "snapshots")
+
+
 @pytest.mark.parametrize("kind", ["quote", "candle", "fill_start", "fill_end"])
 def test_receipt_identity_distinguishes_equal_utc_reads_in_different_fake_bars(kind):
     clocks = _FakeHslFactClocks()
@@ -274,6 +384,7 @@ async def test_final_wait_inspects_a_new_underlying_read_after_its_wrapper_finis
     instance = SimpleNamespace(
         cycle=cycle, _ordinary=None, _source_task=None,
         _quote_tasks={}, _discard_quote_tasks=set(), _reader=reader,
+        required_fill_facts=lambda: None,
     )
     monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
     value = SimpleNamespace(market_snapshot_provider=provider)

@@ -635,6 +635,9 @@ since the latest release tag; these features may already be available when insta
   final Rust calculation and connector admission still require the same raw balance, so
   realized-loss, exposure and HSL risk checks remain authoritative. Empty plans retain their
   account/fill receipt, and shutdown prevents further protective or ordinary submissions.
+  Ordinary preparation also retains immutable HSL candle-source and fill acquisitions;
+  replacement receipts invalidate completed plans, including empty plans. The offline fake
+  runner settles required account confirmations before advancing its bounded market clock.
 
 - HSL now uses one best-effort fill reconciliation path for drawdown and cooldown.
   Known fill quantities are preserved with minimum feasible opening inventory and explicit

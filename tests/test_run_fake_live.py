@@ -111,6 +111,7 @@ class _StubBot:
         self._hsl_live = SimpleNamespace(
             cycle=self.cycle, _ordinary=None,
             _quote_tasks={}, _discard_quote_tasks=set(),
+            required_fill_facts=lambda: None,
         )
 
     async def cycle(self):
