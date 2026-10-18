@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Authorize routine, evidence-backed replies in existing PR review threads for assigned
+  implementation and review work without per-reply approval, preserving explicit user restrictions,
+  privacy boundaries and disputed-thread resolution requirements.
+
 - Distinguish runtime crashes from startup failures, report recovery only after ordinary execution resumes, and show the last bounded failure context when the restart budget is exhausted. Retry limits and terminal-stop behavior are unchanged.
 
 - Build one contiguous timestamp index per synchronous unknown-gap coverage check instead of repeatedly copying the retained candle history for each gap. Preserve full missing-span widths, synthetic-candle exclusion and exact candle/EMA results; never reuse the index across mutable reads.

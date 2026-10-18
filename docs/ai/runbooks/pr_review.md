@@ -4,8 +4,8 @@ Use this for repository-owned semantic review. Read `AGENTS.md`, `../principles.
 `../validation.md`, and the subsystem contracts routed by `../README.md`.
 
 Review does not authorize code changes unless the user explicitly asks for implementation.
-Routine review-thread replies follow the standing authority below. Follow the authority and
-network boundaries in `AGENTS.md` while gathering evidence and posting replies.
+Follow the authority and network boundaries in `AGENTS.md` while gathering evidence and posting
+replies.
 
 ## Review Loop
 
@@ -44,11 +44,9 @@ diffs, test output, or exchange data.
 
 ## Review Feedback Adjudication
 
-Routine, evidence-backed replies in existing review threads are authorized by default for assigned
-implementation or PR-review work, without per-reply approval. Replies may explain findings, fixes,
-validation or disagreements within the assigned PR. Honor explicit read-only, draft-only or no-post
-instructions. All replies must obey the Public Repository Data Boundary in `AGENTS.md`; this
-standing authority does not authorize private-data disclosure, unrelated messages or merging.
+Use the standing PR-reply authority and its exceptions in
+[`AGENTS.md`](../../../AGENTS.md#working-and-validation). The procedure below governs how to
+address review feedback within that authority.
 
 Do not silently treat disputed reviewer feedback as addressed. When an agent disagrees with a
 finding:
@@ -64,9 +62,10 @@ finding:
    reviewer acknowledges the rationale, a new exact-head review explicitly clears the dispute, or
    the user makes the final adjudication after the reviewer was asked to reconsider.
 
-If the user has explicitly restricted public writes, draft the same evidence-backed reply and ask
-for authorization before posting instead of silently rejecting the finding. Continuous-review
-state may record that adjudication is pending, but it must not record the thread as addressed.
+If a public reply is not permitted under the canonical authority, draft the same evidence-backed
+reply and ask for authorization before posting instead of silently rejecting the finding.
+Continuous-review state may record that adjudication is pending, but it must not record the thread
+as addressed.
 
 ## Architectural Proposal Check
 
