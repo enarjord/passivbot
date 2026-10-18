@@ -3,8 +3,9 @@
 Use this for repository-owned semantic review. Read `AGENTS.md`, `../principles.md`,
 `../validation.md`, and the subsystem contracts routed by `../README.md`.
 
-Review is read-only unless the user explicitly asks for implementation. Follow the authority and
-network boundaries in `AGENTS.md` while gathering evidence.
+Review does not authorize code changes unless the user explicitly asks for implementation.
+Follow the authority and network boundaries in `AGENTS.md` while gathering evidence and posting
+replies.
 
 ## Review Loop
 
@@ -43,8 +44,12 @@ diffs, test output, or exchange data.
 
 ## Review Feedback Adjudication
 
+Use the standing PR-reply authority and its exceptions in
+[`AGENTS.md`](../../../AGENTS.md#working-and-validation). The procedure below governs how to
+address review feedback within that authority.
+
 Do not silently treat disputed reviewer feedback as addressed. When an agent disagrees with a
-finding and the task authorizes review-comment writes:
+finding:
 
 1. Reply in the original review thread before moving on. State the decision, cite the exact code
    and governing contract, explain the regression or authority violation the recommendation would
@@ -57,9 +62,10 @@ finding and the task authorizes review-comment writes:
    reviewer acknowledges the rationale, a new exact-head review explicitly clears the dispute, or
    the user makes the final adjudication after the reviewer was asked to reconsider.
 
-If the task does not authorize GitHub comment writes, draft the same evidence-backed reply and ask
-the user for authorization instead of silently rejecting the finding. Continuous-review state may
-record that adjudication is pending, but it must not record the thread as addressed.
+If a public reply is not permitted under the canonical authority, draft the same evidence-backed
+reply and ask for authorization before posting instead of silently rejecting the finding.
+Continuous-review state may record that adjudication is pending, but it must not record the thread
+as addressed.
 
 ## Architectural Proposal Check
 
