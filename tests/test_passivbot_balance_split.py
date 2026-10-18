@@ -5062,37 +5062,51 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("pnl_required", "cooldown_minutes", "expected_lookback_minutes"),
+    ("pnl_required", "cooldown_minutes", "expected_lookback_minutes", "memory_minutes",
+     "old_pnl_status", "old_pnl_source"),
     [
-        (True, 0.0, 30 * 24 * 60),
-        (False, 2.5, 4),
+        (True, 0.0, 30 * 24 * 60, 30 * 24 * 60, "complete", "authoritative"),
+        (False, 2.5, 4, 30 * 24 * 60, "complete", "authoritative"),
+        (True, 720.0, 721, 15, "pending", "unknown"),
+        (True, 720.0, 721, 15, "complete", fem.PNL_SOURCE_SYNTHETIC_DEGRADED),
+        (True, 2.5, 15, 15, "complete", "authoritative"),
     ],
-    ids=["pnl_risk", "entry_cooldown"],
+    ids=["pnl_risk", "entry_cooldown", "long_cooldown_pending_old_pnl",
+         "long_cooldown_degraded_old_pnl", "pnl_horizon_longer"],
 )
 async def test_update_pnls_bootstraps_required_consumer_lookback(
-    pnl_required, cooldown_minutes, expected_lookback_minutes
+    pnl_required, cooldown_minutes, expected_lookback_minutes, memory_minutes,
+    old_pnl_status, old_pnl_source
 ):
     bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: pnl_required
     bot._max_configured_entry_cooldown_minutes = lambda: cooldown_minutes
     now_ms = 1_800_000_000_000
-    lookback_days = 30.0
     start_ms = now_ms - int(expected_lookback_minutes * 60_000)
+    memory_start_ms = now_ms - int(memory_minutes * 60_000)
     cached_events = [
         SimpleNamespace(
-            timestamp=start_ms - 60_000,
+            timestamp=(start_ms + 60_000 if start_ms < memory_start_ms else start_ms - 60_000),
             id="old-fill",
             source_ids=["old-fill"],
             symbol="BTC/USDT:USDT",
             position_side="long",
             side="sell",
-            qty=0.1,
+            qty=-0.1,
             price=10.0,
             pnl=1.0,
             fee_paid=0.0,
-            pnl_status="complete",
+            pnl_status=old_pnl_status,
+            pnl_source=old_pnl_source,
         )
     ]
+    increase = SimpleNamespace(
+        timestamp=now_ms - int(cooldown_minutes * 60_000 / 2),
+        id="still-relevant-increase", source_ids=["still-relevant-increase"],
+        symbol="BTC/USDT:USDT", position_side="long", side="buy", qty=0.1,
+        price=10.0, pnl=0.0, fee_paid=0.0, pnl_status="complete",
+        pnl_source="authoritative",
+    )
 
     class _Cache:
         def __init__(self):
@@ -5127,6 +5141,8 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
             self.history_scope = "window"
 
         async def _refresh_for_lookback(self, *, start_ms):
+            if cooldown_minutes > 0 and start_ms <= increase.timestamp:
+                self._events.append(increase)
             self.cache.mark_covered_start(start_ms)
             return True
 
@@ -5146,9 +5162,10 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "lookback_ema_span_minutes": lookback_days * 1440.0 / 5.0,
-                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
-            }
+                "lookback_ema_span_minutes": memory_minutes / 5.0,
+                "risk_bootstrap_max_lookback_minutes": memory_minutes,
+            },
+            "bot": {"long": {"entry_cooldown": {"base_duration_minutes": cooldown_minutes}}},
         }
     )
     bot._authoritative_pending_confirmations = {}
@@ -5170,6 +5187,21 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert bot._pnls_manager.cache.get_covered_start_ms() == start_ms
     assert bot._pnls_manager.history_scope == "window"
+    if cooldown_minutes > 0:
+        assert bot._get_last_increase_fill_timestamps(
+            [increase.symbol], now_ms=now_ms
+        )[increase.symbol]["long"] == increase.timestamp
+    if pnl_required:
+        assert bot._realized_memory_origin_ms == memory_start_ms
+        assert bot._required_pnl_history_start_ms(now_ms, pnl_start_ms=start_ms) == (
+            True, memory_start_ms
+        )
+        if start_ms < memory_start_ms:
+            # Older structural facts do not become realized-PnL quality blockers.
+            assert bot._required_pnl_events(
+                bot._pnls_manager.get_events(), now_ms, pnl_start_ms=start_ms,
+                required=True, required_start_ms=memory_start_ms,
+            ) == []
 
 
 @pytest.mark.asyncio
@@ -8243,13 +8275,15 @@ def test_authoritative_barrier_waits_for_next_epoch_confirmation():
     ("pnl_required", "cooldown_minutes", "pnl_start_ms", "span_minutes", "origin_ms", "expected"),
     [
         (True, 720.0, None, 43200.0, None, (True, 0)),
-        (True, 720.0, 1_000_000, 3.0, None, (True, 9_100_000)),
-        (True, 720.0, None, 3.0, 1_000_000, (True, 1_000_000)),
+        (True, 720.0, 1_000_000, 3.0, None, (True, 0)),
+        (True, 720.0, None, 3.0, 1_000_000, (True, 0)),
+        (True, 2.5, None, 3.0, 1_000_000, (True, 1_000_000)),
+        (True, 0.0, None, 3.0, None, (True, 9_100_000)),
         (False, 2.5, 1_000_000, 3.0, None, (True, 9_760_000)),
         (False, 0.0, 1_000_000, 3.0, None, (False, None)),
     ],
-    ids=["shared_origin_zero", "shared_origin_bounded", "shared_origin_retained",
-         "cooldown_only", "routine_only"],
+    ids=["shared_origin_zero", "cooldown_before_new_origin", "cooldown_before_retained_origin",
+         "shared_origin_before_cooldown", "shared_origin_only", "cooldown_only", "routine_only"],
 )
 def test_required_fill_history_start_follows_enabled_consumer(
     pnl_required, cooldown_minutes, pnl_start_ms, span_minutes, origin_ms, expected

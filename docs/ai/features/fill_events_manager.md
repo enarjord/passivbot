@@ -106,8 +106,10 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
     from its declared continuous-memory bootstrap origin. An unknown-prefix zero
     initializer and attenuation remain explicit; finite suffix coverage does not
     prove complete infinite-history memory or make its initial allowance safe.
-    Entry cooldown without a PnL consumer requires structural fill coverage only
-    across its maximum configured cooldown horizon. Trailing reconstruction retains
+    Entry cooldown independently requires structural fill coverage across its maximum
+    configured horizon. When both consumers are enabled, acquire and prove the earlier
+    boundary, while checking PnL quality and replaying realized memory only from its
+    fixed origin. Older structural fills do not rebase that origin. Trailing reconstruction retains
     its symbol/position-side confirmation and bounded recovery. With no historical
     consumer enabled, routine ingestion starts from a bounded recent fetch rather
     than proving an unrelated PnL window. HSL separately acquires its bounded

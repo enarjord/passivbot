@@ -15,6 +15,8 @@ since the latest release tag; these features may already be available when insta
   unstuck and uses its own fraction directly, without TWEL multiplication.
   Keep its chosen live bootstrap origin fixed across clock corrections and changes
   to the acquisition horizon.
+  Preserve structural entry-cooldown history when it extends before that origin,
+  so enabling realized-PnL risk does not bypass a still-active cooldown after restart.
   Config schema `v9.1.0` retires `realized_loss_gate_lookback_minutes`; v8 and
   v9.0.0 active gates require explicit semantic migration and fresh evaluation.
   Zero, all-history and equal numeric rolling windows are not EMA equivalents.

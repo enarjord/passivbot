@@ -2055,9 +2055,6 @@ class Passivbot:
         self, now_ms: int, *, pnl_start_ms: Optional[int]
     ) -> tuple[bool, Optional[int]]:
         """Return whether planning needs historical coverage and its earliest timestamp."""
-        orchestrator_pnl_required = self._live_risk_uses_authoritative_pnl()
-        if orchestrator_pnl_required:
-            return True, self._strict_pnl_history_start_ms(now_ms)
         pnl_required, pnl_start_ms = self._required_pnl_history_start_ms(
             now_ms,
             pnl_start_ms=pnl_start_ms,

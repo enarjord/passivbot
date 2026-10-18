@@ -444,6 +444,28 @@ class TestGetRealizedMemory:
         assert first._get_realized_memory() == restarted._get_realized_memory()
         assert first._realized_memory_diagnostics == restarted._realized_memory_diagnostics
 
+    @pytest.mark.parametrize("status,source", [
+        ("pending", "unknown"), ("complete", "synthetic_degraded")
+    ])
+    def test_structural_cooldown_history_does_not_rebase_realized_memory(self, status, source):
+        bot = _make_bot_with_events([
+            _make_fill_event(-50.0, timestamp=1_000, pnl_status=status, pnl_source=source),
+            _make_fill_event(-15.0, timestamp=600_000),  # No elapsed minute after this fill.
+        ])
+        bot.config["live"] = {
+            "lookback_ema_span_minutes": 60.0,
+            "risk_bootstrap_max_lookback_minutes": 1.0,
+        }
+        bot.get_exchange_time = lambda: 600_000
+        bot._max_configured_entry_cooldown_minutes = lambda: 720.0
+        assert bot._required_fill_history_start_ms(600_000, pnl_start_ms=540_000) == (True, 0)
+        assert bot._get_realized_memory() == {"drawdown": 15.0}
+        assert bot._realized_memory_origin_ms == 540_000
+        assert bot._realized_memory_diagnostics["start"] == 540_000
+        assert bot._realized_memory_diagnostics["fills"] == 1
+        assert bot._required_fill_history_start_ms(600_000, pnl_start_ms=0) == (True, 0)
+        assert bot._get_realized_memory() == {"drawdown": 15.0}
+
     def test_current_fact_query_excludes_future_pending_rows(self):
         bot = _make_bot_with_events([
             _make_fill_event(-15.0),
