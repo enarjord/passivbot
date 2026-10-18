@@ -38,6 +38,79 @@ def legacy():
     return config
 
 
+@pytest.mark.parametrize("location, entry_kind", [
+    ("scenario", "cooldown"), ("suite", "ema"),
+])
+@pytest.mark.parametrize("restart, enabled", [(None, False), (None, True), ("never", False)])
+def test_entry_alias_precedence_preserves_referenced_hsl_authority_audits(
+    tmp_path, location, entry_kind, restart, enabled
+):
+    source = legacy()
+    source["bot"]["long"]["hsl"]["enabled"] = False
+    coin_file = tmp_path / "coin.json"
+    coin_file.write_text(json.dumps({"bot": {"long": {"hsl": {
+        "restart_after_red_policy": restart,
+    }}}}))
+    original_bytes = coin_file.read_bytes()
+    source["coin_overrides"] = {"AAA": {"override_config_path": "coin.json"}}
+    if entry_kind == "cooldown":
+        overrides = {
+            "bot": {"long": {"risk": {"entry_cooldown_minutes": 9.0}}},
+            "long.entry_cooldown.base_duration_minutes": 0.05,
+        }
+        canonical = "bot.long.entry_cooldown.base_duration_minutes"
+        expected = 0.05
+    else:
+        overrides = {
+            "bot.long.strategy.trailing_martingale.ema_span_0": 17.5,
+            "long.strategy.entry.ema_span_0": 91.5,
+        }
+        canonical = "bot.long.strategy.trailing_martingale.entry.ema_span_0"
+        expected = 91.5
+    overrides["bot.long.hsl.enabled"] = enabled
+    scenarios = [{"label": "entry-alias-audit", "overrides": overrides}]
+    if location == "suite":
+        source["backtest"]["suite"] = {"enabled": True, "scenarios": scenarios}
+    else:
+        source["backtest"]["scenarios"] = scenarios
+    before = deepcopy(source)
+    kwargs = dict(memory_span_minutes=43200, base_config_path=str(tmp_path / "base.json"))
+    if restart is None and enabled:
+        with pytest.raises(ValueError, match="no v9 policy equivalent"):
+            migrate(source, acknowledge_never_removal=True, **kwargs)
+    else:
+        if restart == "never":
+            with pytest.raises(ValueError, match="acknowledge-never-removal"):
+                migrate(source, **kwargs)
+        output = migrate(source, acknowledge_never_removal=restart == "never", **kwargs).config
+        assert output["backtest"]["scenarios"][0]["overrides"][canonical] == expected
+        assert "restart_after_red_policy" not in json.dumps(output)
+        assert "enabled" not in output["coin_overrides"]["AAA"].get(
+            "bot", {}).get("long", {}).get("hsl", {})
+    assert source == before
+    assert coin_file.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("location", ["scenario", "optimizer"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_entry_audit_normalization_keeps_unrelated_canonical_duplicates_invalid(location, reverse):
+    source = legacy()
+    items = [("bot.long.hsl.enabled", False), ("long.hsl.enabled", True)]
+    patch = dict(reversed(items) if reverse else items)
+    if location == "scenario":
+        # A supported entry collision must not turn unrelated HSL aliases into
+        # an insertion-order choice or silently resolve contradictory facts.
+        patch.update({"bot.long.risk.entry_cooldown_minutes": 9.0,
+                      "long.entry_cooldown.base_duration_minutes": 0.05})
+        source["backtest"]["scenarios"] = [{"label": "ambiguous", "overrides": patch}]
+    else:
+        source["optimize"]["fixed_runtime_overrides"] = patch
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="duplicates canonical path bot.long.hsl.enabled"):
+        migrate(source, memory_span_minutes=43200)
+    assert source == before
+
+
 @pytest.mark.parametrize("value", [False, 0, -1, float("inf"), float("nan"), 1e30])
 def test_risk_span_rejects_invalid_or_nondecaying_f32(value):
     with pytest.raises(ValueError):

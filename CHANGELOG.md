@@ -41,8 +41,9 @@ since the latest release tag; these features may already be available when insta
   acknowledgement of removed `never` policies, dry-run diffs and atomic in-place
   replacement with backups. Materialize legacy coin flags and file references,
   preserving scenario and file-then-inline precedence across legacy strategy EMA
-  and entry-cooldown paths. Resolve disabled HSL policy inheritance in legacy
-  suite scenarios and referenced files before removing null restart selectors.
+  and entry-cooldown paths, including effective-scenario policy audits. Resolve
+  disabled HSL policy inheritance in legacy suite scenarios and referenced files
+  before removing null restart selectors.
   Require schema `v9.0.0` and fresh optimizer fitness/checkpoints;
   old numeric configurations may seed newly evaluated runs after migration.
   Preserve numeric slow-span suggestions in imported seeds and fine-tuning anchors.

@@ -18,6 +18,20 @@ def _set_patch(config, overrides, *, authored=False, scenario=False):
     from config.param_paths import require_existing_config_path, resolve_dotted_config_path
     from config.scenario_overrides import normalize_scenario_overrides
 
+    if authored and scenario:
+        from config.migrations.entry_cooldown import migrate_entry_cooldown
+        from config.migrations.entry_ema import migrate_entry_ema_spans
+
+        # Ordinary scenario loading resolves old/new entry leaf collisions with
+        # canonical precedence before applying paths. Use that same structural
+        # normalization for this audit's effective config, without changing the
+        # raw override facts used by HSL enablement and Never authorization.
+        context = deepcopy(config)
+        context["backtest"] = {"scenarios": [{"overrides": deepcopy(overrides)}]}
+        migrate_entry_cooldown(context)
+        migrate_entry_ema_spans(context)
+        overrides = context["backtest"]["scenarios"][0]["overrides"]
+
     seen = set()
     for selector, value in normalize_scenario_overrides(overrides).items():
         if scenario and (selector == "optimize" or selector.startswith("optimize.")):

@@ -28,6 +28,10 @@ Migration also checks fixed optimizer overrides, global mirroring and scenario
 overrides in their runtime order before removing a null policy.
 An enabled or ambiguous null policy requires explicit correction; authored `never`
 still requires acknowledgement even when disabled.
+Legacy entry EMA and cooldown aliases retain their existing canonical precedence,
+independently of insertion order, when migration checks effective scenarios. This
+structural normalization does not discard raw HSL authorization or resolve
+conflicting HSL aliases.
 
 An EMA span is not a half-life or an equivalent finite lookback. For span S,
 `alpha=2/(S+1)` and half-life is `log(0.5)/log(1-alpha)` minutes
