@@ -1897,12 +1897,13 @@ class Passivbot:
 
         Moving a finite replay suffix forward on every query would silently turn
         exponential memory back into rolling memory. Corrections replay from the
-        same origin; a restart declares a new approximate bounded origin.
+        same origin, including after clock or bootstrap-horizon changes. A restart
+        declares a new approximate bounded origin.
         """
         minutes, _ = risk_bootstrap_horizon_minutes(self.config["live"])
         requested = max(0, int(now_ms) - int(math.floor(minutes * 60_000 + 0.5)))
         origin = getattr(self, "_realized_memory_origin_ms", None)
-        origin = requested if origin is None else min(origin, requested)
+        origin = requested if origin is None else origin
         self._realized_memory_origin_ms = origin
         return origin
 

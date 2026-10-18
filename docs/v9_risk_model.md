@@ -203,6 +203,8 @@ Continuous realized memory starts at zero at the retained coverage boundary with
 `unknown_prefix` diagnostic unless its true origin is known. Report residual attenuation
 beta^N; this is a multiplier on unknown initial state, not a bound on economic error.
 An arbitrary finite suffix cannot prove equality to an unknown infinite past.
+Choose that boundary once per uninterrupted run. A backward clock correction or larger
+bootstrap horizon cannot move the retained origin or admit an older zero-initialized prefix.
 
 Historical budgets use supported balance/cashflow/slot facts when available. Otherwise
 reconstruction discloses its current-budget estimate; it must not claim those historical

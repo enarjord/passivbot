@@ -394,6 +394,38 @@ class TestGetRealizedMemory:
         assert bot._get_realized_memory() == before
         assert bot._realized_memory_origin_ms == origin
 
+    @pytest.mark.parametrize("change", ["backward_clock", "larger_bootstrap_cap"])
+    def test_initialized_origin_does_not_admit_an_older_prefix(self, change, caplog):
+        bot = _make_bot_with_events([
+            _make_fill_event(-50.0, timestamp=539_999),
+            _make_fill_event(-15.0, timestamp=540_001),
+        ])
+        bot.config["live"] = {
+            "lookback_ema_span_minutes": 60.0,
+            "risk_bootstrap_max_lookback_minutes": 1.0,
+        }
+        now = [600_000]
+        bot.get_exchange_time = lambda: now[0]
+        with caplog.at_level(logging.WARNING):
+            first = bot._get_realized_memory()
+            assert bot._realized_memory_origin_ms == 540_000
+            if change == "backward_clock":
+                now[0] = 599_999
+                expected = {"drawdown": 15.0}  # No elapsed minute after this fill.
+            else:
+                bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 2.0
+                expected = first
+            assert bot._get_realized_memory() == expected
+            assert bot._get_realized_memory() == expected
+        bot._pnls_manager.get_events.assert_called_with(
+            start_ms=540_000, end_ms=now[0]
+        )
+        assert bot._realized_memory_origin_ms == 540_000
+        assert bot._realized_memory_diagnostics["start"] == 540_000
+        assert bot._realized_memory_diagnostics["fills"] == 1
+        assert bot._realized_memory_diagnostics["unknown_prefix"] is True
+        assert caplog.text.count("approximate zero initializer") == 1
+
     def test_unknown_prefix_restart_with_retained_initializer_reproduces_memory(self):
         rows = [_make_fill_event(-15.0, timestamp=540_001)]
         first, restarted = _make_bot_with_events(rows), _make_bot_with_events(rows)

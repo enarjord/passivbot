@@ -13,6 +13,8 @@ since the latest release tag; these features may already be available when insta
   before entry economics, and disclose unknown-prefix bootstrap estimates.
   The global realized-loss gate shares account-wide net-realized drawdown with
   unstuck and uses its own fraction directly, without TWEL multiplication.
+  Keep its chosen live bootstrap origin fixed across clock corrections and changes
+  to the acquisition horizon.
   Config schema `v9.1.0` retires `realized_loss_gate_lookback_minutes`; v8 and
   v9.0.0 active gates require explicit semantic migration and fresh evaluation.
   Zero, all-history and equal numeric rolling windows are not EMA equivalents.
