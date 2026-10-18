@@ -86,7 +86,6 @@ def _complete_hsl_payload(payload):
     params.setdefault("coins", ["BTC", "ETH"][: len(payload.bot_params_list)])
     params.setdefault("dynamic_wel_by_tradability", True)
     params.setdefault("lookback_ema_span_minutes", 1440.0)
-    params.setdefault("realized_loss_gate_lookback_minutes", 1440.0)
     old = params.get("equity_hard_stop_loss", {})
     if "mode" in old:
         return
@@ -163,7 +162,6 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "hedge_mode": False,
         "max_realized_loss_pct": 1.0,
         "lookback_ema_span_minutes": 43200.0,
-        "realized_loss_gate_lookback_minutes": 43200.0,
         "market_order_slippage_pct": 0.0005,
         "market_orders_allowed": False,
         "market_order_near_touch_threshold": 0.001,
@@ -3514,86 +3512,15 @@ def test_suite_materialization_preserves_parameter_and_metric_defaults():
     assert original == [{"long_ema_span_0": 64}]
 
 
-@pytest.mark.parametrize(
-    "days,interval,expected",
-    [
-        (-1.0, 1, 0),
-        (0.0, 1, 1),
-        (30.0, 1, 43200),
-        (0.001, 1, 2),
-        (0.001, 5, 1),
-        (1.0, 7, 206),
-    ],
-)
-def test_fill_pnl_lookback_matches_rust_bar_contract(days, interval, expected):
-    from optimization.gpu.service import _fill_pnl_lookback_bars
+@pytest.mark.parametrize("fraction", [0.0, 0.1, 0.99999999, 1.0, 1e308])
+def test_realized_gate_fraction_uses_shared_nearest_f32_graph(fraction):
+    pytest.importorskip("torch")
+    from optimization.gpu.mps_kernel import _encode_max_realized_loss_pct
 
-    assert (
-        _fill_pnl_lookback_bars(
-            {
-                "realized_loss_gate_lookback_minutes": -1.0 if days < 0.0 else days * 1440.0,
-                "candle_interval_minutes": interval,
-            }
-        )
-        == expected
-    )
-
-
-@pytest.mark.parametrize("minutes,interval,expected", [
-    (9.0, 1, 10),
-    (15.000000000000002, 5, 3),
-    (30.000000000000004, 10, 3),
-    (2147483647.0, 1, 2147483647),
-    (10737418235.0, 5, 2147483647),
-])
-def test_fill_pnl_lookback_preserves_native_scaling_and_signed_bar_boundary(
-    minutes, interval, expected
-):
-    from optimization.gpu.service import _fill_pnl_lookback_bars
-
-    assert _fill_pnl_lookback_bars({
-        "realized_loss_gate_lookback_minutes": minutes,
-        "candle_interval_minutes": interval,
-    }) == expected
-
-
-@pytest.mark.parametrize("minutes,interval", [
-    (2147483648.0, 1),
-    (10737418240.0, 5),
-])
-def test_fill_pnl_lookback_rejects_unrepresentable_shader_bar_constant(minutes, interval):
-    from optimization.gpu.service import _fill_pnl_lookback_bars
-
-    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*32-bit"):
-        _fill_pnl_lookback_bars({
-            "realized_loss_gate_lookback_minutes": minutes,
-            "candle_interval_minutes": interval,
-        })
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-def test_multicoin_loss_gate_domain_preflight_precedes_device_setup(monkeypatch, enabled):
-    import optimization.gpu.service as service
-
-    config = get_template_config()
-    config["backtest"]["btc_collateral_cap"] = 0.0
-    config["live"].update(
-        max_realized_loss_pct=0.5 if enabled else 1.0,
-        realized_loss_gate_lookback_minutes=2147483648.0,
-    )
-    monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
-
-    def device_setup(_):
-        raise RuntimeError("device setup reached")
-
-    monkeypatch.setattr(service, "gpu_device", device_setup)
-    error = ValueError if enabled else RuntimeError
-    message = "realized_loss_gate_lookback_minutes.*32-bit" if enabled else "device setup reached"
-    with pytest.raises(error, match=message):
-        service.MpsMulticoinProxy(
-            config=config, hlcvs=None, mss=None, btc=None, timestamps=None,
-            exchange="binance", batch_size=1, needed_metrics={"adg_usd"},
-        )
+    assert _encode_max_realized_loss_pct(fraction) == float(np.float32(min(fraction, 1.0)))
+    if fraction == 0.99999999:
+        # The separately packed configured flag must preserve this active gate.
+        assert fraction < 1.0 and _encode_max_realized_loss_pct(fraction) == 1.0
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

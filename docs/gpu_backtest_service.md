@@ -400,7 +400,7 @@ Shared-account EMA/TM dispatches prove whether any packed candidate and effectiv
 coin-side override can use unstuck EMA gating. When none can, compilation removes
 only its EMA band, initialization, per-candle updates and gating consumers. Ungated
 unstuck selection and ordinary strategy EMAs retain their existing policies;
-continuous realized memory and the independent rolling loss gate remain distinct. Finite coin flags override candidate flags; nonfinite overrides
+continuous realized memory remains required when the realized-loss gate is active. Finite coin flags override candidate flags; nonfinite overrides
 inherit them. The feature bit belongs to the compilation/replay-state identity,
 independently of batch scheduling or search policy. Both fused sides participate
 in the proof, and each replay reconstructs its state for the selected layout.
@@ -408,13 +408,12 @@ in the proof, and each replay reconstructs its state for the selected layout.
 Shared-account EMA and Trailing Martingale auto-unstuck use continuous decaying
 net-realized-PnL memory with `live.lookback_ema_span_minutes`. Every ordinary, protective
 or unstuck fill contributes its net economics once, including signed fees and rebates.
-This memory excludes UPNL and survives HSL episode boundaries. The independent
-`max_realized_loss_pct` gate retains its rolling window from
-`live.realized_loss_gate_lookback_minutes`; that optional history is prepared only for
-the gate and does not become HSL or unstuck memory.
-Finite gate windows use the CPU conversion order before rounding up to candle bars.
-GPU replay rejects windows exceeding `2^31 - 1` bars before kernel compilation;
-`-1.0` retains the all-history policy.
+This memory excludes UPNL and survives HSL episode boundaries. The global
+`max_realized_loss_pct` gate consumes the same realized D and slow span, with its
+fraction directly in the allowance formula and no TWEL multiplier. Its configured
+enablement is preserved separately from float32 packing, including fractions that
+round to 1. The independent rolling window and its history scratch storage are
+retired; old zero/all-history windows require explicit semantic migration.
 
 Trailing Martingale finalizes executable close quantities before reserving projected
 negative PnL across coins and both sides. It prioritizes finalized protective reducers,

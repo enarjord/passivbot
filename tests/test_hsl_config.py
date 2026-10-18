@@ -467,7 +467,7 @@ def test_old_selectorless_hsl_requires_explicit_migration(version, policy, locat
         with pytest.raises(ValueError, match="acknowledge-never-removal"):
             migrate(cfg, memory_span_minutes=43200.0)
     converted = migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True).config
-    assert prepared(converted)["config_version"] == "v9.0.0"
+    assert prepared(converted)["config_version"] == "v9.1.0"
 
 
 def test_old_disabled_hsl_requires_explicit_migration_too():
@@ -484,7 +484,7 @@ def test_old_disabled_hsl_requires_explicit_migration_too():
     for side in ("long", "short"):
         del cfg["bot"][side]["hsl"]["restart_after_red_policy"]
     result = migrate(cfg, memory_span_minutes=43200.0).config
-    assert prepared(result)["config_version"] == "v9.0.0"
+    assert prepared(result)["config_version"] == "v9.1.0"
     assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
 
 
@@ -523,9 +523,9 @@ def test_old_root_file_backed_hsl_requires_migration_before_hydration(
             cfg, base_config_path=str(tmp_path / "config.json"), verbose=False
         )
     result = migrate(cfg, base_config_path=str(tmp_path / "config.json"), memory_span_minutes=43200.0, acknowledge_never_removal=True).config
-    assert result["config_version"] == "v9.0.0"
+    assert result["config_version"] == "v9.1.0"
     assert not any(key.startswith("_hsl") for key in result)
-    assert prepare_config(result, verbose=False)["config_version"] == "v9.0.0"
+    assert prepare_config(result, verbose=False)["config_version"] == "v9.1.0"
 
 
 @pytest.mark.parametrize("policy", ["always", "never"])
@@ -563,7 +563,7 @@ def test_old_legacy_coin_flag_file_requires_migration(tmp_path, policy, location
         prepare_config(cfg, base_config_path=base_path, verbose=False)
     if location == "root":
         converted = migrate(cfg, base_config_path=base_path, memory_span_minutes=43200.0, acknowledge_never_removal=True).config
-        assert prepared(converted)["config_version"] == "v9.0.0"
+        assert prepared(converted)["config_version"] == "v9.1.0"
         block = parse_overrides(converted, verbose=False)["coin_overrides"]["TEST"]["bot"]["long"]["hsl"]
         assert block["enabled"]
         assert "restart_after_red_policy" not in block
@@ -622,13 +622,13 @@ async def test_cli_external_suite_old_hsl_rejected_before_preparation(
         await module.main()
 
 
-@pytest.mark.parametrize("version", ["v8.5.0", "v9.0.0"])
+@pytest.mark.parametrize("version", ["v8.5.0", "v9.1.0"])
 @pytest.mark.parametrize("patch_kind", ["inline", "file", "legacy_file", "non_hsl"])
 def test_external_suite_loader_gates_old_base_and_resolves_current_files(tmp_path, version, patch_kind):
     from suite_runner import load_suite_override_config
 
     cfg = source(enabled=False)
-    if version != "v9.0.0":
+    if version != "v9.1.0":
         as_legacy(cfg, version)
     hsl = {"bot": {"long": {"hsl": {"enabled": True, "cooldown_minutes_after_red": 2.5}}}}
     (tmp_path / "coin.json").write_text(json.dumps(hsl))
@@ -642,7 +642,7 @@ def test_external_suite_loader_gates_old_base_and_resolves_current_files(tmp_pat
     path = tmp_path / "suite.json"
     path.write_text(json.dumps({"backtest": {"suite": {"scenarios": scenarios}}}))
     kwargs = {"source_config": cfg, "base_config_path": str(tmp_path / "base.json")}
-    if version != "v9.0.0":
+    if version != "v9.1.0":
         with pytest.raises(ValueError, match="migrate-config-v9"):
             load_suite_override_config(path, **kwargs)
     else:
@@ -727,7 +727,7 @@ async def test_cli_current_external_suite_reaches_preparation(
         pass
 
     def capture_prepare(source, **kwargs):
-        assert source["config_version"] == "v9.0.0"
+        assert source["config_version"] == "v9.1.0"
         raise PreparedOnly
 
     monkeypatch.setattr(module, "prepare_config", capture_prepare)

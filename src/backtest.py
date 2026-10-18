@@ -71,7 +71,6 @@ from config.access import (
 )
 from config.risk_memory import (
     normalize_lookback_ema_span_minutes,
-    normalize_realized_loss_gate_lookback_minutes,
 )
 from metrics_schema import attach_result_metrics, build_standalone_metrics
 from config.metrics import ANALYSIS_SHARED_KEYS
@@ -946,7 +945,6 @@ class BacktestExecutionSettings:
     market_order_slippage_pct: float
     limit_order_fill_buffer_pct: float
     lookback_ema_span_minutes: float
-    realized_loss_gate_lookback_minutes: float
 
 
 @dataclass
@@ -2517,16 +2515,12 @@ def get_backtest_execution_settings(
     memory_span = normalize_lookback_ema_span_minutes(
         require_config_value(config, "live.lookback_ema_span_minutes")
     )
-    gate_lookback = normalize_realized_loss_gate_lookback_minutes(
-        require_config_value(config, "live.realized_loss_gate_lookback_minutes")
-    )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=market_order_near_touch_threshold,
         market_order_slippage_pct=market_order_slippage_pct,
         limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
         lookback_ema_span_minutes=memory_span,
-        realized_loss_gate_lookback_minutes=gate_lookback,
     )
 
 
@@ -2555,10 +2549,6 @@ def log_backtest_execution_settings(
     logging.info(
         "[backtest]   lookback_ema_span_minutes = %s (live)",
         execution_settings.lookback_ema_span_minutes,
-    )
-    logging.info(
-        "[backtest]   realized_loss_gate_lookback_minutes = %s (live)",
-        execution_settings.realized_loss_gate_lookback_minutes,
     )
 
 
@@ -2801,7 +2791,6 @@ def prep_backtest_args(
                 require_config_value(config, "live.max_realized_loss_pct")
             ),
             "lookback_ema_span_minutes": execution_settings.lookback_ema_span_minutes,
-            "realized_loss_gate_lookback_minutes": execution_settings.realized_loss_gate_lookback_minutes,
             "equity_hard_stop_loss": hard_stop_cfg_long,
             "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
             "limit_order_fill_buffer_pct": execution_settings.limit_order_fill_buffer_pct,

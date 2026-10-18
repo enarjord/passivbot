@@ -383,16 +383,16 @@ impl RealizedMemory {
 }
 
 pub fn allowance(balance: f64, effective_pct: f64, drawdown: f64) -> Result<f64, String> {
-    let balance = number(balance, "unstuck balance")?;
-    let pct = number(effective_pct, "unstuck effective allowance percentage")?;
-    let d = number(drawdown, "unstuck realized drawdown")?;
+    let balance = number(balance, "realized-loss allowance balance")?;
+    let pct = number(effective_pct, "realized-loss allowance percentage")?;
+    let d = number(drawdown, "realized-loss allowance drawdown")?;
     if balance <= 0.0 || pct < 0.0 || d < 0.0 {
-        return Err("invalid v9 unstuck allowance input".into());
+        return Err("invalid v9 realized-loss allowance input".into());
     }
     let peak = balance + d;
     let value = pct.mul_add(peak, -d).max(0.0);
     if !peak.is_finite() || !value.is_finite() {
-        return Err("v9 unstuck allowance exceeds the finite risk domain".into());
+        return Err("v9 realized-loss allowance exceeds the finite risk domain".into());
     }
     Ok(value as f64)
 }
@@ -441,6 +441,33 @@ mod tests {
             allowance_for(1000.0, 0.01, 2.0, 10.0).unwrap(),
             10.199999809265137
         );
+    }
+
+    #[test]
+    fn shared_realized_memory_preserves_full_fill_order_and_independent_allowances() {
+        let mut gain_then_loss = RealizedMemory::new(3.0, 0).unwrap();
+        gain_then_loss.fill(1, 50.0).unwrap();
+        gain_then_loss.fill(1, -40.0).unwrap();
+        assert_eq!(gain_then_loss.drawdown(), 40.0);
+        let mut loss_then_gain = RealizedMemory::new(3.0, 0).unwrap();
+        loss_then_gain.fill(1, -40.0).unwrap();
+        loss_then_gain.fill(1, 50.0).unwrap();
+        assert_eq!(loss_then_gain.drawdown(), 0.0);
+
+        // Neither consumer mutates D or contributes a second spendable budget.
+        let gate = gain_then_loss.allowance(1000.0, 0.05).unwrap();
+        let unstuck = allowance_for(1000.0, 0.01, 2.0, 40.0).unwrap();
+        assert_eq!(gate, 0.05_f32.mul_add(1040.0, -40.0) as f64);
+        assert_eq!(unstuck, 0.0);
+        assert_eq!(gain_then_loss.drawdown(), 40.0);
+        gain_then_loss.advance_to(60_000).unwrap();
+        assert_eq!(gain_then_loss.drawdown(), 20.0);
+        gain_then_loss.advance_to(120_000).unwrap();
+        assert_eq!(gain_then_loss.drawdown(), 10.0);
+        gain_then_loss.fill(120_000, -0.25).unwrap();
+        assert_eq!(gain_then_loss.drawdown(), 10.25);
+        gain_then_loss.fill(120_000, 0.125).unwrap();
+        assert_eq!(gain_then_loss.drawdown(), 10.125);
     }
 
     fn policy() -> Policy {

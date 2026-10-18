@@ -66,7 +66,13 @@ Fresh account balance, complete positions, orders and acted-on quotes remain man
 before writes. Historical uncertainty does not create a second fallback controller or
 preserve old permission. Keep protection-first scheduling, shutdown checks, plan receipts,
 bounded position/fill settling and connector admission. Ordinary strategy, auto-unstuck
-and the independent realized-loss gate retain their own readiness requirements.
+and the realized-loss gate retain their own readiness requirements. Unstuck and
+the gate consume the same account-wide net-realized drawdown memory and slow span;
+the gate's allowance uses its fraction directly, without TWEL. Every actual net
+fill debits that memory once even when HSL is disabled. A bounded authoritative
+suffix starts from an explicitly unknown-prefix zero initializer unless a known
+origin is factually proven. Attenuation is a disclosed estimate, not exact-history
+or safety proof; losing the initializer declares a new bounded bootstrap.
 Freeze each candle acquisition's requested symbol cohort when scheduling it. Later
 position or fill refreshes cannot remove a source from that in-flight request.
 Ordinary preparation retains the actual immutable HSL candle-source and fill receipts,
@@ -79,9 +85,11 @@ cannot certify a completed bar. Optional fill debt does not create a new readine
 
 ## Configuration and validation
 
-V8 configs require explicit versioned migration, including CLI mutations, overrides,
+V8 and v9.0.0 configs require explicit migration to config schema v9.1.0, including CLI mutations, overrides,
 scenarios, seeds and optimizer bounds. Mode `unified`, rolling-day memory and restart
-selectors are migration inputs only. `portfolio` policy is never inferred from a side.
+selectors and the separate realized-loss gate window are migration inputs only.
+Active gate contexts require explicit acknowledgment of shared decaying memory.
+`portfolio` policy is never inferred from a side.
 Removed `never` requires acknowledgement. New memory span/allowance semantics require
 retuning; migrated optimizer fitness and old checkpoints are invalid evidence.
 

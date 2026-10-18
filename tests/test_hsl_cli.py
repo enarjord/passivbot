@@ -18,7 +18,7 @@ def _v8_config():
     config["config_version"] = "v8.5.0"
     for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
                 "realized_loss_gate_lookback_minutes"):
-        config["live"].pop(key)
+        config["live"].pop(key, None)
     config["live"]["pnls_max_lookback_days"] = 30.0
     config["optimize"]["bounds"].pop("live", None)
     for side in ("long", "short"):

@@ -205,9 +205,11 @@ ordinary closes, HSL closes and signed rebates all contribute in deterministic e
 order. UPNL and external balance changes do not. HSL episode transitions never reset it.
 Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32/FMA
 graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
-exposure thresholds and close sizing retain their existing policies. The independent
-`max_realized_loss_pct` gate uses its own rolling history, configured by
-`live.realized_loss_gate_lookback_minutes`; it must not consume decaying D instead.
+exposure thresholds and close sizing retain their existing policies. The global
+`max_realized_loss_pct` gate consumes the same D with `p=max_realized_loss_pct`,
+without TWEL multiplication; panic exemption and close-selection policy remain.
+Config schema v9.1.0 retires its separate rolling window. Active old-schema gates
+require explicit semantic migration; zero and all-history windows are not EMA spans.
 Live realized-memory bootstrap discloses an unknown prefix and residual attenuation;
 a finite suffix is not proof of infinite-tail equality. Required malformed or missing
 realized facts are fatal/deferred at their owning boundary, never an invented zero D.

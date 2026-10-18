@@ -11,8 +11,9 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 ## Config version
 
 `config_version` is a top-level schema field, not a backtest setting or package version.
-Current configs use `v9.0.0`. V8 inputs require explicit
-[v9 migration](v8_to_v9_migration.md), a chosen slow memory span and fresh backtests;
+Current configs use `v9.1.0`. V8 and v9.0.0 inputs require explicit
+[v9 migration](v8_to_v9_migration.md), acknowledgment for an active gate and fresh backtests;
+v8 also requires a chosen slow memory span.
 ordinary loading does not translate old risk policy. For v7 trailing-grid configs, first use the
 [v7-to-v8 migration helper](v7_to_v8_migration.md). See [release status](releases.md) for the distinction
 between schemas, package versions, and tags.
@@ -479,9 +480,9 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
 - **fills_recent_overlap_minutes**: Time overlap used for routine incremental live fill refreshes once the fill cache is warm. Default is `10.0`, which keeps ordinary minute-by-minute fill checks narrow to reduce private REST load.
 - **fills_confirmation_overlap_minutes**: Time overlap used when fills are explicitly required to confirm an account-critical state change, such as a suspected fill or pending staged confirmation. Default is `60.0`, preserving the wider safety window for confirmation refreshes.
-- **lookback_ema_span_minutes**: Shared forward-only exponential memory span for HSL currency drawdown and continuous auto-unstuck realized drawdown. Default `43200.0` minutes. It is an EMA span, not a half-life or a finite history cutoff. It must be finite, at least `1.0`, and decay in the shared f32 arithmetic. The independent HSL `ema_span_minutes` smooths the drawdown ratio. Jointly retune span, risk thresholds and loss allowance after [v8 migration](v8_to_v9_migration.md).
+- **lookback_ema_span_minutes**: Shared forward-only exponential memory span for HSL currency drawdown and account-wide realized drawdown consumed by auto-unstuck and the realized-loss gate. Default `43200.0` minutes. It is an EMA span, not a half-life or a finite history cutoff. It must be finite, at least `1.0`, and decay in the shared f32 arithmetic. The independent HSL `ema_span_minutes` smooths the drawdown ratio. Jointly retune span, risk thresholds and loss allowance after [explicit migration](v8_to_v9_migration.md).
 - **risk_bootstrap_max_lookback_minutes**: Live-only reconstruction cap, default/maximum `129600.0` minutes (90 days). Live targets five slow spans and retains the required active cooldown horizon, capped here, with unknown/truncated history reported. Enabled cooldowns exceeding the cap fail live capability validation. This is acquisition policy, not exponential forgetting. Ordinary CPU/GPU backtesting advances forward without historical rescans.
-- **realized_loss_gate_lookback_minutes**: Independent rolling `max_realized_loss_pct` gate window, default `43200.0`. `0.0` means the consumer's minimum sampling resolution; `-1.0` means all available history. Migration converts the former days setting only for this unchanged gate. It does not set HSL or unstuck memory.
+- **realized_loss_gate_lookback_minutes**: Removed in config schema v9.1.0. The realized-loss gate shares `lookback_ema_span_minutes`. Old positive, zero/minimum-resolution and `-1.0`/all-history windows are migration inputs, not equivalent spans or accepted runtime aliases.
   Live uses a one-millisecond minimum. CPU and GPU candle replay round finite windows
   up to at least one bar and retain the inclusive bar boundary: a loss at bar `j`
   remains in a zero-window calculation at `j + 1`. This inherited bar resolution
@@ -505,11 +506,11 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **total_exposure_enforcer_policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit * total_exposure_enforcer_threshold / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
 - **total_exposure_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` used by TWEL entry gating and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL when the entry gate is enabled; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
 - **risk_we_excess_allowance_pct**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. The effective allowance is capped at `max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
-- **max_realized_loss_pct**: Global realized-loss gate for close orders, anchored to peak realized balance from fill history. For each close order, if projected realized PnL would push balance below `peak_balance * (1 - max_realized_loss_pct)`, the order is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
+- **max_realized_loss_pct**: Global realized-loss gate for close orders. With raw balance B, shared account-wide net-realized drawdown D, and fraction r, its remaining allowance is `max(0, r * (B + D) - D)` in the [shared Rust arithmetic](v9_risk_model.md). TWEL does not multiply r. A projected loss exceeding the remaining allowance is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
   - Default: `1.0` (disabled).
-  - `<= 0.0`: block all lossy closes.
+  - `0.0`: block all lossy closes; negative or nonfinite values are invalid.
   - `>= 1.0`: disable the gate.
-  - Example: with peak balance `$10,000` and `max_realized_loss_pct = 0.05`, lossy closes are blocked once projected balance would fall below `$9,500`.
+  - Example: with raw balance `$10,000`, remembered realized loss D=`$200` and r=`0.05`, remaining allowance is `$310`. Ordered net fills and elapsed-minute decay change D; deposits and UPNL do not.
 - **fee_pct_fallback**: Fallback fee percentage used when a live fill has no usable quote-currency fee after reported-fee parsing and non-quote fee conversion. Default `0.0002` (0.02%). Set `0.0` to make the fallback fee exactly zero, so net realized PnL equals gross realized PnL for fallback-priced fills.
 - **fee_pct_sanity_abs_max**: Absolute fee/notional sanity threshold for live fill accounting. Default `0.001` (0.1%). Reported or converted fees outside this range are replaced by `fee_pct_fallback`.
 - **fee_conversion_max_age_ms**: Maximum timestamp distance allowed when using ticker data to convert a non-quote fee token to quote currency. Default `86400000` (24 hours).
@@ -769,7 +770,7 @@ overrides and suite scenarios.
 
 ## HSL configuration
 
-V9 requires `config_version="v9.0.0"` and the explicit
+V9 requires `config_version="v9.1.0"` and the explicit
 [v8-to-v9 migration](v8_to_v9_migration.md) before using older configurations. Relabeling a
 v8 file does not convert its policy. Main configs reject retired fields in root, CLI,
 coin/scenario overrides and optimizer policy. There is no engine selector or restart policy.

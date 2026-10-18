@@ -28,7 +28,6 @@ def _record(config):
         ("market_order_near_touch_threshold", 0.03),
         ("max_realized_loss_pct", 0.17),
         ("lookback_ema_span_minutes", 24480.0),
-        ("realized_loss_gate_lookback_minutes", 24480.0),
         ("warmup_ratio", 0.7),
         ("max_warmup_minutes", 200),
         ("minimum_coin_age_days", 17),
@@ -138,8 +137,8 @@ def test_changed_contract_blocks_checkpoint_fitness_reuse(tmp_path):
         _validate_resume_results(str(tmp_path), config)
 
 
-@pytest.mark.parametrize("version", [1, 2])
-def test_pre_v9_contract_version_cannot_reuse_saved_fitness(tmp_path, version):
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_pre_shared_gate_contract_version_cannot_reuse_saved_fitness(tmp_path, version):
     import msgpack
     from optimize import _resume_config_mismatches, _validate_resume_results
 

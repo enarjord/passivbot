@@ -158,7 +158,7 @@ def test_dump_config_clean_migrates_backtest_aggregate_overrides_to_reducer(tmp_
     cfg_path.write_text(
         json.dumps(
             {
-                "config_version": "v9.0.0",
+                "config_version": "v9.1.0",
                 "backtest": {
                     "aggregate": {"adg_pnl": "max"},
                     "base_dir": "backtests",
@@ -262,7 +262,8 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
         contract["bot"]["hsl"] if mode == "portfolio" else contract["bot"]["long"]["hsl"]
     )
     assert "restart_after_red_policy" not in block
-    assert contract["version"] == 3
+    assert contract["version"] == 4
+    assert "shared_realized_loss_memory" in contract["risk_model"]
     assert contract["risk_model"].startswith("v9_")
     assert "red_threshold" not in block  # candidate value, not fixed policy
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}

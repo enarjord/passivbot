@@ -93,9 +93,9 @@ minimum executable close, the close may exceed the remaining allowance. Further
 unstucking is then blocked until later realized profits or loss-memory decay rebuild positive
 allowance.
 
-The global realized-loss gate remains separate. `live.max_realized_loss_pct`
-can still block a non-panic unstuck close if the projected fill would breach
-that realized-loss floor.
+The global realized-loss gate has its own threshold, `live.max_realized_loss_pct`,
+and consumes the same account-wide realized drawdown. It can still block a
+non-panic unstuck close if the projected loss exceeds its remaining allowance.
 
 Auto-unstuck may be emitted in the same ideal-order batch as compatible ordinary
 grid, trailing, or EMA-anchor closes for that position. Passivbot keeps only one
@@ -239,20 +239,22 @@ panic close orders bypass the realized-loss gate.
 ### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
 
-The gate is anchored to the net realized PnL peak reconstructed from fill history
-(`pnl + fee_paid`):
+The gate consumes the same account-wide net-realized drawdown D as auto-unstuck,
+with elapsed-minute decay from `live.lookback_ema_span_minutes` and per-fill clipping.
+All actual fills contribute net PnL and signed fees once, even when HSL and unstuck
+are disabled. UPNL and external balance changes do not change D.
 
-`balance_peak = current_balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)`
+With raw balance B and fraction r=`max_realized_loss_pct`, Rust computes:
 
-`balance_floor = balance_peak * (1 - max_realized_loss_pct)`
+`remaining_allowance = max(0, r * (B + D) - D)`
 
-For each candidate close order, the bot projects realized PnL if filled and blocks the order when:
-
-`projected_balance_after_fill < balance_floor`
+The exact float32/FMA graph follows the [v9 risk model](v9_risk_model.md). TWEL does
+not multiply r. A candidate close whose projected loss exceeds the remaining
+allowance is blocked; fills and decay replenish or consume that allowance.
 
 Behavior by value:
-* `max_realized_loss_pct <= 0.0`: block all lossy closes.
-* `0.0 < max_realized_loss_pct < 1.0`: allow losses only down to the configured fraction below peak balance.
+* `max_realized_loss_pct == 0.0`: block all lossy closes; negative or nonfinite values are invalid.
+* `0.0 < max_realized_loss_pct < 1.0`: allow losses within the remaining shared-memory allowance.
 * `max_realized_loss_pct >= 1.0`: disabled.
 
 Operational notes:
@@ -260,9 +262,12 @@ Operational notes:
 * Live bot logs visible warnings whenever an order is blocked by this gate.
 * This can intentionally block automatic reducers if they would realize too much loss.
 * If you need immediate forced reduction regardless of realized loss, use panic mode.
-* The gate uses its independent rolling `live.realized_loss_gate_lookback_minutes` window;
-  `-1.0` means all available history. It is not
-  limited to fills created by the current bot process.
+* The old `live.realized_loss_gate_lookback_minutes` window is removed in config
+  schema v9.1.0. Active old-schema gates need explicit migration acknowledgment;
+  zero and all-history windows have no equivalent shared EMA span.
+* Restart reconstructs a declared bounded authoritative suffix from a fixed origin.
+  An unknown-prefix zero initializer and its residual attenuation are disclosed;
+  a finite suffix does not prove exact infinite-history memory.
 
 ### D. Equity Hard Stop Loss
 

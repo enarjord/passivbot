@@ -617,7 +617,6 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             lookback_ema_span_minutes: 3.0,
-            pnls_max_lookback_days: 30.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: crate::types::EquityHardStopLossConfig { hsl: Some(config) },
             market_orders_allowed: true,
@@ -931,6 +930,208 @@ mod tests {
         assert_eq!(bt.hsl_action(LONG, 0), Action::Halted);
         bt.update_hsl(3).unwrap();
         assert_eq!(bt.hsl_action(LONG, 0), Action::Normal);
+    }
+
+    #[test]
+    fn realized_gate_only_consumes_actual_net_fills_once_across_sides_and_flatness() {
+        let values = candles(2, 100.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        let mut p = params("coin", 2);
+        p.max_realized_loss_pct = 0.05;
+        p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
+        let mut bot_params = bots(2);
+        for pair in &mut bot_params {
+            pair.long.unstuck_enabled = false;
+            pair.short.unstuck_enabled = false;
+        }
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            bot_params,
+            vec![ExchangeParams::default(); 2],
+            &p,
+        );
+        assert!(bt.realized_memory_enabled);
+        assert!(!bt.hsl_enabled());
+        bt.process_entry_fill_long(
+            0,
+            0,
+            &order(1.0, OrderType::EntryInitialNormalLong),
+            execution(100.0),
+        )
+        .unwrap();
+        bt.process_entry_fill_short(
+            0,
+            1,
+            &order(-1.0, OrderType::EntryInitialNormalShort),
+            execution(100.0),
+        )
+        .unwrap();
+        assert_eq!(bt.realized_memory.drawdown(), 0.2_f32 as f64);
+        // Profit clips only the already-realized loss. The later loss is fully
+        // debited; netting this same-time pair would incorrectly hide it.
+        bt.process_close_fill_short(
+            0,
+            1,
+            &order(1.0, OrderType::CloseGridShort),
+            execution(80.0),
+        )
+        .unwrap();
+        bt.process_close_fill_long(
+            0,
+            0,
+            &order(-1.0, OrderType::CloseGridLong),
+            execution(80.0),
+        )
+        .unwrap();
+        assert_eq!(bt.realized_memory.drawdown(), 20.08_f32 as f64);
+        assert_eq!(bt.positions.long[0].size, 0.0);
+        assert_eq!(bt.positions.short[1].size, 0.0);
+        let net_ledger: f64 = bt.fills.iter().map(|fill| fill.pnl + fill.fee_paid).sum();
+        assert_eq!(bt.pnl_cumsum_running_net, net_ledger);
+        assert_eq!(bt.pnl_cumsum_running_net_pside[LONG], -20.2 + 0.02);
+        assert_eq!(bt.pnl_cumsum_running_net_pside[SHORT], 19.8 + 0.02);
+        let before = bt.get_orchestrator_input_cached(0, None, None);
+        assert_eq!(before.global.realized_pnl_drawdown, 20.08_f32 as f64);
+        bt.orchestrator_input_cache = Some(before);
+
+        // Cash balance and HSL episode state never mutate the realized memory.
+        bt.balance.usd_total_balance += 100.0;
+        assert_eq!(bt.realized_memory.drawdown(), 20.08_f32 as f64);
+        bt.realized_memory.advance_to(60_000).unwrap();
+        let after = bt.get_orchestrator_input_cached(1, None, None);
+        assert_eq!(after.global.realized_pnl_drawdown, 10.04_f32 as f64);
+        assert_eq!(after.balance_raw, bt.balance.usd_total_balance);
+        // A signed entry rebate reduces the same D, without resetting a flat
+        // account or a newly opened position to zero.
+        let mut rebate = execution(100.0);
+        rebate.fee_rate = -0.001;
+        bt.process_entry_fill_long(1, 0, &order(1.0, OrderType::EntryInitialNormalLong), rebate)
+            .unwrap();
+        assert_eq!(bt.realized_memory.drawdown(), (10.04_f32 - 0.1_f32) as f64);
+    }
+
+    #[test]
+    fn actual_loss_restricts_next_unstuck_and_gate_from_one_shared_memory() {
+        let values = candles(1, 90.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        let mut p = params("coin", 1);
+        p.max_realized_loss_pct = 0.15;
+        p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
+        let mut bot_params = bots(1);
+        bot_params[0].short.unstuck_enabled = false;
+        let long = &mut bot_params[0].long;
+        long.unstuck_enabled = true;
+        long.unstuck_ema_gating_enabled = false;
+        long.unstuck_loss_allowance_pct = 0.02;
+        long.unstuck_close_pct = 0.5;
+        long.unstuck_threshold = 0.5;
+        long.wallet_exposure_limit = 0.5;
+        long.risk_wel_enforcer_enabled = false;
+        long.risk_twel_enforcer_enabled = false;
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            bot_params,
+            vec![ExchangeParams::default()],
+            &p,
+        );
+        let mut entry = execution(100.0);
+        entry.fee_rate = 0.0;
+        bt.process_entry_fill_long(0, 0, &order(10.0, OrderType::EntryInitialNormalLong), entry)
+            .unwrap();
+        let mut exit = execution(50.0);
+        exit.fee_rate = 0.0;
+        bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
+            .unwrap();
+        assert_eq!(bt.realized_memory.drawdown(), 50.0);
+        let input = bt.get_orchestrator_input_cached(0, None, None);
+        assert_eq!(input.balance_raw, 950.0);
+        assert_eq!(input.global.realized_pnl_drawdown, 50.0);
+        assert_eq!(bt.unstuck_allowance_for_position(0, LONG).unwrap(), 0.0);
+        assert_eq!(
+            crate::hsl_decay::allowance(input.balance_raw, p.max_realized_loss_pct, 50.0).unwrap(),
+            0.15_f32.mul_add(1000.0, -50.0) as f64,
+        );
+        let actual = orchestrator::compute_ideal_orders(&input).unwrap();
+        assert!(actual
+            .orders
+            .iter()
+            .all(|order| order.order_type != OrderType::CloseUnstuckLong));
+        let mut without_loss_memory = input.clone();
+        without_loss_memory.global.realized_pnl_drawdown = 0.0;
+        let reference = orchestrator::compute_ideal_orders(&without_loss_memory).unwrap();
+        assert!(reference
+            .orders
+            .iter()
+            .any(|order| order.order_type == OrderType::CloseUnstuckLong));
+        assert_eq!(bt.realized_memory.drawdown(), 50.0);
+    }
+
+    #[test]
+    fn gate_only_replay_decays_without_fills_at_every_completed_minute() {
+        let values = candles(1, 100.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        for interval in [1, 5] {
+            let mut p = params("coin", 1);
+            p.max_realized_loss_pct = 0.0;
+            p.candle_interval_minutes = interval;
+            p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
+            let mut bot_params = bots(1);
+            let pair = &mut bot_params[0];
+            for side in [&mut pair.long, &mut pair.short] {
+                side.unstuck_enabled = false;
+                side.entry_eligible = false;
+                side.n_positions = 0;
+            }
+            let mut bt = Backtest::new(
+                values.view(),
+                btc.view(),
+                bot_params,
+                vec![ExchangeParams::default()],
+                &p,
+            );
+            let mut entry = execution(100.0);
+            entry.fee_rate = 0.0;
+            bt.process_entry_fill_long(0, 0, &order(1.0, OrderType::EntryInitialNormalLong), entry)
+                .unwrap();
+            let mut exit = execution(36.0);
+            exit.fee_rate = 0.0;
+            bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
+                .unwrap();
+            assert_eq!(bt.realized_memory.drawdown(), 64.0);
+            let (fills, _) = bt.run().unwrap();
+            assert_eq!(fills.len(), 2);
+            let mut expected = 64.0_f32;
+            // The last row is next-candle lookahead; k=4 is the last
+            // completed row in this six-row ordinary backtest fixture.
+            for _ in 0..5 * interval {
+                expected = 0.5_f32.mul_add(expected, 0.0);
+            }
+            assert_eq!(bt.realized_memory.drawdown(), expected as f64);
+        }
+    }
+
+    #[test]
+    fn realized_gate_zero_activates_memory_and_disabled_gate_does_not() {
+        let values = candles(1, 100.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        for pct in [0.0, 1.0 - f64::EPSILON, 1.0, 2.0] {
+            let mut p = params("coin", 1);
+            p.max_realized_loss_pct = pct;
+            p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
+            let mut bot_params = bots(1);
+            bot_params[0].long.unstuck_enabled = false;
+            bot_params[0].short.unstuck_enabled = false;
+            let bt = Backtest::new(
+                values.view(),
+                btc.view(),
+                bot_params,
+                vec![ExchangeParams::default()],
+                &p,
+            );
+            assert_eq!(bt.realized_memory_enabled, pct < 1.0);
+        }
     }
 
     #[test]

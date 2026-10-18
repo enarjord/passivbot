@@ -10,7 +10,7 @@ from typing import Any
 from config.shared_bot import BOT_GROUP_FIELD_MAP, get_grouped_bot_value
 from config.risk_memory import (
     normalize_lookback_ema_span_minutes, normalize_risk_bootstrap_max_lookback_minutes,
-    normalize_realized_loss_gate_lookback_minutes, risk_bootstrap_horizon_minutes,
+    risk_bootstrap_horizon_minutes,
 )
 from live.smoke_report import _user_safe_display_path
 
@@ -33,7 +33,6 @@ CACHE_LIVE_KEYS = (
     "max_warmup_minutes",
     "lookback_ema_span_minutes",
     "risk_bootstrap_max_lookback_minutes",
-    "realized_loss_gate_lookback_minutes",
     "warmup_concurrency",
     "warmup_jitter_seconds",
     "warmup_ratio",
@@ -50,7 +49,6 @@ CACHE_SETTING_CHECK_KEYS = (
     "max_warmup_minutes",
     "lookback_ema_span_minutes",
     "risk_bootstrap_max_lookback_minutes",
-    "realized_loss_gate_lookback_minutes",
     "warmup_ratio",
 )
 FORAGER_LIVE_KEYS = (
@@ -670,13 +668,11 @@ def _cache_readiness_report(
     for key, validator in (
         ("lookback_ema_span_minutes", normalize_lookback_ema_span_minutes),
         ("risk_bootstrap_max_lookback_minutes", normalize_risk_bootstrap_max_lookback_minutes),
-        ("realized_loss_gate_lookback_minutes", normalize_realized_loss_gate_lookback_minutes),
     ):
         try:
             value = validator(live.get(key))
         except (ValueError, TypeError) as error:
-            if key != "realized_loss_gate_lookback_minutes":
-                lookback_status = "invalid"
+            lookback_status = "invalid"
             _append_attention(fills, f"{key}_invalid", str(error))
         else:
             fills["evidence"].append({"code": f"{key}_configured", "value": value})

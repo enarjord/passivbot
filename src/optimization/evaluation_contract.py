@@ -13,7 +13,7 @@ from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -28,7 +28,6 @@ BACKTEST_LIVE_KEYS = frozenset(
         "hedge_mode",
         "max_realized_loss_pct",
         "lookback_ema_span_minutes",
-        "realized_loss_gate_lookback_minutes",
         "market_orders_allowed",
         "market_order_near_touch_threshold",
         "forager_score_hysteresis_pct",
@@ -125,7 +124,7 @@ def build_evaluation_contract(config: dict) -> dict:
         }
     contract = {
         "version": CONTRACT_VERSION,
-        "risk_model": "v9_decaying_currency_drawdown_ratio_ema_finite_cooldown",
+        "risk_model": "v9_shared_realized_loss_memory_currency_drawdown_ratio_ema_finite_cooldown",
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),
         "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from candlestick_manager import CANDLE_DTYPE, sanitize_remote_fetch_diagnostic
 from config import load_prepared_config
 from config.overrides import parse_overrides
-from config.risk_memory import risk_bootstrap_horizon_minutes, realized_loss_gate_start_ms
+from config.risk_memory import risk_bootstrap_horizon_minutes
 from config.hsl import require_live_runtime_support
 from config.runtime_compile import compile_runtime_config
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
@@ -443,12 +443,12 @@ def _fake_fill_cache_coverage(
         now_ms = int(fake_client.now_ms)
         minutes, _ = risk_bootstrap_horizon_minutes(live)
         minutes = max(minutes, require_live_runtime_support(config))
-        starts = [now_ms - int(math.floor(minutes * 60_000 + 0.5))]
-        if float(live["max_realized_loss_pct"]) < 1.0:
-            starts.append(realized_loss_gate_start_ms(live, now_ms))
-        if any(start is None for start in starts):
+        start_ms = max(0, now_ms - int(math.floor(minutes * 60_000 + 0.5)))
+        # The fake cache was populated from the complete observed fixture
+        # ledger. A bootstrap reaching timestamp zero proves that origin.
+        if start_ms == 0:
             return None, "all"
-        return min(int(start) for start in starts if start is not None), "window"
+        return start_ms, "window"
     if events:
         return min(int(event.timestamp) for event in events), "window"
     return None, None

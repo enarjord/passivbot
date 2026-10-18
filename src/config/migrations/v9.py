@@ -1,4 +1,4 @@
-"""Explicit v8-to-v9 policy migration; ordinary runtime loading is v9-only."""
+"""Explicit v8/v9.0 policy migration; ordinary runtime loading requires current v9."""
 
 from copy import deepcopy
 from dataclasses import dataclass
@@ -8,7 +8,8 @@ import re
 from config.risk_memory import normalize_lookback_ema_span_minutes
 
 
-V9_SCHEMA_VERSION = "v9.0.0"
+V9_SCHEMA_VERSION = "v9.1.0"
+PREVIOUS_V9_SCHEMA_VERSION = "v9.0.0"
 MIGRATION_COMMAND = "passivbot tool migrate-config-v9"
 _VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$", re.IGNORECASE)
 _RETIRED_HSL_FIELDS = frozenset({"tier_ratios", "orange_tier_mode", "no_restart_drawdown_threshold"})
@@ -79,9 +80,9 @@ def require_v9_runtime_config(config, *, additional_inputs=()):
         if version is not None and match is None:
             raise ValueError(
                 f"config.config_version must be a semantic version like {V9_SCHEMA_VERSION}; "
-                f"got {version!r}. Use explicit migration for supported v8 configurations"
+                f"got {version!r}. Use explicit migration for supported v8 or v9.0.0 configurations"
             )
-        if match is not None and tuple(map(int, match.groups())) > (9, 0, 0):
+        if match is not None and tuple(map(int, match.groups())) > (9, 1, 0):
             raise ValueError(
                 f"config.config_version {version!r} is newer than supported schema {V9_SCHEMA_VERSION}; "
                 "upgrade Passivbot; explicit migration cannot load a future schema"
@@ -100,6 +101,7 @@ def reject_retired_v9_fields(config, *, additional_inputs=()):
             name = str(key)
             if (
                 "pnls_max_lookback_days" in name
+                or "realized_loss_gate_lookback_minutes" in name
                 or "restart_after_red_policy" in name
                 or "hsl_engine" in name
                 or _retired_control(path, key)
@@ -107,25 +109,87 @@ def reject_retired_v9_fields(config, *, additional_inputs=()):
                 raise ValueError(f"{path} is removed in v9; use {MIGRATION_COMMAND}")
             if isinstance(value, str) and "fixed_params" in path and (
                 "pnls_max_lookback_days" in value or "restart_after_red_policy" in value
+                or "realized_loss_gate_lookback_minutes" in value
             ):
                 raise ValueError(f"{path} targets a removed v9 field; use {MIGRATION_COMMAND}")
             if name.split(".")[-1] == "hsl_signal_mode" and value == "unified":
                 raise ValueError(f"{path}=unified is removed in v9; use {MIGRATION_COMMAND}")
 
 
-def _gate_minutes(days, path):
-    if isinstance(days, str) and days.strip().lower() == "all":
-        return -1.0
-    if isinstance(days, bool):
-        raise ValueError(f"{path} must be finite days >= 0 or 'all'")
+def _validate_legacy_gate_window(value, path, *, days=False):
+    """Validate retired input without interpreting it as exponential memory."""
+    if days and isinstance(value, str) and value.strip().lower() == "all":
+        return
+    if isinstance(value, bool):
+        raise ValueError(f"{path} must be a finite legacy duration")
     try:
-        number = float(days)
+        number = float(value)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{path} must be finite days >= 0 or 'all'") from exc
-    minutes = number * 1440.0
-    if not math.isfinite(minutes) or number < 0.0:
-        raise ValueError(f"{path} must be finite days >= 0 or 'all'")
-    return minutes
+        raise ValueError(f"{path} must be a finite legacy duration") from exc
+    milliseconds = number * (86_400_000.0 if days else 60_000.0)
+    if not math.isfinite(number) or (number < 0.0 and (days or number != -1.0)):
+        all_history = "'all'" if days else "-1"
+        raise ValueError(f"{path} must be >= 0, or {all_history} for legacy all history")
+    if not math.isfinite(milliseconds) or round(milliseconds) > (1 << 63) - 1:
+        raise ValueError(f"{path} must fit in signed 64-bit milliseconds")
+
+
+def _realized_gate_migration_contexts(config):
+    """Inspect only global gate consumers, including dormant authored scenarios.
+
+    Coin-file global fields are not an allowed coin patch. Their migration uses
+    private caller state to skip this audit; the complete authored configuration
+    is always audited separately before canonical validation.
+    """
+    from config.scenario_overrides import normalize_scenario_overrides
+
+    live = config.get("live", {})
+    root = (live.get("max_realized_loss_pct", 1.0), live.get("lookback_ema_span_minutes"))
+
+    def overlay(base, overrides):
+        patch = normalize_scenario_overrides(overrides)
+        return (patch.get("live.max_realized_loss_pct", base[0]),
+                patch.get("live.lookback_ema_span_minutes", base[1]))
+
+    optimized = overlay(root, config.get("optimize", {}).get("fixed_runtime_overrides"))
+    contexts = [("root", root), ("optimize.fixed_runtime_overrides", optimized)]
+    for prefix, container in (("backtest", config.get("backtest", {})),
+                              ("backtest.suite", config.get("backtest", {}).get("suite", {}))):
+        if not isinstance(container, dict):
+            continue
+        for index, scenario in enumerate(container.get("scenarios", [])):
+            for suffix, base in (("", root), (" + fixed_runtime_overrides", optimized)):
+                contexts.append((f"{prefix}.scenarios[{index}]{suffix}",
+                                 overlay(base, scenario.get("overrides"))))
+    active = []
+    for path, (raw_fraction, span) in contexts:
+        try:
+            fraction = float(raw_fraction)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{path}: live.max_realized_loss_pct must be finite") from exc
+        if not math.isfinite(fraction) or fraction < 0.0:
+            raise ValueError(f"{path}: live.max_realized_loss_pct must be finite and >= 0")
+        if fraction < 1.0:
+            if span is None:
+                raise ValueError(
+                    f"{path}: active realized-loss gate requires an explicit "
+                    "--lookback-ema-span-minutes choice or authored shared span"
+                )
+            span = normalize_lookback_ema_span_minutes(span)
+            active.append(dict(context=path, max_realized_loss_pct=fraction,
+                               lookback_ema_span_minutes=span))
+    return active
+
+
+def _require_gate_ack(config, acknowledge):
+    contexts = _realized_gate_migration_contexts(config)
+    if contexts and not acknowledge:
+        raise ValueError(
+            f"{contexts[0]['context']}: active max_realized_loss_pct changes from rolling "
+            "history to shared decaying realized memory; requires "
+            "--acknowledge-realized-loss-gate-memory-change and fresh backtests"
+        )
+    return contexts
 
 
 def migrate_v8_to_v9(
@@ -134,7 +198,9 @@ def migrate_v8_to_v9(
     memory_span_minutes=None,
     memory_span_choices=None,
     acknowledge_never_removal=False,
+    acknowledge_realized_loss_gate_memory_change=False,
     _null_policy_enablement=None,
+    _coin_patch=False,
 ):
     """Transform authored policy without importing simulation or exchange runtimes.
 
@@ -151,8 +217,8 @@ def migrate_v8_to_v9(
     version = result.get("config_version")
     match = _VERSION.fullmatch(version.strip()) if isinstance(version, str) else None
     if match is None or tuple(map(int, match.groups()))[0] not in {8, 9}:
-        raise ValueError("migrate-config-v9 requires a versioned v8 configuration or v9.0.0")
-    if int(match[1]) == 9:
+        raise ValueError("migrate-config-v9 requires versioned v8, v9.0.0 or v9.1.0")
+    if version == V9_SCHEMA_VERSION:
         require_v9_runtime_config(result)
         if memory_span_minutes is not None and normalize_lookback_ema_span_minutes(
             memory_span_minutes
@@ -161,12 +227,22 @@ def migrate_v8_to_v9(
         if memory_span_choices:
             raise ValueError("memory-span choices do not apply to an already-v9 configuration")
         return MigrationResult(result, [], ())
-    if memory_span_minutes is None:
+    is_v8 = int(match[1]) == 8
+    if not is_v8 and version != PREVIOUS_V9_SCHEMA_VERSION:
+        raise ValueError("migrate-config-v9 supports v8 and v9.0.0, not a future schema")
+    if is_v8 and memory_span_minutes is None and not _coin_patch:
         raise ValueError(
             "v8 risk memory is not equivalent to an EMA span; explicitly choose "
             "--lookback-ema-span-minutes and re-tune HSL/unstuck"
         )
-    root_span = normalize_lookback_ema_span_minutes(memory_span_minutes)
+    authored_span = (None if _coin_patch else
+                     result.get("live", {}).get("lookback_ema_span_minutes"))
+    root_span = (normalize_lookback_ema_span_minutes(memory_span_minutes)
+                 if memory_span_minutes is not None else
+                 normalize_lookback_ema_span_minutes(authored_span)
+                 if authored_span is not None else None)
+    if authored_span is not None and root_span != normalize_lookback_ema_span_minutes(authored_span):
+        raise ValueError("authored live.lookback_ema_span_minutes conflicts with migration choice")
     choices = dict(memory_span_choices or {})
     used_choices = set()
     changes = []
@@ -232,6 +308,7 @@ def migrate_v8_to_v9(
             if key == "fixed_params" and isinstance(value, list):
                 if any(isinstance(item, str) and (
                     "pnls_max_lookback_days" in item or "restart_after_red_policy" in item
+                    or "realized_loss_gate_lookback_minutes" in item
                 ) for item in value):
                     raise ValueError(f"{current} targets removed v8 fields; edit selectors explicitly")
             if "restart_after_red_policy" in str(key):
@@ -259,6 +336,11 @@ def migrate_v8_to_v9(
                         f"{current} requires explicit new live.lookback_ema_span_minutes bounds; "
                         "days-to-minutes conversion is not equivalent risk policy"
                     )
+                if _coin_patch:
+                    _validate_legacy_gate_window(value, current, days=True)
+                    del node[key]
+                    record(current, value, None, "removed global memory field from a coin-only document")
+                    continue
                 if current == "live.pnls_max_lookback_days":
                     span = root_span
                 elif current in choices:
@@ -266,18 +348,24 @@ def migrate_v8_to_v9(
                     used_choices.add(current)
                 else:
                     raise ValueError(f"{current} requires --memory-span '{current}=MINUTES'")
+                _validate_legacy_gate_window(value, current, days=True)
                 new_key = str(key).replace("pnls_max_lookback_days", "lookback_ema_span_minutes")
-                gate_key = str(key).replace("pnls_max_lookback_days", "realized_loss_gate_lookback_minutes")
                 if new_key.startswith("live_"):
                     new_key = "live." + new_key.removeprefix("live_")
-                    gate_key = "live." + gate_key.removeprefix("live_")
-                if new_key in node or gate_key in node:
+                if new_key in node:
                     raise ValueError(f"{current} conflicts with an authored v9 risk field")
                 node[new_key] = span
-                node[gate_key] = _gate_minutes(value, current)
                 del node[key]
-                record(current, value, {new_key: span, gate_key: node[gate_key]},
-                       "explicit decaying-memory choice; independent rolling gate keeps its duration")
+                record(current, value, {new_key: span},
+                       "explicit shared decaying-memory choice; no rolling-window equivalence")
+                continue
+            if "realized_loss_gate_lookback_minutes" in str(key):
+                if ".bounds" in current or isinstance(value, (list, dict)):
+                    raise ValueError(f"{current} is retired; choose shared-span bounds explicitly")
+                _validate_legacy_gate_window(value, current)
+                del node[key]
+                record(current, value, None,
+                       "retired rolling gate window; gate shares the existing exponential span")
                 continue
             if (str(key).split(".")[-1] == "hsl_signal_mode" and
                     isinstance(value, str) and value.strip().lower() == "unified"):
@@ -291,11 +379,17 @@ def migrate_v8_to_v9(
     if unused:
         raise ValueError(f"unused memory-span choices: {', '.join(sorted(unused))}")
     live = result.setdefault("live", {})
-    if "lookback_ema_span_minutes" in live and live["lookback_ema_span_minutes"] != root_span:
+    if (not _coin_patch and root_span is not None and "lookback_ema_span_minutes" in live
+            and live["lookback_ema_span_minutes"] != root_span):
         raise ValueError("authored live.lookback_ema_span_minutes conflicts with migration choice")
-    if "lookback_ema_span_minutes" not in live:
+    if root_span is not None and "lookback_ema_span_minutes" not in live:
         live["lookback_ema_span_minutes"] = root_span
         record("live.lookback_ema_span_minutes", None, root_span, "explicit v9 memory choice")
+    if not _coin_patch:
+        active_contexts = _require_gate_ack(result, acknowledge_realized_loss_gate_memory_change)
+        if active_contexts:
+            record("live.max_realized_loss_pct", None, active_contexts,
+                   "acknowledged shared realized-loss memory in every effective authored context")
     result["config_version"] = V9_SCHEMA_VERSION
     record("config_version", version, V9_SCHEMA_VERSION, "explicit v9 schema migration")
     require_v9_runtime_config(result)
@@ -303,5 +397,6 @@ def migrate_v8_to_v9(
         result,
         changes,
         ("HSL ratios, drawdown memory, cooldown and unstuck replenishment changed. "
-         "Re-tune spans/allowances/bounds and freshly evaluate every seed; v8 fitness/checkpoints are invalid.",),
+         "The realized-loss gate now shares decaying net-realized memory without TWEL. "
+         "Re-tune spans/allowances/bounds and freshly evaluate every seed; old fitness/checkpoints are invalid.",),
     )

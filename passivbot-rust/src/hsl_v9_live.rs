@@ -269,6 +269,8 @@ pub fn realized_memory_v9(input_json: &str) -> PyResult<String> {
     serde_json::to_string(&serde_json::json!({
         "drawdown": memory.drawdown(), "start": input.start, "now": input.now,
         "fills": input.fills.len(), "unknown_prefix": !input.known_origin,
+        "initial_drawdown": 0.0,
+        "initialization": if input.known_origin { "known_zero_origin" } else { "unknown_prefix_zero" },
         "prefix_attenuation": attenuation, "same_time_order_from_canonical_manager": same_time,
     }))
     .map_err(|e| PyValueError::new_err(e.to_string()))
@@ -399,5 +401,28 @@ mod tests {
         let output: Value = serde_json::from_str(&realized_memory_v9(&input).unwrap()).unwrap();
         assert_eq!(output["drawdown"], json!(7.5));
         assert_eq!(output["unknown_prefix"], json!(false));
+        assert_eq!(output["initialization"], json!("known_zero_origin"));
+        assert_eq!(output["initial_drawdown"], json!(0.0));
+    }
+
+    #[test]
+    fn realized_memory_unknown_prefix_declares_initializer_without_claiming_tail_recovery() {
+        let suffix = json!({"span_minutes":3,"start":60000,"now":120000,
+            "known_origin":false,"fills":[]}).to_string();
+        let result: Value = serde_json::from_str(&realized_memory_v9(&suffix).unwrap()).unwrap();
+        assert_eq!(result["drawdown"], json!(0.0));
+        assert_eq!(result["unknown_prefix"], json!(true));
+        assert_eq!(result["initialization"], json!("unknown_prefix_zero"));
+        assert_eq!(result["initial_drawdown"], json!(0.0));
+        assert_eq!(result["prefix_attenuation"], json!(0.5));
+
+        // The same empty suffix with an actual preceding loss has nonzero
+        // memory. Attenuation alone cannot bound unknown economic loss.
+        let complete = json!({"span_minutes":3,"start":0,"now":120000,
+            "known_origin":true,"fills":[
+                {"identity":"prior-loss","timestamp":0,"net":-40.0}
+            ]}).to_string();
+        let exact: Value = serde_json::from_str(&realized_memory_v9(&complete).unwrap()).unwrap();
+        assert_eq!(exact["drawdown"], json!(10.0));
     }
 }

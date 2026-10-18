@@ -1065,6 +1065,23 @@ mod tests {
     use pyo3::types::{PyDict, PyList};
 
     #[test]
+    fn native_backtest_rejects_retired_rolling_gate_horizon() {
+        prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            for horizon in [-1.0, 0.0, 43_200.0] {
+                let input = PyDict::new_bound(py);
+                input
+                    .set_item("realized_loss_gate_lookback_minutes", horizon)
+                    .unwrap();
+                let error = backtest_params_from_dict(input.as_gil_ref()).unwrap_err();
+                assert!(error
+                    .to_string()
+                    .contains("realized_loss_gate_lookback_minutes is retired"));
+            }
+        });
+    }
+
+    #[test]
     fn test_gate_entries_blocks_when_twe_if_filled_exceeds() {
         prepare_freethreaded_python();
         Python::with_gil(|py| {
@@ -1929,6 +1946,11 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
+    if dict.contains("realized_loss_gate_lookback_minutes")? {
+        return Err(PyValueError::new_err(
+            "realized_loss_gate_lookback_minutes is retired; use shared lookback_ema_span_minutes",
+        ));
+    }
     let parse_hsl_cfg = |parent: &PyDict, key: &str| -> PyResult<EquityHardStopLossConfig> {
         let item = parent
             .get_item(key)?
@@ -2020,8 +2042,6 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or(1.0),
         lookback_ema_span_minutes: extract_value(dict, "lookback_ema_span_minutes")?,
-        pnls_max_lookback_days: extract_value::<f64>(dict, "realized_loss_gate_lookback_minutes")?
-            / 1440.0,
         liquidation_threshold: dict
             .get_item("liquidation_threshold")?
             .map(|item| item.extract::<f64>())
@@ -2708,25 +2728,6 @@ fn validate_orchestrator_account_risk_inputs(
         None,
         true,
     )?;
-    for (path, value) in [
-        (
-            "global.realized_pnl_cumsum_max",
-            input.global.realized_pnl_cumsum_max,
-        ),
-        (
-            "global.realized_pnl_cumsum_last",
-            input.global.realized_pnl_cumsum_last,
-        ),
-    ] {
-        if !value.is_finite() {
-            return Err(PyValueError::new_err(format!("{path} must be finite")));
-        }
-    }
-    if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
-        return Err(PyValueError::new_err(
-            "global.realized_pnl_cumsum_max must be >= global.realized_pnl_cumsum_last",
-        ));
-    }
     validate_finite_range(
         "global.unstuck_allowance_long",
         input.global.unstuck_allowance_long,

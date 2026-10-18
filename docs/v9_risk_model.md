@@ -96,7 +96,7 @@ immediate restart. New actual exposure clears the old terminal record. There is 
 
 ## Continuous realized-loss memory
 
-Auto-unstuck has one shared net-realized-PNL memory across all positions. It excludes UPNL
+Auto-unstuck and the realized-loss gate consume one shared net-realized-PNL memory across all positions. It excludes UPNL
 and never resets at an HSL episode boundary. Start from zero at a known origin. Advance slow
 decay once per elapsed minute and process every fill in economic order:
 
@@ -107,11 +107,21 @@ p = f32(loss_allowance_pct) * f32(applicable_TWEL)
 allowance = max(0, fma(p, f32(raw_balance) + D_realized, -D_realized))
 ```
 
+For the global realized-loss gate use `p = f32(max_realized_loss_pct)` in the same
+allowance graph, without TWEL multiplication. Its original configured fraction determines
+enablement: finite values in [0, 1) activate the gate and values at least 1 disable it.
+Zero blocks lossy non-panic closes; negative or nonfinite fractions are invalid.
+The gate remains active when HSL and unstuck are
+disabled. The shared producer consumes every actual net fill once, including fees and
+rebates, before any HSL-only early return.
+
 Retain the existing allowance, selection, exposure, price-EMA and close-sizing policies.
 The ordinary balance ledger accounts for each loss or fee exactly once. Profit repays
 remembered loss; excess profit creates no negative credit. This changes replenishment and
-requires fresh joint calibration of span and loss allowance. The independent rolling
-`max_realized_loss_pct` gate retains its own history and does not silently acquire this memory.
+requires fresh joint calibration of span and loss allowance. Config schema v9.1.0 explicitly
+retires the rolling gate window; migrating an active v8 or v9.0.0 gate requires semantic
+acknowledgment. Equal numeric windows, zero and all-history policies are not equivalent
+exponential spans.
 
 ## Bootstrap, correction and restart
 

@@ -743,9 +743,13 @@ mod tests {
             assert!(body.contains("thread float& balance = account.balance"));
             assert!(body
                 .contains("thread float& realized_pnl_cumsum_last = account.realized_pnl_total"));
-            // Unstuck consumes the account's configured history projection,
-            // rather than requiring an alias of the all-history peak.
-            assert!(body.contains("effective_realized_pnl_drawdown(account)"));
+            // Both consumers use the one continuous account-global memory;
+            // gate-only configurations keep its producer enabled.
+            assert!(body.contains("joint_realized_loss_allowance("));
+            assert!(body.contains(
+                "account.realized_decay_enabled = PASSIVBOT_UNSTUCK_ENABLED || loss_gate_enabled"
+            ));
+            assert!(!body.contains("unstuck_pnl_values"));
             assert_eq!(
                 body.matches("record_realized_net(").count(),
                 expected_account_record_sites

@@ -6,8 +6,9 @@ This is the recommended way to work with Passivbot configs on the current config
 
 - The canonical hardcoded defaults live in `src/config/schema.py`.
 - The example config `configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile.
-- New configs use top-level `config_version: "v9.0.0"`. V8 configs require the explicit
-  [v9 migration tool](v8_to_v9_migration.md), a chosen exponential memory span and fresh backtests;
+- New configs use top-level `config_version: "v9.1.0"`. V8 and v9.0.0 configs require the explicit
+  [v9 migration tool](v8_to_v9_migration.md), an acknowledged active-gate memory change and fresh backtests;
+  v8 also requires a chosen exponential memory span.
   ordinary loading never silently changes rolling risk memory into v9 policy.
   Config-schema versions are separate from [package versions and release tags](releases.md).
   V7 and pre-v8 configs require explicit migration.
@@ -46,8 +47,8 @@ dry-run/check modes and migration boundaries.
 - Keep one normal JSON or HJSON config per strategy/account instead of relying on many CLI overrides.
 - Use CLI overrides for temporary experiments, not as your main configuration workflow.
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.
-- Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, `lookback_ema_span_minutes`, `realized_loss_gate_lookback_minutes`, `fee_pct_fallback`, and `fee_pct_sanity_abs_max` directly from `live`; these fields are not accepted under `backtest`.
-- `live.lookback_ema_span_minutes` controls shared HSL/unstuck exponential memory. The independent rolling loss gate uses `live.realized_loss_gate_lookback_minutes` (`-1.0` means all history); live reconstruction uses its separately bounded `risk_bootstrap_max_lookback_minutes` cap.
+- Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, `lookback_ema_span_minutes`, `fee_pct_fallback`, and `fee_pct_sanity_abs_max` directly from `live`; these fields are not accepted under `backtest`.
+- `live.lookback_ema_span_minutes` controls shared HSL, auto-unstuck and realized-loss-gate exponential memory. `realized_loss_gate_lookback_minutes` is removed; zero and all-history windows have no equivalent EMA span. Live reconstruction uses its separately bounded `risk_bootstrap_max_lookback_minutes` cap.
 - Keep new configs on the canonical schema. Do not author new configs using deprecated field names.
 - Do not paste old flat v7 trailing-grid fields into a v8 config. Run the migration helper so the fields land under `bot.<side>.strategy.trailing_grid_v7`.
 - Use `coin_overrides` for per-coin exceptions instead of cloning whole configs for minor differences.

@@ -813,16 +813,13 @@ inline int next_tm_admission_reducer(thread const TmCloseAdmission& source) {
 inline bool apply_tm_multicoin_close_admission(
     thread TrailingMartingaleMulticoinSideState* long_side,
     thread TrailingMartingaleMulticoinSideState* short_side,
-    thread const JointPortfolioAccount& account,
+    thread JointPortfolioAccount& account,
     constant float* bars, constant int* fill_ticks, constant float* coin_settings ORGANILLO_ARGS,
     int k, int T, int C, float max_loss_pct, float slippage
 ) {
     TmFinalizedClose orders[501];
-    float drawdown = effective_realized_pnl_drawdown(account);
-    float allowed = float32_floor_nonnegative(
-        (account.balance + drawdown) * fmax(max_loss_pct, 0.0f)
-    );
-    float remaining = float32_floor_nonnegative(fmax(allowed - drawdown, 0.0f));
+    float remaining;
+    if (!joint_realized_loss_allowance(account, max_loss_pct, remaining)) return false;
     for (int rank = 0; rank < 2; ++rank) {
         thread TrailingMartingaleMulticoinSideState* side = rank == 0 ? long_side : short_side;
         if (side == nullptr) continue;
@@ -5428,10 +5425,6 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     device TrailingMartingaleMulticoinFusedReplayState* replay_states,
     constant int* replay_range,
@@ -5533,7 +5526,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
-        && run_settings[5] < 1.0f;
+        && run_settings[16] > 0.5f;
     const float max_realized_loss_pct = run_settings[5];
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
@@ -5696,19 +5689,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         bars, coin_settings, C, COIN_COLS, run_settings[15] > 0.5f);
     attach_hsl_replay_side(factual_context, long_side.hsl, long_side.coin_hsl, 0, false);
     attach_hsl_replay_side(factual_context, short_side.hsl, short_side.coin_hsl, 1, true);
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    if (scalars[int(b) * FUSED_SCALAR_COLS + 9] == -3.0f) return;
-    bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
-#endif
+    account.realized_decay_enabled = PASSIVBOT_UNSTUCK_ENABLED || loss_gate_enabled;
     account.realized_decay_beta = long_side.hsl.decay_policy.slow_beta;
     account.realized_decay_interval_minutes = multicoin_interval_minutes(interval_ms);
     for (int k = begin_k; k < chunk_stop_k; ++k) {
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
         fills.step_volume = 0.0f;
         fills.step_has_fill = 0.0f;
-#endif
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        account.unstuck_pnl_k = k;
 #endif
         if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings ORGANILLO_PASS, k, C)
             || held_positions_have_missing_prices(short_side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
@@ -5997,12 +5984,6 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        if (!refresh_unstuck_pnl_window(account)) {
-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -3.0f;
-            return;
-        }
-#endif
         float long_unstuck_diff = INFINITY;
         float short_unstuck_diff = INFINITY;
         const int long_unstuck_candidate = long_can_generate
@@ -6096,7 +6077,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_can_generate ? &short_side : nullptr,
                 account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
                 k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -5.0f;
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = account.realized_decay_valid ? -5.0f : -8.0f;
             return;
         }
 #endif
@@ -6731,10 +6712,6 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     device char* replay_state_bytes,
     constant int* replay_range,
@@ -6775,9 +6752,6 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
         hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        unstuck_pnl_values, unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
         replay_states, replay_range,
 #endif
@@ -6829,10 +6803,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     device TrailingMartingaleMulticoinReplayState* replay_states,
     constant int* replay_range,
@@ -6899,7 +6869,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
-        && run_settings[5] < 1.0f;
+        && run_settings[14] > 0.5f;
     const float max_realized_loss_pct = run_settings[5];
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
@@ -6924,7 +6894,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     JointPortfolioAccount account = init_joint_portfolio_account(starting_balance);
     thread float& balance = account.balance;
     thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
-    thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
     TrailingMartingaleMulticoinFillState fills =
         init_trailing_martingale_multicoin_fill_state();
     thread float& pnl_recovery_peak = fills.pnl_recovery_peak;
@@ -7066,19 +7035,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     HslReplayContext factual_context = hsl_replay_context(
         bars, coin_settings, C, COIN_COLS, run_settings[13] > 0.5f);
     attach_hsl_replay_side(factual_context, side.hsl, side.coin_hsl, 0, short_side);
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    if (scalars[int(b) * SCALAR_COLS + 9] == -3.0f) return;
-    bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
-#endif
+    account.realized_decay_enabled = PASSIVBOT_UNSTUCK_ENABLED || loss_gate_enabled;
     account.realized_decay_beta = side.hsl.decay_policy.slow_beta;
     account.realized_decay_interval_minutes = multicoin_interval_minutes(interval_ms);
     for (int k = begin_k; k < chunk_stop_k; ++k) {
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
         fills.step_volume = 0.0f;
         fills.step_has_fill = 0.0f;
-#endif
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        account.unstuck_pnl_k = k;
 #endif
         if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
@@ -7285,12 +7248,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             scalars[int(b) * SCALAR_COLS + 9] = -8.0f;
             return;
         }
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        if (!refresh_unstuck_pnl_window(account)) {
-            scalars[int(b) * SCALAR_COLS + 9] = -3.0f;
-            return;
-        }
-#endif
         if (can_generate) {
             update_tm_multicoin_side_selection(
                 side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
@@ -7325,7 +7282,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 short_side ? nullptr : &side, short_side ? &side : nullptr,
                 account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
                 k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
-            scalars[int(b) * SCALAR_COLS + 9] = -5.0f;
+            scalars[int(b) * SCALAR_COLS + 9] = account.realized_decay_valid ? -5.0f : -8.0f;
             return;
         }
 #endif
@@ -7861,10 +7818,6 @@ kernel void passivbot_trailing_martingale_multicoin(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     device char* replay_state_bytes,
     constant int* replay_range,
@@ -7910,9 +7863,6 @@ kernel void passivbot_trailing_martingale_multicoin(
         hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        unstuck_pnl_values, unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
         replay_states, replay_range,
 #endif
@@ -7962,10 +7912,6 @@ kernel void passivbot_trailing_martingale_multicoin_long(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     device char* replay_state_bytes,
     constant int* replay_range,
@@ -8006,9 +7952,6 @@ kernel void passivbot_trailing_martingale_multicoin_long(
         hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        unstuck_pnl_values, unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
         replay_states, replay_range,
 #endif

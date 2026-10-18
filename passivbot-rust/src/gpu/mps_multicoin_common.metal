@@ -4,10 +4,6 @@
 // and the future joint-side portfolio kernel compose this module so rounding,
 // fill accounting, override lookup, and exposure allowance cannot drift apart.
 
-#ifndef PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS
-#define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS 0
-#endif
-
 #ifndef PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED
 #define PASSIVBOT_WEIGHTED_RAW_EQUITY_ENABLED 0
 #endif
@@ -226,161 +222,6 @@ inline bool realized_loss_gate_allows(
         || -net_pnl <= remaining_loss_budget;
 }
 
-// Finite fill-PnL window shared by auto-unstuck and realized-loss admission,
-// independent of HSL. The existing scratch/compile ABI retains its unstuck name.
-struct RollingPnlWindow {
-    int event_head;
-    int event_count;
-    int peak_head;
-    int peak_count;
-    float absolute_cumulative;
-    bool overflowed;
-};
-
-struct RollingPnlSignal {
-    float peak;
-    float current;
-};
-
-inline RollingPnlWindow init_rolling_pnl_window() {
-    RollingPnlWindow window;
-    window.event_head = 0;
-    window.event_count = 0;
-    window.peak_head = 0;
-    window.peak_count = 0;
-    window.absolute_cumulative = 0.0f;
-    window.overflowed = false;
-    return window;
-}
-
-inline void reset_rolling_pnl_window(
-    thread RollingPnlWindow& window
-) {
-    window.event_head = 0;
-    window.event_count = 0;
-    window.peak_head = 0;
-    window.peak_count = 0;
-}
-
-inline void prune_rolling_pnl_window(
-    thread RollingPnlWindow& window,
-    device float2* values,
-    device int2* indices,
-    int base,
-    int capacity,
-    int k,
-    int lookback_bars
-) {
-    if (lookback_bars <= 0 || window.overflowed) return;
-    while (window.event_count > 0) {
-        int slot = window.event_head;
-        if (k - indices[base + slot].x <= lookback_bars) break;
-        if (window.peak_count > 0
-            && indices[base + window.peak_head].y == slot) {
-            window.peak_head = (window.peak_head + 1) % capacity;
-            window.peak_count -= 1;
-        }
-        window.event_head = (window.event_head + 1) % capacity;
-        window.event_count -= 1;
-    }
-}
-
-inline void record_rolling_pnl(
-    thread RollingPnlWindow& window,
-    device float2* values,
-    device int2* indices,
-    int base,
-    int capacity,
-    int k,
-    int lookback_bars,
-    bool active,
-    float pnl
-) {
-    if (!active || lookback_bars <= 0 || window.overflowed) return;
-    window.absolute_cumulative += pnl;
-    prune_rolling_pnl_window(
-        window, values, indices, base, capacity, k, lookback_bars
-    );
-    if (window.event_count > 0) {
-        int slot = (window.event_head + window.event_count - 1) % capacity;
-        if (indices[base + slot].x == k) {
-            values[base + slot].y = fmax(
-                values[base + slot].y, window.absolute_cumulative
-            );
-            if (window.peak_count > 0) {
-                int peak_tail = (
-                    window.peak_head + window.peak_count - 1
-                ) % capacity;
-                if (indices[base + peak_tail].y == slot) {
-                    window.peak_count -= 1;
-                }
-            }
-            while (window.peak_count > 0) {
-                int back = (
-                    window.peak_head + window.peak_count - 1
-                ) % capacity;
-                int peak_slot = indices[base + back].y;
-                if (values[base + peak_slot].y
-                    > values[base + slot].y) break;
-                window.peak_count -= 1;
-            }
-            int peak_tail = (
-                window.peak_head + window.peak_count
-            ) % capacity;
-            indices[base + peak_tail].y = slot;
-            window.peak_count += 1;
-            return;
-        }
-    }
-    if (window.event_count >= capacity || window.peak_count >= capacity) {
-        window.overflowed = true;
-        return;
-    }
-    int slot = (window.event_head + window.event_count) % capacity;
-    values[base + slot] = float2(
-        window.absolute_cumulative - pnl, window.absolute_cumulative
-    );
-    indices[base + slot].x = k;
-    window.event_count += 1;
-
-    while (window.peak_count > 0) {
-        int back = (window.peak_head + window.peak_count - 1) % capacity;
-        int peak_slot = indices[base + back].y;
-        if (values[base + peak_slot].y > window.absolute_cumulative) break;
-        window.peak_count -= 1;
-    }
-    int peak_tail = (window.peak_head + window.peak_count) % capacity;
-    indices[base + peak_tail].y = slot;
-    window.peak_count += 1;
-}
-
-inline RollingPnlSignal effective_rolling_pnl(
-    thread RollingPnlWindow& window,
-    device float2* values,
-    device int2* indices,
-    int base,
-    int capacity,
-    int k,
-    int lookback_bars
-) {
-    RollingPnlSignal signal;
-    signal.peak = 0.0f;
-    signal.current = 0.0f;
-    if (lookback_bars <= 0 || window.overflowed) return signal;
-    prune_rolling_pnl_window(
-        window, values, indices, base, capacity, k, lookback_bars
-    );
-    if (window.event_count == 0) return signal;
-    float base_cumulative = values[base + window.event_head].x;
-    int peak_slot = indices[base + window.peak_head].y;
-    signal.current = window.absolute_cumulative - base_cumulative;
-    signal.peak = fmax(
-        values[base + peak_slot].y - base_cumulative,
-        fmax(signal.current, 0.0f)
-    );
-    return signal;
-}
-
 // Joint-side account state for the fused multi-coin portfolio path. Exact
 // Rust processes every long fill before every short fill for a candle; callers
 // preserve that ordering while this state owns the one shared cash balance and
@@ -389,7 +230,6 @@ struct JointPortfolioAccount {
     float balance;
     float balance_correction;
     float realized_pnl_total;
-    float realized_pnl_peak;
     float realized_pnl_long;
     float realized_pnl_short;
     float realized_decay_beta;
@@ -397,14 +237,7 @@ struct JointPortfolioAccount {
     long realized_decay_minute;
     int realized_decay_interval_minutes;
     bool realized_decay_valid;
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    RollingPnlWindow unstuck_pnl;
-    device float2* unstuck_pnl_values;
-    device int2* unstuck_pnl_indices;
-    int unstuck_pnl_base;
-    int unstuck_pnl_k;
-    float unstuck_pnl_drawdown;
-#endif
+    bool realized_decay_enabled;
 };
 
 inline JointPortfolioAccount init_joint_portfolio_account(
@@ -414,7 +247,6 @@ inline JointPortfolioAccount init_joint_portfolio_account(
     account.balance = starting_balance;
     account.balance_correction = 0.0f;
     account.realized_pnl_total = 0.0f;
-    account.realized_pnl_peak = 0.0f;
     account.realized_pnl_long = 0.0f;
     account.realized_pnl_short = 0.0f;
     account.realized_decay_beta = 0.0f;
@@ -422,20 +254,26 @@ inline JointPortfolioAccount init_joint_portfolio_account(
     account.realized_decay_minute = 0;
     account.realized_decay_interval_minutes = 1;
     account.realized_decay_valid = true;
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    account.unstuck_pnl = init_rolling_pnl_window();
-    account.unstuck_pnl_values = nullptr;
-    account.unstuck_pnl_indices = nullptr;
-    account.unstuck_pnl_base = 0;
-    account.unstuck_pnl_k = 0;
-    account.unstuck_pnl_drawdown = 0.0f;
-#endif
+    account.realized_decay_enabled = true;
     return account;
+}
+
+// The gate and auto-unstuck read one account-global realized memory. Planning
+// reserves projected losses separately; only actual fills mutate the memory.
+inline bool joint_realized_loss_allowance(
+    thread JointPortfolioAccount& account, float fraction, thread float& allowance
+) {
+    if (!hsl_decay_realized_allowance(
+            account.balance, fraction, account.realized_decay_drawdown, allowance)) {
+        account.realized_decay_valid = false;
+        return false;
+    }
+    return true;
 }
 
 #pragma STDC FP_CONTRACT OFF
 inline void advance_joint_realized_memory(thread JointPortfolioAccount& account, int bar_index) {
-#if PASSIVBOT_UNSTUCK_ENABLED
+    if (!account.realized_decay_enabled) return;
     // Fill/recovery coordinates remain bars. Risk memory always advances by
     // exact integer minutes, including when HSL is disabled on aggregated data.
     const long minute = long(bar_index) * long(account.realized_decay_interval_minutes);
@@ -447,7 +285,6 @@ inline void advance_joint_realized_memory(thread JointPortfolioAccount& account,
         account.realized_decay_drawdown = fma(account.realized_decay_beta,
             account.realized_decay_drawdown, 0.0f);
     account.realized_decay_minute = minute;
-#endif
 }
 #pragma STDC FP_CONTRACT ON
 
@@ -456,18 +293,10 @@ inline void record_joint_portfolio_fill(
     float net_pnl,
     bool is_long
 ) {
-#if PASSIVBOT_UNSTUCK_ENABLED
-    account.realized_decay_valid = account.realized_decay_valid
-        && hsl_decay_realized_fill(net_pnl, account.realized_decay_drawdown);
-#endif
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    record_rolling_pnl(
-        account.unstuck_pnl, account.unstuck_pnl_values,
-        account.unstuck_pnl_indices, account.unstuck_pnl_base,
-        PASSIVBOT_UNSTUCK_PNL_CAPACITY, account.unstuck_pnl_k,
-        PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS, true, net_pnl
-    );
-#endif
+    if (account.realized_decay_enabled) {
+        account.realized_decay_valid = account.realized_decay_valid
+            && hsl_decay_realized_fill(net_pnl, account.realized_decay_drawdown);
+    }
     // Keep small fees/profits from disappearing into the larger cash balance.
     // The residual travels with account state through temporal dispatches.
     float adjusted = net_pnl - account.balance_correction;
@@ -475,46 +304,9 @@ inline void record_joint_portfolio_fill(
     account.balance_correction = (next - account.balance) - adjusted;
     account.balance = next;
     account.realized_pnl_total += net_pnl;
-    account.realized_pnl_peak = fmax(
-        account.realized_pnl_peak, account.realized_pnl_total
-    );
     if (is_long) account.realized_pnl_long += net_pnl;
     else account.realized_pnl_short += net_pnl;
 }
-
-// Consumers use the configured fill-PnL window, or the all-history fallback.
-// HSL retains its independent reporting and panic scopes.
-inline float effective_realized_pnl_drawdown(thread const JointPortfolioAccount& account) {
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    return account.unstuck_pnl_drawdown;
-#else
-    return account.realized_pnl_peak - account.realized_pnl_total;
-#endif
-}
-
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-inline void bind_unstuck_pnl_window(
-    thread JointPortfolioAccount& account,
-    device float2* values,
-    device int2* indices,
-    int candidate
-) {
-    account.unstuck_pnl_values = values;
-    account.unstuck_pnl_indices = indices;
-    account.unstuck_pnl_base = candidate * PASSIVBOT_UNSTUCK_PNL_CAPACITY;
-}
-
-inline bool refresh_unstuck_pnl_window(thread JointPortfolioAccount& account) {
-    RollingPnlSignal signal = effective_rolling_pnl(
-        account.unstuck_pnl, account.unstuck_pnl_values,
-        account.unstuck_pnl_indices, account.unstuck_pnl_base,
-        PASSIVBOT_UNSTUCK_PNL_CAPACITY, account.unstuck_pnl_k,
-        PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS
-    );
-    account.unstuck_pnl_drawdown = fmax(signal.peak - signal.current, 0.0f);
-    return !account.unstuck_pnl.overflowed;
-}
-#endif
 
 inline void record_realized_net(
     float net_pnl,

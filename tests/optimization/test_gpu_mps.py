@@ -13228,150 +13228,41 @@ def test_tm_multicoin_scenario_batch_matches_separate_candidate_batches(side):
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-def test_mps_unstuck_rolling_pnl_window_expires_and_resets_fill_events():
+def test_mps_gate_only_realized_memory_clips_fills_and_queries_are_pure():
     import passivbot_rust
 
-    dense_round_trip_count = 2_096
-    fills_per_round_trip = 4
-    # Ordinary unstuck keeps one coalesced event per candle.
-    dense_capacity = dense_round_trip_count
-    probe_kernel = (
-        r"""
-kernel void passivbot_rolling_pnl_probe(
-    device float2* values,
-    device int2* indices,
-    device float* output,
-    uint b [[thread_position_in_grid]]
-) {
-    if (b > 0) return;
-    RollingPnlWindow window = init_rolling_pnl_window();
-    const int capacity = 4;
-    const int lookback_bars = 2;
-    record_rolling_pnl(
-        window, values, indices, 0, capacity, 0, lookback_bars, true, 50.0f
-    );
-    RollingPnlSignal first = effective_rolling_pnl(
-        window, values, indices, 0, capacity, 0, lookback_bars
-    );
-    record_rolling_pnl(
-        window, values, indices, 0, capacity, 1, lookback_bars, true, -80.0f
-    );
-    RollingPnlSignal second = effective_rolling_pnl(
-        window, values, indices, 0, capacity, 1, lookback_bars
-    );
-    RollingPnlSignal expired = effective_rolling_pnl(
-        window, values, indices, 0, capacity, 3, lookback_bars
-    );
-    record_rolling_pnl(
-        window, values, indices, 0, capacity, 4, lookback_bars, true, 55.0f
-    );
-    RollingPnlSignal final_signal = effective_rolling_pnl(
-        window, values, indices, 0, capacity, 4, lookback_bars
-    );
-    reset_rolling_pnl_window(window);
-    RollingPnlSignal reset_signal = effective_rolling_pnl(
-        window, values, indices, 0, capacity, 4, lookback_bars
-    );
-
-    output[0] = first.peak;
-    output[1] = first.current;
-    output[2] = second.peak;
-    output[3] = second.current;
-    output[4] = expired.peak;
-    output[5] = expired.current;
-    output[6] = final_signal.peak;
-    output[7] = final_signal.current;
-    output[8] = reset_signal.peak;
-    output[9] = reset_signal.current;
-
-    RollingPnlWindow inactive = init_rolling_pnl_window();
-    record_rolling_pnl(
-        inactive, values, indices, 4, 2, 0, 10, false, 1.0f
-    );
-    record_rolling_pnl(
-        inactive, values, indices, 4, 2, 1, 10, false, 1.0f
-    );
-    record_rolling_pnl(
-        inactive, values, indices, 4, 2, 2, 10, false, 1.0f
-    );
-    output[10] = inactive.overflowed ? 1.0f : 0.0f;
-
-    RollingPnlWindow overflow = init_rolling_pnl_window();
-    record_rolling_pnl(
-        overflow, values, indices, 4, 2, 0, 10, true, 1.0f
-    );
-    record_rolling_pnl(
-        overflow, values, indices, 4, 2, 1, 10, true, 1.0f
-    );
-    record_rolling_pnl(
-        overflow, values, indices, 4, 2, 2, 10, true, 1.0f
-    );
-    output[11] = overflow.overflowed ? 1.0f : 0.0f;
-
-    RollingPnlWindow dense = init_rolling_pnl_window();
-    for (int k = 0; k < __DENSE_ROUND_TRIP_COUNT__; ++k) {
-        for (int fill = 0; fill < __FILLS_PER_ROUND_TRIP__; ++fill) {
-            record_rolling_pnl(
-                dense, values, indices, 6, __DENSE_CAPACITY__, k,
-                __DENSE_ROUND_TRIP_COUNT__ + 1, true, -0.1f
-            );
-        }
-        record_rolling_pnl(
-            dense, values, indices, 6, __DENSE_CAPACITY__, k,
-            __DENSE_ROUND_TRIP_COUNT__ + 1, true, 1.0f
-        );
-    }
-    output[12] = dense.overflowed ? 1.0f : 0.0f;
-    output[13] = float(dense.event_count);
-
-    RollingPnlWindow coalesced = init_rolling_pnl_window();
-    record_rolling_pnl(
-        coalesced, values, indices, 6, __DENSE_CAPACITY__, 0, 2, true, 50.0f
-    );
-    record_rolling_pnl(
-        coalesced, values, indices, 6, __DENSE_CAPACITY__, 0, 2, true, -80.0f
-    );
-    RollingPnlSignal coalesced_signal = effective_rolling_pnl(
-        coalesced, values, indices, 6, __DENSE_CAPACITY__, 0, 2
-    );
-    output[14] = coalesced_signal.peak;
-    output[15] = coalesced_signal.current;
-    output[16] = float(coalesced.event_count);
+    probe = r"""
+kernel void shared_realized_memory_probe(device float* output,
+    uint b [[thread_position_in_grid]]) {
+    if (b != 0) return;
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    account.realized_decay_enabled = true;
+    account.realized_decay_beta = 0.5f;
+    record_joint_portfolio_fill(account, -80.0f, true);
+    record_joint_portfolio_fill(account, 100.0f, false);
+    record_joint_portfolio_fill(account, -20.0f, true);
+    output[0] = account.realized_decay_drawdown;
+    advance_joint_realized_memory(account, 1);
+    output[1] = account.realized_decay_drawdown;
+    float allowance = 0.0f;
+    output[2] = float(joint_realized_loss_allowance(account, 0.1f, allowance));
+    output[3] = allowance;
+    joint_realized_loss_allowance(account, 0.1f, allowance);
+    output[4] = account.realized_decay_drawdown;
+    account.realized_decay_enabled = false;
+    record_joint_portfolio_fill(account, -5.0f, false);
+    output[5] = account.realized_decay_drawdown;
+    output[6] = account.balance;
 }
-""".replace("__DENSE_ROUND_TRIP_COUNT__", str(dense_round_trip_count))
-        .replace("__FILLS_PER_ROUND_TRIP__", str(fills_per_round_trip))
-        .replace("__DENSE_CAPACITY__", str(dense_capacity))
-    )
-    buffer_size = 6 + dense_capacity
-    values = torch.empty((buffer_size, 2), dtype=torch.float32, device=gpu_device())
-    indices = torch.empty((buffer_size, 2), dtype=torch.int32, device=gpu_device())
-    output = torch.zeros(17, dtype=torch.float32, device=gpu_device())
-    library = compile_shader(
-        passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
-    )
-
-    library.passivbot_rolling_pnl_probe(values, indices, output, threads=(1, 1, 1))
+"""
+    output = torch.zeros(7, dtype=torch.float32, device=gpu_device())
+    source = "#define PASSIVBOT_UNSTUCK_ENABLED 0\n" + passivbot_rust.mps_ema_anchor_multicoin_source_py()
+    library = compile_shader(source + probe)
+    library.shared_realized_memory_probe(output, threads=(1, 1, 1))
     synchronize()
-
-    assert output.cpu().tolist() == [
-        50.0,
-        50.0,
-        50.0,
-        -30.0,
-        0.0,
-        -80.0,
-        55.0,
-        55.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        float(dense_round_trip_count),
-        50.0,
-        -30.0,
-        1.0,
-    ]
+    # The first loss is fully repaid before the final loss: summing this batch
+    # before clipping would incorrectly report zero drawdown.
+    assert output.cpu().tolist() == [20.0, 10.0, 1.0, 91.0, 10.0, 10.0, 995.0]
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")

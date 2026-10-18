@@ -149,7 +149,7 @@ from config.strategy import (
 from config.shared_bot import get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import PnlsLookback
-from config.risk_memory import risk_bootstrap_horizon_minutes, realized_loss_gate_start_ms
+from config.risk_memory import risk_bootstrap_horizon_minutes
 from config.overrides import parse_overrides
 from config.runtime_compile import compile_runtime_config
 from risk_limits import (
@@ -1867,7 +1867,7 @@ class Passivbot:
         )
 
     def _live_risk_uses_authoritative_pnl(self) -> bool:
-        return self._orchestrator_uses_realized_pnl() or False
+        return self._orchestrator_uses_realized_pnl()
 
     def bot_value(self, pside: str, key: str):
         bot_side = self.config.get("bot", {}).get(pside, {})
@@ -1923,14 +1923,9 @@ class Passivbot:
         return PnlsLookback("window", (now_ms - min(starts)) / 86_400_000.0)
 
     def _strict_pnl_history_start_ms(self, now_ms):
-        starts = []
-        if self._unstuck_uses_realized_pnl():
-            starts.append(self._realized_memory_start_ms(now_ms))
-        if self._live_max_realized_loss_pct() < 1.0:
-            starts.append(realized_loss_gate_start_ms(self.config["live"], now_ms))
-        if any(start is None for start in starts):
-            return None
-        return min(starts) if starts else None
+        if self._orchestrator_uses_realized_pnl():
+            return self._realized_memory_start_ms(now_ms)
+        return None
 
     def _pnls_lookback_start_ms(self) -> Optional[int]:
         config = getattr(self, "config", None)
@@ -2099,14 +2094,6 @@ class Passivbot:
         return [
             event for event in events if int(event.timestamp) >= int(required_start_ms)
         ]
-
-    def _get_effective_pnl_events(self) -> list:
-        if self._pnls_manager is None:
-            return []
-        start_ms = self._pnls_lookback_start_ms()
-        if start_ms is None:
-            return self._pnls_manager.get_events()
-        return self._pnls_manager.get_events(start_ms=start_ms)
 
     def _assert_no_pending_pnl_events(self, events: list, *, context: str) -> None:
         FillEventsManager.assert_no_pending_pnl(events, context=context)
@@ -2640,7 +2627,7 @@ class Passivbot:
         if self._pnls_manager is None:
             return {"status": "no_pnl_manager"}
 
-        memory = self._get_realized_pnl_cumsum_stats()
+        memory = self._get_realized_memory()
         drawdown = memory["drawdown"]
         balance_raw = self.get_raw_balance()
         balance_peak = balance_raw + drawdown
@@ -13011,55 +12998,75 @@ class Passivbot:
                 self._log_fill_event(event),
             )
 
-    def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
-        """Expose separate rolling-gate facts and Rust continuous unstuck memory."""
+    def _get_realized_memory(self) -> dict[str, float]:
+        """Reconstruct one Rust memory for every strict realized-PnL consumer.
+
+        The fixed origin is factual initialization for this run. A bounded
+        suffix starts from an explicitly approximate zero unknown prefix; its
+        attenuation does not bound the omitted economic loss. Corrections and
+        repeated queries replay the same retained facts and initializer.
+        """
         if getattr(self, "_pnls_manager", None) is None:
             if self._orchestrator_uses_realized_pnl():
                 raise RuntimeError("realized risk requires the canonical fill manager")
-            return {"max": 0.0, "last": 0.0, "drawdown": 0.0}
+            return {"drawdown": 0.0}
         if not self._orchestrator_uses_realized_pnl():
-            return {"max": 0.0, "last": 0.0, "drawdown": 0.0}
-        start_ms = self._pnls_lookback_start_ms()
-        events = self._get_effective_pnl_events()
+            return {"drawdown": 0.0}
+        from live.realized_facts import canonical_realized_facts
+
+        now_ms = int(self.get_exchange_time())
+        origin = self._realized_memory_start_ms(now_ms)
+        events = self._pnls_manager.get_events(start_ms=origin, end_ms=now_ms)
         self._assert_pnl_history_safe_for_risk(
             events,
-            context="orchestrator realized PnL cumsum",
-            start_ms=start_ms,
+            context="shared realized-loss memory",
+            start_ms=origin,
+            end_ms=now_ms,
         )
-        now_ms = int(self.get_exchange_time())
-        result = {"max": 0.0, "last": 0.0, "drawdown": 0.0}
-        if self._live_max_realized_loss_pct() < 1.0:
-            gate_start = realized_loss_gate_start_ms(self.config["live"], now_ms)
-            gate_events = [ev for ev in events if gate_start is None or ev.timestamp >= gate_start]
-            if gate_events:
-                cumsum = np.array([fill_event_net_pnl(ev) for ev in gate_events], dtype=float).cumsum()
-                result.update(max=max(0.0, float(cumsum.max())), last=float(cumsum[-1]))
-        if self._unstuck_uses_realized_pnl():
-            from live.realized_facts import canonical_realized_facts
-
-            origin = self._realized_memory_start_ms(now_ms)
-            memory_events = [ev for ev in events if origin <= ev.timestamp <= now_ms]
-            ordered = canonical_realized_facts(memory_events)
-            payload = {
-                "span_minutes": self.config["live"]["lookback_ema_span_minutes"],
-                "start": origin, "now": now_ms, "known_origin": False,
-                "fills": list(ordered.fills),
-            }
-            try:
-                memory = json.loads(pbr.realized_memory_v9(json.dumps(payload, allow_nan=False)))
-                if (type(memory["start"]) is not int or memory["start"] != origin
-                    or type(memory["now"]) is not int or memory["now"] != now_ms
-                    or type(memory["drawdown"]) not in (int, float)
-                    or not math.isfinite(memory["drawdown"]) or memory["drawdown"] < 0):
-                    raise ValueError("invalid realized-memory envelope")
-            except (KeyError, TypeError, ValueError, OverflowError) as exc:
-                raise FatalBotException("invalid v9 realized-memory producer output") from exc
-            self._realized_memory_diagnostics = memory
-            memory["ordering_reasons"] = list(ordered.reasons)
-            memory["ambiguous_cohort_count"] = ordered.ambiguous_cohort_count
-            memory["proven_pair_chain_count"] = ordered.proven_pair_chain_count
-            result["drawdown"] = float(memory["drawdown"])
-        return result
+        ordered = canonical_realized_facts(events)
+        # Strict coverage from timestamp zero proves there is no older clock
+        # prefix. A covered finite suffix alone cannot prove that initializer.
+        known_origin = origin == 0
+        initialization = "known_zero_origin" if known_origin else "unknown_prefix_zero"
+        payload = {
+            "span_minutes": self.config["live"]["lookback_ema_span_minutes"],
+            "start": origin, "now": now_ms, "known_origin": known_origin,
+            "fills": list(ordered.fills),
+        }
+        try:
+            memory = json.loads(pbr.realized_memory_v9(json.dumps(payload, allow_nan=False)))
+            if (type(memory["start"]) is not int or memory["start"] != origin
+                or type(memory["now"]) is not int or memory["now"] != now_ms
+                or type(memory["drawdown"]) not in (int, float)
+                or not math.isfinite(memory["drawdown"]) or memory["drawdown"] < 0
+                or type(memory["fills"]) is not int or memory["fills"] != len(ordered.fills)
+                or type(memory["unknown_prefix"]) is not bool
+                or memory["unknown_prefix"] != (not known_origin)
+                or memory["initialization"] != initialization
+                or type(memory["initial_drawdown"]) not in (int, float)
+                or memory["initial_drawdown"] != 0.0
+                or type(memory["prefix_attenuation"]) not in (int, float)
+                or not 0.0 <= memory["prefix_attenuation"] <= 1.0):
+                raise ValueError("invalid realized-memory envelope")
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise FatalBotException("invalid v9 realized-memory producer output") from exc
+        memory["ordering_reasons"] = list(ordered.reasons)
+        memory["ambiguous_cohort_count"] = ordered.ambiguous_cohort_count
+        memory["proven_pair_chain_count"] = ordered.proven_pair_chain_count
+        previous = getattr(self, "_realized_memory_diagnostics", None)
+        if not known_origin and (
+            previous is None or previous["start"] != origin
+            or previous["span_minutes"] != payload["span_minutes"]
+        ):
+            logging.warning(
+                "[risk] shared realized-loss memory uses an approximate zero initializer "
+                "for unknown history before %s; span_minutes=%s prefix_attenuation=%s "
+                "(attenuation is not an economic error bound)",
+                origin, payload["span_minutes"], memory["prefix_attenuation"],
+            )
+        memory["span_minutes"] = payload["span_minutes"]
+        self._realized_memory_diagnostics = memory
+        return {"drawdown": float(memory["drawdown"])}
 
     @staticmethod
     def _fill_event_increases_position(pside: str, side: str, qty: float) -> bool:
@@ -15300,7 +15307,7 @@ class Passivbot:
         return self._pnls_manager is not None and self._unstuck_uses_realized_pnl()
 
     def _calc_orchestrator_unstuck_allowance_for_symbol(
-        self, pside: str, symbol: str, realized_pnl_cumsum: dict
+        self, pside: str, symbol: str, realized_memory: dict
     ) -> float:
         pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
@@ -15311,7 +15318,7 @@ class Passivbot:
                 self.get_raw_balance(),
                 pct,
                 twel,
-                float(realized_pnl_cumsum["drawdown"]),
+                float(realized_memory["drawdown"]),
             )
         )
 
@@ -17832,9 +17839,9 @@ class Passivbot:
         )
 
         # Python only proves the realized-PnL inputs are safe to expose; Rust
-        # owns unstuck emission from the cumsum facts below, and duplicate
+        # owns both realized-loss consumers from the shared memory below; duplicate
         # order risk rides normal live reconciliation like any other order.
-        realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
+        realized_memory = self._get_realized_memory()
         auto_unstuck_allowed = self._auto_unstuck_configured_live()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
@@ -17877,13 +17884,7 @@ class Passivbot:
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
                 "max_realized_loss_pct": max_realized_loss_pct,
-                "realized_pnl_drawdown": float(realized_pnl_cumsum["drawdown"]),
-                "realized_pnl_cumsum_max": float(
-                    realized_pnl_cumsum.get("max", 0.0) or 0.0
-                ),
-                "realized_pnl_cumsum_last": float(
-                    realized_pnl_cumsum.get("last", 0.0) or 0.0
-                ),
+                "realized_pnl_drawdown": float(realized_memory["drawdown"]),
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
@@ -18155,7 +18156,7 @@ class Passivbot:
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
                     allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
-                        pside, symbol, realized_pnl_cumsum
+                        pside, symbol, realized_memory
                     )
                     self._maybe_log_unstuck_selection(
                         symbol=symbol,

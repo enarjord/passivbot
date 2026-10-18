@@ -652,8 +652,10 @@ class _DummyPnlsManager:
     def __init__(self, events):
         self._events = list(events)
 
-    def get_events(self, start_ms=None):
-        return [e for e in self._events if start_ms is None or e.timestamp >= start_ms]
+    def get_events(self, start_ms=None, end_ms=None):
+        return [e for e in self._events
+                if (start_ms is None or e.timestamp >= start_ms)
+                and (end_ms is None or e.timestamp <= end_ms)]
 
 
 def test_entry_cooldown_delta_guard_bypasses_when_disabled():
@@ -3107,9 +3109,7 @@ def _supply_known_empty_realized_risk(bot):
     # These orchestrator-output fixtures explicitly start with no realized fills.
     # A scenario supplying a manager must retain the actual history/memory path.
     assert bot._pnls_manager is None
-    bot._get_realized_pnl_cumsum_stats = lambda: {
-        "max": 0.0, "last": 0.0, "drawdown": 0.0
-    }
+    bot._get_realized_memory = lambda: {"drawdown": 0.0}
 
 
 def _stamp_staged_account_and_candles(bot):
@@ -3234,6 +3234,7 @@ def _make_order(
 @pytest.mark.asyncio
 async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     cfg = _dummy_config()
+    cfg["live"]["max_realized_loss_pct"] = 0.02
     bot = _make_dummy_bot(cfg)
     bot._bp_defaults.update(
         {
@@ -3324,7 +3325,9 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     assert [row["net"] for row in memory_calls[0]["fills"]] == [-2.5]
     assert payload["global"]["realized_pnl_drawdown"] == 2.5
     # Rust derives allowance from the continuous realized-loss memory, rather
-    # than an existing order or rolling realized-loss-gate cumsum.
+    # than an existing order. The loss gate receives the same drawdown.
+    assert "realized_pnl_cumsum_max" not in payload["global"]
+    assert "realized_pnl_cumsum_last" not in payload["global"]
     assert "unstuck_allowance_long" not in payload["global"]
     assert "unstuck_allowance_short" not in payload["global"]
 

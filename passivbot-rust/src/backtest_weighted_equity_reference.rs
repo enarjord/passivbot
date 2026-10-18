@@ -20,12 +20,15 @@ fn assert_metrics_with_tolerance(
         if let Some(reference) = expected[name].as_f64() {
             assert!(
                 value.is_finite()
-                    && (value - reference).abs()
-                        <= absolute_tolerance.max(reference.abs() * 1e-12),
+                    && (value - reference).abs() <= absolute_tolerance.max(reference.abs() * 1e-12),
                 "{case} {name}: Rust {value}, reference {reference}"
             );
         } else if expected[name].as_str() == Some("positive_infinity") {
-            assert_eq!(value, f64::INFINITY, "{case} {name}: expected positive infinity");
+            assert_eq!(
+                value,
+                f64::INFINITY,
+                "{case} {name}: expected positive infinity"
+            );
         } else {
             assert!(
                 expected[name].is_null() && !value.is_finite(),
@@ -83,7 +86,6 @@ fn weighted_equity_shared_references_match_current_producers() {
         hedge_mode: true,
         max_realized_loss_pct: 1.0,
         lookback_ema_span_minutes: 43_200.0,
-        pnls_max_lookback_days: 365.0,
         liquidation_threshold: 0.05,
         market_orders_allowed: false,
         market_order_near_touch_threshold: 0.001,
@@ -148,20 +150,40 @@ fn weighted_equity_shared_references_match_current_producers() {
                 ],
                 &case[expected_raw],
             );
-            let expected_full = if quantized { "expected_raw_full_f32" } else { "expected_raw_full" };
-            assert_metrics(name, &[
-                ("adg_rolling_hmean_strategy_eq", raw.adg_rolling_hmean_strategy_eq),
-                ("adg_strategy_eq", raw.adg_strategy_eq),
-                ("adg_time_integrated_strategy_eq", raw.adg_time_integrated_strategy_eq),
-                ("calmar_ratio_strategy_eq", raw.calmar_ratio_strategy_eq),
-                ("expected_shortfall_1pct_strategy_eq", raw.expected_shortfall_1pct_strategy_eq),
-                ("mdg_strategy_eq", raw.mdg_strategy_eq),
-                ("omega_ratio_strategy_eq", raw.omega_ratio_strategy_eq),
-                ("positive_gain_participation_strategy_eq", raw.positive_gain_participation_strategy_eq),
-                ("sharpe_ratio_strategy_eq", raw.sharpe_ratio_strategy_eq),
-                ("sortino_ratio_strategy_eq", raw.sortino_ratio_strategy_eq),
-                ("sterling_ratio_strategy_eq", raw.sterling_ratio_strategy_eq),
-            ], &case[expected_full]);
+            let expected_full = if quantized {
+                "expected_raw_full_f32"
+            } else {
+                "expected_raw_full"
+            };
+            assert_metrics(
+                name,
+                &[
+                    (
+                        "adg_rolling_hmean_strategy_eq",
+                        raw.adg_rolling_hmean_strategy_eq,
+                    ),
+                    ("adg_strategy_eq", raw.adg_strategy_eq),
+                    (
+                        "adg_time_integrated_strategy_eq",
+                        raw.adg_time_integrated_strategy_eq,
+                    ),
+                    ("calmar_ratio_strategy_eq", raw.calmar_ratio_strategy_eq),
+                    (
+                        "expected_shortfall_1pct_strategy_eq",
+                        raw.expected_shortfall_1pct_strategy_eq,
+                    ),
+                    ("mdg_strategy_eq", raw.mdg_strategy_eq),
+                    ("omega_ratio_strategy_eq", raw.omega_ratio_strategy_eq),
+                    (
+                        "positive_gain_participation_strategy_eq",
+                        raw.positive_gain_participation_strategy_eq,
+                    ),
+                    ("sharpe_ratio_strategy_eq", raw.sharpe_ratio_strategy_eq),
+                    ("sortino_ratio_strategy_eq", raw.sortino_ratio_strategy_eq),
+                    ("sterling_ratio_strategy_eq", raw.sterling_ratio_strategy_eq),
+                ],
+                &case[expected_full],
+            );
             for (variant, fill_indices) in case["fill_indices"].as_object().unwrap() {
                 let fills: Vec<Fill> = fill_indices
                     .as_array()
@@ -224,7 +246,10 @@ fn weighted_equity_shared_references_match_current_producers() {
                         ("exponential_fit_error_usd", account.exponential_fit_error),
                         ("equity_choppiness_w_usd", account.equity_choppiness_w),
                         ("equity_jerkiness_w_usd", account.equity_jerkiness_w),
-                        ("exponential_fit_error_w_usd", account.exponential_fit_error_w),
+                        (
+                            "exponential_fit_error_w_usd",
+                            account.exponential_fit_error_w,
+                        ),
                     ],
                     &case[expected_shape][variant],
                     1e-10,

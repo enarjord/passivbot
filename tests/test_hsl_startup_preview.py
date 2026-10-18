@@ -16,7 +16,7 @@ def _write_config(path, config):
 
 def _sample_config() -> dict:
     return {
-        "config_version": "v9.0.0",
+        "config_version": "v9.1.0",
         "live": {
             "user": "binance_01",
             "exchange": "binance",

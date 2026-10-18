@@ -6,16 +6,18 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Replace rolling HSL and auto-unstuck loss memory with the v9 forward decaying
+- Replace rolling HSL, auto-unstuck and realized-loss-gate memory with the v9 forward decaying
   risk model. `live.lookback_ema_span_minutes` controls slow loss decay; HSL's
   independent fast EMA smooths the drawdown ratio with contemporaneous budgets.
   Preserve individually ordered fills and fees, initialize proven new episodes
   before entry economics, and disclose unknown-prefix bootstrap estimates.
-  The independent rolling realized-loss gate uses
-  `live.realized_loss_gate_lookback_minutes`; validate its duration against the
-  signed 64-bit millisecond clock before accepting configuration. Preserve CPU
-  bar-conversion rounding on GPU and reject windows outside its signed 32-bit
-  bar domain before compilation.
+  The global realized-loss gate shares account-wide net-realized drawdown with
+  unstuck and uses its own fraction directly, without TWEL multiplication.
+  Config schema `v9.1.0` retires `realized_loss_gate_lookback_minutes`; v8 and
+  v9.0.0 active gates require explicit semantic migration and fresh evaluation.
+  Zero, all-history and equal numeric rolling windows are not EMA equivalents.
+  Move the EMA-anchor smoke template to
+  `configs/examples/ema_anchor_smoke_test.json` and update it to the current schema.
   Native GPU optimization transports the global slow-memory span per request,
   preserving fixed and scenario overrides and effective-candidate deduplication.
 

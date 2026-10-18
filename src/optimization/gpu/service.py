@@ -651,7 +651,6 @@ def _gpu_proxy_execution_checkpoint_contract(
         "hedge_mode",
         "max_realized_loss_pct",
         "lookback_ema_span_minutes",
-        "realized_loss_gate_lookback_minutes",
         "market_order_slippage_pct",
         "market_orders_allowed",
         "market_order_near_touch_threshold",
@@ -1097,32 +1096,6 @@ def _hsl_lookback_bars(backtest_params, *, hsl_enabled):
     # A constant-sized inert binding preserves the existing kernel argument
     # shape. V9 HSL owns no historical window or factual replay capacity.
     return 1
-
-
-def _fill_pnl_lookback_bars(backtest_params: dict) -> int:
-    """Rust's finite fill-PnL lookback in candle bars; zero means all history."""
-    from config.risk_memory import normalize_realized_loss_gate_lookback_minutes
-
-    lookback_minutes = normalize_realized_loss_gate_lookback_minutes(
-        backtest_params["realized_loss_gate_lookback_minutes"]
-    )
-    if lookback_minutes == -1.0:
-        return 0
-    interval_minutes = int(backtest_params["candle_interval_minutes"])
-    # Preserve the native parser's minutes -> internal days -> minutes graph.
-    # Reassociation changes ceil at ordinary boundaries (9 minutes becomes
-    # 9.000000000000002 in Rust), which would expire fill history a bar early.
-    native_minutes = (lookback_minutes / 1440.0) * 24.0 * 60.0
-    bars = max(
-        1,
-        int(np.ceil(native_minutes / interval_minutes)),
-    )
-    if bars > np.iinfo(np.int32).max:
-        raise ValueError(
-            "GPU live.realized_loss_gate_lookback_minutes exceeds the signed "
-            "32-bit candle-bar domain; use a CPU backend or a shorter window"
-        )
-    return bars
 
 
 def _require_multicoin_metric_topology(
@@ -2628,15 +2601,6 @@ class MpsMulticoinProxy:
     ):
         from config.gpu import validate_gpu_backtest_config
         validate_gpu_backtest_config(config)
-        if config["live"]["max_realized_loss_pct"] < 1.0:
-            # Reject an unrepresentable shader constant before importing or
-            # preparing the optional device runtime. Disabled gates are inert.
-            _fill_pnl_lookback_bars({
-                "realized_loss_gate_lookback_minutes": config["live"][
-                    "realized_loss_gate_lookback_minutes"
-                ],
-                "candle_interval_minutes": config["backtest"]["candle_interval_minutes"],
-            })
         try:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
@@ -3109,14 +3073,8 @@ class MpsMulticoinProxy:
         if selection is not None:
             self.checkpoint_contract["organillo"] = selection.identity
             common_runner_kwargs["selection"] = selection
-        # Auto-unstuck and realized-loss admission share one bounded fill-PnL
-        # window. Preserve it even if a tunable unstuck allowance is initially
-        # zero. Both shared-account strategies consume the same effective peak.
-        unstuck_enabled = any(
-            bool(item[side]["unstuck_enabled"])
-            for item in projected
-            for side in self.sides
-        )
+        # Both realized consumers read the one continuous account-global memory.
+        # Its slow span is already carried by every active side's policy row.
         common_runner_kwargs["interrupt_check"] = self.interrupt_check
         common_runner_kwargs["factual_hsl"] = factual_hsl
         common_runner_kwargs["exposure_rms_enabled"] = bool(
@@ -3124,11 +3082,6 @@ class MpsMulticoinProxy:
         )
         common_runner_kwargs["compact_recovery_output"] = bool(
             factual_hsl and common_runner_kwargs["recovery_distribution_enabled"]
-        )
-        loss_gate_enabled = common_runner_kwargs["max_realized_loss_pct"] < 1.0
-        common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
-            _fill_pnl_lookback_bars(backtest_params)
-            if loss_gate_enabled else 0
         )
         common_runner_kwargs.update(
             pnl_lookback_bars=_hsl_lookback_bars(

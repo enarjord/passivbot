@@ -16,7 +16,7 @@ def _write_config(path, config):
 
 def _sample_config() -> dict:
     return {
-        "config_version": "v9.0.0",
+        "config_version": "v9.1.0",
         "backtest": {"exchanges": ["binance"]},
         "live": {
             "user": "binance_01",
@@ -33,7 +33,6 @@ def _sample_config() -> dict:
             "max_warmup_minutes": 30,
             "lookback_ema_span_minutes": 10080.0,
             "risk_bootstrap_max_lookback_minutes": 129600.0,
-            "realized_loss_gate_lookback_minutes": 10080.0,
             "api_key": "super-secret-api-key",
         },
         "bot": {
@@ -122,7 +121,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "warning_threshold": 0.05,
     }
     assert report["cache"]["live_settings"]["lookback_ema_span_minutes"] == 10080.0
-    assert report["cache"]["live_settings"]["realized_loss_gate_lookback_minutes"] == 10080.0
+    assert "realized_loss_gate_lookback_minutes" not in report["cache"]["live_settings"]
     assert report["cache"]["readiness"]["status"] == "attention"
     assert report["cache"]["readiness"]["summary"] == {
         "attention_count": 7,
@@ -532,7 +531,7 @@ def test_live_config_preflight_handles_all_and_invalid_coin_shapes(tmp_path):
 
 def test_live_config_preflight_malformed_structure_returns_nonzero(tmp_path, capsys):
     config_path = tmp_path / "bad.json"
-    _write_config(config_path, {"config_version": "v9.0.0", "live": []})
+    _write_config(config_path, {"config_version": "v9.1.0", "live": []})
 
     assert live_config_preflight.main([str(config_path), "--compact"]) == 1
     report = json.loads(capsys.readouterr().out)

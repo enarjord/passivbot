@@ -325,7 +325,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v9.0.0",
+    "config_version": "v9.1.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -463,7 +463,6 @@
         "order_replacement_churn_gate_stability_minutes": 2.0,
         "order_replacement_churn_gate_window_minutes": 10.0,
         "lookback_ema_span_minutes": 43200.0,
-        "realized_loss_gate_lookback_minutes": 43200.0,
         "risk_bootstrap_max_lookback_minutes": 129600.0,
         "recv_window_ms": 5000,
         "startup_phase_budgets": {},

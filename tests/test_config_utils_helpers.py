@@ -490,7 +490,7 @@ def test_rename_config_keys_records_tracker_events():
 
 def test_load_config_renames_legacy_panic_market_slippage_pct(tmp_path):
     raw = {
-        "config_version": "v9.0.0",
+        "config_version": "v9.1.0",
         "backtest": {"panic_market_slippage_pct": 0.0015},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -671,7 +671,7 @@ def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatt
     assert template["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
     sparse = {
-        "config_version": "v9.0.0",
+        "config_version": "v9.1.0",
         "live": {},
         "backtest": {},
         "bot": {"long": {}, "short": {}},
@@ -1798,7 +1798,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     )
     _assert_help_option_aliases(help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT")
     assert "--lookback-ema-span-minutes FLOAT" in help_text
-    assert "--realized-loss-gate-lookback-minutes FLOAT" in help_text
+    assert "--realized-loss-gate-lookback-minutes" not in help_text
     assert "--pnls-max-lookback-days" not in help_text
     assert "--bot.long.entry_grid_inflation_enabled" not in help_text
     assert "--bot.long.hsl.enabled" not in help_text
@@ -1879,7 +1879,7 @@ def test_live_default_help_shows_curated_groups():
         help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
     )
     assert "--lookback-ema-span-minutes FLOAT" in help_text
-    assert "--realized-loss-gate-lookback-minutes FLOAT" in help_text
+    assert "--realized-loss-gate-lookback-minutes" not in help_text
     assert "--pnls-max-lookback-days" not in help_text
     _assert_help_option_aliases(help_text, "--user", "-u", "VALUE")
     assert "--live.auto_gs" not in help_text
@@ -1904,7 +1904,7 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     )
     _assert_help_option_aliases(help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT")
     assert "--lookback-ema-span-minutes FLOAT" in help_text
-    assert "--realized-loss-gate-lookback-minutes FLOAT" in help_text
+    assert "--realized-loss-gate-lookback-minutes" not in help_text
     assert "--pnls-max-lookback-days" not in help_text
     assert "--reducer-default MODE" in help_text
     assert "--iters INT, -i INT" not in help_text
@@ -2078,7 +2078,7 @@ def test_risk_cli_aliases_last_value_wins(legacy_last):
     )
 
 
-def test_live_risk_memory_and_independent_gate_flags_parse():
+def test_live_shared_risk_memory_and_gate_fraction_flags_parse():
     config = get_template_config()
     del config["optimize"]
     del config["backtest"]
@@ -2097,15 +2097,18 @@ def test_live_risk_memory_and_independent_gate_flags_parse():
 
     parsed_short = parser.parse_args(["--live.lookback_ema_span_minutes", "14"])
     parsed_long = parser.parse_args(["--lookback-ema-span-minutes", "21"])
-    parsed_all = parser.parse_args(["--realized-loss-gate-lookback-minutes", "-1"])
+    parsed_gate = parser.parse_args(["--max-realized-loss-pct", "0.1"])
 
     assert getattr(parsed_short, "live.lookback_ema_span_minutes") == pytest.approx(14.0)
     assert getattr(parsed_long, "live.lookback_ema_span_minutes") == pytest.approx(21.0)
-    assert getattr(parsed_all, "live.realized_loss_gate_lookback_minutes") == -1.0
+    assert getattr(parsed_gate, "live.max_realized_loss_pct") == 0.1
 
 
-@pytest.mark.parametrize("command", ["backtest", "optimize"])
-def test_dotted_loss_gate_override_accepts_all_sentinel_for_non_live_commands(command):
+@pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
+@pytest.mark.parametrize("flag", ["--realized-loss-gate-lookback-minutes",
+                                  "--live.realized_loss_gate_lookback_minutes",
+                                  "--live_realized_loss_gate_lookback_minutes"])
+def test_retired_loss_gate_window_cli_aliases_are_rejected(command, flag):
     config = project_template_config_for_cli(get_template_config(), command)
     parser = argparse.ArgumentParser(prog=command)
     group_map = {
@@ -2120,9 +2123,9 @@ def test_dotted_loss_gate_override_accepts_all_sentinel_for_non_live_commands(co
         group_map=group_map,
     )
 
-    parsed = parser.parse_args(["--live.realized_loss_gate_lookback_minutes", "-1"])
-
-    assert getattr(parsed, "live.realized_loss_gate_lookback_minutes") == -1.0
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args([flag, "-1"])
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("command", ["backtest", "optimize"])

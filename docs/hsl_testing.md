@@ -37,10 +37,11 @@ backtest/optimizer smoke. Current-head independent review and CI are separate re
 
 ## Migration qualification
 
-Config schema `v9.0.0` is separate from package/release versions. V8 configurations require
-explicit migration with a chosen slow span and acknowledgement of any removed Never policy.
+Config schema `v9.1.0` is separate from package/release versions. V8 and v9.0.0 configurations require
+explicit migration and acknowledgment for an active realized-loss gate. V8 also needs a
+chosen slow span and acknowledgement of any removed Never policy.
 Test nested/file-backed coin overrides, effective scenario/optimizer policies, independent
-rolling-gate duration, removed dimensions and invalid f32 spans. Reload separate output and
+gate-window retirement, removed dimensions and invalid f32 spans. Reload separate output and
 repeat migration for idempotence. Source/backup/output collisions and failed validation must
 preserve original inputs. Old checkpoints/fitness are rejected; seeds are freshly evaluated.
 See [v8-to-v9 migration](v8_to_v9_migration.md). No migration authorizes deployment.

@@ -54,6 +54,52 @@ def _strategy_side(config, pside, kind=None):
     return config["bot"][pside]["strategy"][kind]
 
 
+def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
+    path = Path(__file__).resolve().parents[1] / "configs/examples/ema_anchor_smoke_test.json"
+    authored = json.loads(path.read_text())
+    original = deepcopy(authored)
+    config = load_prepared_config(str(path), verbose=False, log_info=False)
+    compiled = compile_runtime_config(config, runtime="backtest")
+
+    assert authored["config_version"] == config["config_version"] == CONFIG_SCHEMA_VERSION
+    assert config["live"]["strategy_kind"] == "ema_anchor"
+    assert config["live"]["user"] == "example"
+    # This explicit demonstration span is not a converted rolling-window policy.
+    assert config["live"]["lookback_ema_span_minutes"] == 43200.0
+    assert config["live"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
+    assert config["live"]["max_realized_loss_pct"] == 1.0
+    assert config["live"]["hsl_signal_mode"] == "coin"
+    assert config["live"]["approved_coins"] == {
+        "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
+    }
+    for key, expected in {
+        "start_date": "2023-01-01", "end_date": "2023-01-15",
+        "exchanges": ["binance", "bybit"], "candle_interval_minutes": 5,
+        "starting_balance": 100000.0, "maker_fee_override": 0.0004,
+        "btc_collateral_cap": 0.0, "suite_enabled": False,
+    }.items():
+        assert config["backtest"][key] == expected
+    expected_strategy = {
+        "base_qty_pct": 0.04, "ema_span_0": 48.0, "ema_span_1": 288.0,
+        "offset": 0.003, "offset_volatility_ema_span_1m": 60.0,
+        "offset_volatility_1m_weight": 0.0, "offset_volatility_ema_span_1h": 24.0,
+        "offset_volatility_1h_weight": 0.0, "offset_psize_weight": 0.2,
+    }
+    for side in ("long", "short"):
+        assert config["bot"][side]["hsl"]["enabled"] is False
+        assert config["bot"][side]["risk"]["n_positions"] == 2.0
+        assert config["bot"][side]["risk"]["total_wallet_exposure_limit"] == 1.0
+        for key, expected in expected_strategy.items():
+            assert _strategy_side(config, side)[key] == expected
+            assert _strategy_side(compiled, side)[key] == expected
+        assert config["bot"][side]["unstuck"]["ema_span_0"] == 48.0
+        assert config["bot"][side]["unstuck"]["ema_span_1"] == 288.0
+    for retired in ("pnls_max_lookback_days", "realized_loss_gate_lookback_minutes",
+                    "no_restart_drawdown_threshold", "orange_tier_mode", "tier_ratios"):
+        assert retired not in path.read_text()
+    assert json.loads(path.read_text()) == original
+
+
 def test_startup_phase_budgets_validate_and_roundtrip():
     source = get_template_config()
     assert source["live"]["startup_phase_budgets"] == {}
@@ -2013,9 +2059,13 @@ def test_prepare_config_requires_explicit_previous_schema_migration(
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_rejects_unreleased_same_major_schema():
+@pytest.mark.parametrize("version,message", [
+    ("v9.1.999", "newer than supported schema"),
+    ("v9.0.999", "requires explicit migration"),
+])
+def test_prepare_config_rejects_unreleased_same_major_schema(version, message):
     source = {
-        "config_version": "v9.0.999",
+        "config_version": version,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -2023,7 +2073,7 @@ def test_prepare_config_rejects_unreleased_same_major_schema():
         "optimize": {"bounds": {}},
     }
 
-    with pytest.raises(ValueError, match="newer than supported schema"):
+    with pytest.raises(ValueError, match=message):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
@@ -2071,7 +2121,7 @@ def test_prepare_config_keeps_live_lookback_ema_span_minutes_without_backtest_ov
     assert "lookback_ema_span_minutes" not in prepared["backtest"]
 
 
-def test_prepare_config_preserves_all_history_for_independent_loss_gate():
+def test_prepare_config_rejects_retired_all_history_gate_window():
     source = {
         "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
@@ -2081,9 +2131,8 @@ def test_prepare_config_preserves_all_history_for_independent_loss_gate():
         "optimize": {"bounds": {}},
     }
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert prepared["live"]["realized_loss_gate_lookback_minutes"] == -1.0
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*removed"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 def test_prepare_config_rejects_invalid_lookback_ema_span_minutes_string():

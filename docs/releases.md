@@ -14,7 +14,7 @@ those changes. The development package reports `8.2.0.dev0`; this is not a new t
 | Package version (`passivbot --version`) | The package's declared version; record the Git commit too when using `master` |
 | `config_version` | Config schema compatibility, independent of the package/release number |
 
-This revision uses config schema **v9.0.0**. V8 configurations require explicit
+This revision uses config schema **v9.1.0**. V8 and v9.0.0 configurations require explicit
 [v9 migration](v8_to_v9_migration.md) before ordinary loading. These schema numbers do not
 imply corresponding published releases. Use
 examples and documentation from the same revision as the installed runtime. A config saved by a

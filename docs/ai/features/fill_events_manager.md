@@ -101,10 +101,11 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
     fetch records an unproven range; every such range remains retryable under the
     execution loop's backoff regardless of attempt count, and a successful bounded
     traversal clears it even when the response contains no fills.
-12. Live coverage requirements follow the enabled consumer. Auto-unstuck requires
-    authoritative PnL from its continuous-memory bootstrap origin. The independent
-    realized-loss gate requires its own configured rolling horizon and authoritative
-    PnL quality; the removed rolling-day setting cannot stand in for both.
+12. Live coverage requirements follow the enabled consumer. Auto-unstuck and the
+    realized-loss gate require authoritative PnL across their shared retained suffix
+    from its declared continuous-memory bootstrap origin. An unknown-prefix zero
+    initializer and attenuation remain explicit; finite suffix coverage does not
+    prove complete infinite-history memory or make its initial allowance safe.
     Entry cooldown without a PnL consumer requires structural fill coverage only
     across its maximum configured cooldown horizon. Trailing reconstruction retains
     its symbol/position-side confirmation and bounded recovery. With no historical
@@ -112,7 +113,7 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
     than proving an unrelated PnL window. HSL separately acquires its bounded
     bootstrap history and full finite cooldown horizon using its best-effort Rust
     reconciliation contract. HSL alone does not require strict authoritative PnL
-    across the unrelated continuous auto-unstuck or rolling loss-gate horizon.
+    across the separate shared realized-memory suffix required by unstuck or the gate.
     Coin scopes use their effective per-coin HSL policy and cooldown. Recompute both coverage and PnL
     requirements after fetching so delayed fills cannot be accepted under the
     earlier boundary and older discarded episodes cannot remain PnL blockers.

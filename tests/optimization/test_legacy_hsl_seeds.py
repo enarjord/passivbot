@@ -50,7 +50,7 @@ def test_old_schema_seed_requires_migration_even_when_disabled(mode,policy,artif
 
 
 @pytest.mark.parametrize('artifact',['json','pareto'])
-@pytest.mark.parametrize('version',[None,'v8.6.0','v9.1.0'])
+@pytest.mark.parametrize('version',[None,'v8.6.0','v9.0.0','v9.1.999'])
 def test_seed_schema_errors_are_fatal_instead_of_silently_replaced_by_random_seeds(tmp_path,artifact,version):
     cfg=get_template_config()
     if version is None:cfg.pop('config_version')
@@ -118,13 +118,23 @@ def test_nonfinite_current_numeric_seed_is_skipped(field,value,artifact,tmp_path
 def test_current_slow_span_seed_survives_extraction_and_normal_bounds_clamp(tmp_path, artifact, authored, expected):
     cfg = get_template_config()
     cfg['live']['lookback_ema_span_minutes'] = authored
-    cfg['live']['realized_loss_gate_lookback_minutes'] = -1.0
     seeds = extract_configs(str(save(tmp_path, cfg, artifact)))
     keys = [('live_lookback_ema_span_minutes', ('live', 'lookback_ema_span_minutes'))]
     values, count = configs_to_individuals_streaming(seeds,
         [Bound.from_config(keys[0][0], [1000.0, 50000.0])], sig_digits=7, key_paths=keys)
     assert count == 1 and values == [(expected,)]
     assert 'realized_loss_gate_lookback_minutes' not in seeds[0]['live']
+
+
+def test_old_v9_active_gate_seed_requires_explicit_migration(tmp_path):
+    from optimize import StartingConfigSchemaError
+
+    cfg = get_template_config()
+    cfg['config_version'] = 'v9.0.0'
+    cfg['live']['max_realized_loss_pct'] = 0.1
+    # Even a sparse old export without its rolling duration has old semantics.
+    with pytest.raises(StartingConfigSchemaError, match='migrate-config-v9'):
+        extract_configs(str(save(tmp_path, cfg, 'json')))
 
 
 @pytest.mark.parametrize('value', ['NaN', 'Infinity', '-Infinity', True, 'bad'])

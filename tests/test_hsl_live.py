@@ -2336,16 +2336,16 @@ from hsl_fixture import load_fake_hsl_config
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("lookback", [-1.0, 0.0])
+@pytest.mark.parametrize("span", [1.0, 43200.0])
 async def test_disabled_hsl_owner_keeps_ordinary_fill_refresh_without_hsl_window(
-    lookback,
+    span,
 ):
     from test_hsl_runtime import bot
 
     value = bot()
     for side in ("long", "short"):
         value.config["bot"][side]["hsl"]["enabled"] = False
-    value.config["live"]["realized_loss_gate_lookback_minutes"] = lookback
+    value.config["live"]["lookback_ema_span_minutes"] = span
     owner = hsl_live.Owner(value)
     calls = []
 

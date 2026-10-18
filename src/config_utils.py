@@ -45,7 +45,6 @@ from config.log_output import log_config_message
 from config.metrics import CURRENCY_METRICS, SHARED_METRICS
 from config.risk_memory import (
     normalize_lookback_ema_span_minutes,
-    normalize_realized_loss_gate_lookback_minutes,
     normalize_risk_bootstrap_max_lookback_minutes,
 )
 from config.normalize import normalize_config
@@ -363,11 +362,6 @@ FIELD_RUNTIME_RULES = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-    },
-    "live.realized_loss_gate_lookback_minutes": {
-        "owner": "live", "consumed_by": {"live", "backtest", "optimize"},
-        "cli_exposed_on": {"live", "backtest", "optimize"},
-        "help_group": {"backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
     },
     "live.risk_bootstrap_max_lookback_minutes": {
         "owner": "live", "consumed_by": {"live"}, "cli_exposed_on": {"live"},
@@ -1202,7 +1196,7 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Maximum realized loss percentage allowed before trading is halted.",
+        "help": "Limit non-panic close losses using shared realized drawdown memory; >=1 disables the gate.",
     },
     "live.fee_pct_fallback": {
         "visible": ["--fee-pct-fallback"],
@@ -1249,16 +1243,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
         "group": {"live": "Behavior", "backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
-        "help": "Shared v9 exponential HSL/unstuck memory EMA span in minutes; requires retuning.",
-    },
-    "live.realized_loss_gate_lookback_minutes": {
-        "visible": ["--realized-loss-gate-lookback-minutes"],
-        "hidden": ["--live.realized_loss_gate_lookback_minutes", "--live_realized_loss_gate_lookback_minutes"],
-        "type": normalize_realized_loss_gate_lookback_minutes,
-        "metavar": "FLOAT",
-        "commands": {"live", "backtest", "optimize"},
-        "group": {"live": "Behavior", "backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
-        "help": "Independent rolling max_realized_loss_pct gate window in minutes; -1 means all history.",
+        "help": "Shared exponential HSL, unstuck and realized-loss-gate memory EMA span in minutes; requires retuning.",
     },
     "live.risk_bootstrap_max_lookback_minutes": {
         "visible": ["--risk-bootstrap-max-lookback-minutes"],

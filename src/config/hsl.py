@@ -252,7 +252,8 @@ def validate_parameter_path(path, mode):
         raise ValueError(
             f"{path} is a removed HSL recovery control; remove this bound/override"
         )
-    if "restart_after_red_policy" in path or "pnls_max_lookback_days" in path:
+    if ("restart_after_red_policy" in path or "pnls_max_lookback_days" in path
+            or "realized_loss_gate_lookback_minutes" in path):
         raise ValueError(f"{path} is removed in v9; use passivbot tool migrate-config-v9")
     if not _is_hsl_path(path):
         return
@@ -325,8 +326,7 @@ def normalize_hsl(config, template, *, verbose=True):
     config.setdefault("live", {}).pop("hsl_engine", None)
     from .risk_memory import normalize_risk_memory_config
 
-    for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
-                "realized_loss_gate_lookback_minutes"):
+    for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes"):
         config["live"].setdefault(key, deepcopy(template["live"][key]))
     normalize_risk_memory_config(config)
     mode = _mode(config)

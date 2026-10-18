@@ -208,7 +208,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v9.0.0",
+    "config_version": "v9.1.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -252,7 +252,6 @@
         "minimum_coin_age_days": 180,
         "order_match_tolerance_pct": 0.0002,
         "lookback_ema_span_minutes": 43200.0,
-        "realized_loss_gate_lookback_minutes": 43200.0,
         "risk_bootstrap_max_lookback_minutes": 129600.0,
         "recv_window_ms": 10000,
         "strategy_kind": "trailing_martingale",

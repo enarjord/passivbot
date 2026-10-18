@@ -335,14 +335,13 @@ def _with_tm_dispatch_features(
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
-    """Encode a float64 loss fraction without loosening its Metal budget."""
+    """Match the shared risk graph's nearest binary32 fraction cast.
 
-    if value >= 1.0:
-        return 1.0
-    encoded = np.float32(value)
-    if float(encoded) > value:
-        encoded = np.nextafter(encoded, np.float32(-np.inf))
-    return float(encoded)
+    Original float64 enablement is transported separately: a fraction just below
+    one may round to one while its configured gate remains enabled.
+    """
+
+    return 1.0 if value >= 1.0 else float(np.float32(value))
 
 
 def _btc_risk_price_tensor(btc_prices, *, expected_count: int):
@@ -1117,15 +1116,6 @@ def _with_unstuck_ema(source: str, enabled: bool) -> str:
     return "#define PASSIVBOT_UNSTUCK_EMA_ENABLED 0\n" + source
 
 
-def _with_unstuck_pnl_window(source, lookback_bars, capacity):
-    if lookback_bars:
-        source = (
-            f"#define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS {lookback_bars}\n"
-            f"#define PASSIVBOT_UNSTUCK_PNL_CAPACITY {capacity}\n" + source
-        )
-    return source
-
-
 def _with_multicoin_side(source, side):
     if side is None:
         return source
@@ -1150,8 +1140,6 @@ def _ema_anchor_multicoin_shader_library(
     hsl_capacity: int = 0,
     hsl_lookback: int = 0,
     mps_coin_capacity: int | None = None,
-    unstuck_pnl_lookback_bars: int = 0,
-    unstuck_pnl_capacity: int = 0,
     weighted_volume_enabled: bool = False,
     raw_strategy_risk_enabled: bool = False,
     raw_strategy_growth_enabled: bool = False,
@@ -1214,7 +1202,6 @@ def _ema_anchor_multicoin_shader_library(
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity, hsl_fact_capacity
         )
-    source = _with_unstuck_pnl_window(source, unstuck_pnl_lookback_bars, unstuck_pnl_capacity)
     if mps_coin_capacity is not None:
         return compile_shader(
             source,
@@ -1239,8 +1226,6 @@ def _trailing_martingale_multicoin_shader_library(
     hsl_capacity: int = 0,
     hsl_lookback: int = 0,
     mps_coin_capacity: int | None = None,
-    unstuck_pnl_lookback_bars: int = 0,
-    unstuck_pnl_capacity: int = 0,
     loss_gate_disabled: bool = False,
     weighted_volume_enabled: bool = False,
     raw_strategy_risk_enabled: bool = False,
@@ -1316,7 +1301,6 @@ def _trailing_martingale_multicoin_shader_library(
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity, hsl_fact_capacity
         )
-    source = _with_unstuck_pnl_window(source, unstuck_pnl_lookback_bars, unstuck_pnl_capacity)
     if mps_coin_capacity is not None:
         return compile_shader(
             source,
@@ -1921,10 +1905,10 @@ class MpsEmaAnchorRunner:
         max_realized_loss_pct = float(max_realized_loss_pct)
         if not np.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
             raise ValueError("max_realized_loss_pct must be finite and non-negative")
+        self.loss_gate_enabled = max_realized_loss_pct < 1.0
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             max_realized_loss_pct
         )
-        self.loss_gate_enabled = encoded_max_realized_loss_pct < 1.0
         self.market_orders_allowed = bool(market_orders_allowed)
         taker_fee = market.maker_fee if taker_fee is None else float(taker_fee)
         market_order_slippage_pct = float(market_order_slippage_pct)
@@ -2469,7 +2453,6 @@ class _MulticoinReplayRunner:
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
-        unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
         exposure_rms_enabled: bool = False,
@@ -2561,18 +2544,6 @@ class _MulticoinReplayRunner:
         self.hsl_raw_tail_capacity = (
             _raw_drawdown_tail_capacity(self.n_days) if self.hsl_raw_tail_enabled else 1
         )
-        if unstuck_pnl_lookback_bars < 0:
-            raise ValueError("unstuck_pnl_lookback_bars must be nonnegative")
-        self.unstuck_pnl_lookback_bars = int(unstuck_pnl_lookback_bars)
-        # At most one event per candle, including both lookback endpoints.
-        # Coalescing preserves every intrabar peak; no fill-count cap is needed.
-        self.unstuck_pnl_capacity = (
-            min(self.n, self.unstuck_pnl_lookback_bars + 1)
-            if self.unstuck_pnl_lookback_bars
-            else 0
-        )
-        self._unstuck_pnl_buffers = {}
-
         self.pnl_lookback_bars = int(pnl_lookback_bars)
         self.hsl_capacity = 0
         self._hsl_scratch_buffers = {}
@@ -2705,6 +2676,7 @@ class _MulticoinReplayRunner:
         max_realized_loss_pct = float(max_realized_loss_pct)
         if not np.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
             raise ValueError("max_realized_loss_pct must be finite and non-negative")
+        self.loss_gate_enabled = max_realized_loss_pct < 1.0
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             max_realized_loss_pct
         )
@@ -2741,6 +2713,7 @@ class _MulticoinReplayRunner:
                 float(bool(filter_by_min_effective_cost)),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
+                float(self.loss_gate_enabled),  # Original float64 gate activation.
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -2897,7 +2870,7 @@ class _MulticoinReplayRunner:
 
     def _history_bytes_per_candidate(self):
         return (
-            self._hsl_history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
+            self._hsl_history_bytes_per_candidate()
             + (int(self._replay_state_bytes or 0) if self._temporal_replay_enabled() else 0)
             + (4 * self.n_days if self.raw_strategy_risk_enabled else 0)
             + (8 * self.n_days if self.raw_strategy_growth_enabled else 0)
@@ -2932,7 +2905,7 @@ class _MulticoinReplayRunner:
         # with every other old history. Release the complete prior dispatch
         # before params, outputs or any replacement histories are allocated.
         for name in (
-            "_buffers", "_hsl_scratch_buffers", "_unstuck_pnl_buffers",
+            "_buffers", "_hsl_scratch_buffers",
             "_recovery_buffers", "_volume_buffers", "_weighted_equity_buffers",
             "_hsl_ema_tail_buffers", "_equity_balance_diff_buffers",
             "_entry_interval_stat_buffers", "_entry_interval_count_buffers",
@@ -2945,22 +2918,6 @@ class _MulticoinReplayRunner:
         resident = self._history_bytes_per_candidate()
         available = self.hsl_scratch_budget_bytes - self._history_workspace_bytes()
         return available // max(1, resident)
-
-    def _unstuck_history_buffers(self, batch_size):
-        if (
-            self._history_batch_bytes(batch_size)
-            > self.hsl_scratch_budget_bytes
-        ):
-            raise ValueError("GPU history batch exceeds its scratch budget")
-        if batch_size not in self._unstuck_pnl_buffers:
-            shape = (batch_size, self.unstuck_pnl_capacity, 2)
-            self._unstuck_pnl_buffers = {
-                batch_size: (
-                    torch.empty(shape, dtype=torch.float32, device=gpu_device()),
-                    torch.empty(shape, dtype=torch.int32, device=gpu_device()),
-                )
-            }
-        return self._unstuck_pnl_buffers[batch_size]
 
     def _hsl_buffers(self, batch_size):
         factual_only = getattr(self, "native_factual_hsl", False)
@@ -3438,11 +3395,12 @@ class _MulticoinReplayRunner:
         # The baseline split and policy validation precede any new headroom query.
         # Admission preserves that split width and the already-sized compiled ABI.
         self._seed_initial_factual_capacity(int(matrix.shape[0]))
-        self.settings[-2] = getattr(self, "hsl_fact_capacity", 0)
+        # The final word is original-f64 gate activation, not factual control.
+        self.settings[-3] = getattr(self, "hsl_fact_capacity", 0)
         factual_replay = bool(getattr(self, "hsl_factual_replay", False))
         if factual_replay and not getattr(self, "hsl_fact_capacity", 0):
             raise ValueError("GPU factual HSL evaluation requires retained fill capacity")
-        self.settings[-1] = float(factual_replay)
+        self.settings[-2] = float(factual_replay)
         batch_size = int(matrix.shape[0])
         self._prepare_scratch_shape(batch_size)
         params_mps = torch.as_tensor(matrix, device=gpu_device())
@@ -3674,8 +3632,6 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             kernel_args += (hsl_ema_tail_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
-        if self.unstuck_pnl_capacity:
-            kernel_args += self._unstuck_history_buffers(batch_size)
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size, scalars=scalars)
 
     def _use_disabled_hsl_specialization(self, matrix):
@@ -3706,8 +3662,6 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             self.hsl_capacity,
             self.pnl_lookback_bars,
             self.mps_coin_capacity,
-            self.unstuck_pnl_lookback_bars,
-            self.unstuck_pnl_capacity,
             self.weighted_volume_enabled,
             self.raw_strategy_risk_enabled,
             self.raw_strategy_growth_enabled,
@@ -3770,7 +3724,6 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
-        unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
         exposure_rms_enabled: bool = False,
@@ -3805,7 +3758,6 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
-            unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
             exposure_rms_enabled=exposure_rms_enabled,
@@ -3871,6 +3823,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 float(bool(filter_by_min_effective_cost)),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
+                float(self.loss_gate_enabled),  # Original float64 gate activation.
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -3953,8 +3906,6 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (hsl_ema_tail_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
-        if self.unstuck_pnl_capacity:
-            kernel_args += self._unstuck_history_buffers(batch_size)
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size, scalars=scalars)
 
     def _decode(self, daily, scalars, gaps) -> dict:
@@ -4075,14 +4026,13 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
-        unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
         exposure_rms_enabled: bool = False,
         interrupt_check=None,
         selection=None,
     ):
-        self.loss_gate_enabled = _encode_max_realized_loss_pct(max_realized_loss_pct) < 1.0
+        self.loss_gate_enabled = float(max_realized_loss_pct) < 1.0
         self.loss_gate_specialization = True
         super().__init__(
             run,
@@ -4112,7 +4062,6 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
-            unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
             exposure_rms_enabled=exposure_rms_enabled,
@@ -4156,8 +4105,6 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             self.hsl_capacity,
             self.pnl_lookback_bars,
             self.mps_coin_capacity,
-            self.unstuck_pnl_lookback_bars,
-            self.unstuck_pnl_capacity,
             self.loss_gate_specialization and not self.loss_gate_enabled,
             self.weighted_volume_enabled,
             self.raw_strategy_risk_enabled,
@@ -4236,8 +4183,6 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             kernel_args += (hsl_ema_tail_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
-        if self.unstuck_pnl_capacity:
-            kernel_args += self._unstuck_history_buffers(batch_size)
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size, scalars=scalars)
 
 
@@ -4283,7 +4228,6 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
         pnl_lookback_bars: int = 0,
-        unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         factual_hsl: bool = False,
         exposure_rms_enabled: bool = False,
@@ -4318,7 +4262,6 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
             pnl_lookback_bars=pnl_lookback_bars,
-            unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
             max_dispatch_candidate_bars=max_dispatch_candidate_bars,
             factual_hsl=factual_hsl,
             exposure_rms_enabled=exposure_rms_enabled,
@@ -4379,6 +4322,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 float(bool(filter_by_min_effective_cost)),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
+                float(self.loss_gate_enabled),  # Original float64 gate activation.
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -4464,8 +4408,6 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             kernel_args += (hsl_ema_tail_samples,)
         if self.hsl_capacity:
             kernel_args += self._hsl_buffers(batch_size)
-        if self.unstuck_pnl_capacity:
-            kernel_args += self._unstuck_history_buffers(batch_size)
         self._dispatch_replay(library, kernel_args, end_steps, batch_size=batch_size, scalars=scalars)
 
     def _decode(self, daily, scalars, gaps) -> dict:

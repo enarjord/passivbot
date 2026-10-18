@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 import json
-import math
 from pathlib import Path
 import stat
 
@@ -12,9 +11,7 @@ from config import compile_runtime_config, prepare_config
 from config.migrations.v9 import MigrationResult, migrate_v8_to_v9, require_v9_runtime_config
 from config.risk_memory import (
     normalize_lookback_ema_span_minutes,
-    normalize_realized_loss_gate_lookback_minutes,
     normalize_risk_bootstrap_max_lookback_minutes,
-    realized_loss_gate_start_ms,
     risk_bootstrap_horizon_minutes,
 )
 from config.schema import get_template_config
@@ -38,6 +35,187 @@ def legacy():
     for side in ("long", "short"):
         config["bot"][side]["hsl"]["restart_after_red_policy"] = "always"
     return config
+
+
+def previous_v9(*, fraction=1.0, window=43200.0):
+    config = current()
+    config["config_version"] = "v9.0.0"
+    config["live"]["max_realized_loss_pct"] = fraction
+    config["live"]["realized_loss_gate_lookback_minutes"] = window
+    return config
+
+
+@pytest.mark.parametrize("window", [-1.0, 0.0, 1 / 128, 43200.0])
+@pytest.mark.parametrize("fraction", [0.0, 0.1])
+def test_old_v9_active_gate_requires_semantic_ack_without_window_conversion(window, fraction):
+    source = previous_v9(fraction=fraction, window=window)
+    source["live"]["lookback_ema_span_minutes"] = 91.5
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="acknowledge-realized-loss-gate-memory-change"):
+        migrate(source)
+    result = migrate(source, acknowledge_realized_loss_gate_memory_change=True)
+    assert result.config["config_version"] == "v9.1.0"
+    assert result.config["live"]["max_realized_loss_pct"] == fraction
+    assert result.config["live"]["lookback_ema_span_minutes"] == 91.5
+    assert "realized_loss_gate_lookback_minutes" not in json.dumps(result.config)
+    assert any("acknowledged shared" in item["reason"] for item in result.changes)
+    assert source == before
+    assert migrate(result.config).changes == []
+
+
+@pytest.mark.parametrize("fraction", [1.0, 2.0])
+def test_old_v9_disabled_gate_migrates_without_semantic_ack(fraction):
+    result = migrate(previous_v9(fraction=fraction, window=-1.0))
+    assert result.config["live"]["max_realized_loss_pct"] == fraction
+    assert "realized_loss_gate_lookback_minutes" not in result.config["live"]
+
+
+@pytest.mark.parametrize("fraction", [-0.1, float("nan"), float("inf")])
+def test_gate_migration_does_not_acknowledge_invalid_fraction(fraction):
+    with pytest.raises(ValueError, match="max_realized_loss_pct must be finite and >= 0"):
+        migrate(previous_v9(fraction=fraction),
+                acknowledge_realized_loss_gate_memory_change=True)
+
+
+def test_sparse_old_v9_gate_never_silently_acquires_default_memory():
+    source = previous_v9(fraction=0.1)
+    source["live"].pop("realized_loss_gate_lookback_minutes")
+    source["live"].pop("lookback_ema_span_minutes")
+    with pytest.raises(ValueError, match="explicit.*lookback-ema-span-minutes"):
+        migrate(source, acknowledge_realized_loss_gate_memory_change=True)
+    result = migrate(source, memory_span_minutes=12.5,
+                     acknowledge_realized_loss_gate_memory_change=True)
+    assert result.config["live"]["lookback_ema_span_minutes"] == 12.5
+    with pytest.raises(ValueError, match="explicit migration"):
+        prepare_config(source, verbose=False)
+
+
+def test_old_v9_gate_ack_cannot_silently_retune_existing_shared_span():
+    source = previous_v9(fraction=0.1)
+    with pytest.raises(ValueError, match="conflicts with migration choice"):
+        migrate(source, memory_span_minutes=10.0,
+                acknowledge_realized_loss_gate_memory_change=True)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_old_v9_gate_only_scenario_window_explicitly_adopts_effective_shared_span(nested):
+    from config.scenario_overrides import normalize_scenario_overrides
+    from suite_runner import apply_scenario_overrides
+
+    source = previous_v9()
+    values = {"max_realized_loss_pct": 0.1, "realized_loss_gate_lookback_minutes": -1.0,
+              "lookback_ema_span_minutes": 12.5}
+    patch = {"live": values} if nested else {f"live.{key}": value for key, value in values.items()}
+    source["backtest"]["scenarios"] = [{"label": "adopt-decay", "overrides": patch}]
+    before = deepcopy(source)
+    result = migrate(source, acknowledge_realized_loss_gate_memory_change=True)
+    overrides = result.config["backtest"]["scenarios"][0]["overrides"]
+    assert ("live" in overrides) is nested
+    normalized = normalize_scenario_overrides(overrides)
+    assert normalized["live.lookback_ema_span_minutes"] == 12.5
+    assert normalized["live.max_realized_loss_pct"] == 0.1
+    assert "realized_loss_gate_lookback_minutes" not in json.dumps(overrides)
+    effective = deepcopy(result.config)
+    apply_scenario_overrides(effective, normalized)
+    assert effective["live"]["lookback_ema_span_minutes"] == 12.5
+    assert effective["live"]["max_realized_loss_pct"] == 0.1
+    assert result.config["live"]["lookback_ema_span_minutes"] == 43200.0
+    contexts = next(item["new"] for item in result.changes if "acknowledged shared" in item["reason"])
+    assert any(item["context"].startswith("backtest.scenarios[0]")
+               and item["lookback_ema_span_minutes"] == 12.5 for item in contexts)
+    assert source == before
+
+
+def test_gate_ack_does_not_resolve_conflicting_same_layer_threshold_aliases():
+    source = previous_v9()
+    source["backtest"]["scenarios"] = [{"label": "ambiguous", "overrides": {
+        "live": {"max_realized_loss_pct": 0.1}, "live.max_realized_loss_pct": 1.0,
+    }}]
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="defined more than once"):
+        migrate(source, acknowledge_realized_loss_gate_memory_change=True)
+    assert source == before
+
+
+@pytest.mark.parametrize("location", ["bounds", "selectors"])
+def test_retired_gate_search_dimensions_require_explicit_edit(location):
+    source = previous_v9()
+    if location == "bounds":
+        source["optimize"]["bounds"]["live_realized_loss_gate_lookback_minutes"] = [0.0, 43200.0]
+    else:
+        source["optimize"]["fixed_params"] = ["live.realized_loss_gate_lookback_minutes"]
+    with pytest.raises(ValueError, match="(?:retired|targets removed)"):
+        migrate(source, acknowledge_realized_loss_gate_memory_change=True)
+
+
+@pytest.mark.parametrize("location", ["root", "scenario", "suite", "fixed", "scenario_after_fixed"])
+def test_gate_migration_audits_effective_root_fixed_and_dormant_scenario_contexts(location):
+    source = previous_v9()
+    patch = {"live.max_realized_loss_pct": 0.1,
+             "live.lookback_ema_span_minutes": 12.5}
+    if location == "root":
+        source["live"]["max_realized_loss_pct"] = 0.1
+    elif location == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = patch
+    else:
+        scenarios = [{"label": "stored", "overrides": patch}]
+        if location == "suite":
+            source["backtest"]["suite"] = {"enabled": False, "scenarios": scenarios}
+        else:
+            source["backtest"]["scenarios"] = scenarios
+            if location == "scenario_after_fixed":
+                source["optimize"]["fixed_runtime_overrides"] = {"live.max_realized_loss_pct": 1.0}
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="acknowledge-realized-loss-gate-memory-change"):
+        migrate(source)
+    output = migrate(source, acknowledge_realized_loss_gate_memory_change=True).config
+    assert output["config_version"] == "v9.1.0"
+    assert source == before
+
+
+def test_v8_active_gate_requires_both_memory_choice_and_semantic_ack():
+    source = legacy()
+    source["live"]["max_realized_loss_pct"] = 0.1
+    with pytest.raises(ValueError, match="explicitly choose"):
+        migrate_v8_to_v9(source, acknowledge_realized_loss_gate_memory_change=True)
+    with pytest.raises(ValueError, match="acknowledge-realized-loss-gate-memory-change"):
+        migrate_v8_to_v9(source, memory_span_minutes=12.5)
+    output = migrate_v8_to_v9(source, memory_span_minutes=12.5,
+                             acknowledge_realized_loss_gate_memory_change=True).config
+    assert output["live"]["lookback_ema_span_minutes"] == 12.5
+    assert "realized_loss_gate_lookback_minutes" not in output["live"]
+
+
+def test_ignored_coin_global_gate_is_not_effective_but_never_audit_is_preserved(tmp_path):
+    source = previous_v9()
+    document = previous_v9(fraction=0.1, window=0.0)
+    document["live"]["lookback_ema_span_minutes"] = 12.5
+    document["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
+    path = tmp_path / "coin.json"
+    path.write_text(json.dumps(document))
+    original = path.read_bytes()
+    source["coin_overrides"] = {"AAA": {"override_config_path": "coin.json"}}
+    with pytest.raises(ValueError, match="acknowledge-never-removal"):
+        migrate(source, base_config_path=str(tmp_path / "base.json"))
+    output = migrate(source, acknowledge_never_removal=True,
+                     base_config_path=str(tmp_path / "base.json")).config
+    assert output["live"]["max_realized_loss_pct"] == 1.0
+    assert output["live"]["lookback_ema_span_minutes"] == 43200.0
+    assert "max_realized_loss_pct" not in output["coin_overrides"]["AAA"].get("live", {})
+    assert path.read_bytes() == original
+
+
+def test_old_v9_gate_cli_ack_precedes_atomic_write(tmp_path):
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(previous_v9(fraction=0.1)))
+    original = path.read_bytes()
+    with pytest.raises(SystemExit):
+        main([str(path), "--in-place"])
+    assert path.read_bytes() == original
+    assert sorted(item.name for item in tmp_path.iterdir()) == ["old.json"]
+    assert main([str(path), "--in-place", "--acknowledge-realized-loss-gate-memory-change"]) == 0
+    assert (tmp_path / "old.pre-v9.1-backup.json").read_bytes() == original
+    assert json.loads(path.read_text())["config_version"] == "v9.1.0"
 
 
 @pytest.mark.parametrize("location, entry_kind", [
@@ -122,63 +300,25 @@ def test_risk_span_rejects_invalid_or_nondecaying_f32(value):
 def test_spans_and_bootstrap_are_independent_float_settings():
     cfg = get_template_config()
     prepared = prepare_config(cfg, verbose=False)
-    assert prepared["config_version"] == "v9.0.0"
+    assert prepared["config_version"] == "v9.1.0"
     assert prepared["live"]["lookback_ema_span_minutes"] == 43200.0
     assert isinstance(prepared["live"]["lookback_ema_span_minutes"], float)
     assert risk_bootstrap_horizon_minutes(prepared["live"]) == (129600.0, True)
-    assert realized_loss_gate_start_ms(prepared["live"], 3_000_000_000) == 408_000_000
-    prepared["live"]["realized_loss_gate_lookback_minutes"] = -1.0
-    assert realized_loss_gate_start_ms(prepared["live"], 3_000_000_000) is None
-    prepared["live"]["realized_loss_gate_lookback_minutes"] = 0.0
-    assert realized_loss_gate_start_ms(prepared["live"], 120_000) == 119_999
-    assert realized_loss_gate_start_ms(prepared["live"], 120_000, minimum_ms=60_000) == 60_000
+    assert "realized_loss_gate_lookback_minutes" not in prepared["live"]
     with pytest.raises(ValueError):
         normalize_risk_bootstrap_max_lookback_minutes(129601.0)
 
 
-@pytest.mark.parametrize("minutes", [1e308, 1e100, (1 << 63) / 60_000.0])
-def test_realized_gate_rejects_scaled_duration_outside_signed_millisecond_domain(minutes):
-    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
-        normalize_realized_loss_gate_lookback_minutes(minutes)
-    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
-        realized_loss_gate_start_ms({"realized_loss_gate_lookback_minutes": minutes}, 120_000)
+@pytest.mark.parametrize("minutes", [-1.0, 0.0, 1 / 128, 43200.0, 1e308])
+def test_runtime_rejects_retired_gate_window_even_when_gate_disabled(minutes):
     config = current()
+    config["live"]["max_realized_loss_pct"] = 1.0
     config["live"]["realized_loss_gate_lookback_minutes"] = minutes
-    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*removed"):
         prepare_config(config, verbose=False)
 
 
-def test_realized_gate_accepts_last_float_duration_inside_signed_clock_boundary():
-    boundary = (1 << 63) / 60_000.0
-    minutes = math.nextafter(boundary, 0.0)
-    duration = round(minutes * 60_000.0)
-    assert duration <= (1 << 63) - 1 < round(boundary * 60_000.0)
-    assert normalize_realized_loss_gate_lookback_minutes(minutes) == minutes
-    config = current()
-    config["optimize"]["backend"] = "pymoo"  # CPU scope; backend capacity is a separate contract.
-    config["live"]["realized_loss_gate_lookback_minutes"] = minutes
-    prepared = prepare_config(config, verbose=False)
-    assert prepared["live"]["realized_loss_gate_lookback_minutes"] == minutes
-    assert realized_loss_gate_start_ms(prepared["live"], 120_000) == 120_000 - duration
-
-
-@pytest.mark.parametrize("minutes, duration", [
-    (-1.0, None), (0.0, 1), (1 / 128, 469), (3 / 120_000, 2), (5 / 120_000, 2),
-    (1440.0, 86_400_000),
-])
-def test_realized_gate_preserves_all_zero_fractional_and_rounding_semantics(minutes, duration):
-    config = current()
-    config["live"]["realized_loss_gate_lookback_minutes"] = minutes
-    live = prepare_config(config, verbose=False)["live"]
-    assert live["realized_loss_gate_lookback_minutes"] == minutes
-    assert isinstance(live["realized_loss_gate_lookback_minutes"], float)
-    expected = None if duration is None else 120_000 - duration
-    assert realized_loss_gate_start_ms(live, 120_000) == expected
-    expected_bar = None if duration is None else 120_000 - max(60_000, duration)
-    assert realized_loss_gate_start_ms(live, 120_000, minimum_ms=60_000) == expected_bar
-
-
-def test_realized_gate_cli_rejects_out_of_domain_duration(capsys):
+def test_realized_gate_cli_rejects_retired_duration(capsys):
     from argparse import ArgumentParser
     from config_utils import add_config_arguments
 
@@ -187,14 +327,14 @@ def test_realized_gate_cli_rejects_out_of_domain_duration(capsys):
     with pytest.raises(SystemExit) as error:
         parser.parse_args(["--realized-loss-gate-lookback-minutes", "1e308"])
     assert error.value.code == 2
-    assert "realized_loss_gate_lookback_minutes" in capsys.readouterr().err
+    assert "realized-loss-gate-lookback-minutes" in capsys.readouterr().err
 
 
-def test_realized_gate_scenario_revalidates_duration_before_consumption():
+def test_realized_gate_scenario_rejects_retired_duration_before_consumption():
     from suite_runner import apply_scenario_overrides
 
     config = prepare_config(current(), verbose=False)
-    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*removed"):
         apply_scenario_overrides(config, {"live.realized_loss_gate_lookback_minutes": 1e308})
 
 
@@ -212,7 +352,7 @@ def test_migration_rejects_unrepresentable_realized_gate_duration(location):
             "live.realized_loss_gate_lookback_minutes": 1e308,
         }
     before = deepcopy(source)
-    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
+    with pytest.raises(ValueError, match="(?:pnls_max_lookback_days|realized_loss_gate_lookback_minutes).*signed 64-bit"):
         migrate(source, memory_span_minutes=43200)
     assert source == before
 
@@ -226,9 +366,9 @@ def test_migration_cli_refuses_oversized_gate_before_writing(tmp_path, capsys):
     with pytest.raises(SystemExit) as error:
         main([str(path), "--lookback-ema-span-minutes", "43200", "--in-place"])
     assert error.value.code == 2
-    assert "realized_loss_gate_lookback_minutes" in capsys.readouterr().err
+    assert "pnls_max_lookback_days" in capsys.readouterr().err
     assert path.read_bytes() == original
-    assert not path.with_name("legacy.v8-backup.json").exists()
+    assert not path.with_name("legacy.pre-v9.1-backup.json").exists()
 
 
 def test_migration_requires_a_memory_choice_and_does_not_mutate_input():
@@ -239,7 +379,7 @@ def test_migration_requires_a_memory_choice_and_does_not_mutate_input():
     result = migrate_v8_to_v9(source, memory_span_minutes=1234.5)
     assert source == before
     assert result.config["live"]["lookback_ema_span_minutes"] == 1234.5
-    assert result.config["live"]["realized_loss_gate_lookback_minutes"] == 43200.0
+    assert "realized_loss_gate_lookback_minutes" not in result.config["live"]
     assert "pnls_max_lookback_days" not in result.config["live"]
     assert "restart_after_red_policy" not in result.config["bot"]["long"]["hsl"]
     assert result.warnings and result.changes
@@ -295,7 +435,7 @@ def test_disabled_v8_null_restart_is_removed_with_unambiguous_effective_context(
     require_v9_runtime_config(result.config)
     assert any(row["old"] is None and "null restart" in row["reason"] for row in result.changes)
     # Full static validation must accept the supported legacy representation too.
-    assert migrate(source, memory_span_minutes=43200).config["config_version"] == "v9.0.0"
+    assert migrate(source, memory_span_minutes=43200).config["config_version"] == "v9.1.0"
 
 
 @pytest.mark.parametrize("location", ["root", "coin", "scenario", "ambiguous", "conflicting"])
@@ -363,15 +503,15 @@ def test_distinct_scenario_window_requires_path_specific_choice():
                              memory_span_choices={path: 1200.5})
     patch = result.config["backtest"]["scenarios"][0]["overrides"]
     assert patch["live.lookback_ema_span_minutes"] == 1200.5
-    assert patch["live.realized_loss_gate_lookback_minutes"] == 3600.0
+    assert "live.realized_loss_gate_lookback_minutes" not in patch
     assert patch["live.hsl_signal_mode"] == "portfolio"
 
 
-def test_all_gate_is_preserved_without_infinite_risk_memory():
+def test_legacy_all_history_is_removed_without_infinite_risk_memory():
     source = legacy()
     source["live"]["pnls_max_lookback_days"] = "all"
     output = migrate_v8_to_v9(source, memory_span_minutes=43200).config
-    assert output["live"]["realized_loss_gate_lookback_minutes"] == -1.0
+    assert "realized_loss_gate_lookback_minutes" not in output["live"]
     assert output["live"]["lookback_ema_span_minutes"] == 43200.0
 
 
@@ -393,7 +533,7 @@ def test_retired_controls_are_reported_by_migration_and_rejected_at_runtime():
         require_v9_runtime_config(result.config)
 
 
-@pytest.mark.parametrize("version", [None, "v8.6.0", "v10.0.0", "nonsense"])
+@pytest.mark.parametrize("version", [None, "v8.6.0", "v9.0.0", "v10.0.0", "nonsense"])
 def test_runtime_rejects_non_v9_even_with_hsl_disabled(version):
     config = current()
     config["config_version"] = version
@@ -427,8 +567,8 @@ def test_cli_dry_run_default_output_and_atomic_backup(tmp_path):
         main([str(source), "--lookback-ema-span-minutes", "1234.5"])
     assert source.read_bytes() == original
     assert main([str(source), "--lookback-ema-span-minutes", "1234.5", "--in-place"]) == 0
-    assert (tmp_path / "config.v8-backup.json").read_bytes() == original
-    assert json.loads(source.read_text())["config_version"] == "v9.0.0"
+    assert (tmp_path / "config.pre-v9.1-backup.json").read_bytes() == original
+    assert json.loads(source.read_text())["config_version"] == "v9.1.0"
 
 
 def test_invalid_migration_never_replaces_input_or_creates_backup(tmp_path):
@@ -440,7 +580,7 @@ def test_invalid_migration_never_replaces_input_or_creates_backup(tmp_path):
     with pytest.raises(SystemExit):
         main([str(source), "--lookback-ema-span-minutes", "43200", "--in-place"])
     assert source.read_bytes() == original
-    assert not (tmp_path / "config.v8-backup.json").exists()
+    assert not (tmp_path / "config.pre-v9.1-backup.json").exists()
 
 
 def test_move_output_materializes_file_with_inline_precedence(tmp_path):
@@ -981,7 +1121,7 @@ def _synthetic_migration(monkeypatch, config=None):
     import tools.migrate_config_v9 as tool
 
     monkeypatch.setattr(tool, "migrate", lambda *args, **kwargs:
-                        MigrationResult(config or {"config_version": "v9.0.0"}, [], ()))
+                        MigrationResult(config or {"config_version": "v9.1.0"}, [], ()))
 
 
 def test_atomic_in_place_follows_symlink_and_preserves_mode(tmp_path, monkeypatch):
@@ -994,7 +1134,7 @@ def test_atomic_in_place_follows_symlink_and_preserves_mode(tmp_path, monkeypatc
     assert main([str(source), "--in-place", "--lookback-ema-span-minutes", "43200"]) == 0
     assert source.is_symlink()
     assert stat.S_IMODE(target.stat().st_mode) == 0o640
-    assert (tmp_path / "target.v8-backup.json").read_bytes() == original
+    assert (tmp_path / "target.pre-v9.1-backup.json").read_bytes() == original
 
 
 def test_atomic_replace_failure_preserves_source_and_cleans_temp(tmp_path, monkeypatch):
@@ -1010,7 +1150,7 @@ def test_atomic_replace_failure_preserves_source_and_cleans_temp(tmp_path, monke
     with pytest.raises(SystemExit):
         main([str(source), "--in-place", "--lookback-ema-span-minutes", "43200"])
     assert source.read_bytes() == before
-    assert (tmp_path / "input.v8-backup.json").read_bytes() == before
+    assert (tmp_path / "input.pre-v9.1-backup.json").read_bytes() == before
     assert not list(tmp_path.glob(".*.tmp"))
 
 
@@ -1042,7 +1182,7 @@ def test_report_collision_fails_before_output_or_backup(tmp_path, monkeypatch):
               "--lookback-ema-span-minutes", "43200"])
     assert source.read_bytes() == before
     assert report.read_text() == "preserve"
-    assert not (tmp_path / "input.v8-backup.json").exists()
+    assert not (tmp_path / "input.pre-v9.1-backup.json").exists()
 
 
 def test_nonfinite_output_fails_before_any_write(tmp_path, monkeypatch):
@@ -1060,7 +1200,7 @@ def test_nonfinite_change_report_fails_before_any_write(tmp_path, monkeypatch):
     import tools.migrate_config_v9 as tool
 
     monkeypatch.setattr(tool, "migrate", lambda *args, **kwargs: MigrationResult(
-        {"config_version": "v9.0.0"}, [{"old": float("inf"), "new": None}], ()))
+        {"config_version": "v9.1.0"}, [{"old": float("inf"), "new": None}], ()))
     source = tmp_path / "input.json"
     source.write_text('{"config_version":"v8.6.0"}')
     before = source.read_bytes()

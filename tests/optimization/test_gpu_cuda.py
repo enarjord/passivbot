@@ -1114,7 +1114,6 @@ def test_tm_unchunked_dispatch_uses_backend_launch_options(monkeypatch, device, 
         weighted_equity_cols=0,
         max_dispatch_candidate_bars=None,
         hsl_capacity=0,
-        unstuck_pnl_capacity=0,
     )))
     calls = []
     def kernel(*args, **kwargs):

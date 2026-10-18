@@ -1,4 +1,4 @@
-"""EMA loss admission uses the same finite fill history as exact Rust."""
+"""Loss admission and unstuck share one continuous realized-memory fold."""
 
 from copy import deepcopy
 
@@ -15,23 +15,25 @@ pytestmark = pytest.mark.skipif(
 
 
 def loss_gate_proxy(
-    sides, coins=2, lookback=8 / 1440, *, unstuck=False, hsl_mode="coin", max_loss_pct=None
+    sides, coins=2, memory_span=8.0, *, unstuck=False, hsl_mode="coin", max_loss_pct=None,
+    interval_minutes=1,
 ):
     from optimization.gpu.service import MpsMulticoinProxy
 
     original, inputs = make_proxy(
-        sides, strategy="ema_anchor", coins=coins, hsl_mode=hsl_mode
+        sides, memory_span, strategy="ema_anchor", coins=coins, hsl_mode=hsl_mode,
+        interval_minutes=interval_minutes,
     )
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
-    config["live"]["realized_loss_gate_lookback_minutes"] = -1.0 if lookback == "all" else lookback * 1440
+    config["live"]["lookback_ema_span_minutes"] = memory_span
     config["live"]["max_realized_loss_pct"] = 0.003 if unstuck else 0.0003
     if max_loss_pct is not None:
         config["live"]["max_realized_loss_pct"] = max_loss_pct
     if not unstuck:
         # Each flat-price close loses only its fee. Entry fees initially exhaust
-        # the gate; after expiry, ordinary closes are admitted without unstuck.
+        # the gate; continuous decay later admits ordinary closes without unstuck.
         candles = candles.copy()
         candles[:, :, :3] = (101.0, 99.0, 100.4)
         for side in sides:
@@ -45,25 +47,89 @@ def loss_gate_proxy(
     return proxy, inputs
 
 
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("sides,fraction,span,interval,unstuck", [
+    pytest.param(("long",), 0.0003, 3.0, 1, False, id="long-gate-only"),
+    pytest.param(("short",), 0.0003, 3.0, 1, False, id="short-gate-only"),
+    pytest.param(("long", "short"), 0.0003, 3.0, 1, False, id="both-gate-only"),
+    pytest.param(("long", "short"), 0.0003, 8.0, 5, False, id="both-five-minute"),
+    pytest.param(("long", "short"), 0.003, 8.0, 1, True, id="both-consumers"),
+    pytest.param(("long",), 0.0, 8.0, 1, False, id="zero"),
+    pytest.param(("long",), 0.99999999, 8.0, 1, False, id="active-rounds-one"),
+    pytest.param(("long",), 1e308, 8.0, 1, False, id="disabled-huge-finite"),
+])
+def test_shared_gate_production_consumers_and_transport(
+    strategy, sides, fraction, span, interval, unstuck
+):
+    import numpy as np
+    from backtest import run_backtest
+    from optimization.gpu.service import MpsMulticoinProxy
+    from test_gpu_tm_loss_admission import fee_only_close_fixture
+
+    if strategy == "ema_anchor":
+        proxy, inputs = loss_gate_proxy(
+            sides, memory_span=span, unstuck=unstuck, max_loss_pct=fraction,
+            interval_minutes=interval,
+        )
+    elif not unstuck:
+        proxy, inputs = fee_only_close_fixture(
+            sides, 2, span, fraction, interval_minutes=interval,
+        )
+    else:
+        original, inputs = make_proxy(sides, span, strategy=strategy)
+        del original
+        candles, markets, config, exchange, btc, timestamps = inputs
+        config["live"]["max_realized_loss_pct"] = fraction
+        proxy = MpsMulticoinProxy(
+            config=config, hlcvs=candles, mss=markets, exchange=exchange,
+            btc=btc, timestamps=timestamps, batch_size=2,
+            needed_metrics={"adg_strategy_eq", "fills_per_day"},
+        )
+    runner, output = raw(proxy, [{}])
+    fills, _, _ = run_backtest(*inputs)
+    assert len(fills) > 0
+    assert runner.loss_gate_enabled is (fraction < 1.0)
+    assert runner.settings[-1].item() == float(fraction < 1.0)
+    assert runner.settings[5].item() == float(np.float32(min(fraction, 1.0)))
+    if not unstuck:
+        assert runner.dispatch_unstuck_enabled is False
+    assert not hasattr(runner, "_unstuck_pnl_buffers")
+    assert output["fill_count"].item() == len(fills)
+    assert output["balance"].item() == pytest.approx(float(fills[-1, 5]), abs=0.002)
+    for side in sides:
+        expected = sum(float(fill[9]) for fill in fills if fill[13].endswith(side))
+        key = "psize" if side == "long" else "short_psize"
+        assert output[key].item() == pytest.approx(abs(expected), abs=2e-5)
+    if 0.0 < fraction < 1.0 and not unstuck:
+        assert any(str(fill[13]).startswith("close_") for fill in fills)
+    # Retained memory must survive real dispatch boundaries, then start fresh
+    # on the next request. Neither operation owns an additional fill producer.
+    runner.max_dispatch_candidate_bars = 8
+    _, chunked = raw(proxy, [{}])
+    compare(output, chunked)
+    _, repeated = raw(proxy, [{}])
+    compare(output, repeated)
+
+
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("max_loss_pct", [0.0, 0.5, 1.0])
-def test_ema_history_is_present_only_for_a_finite_loss_consumer(sides, max_loss_pct):
+def test_ema_gate_uses_constant_memory_without_a_history_queue(sides, max_loss_pct):
     proxy, _ = loss_gate_proxy(sides, max_loss_pct=max_loss_pct)
     runner, _ = raw(proxy, [{}])
     enabled = max_loss_pct < 1.0
-    assert runner.unstuck_pnl_lookback_bars == (8 if enabled else 0)
-    assert runner.unstuck_pnl_capacity == (9 if enabled else 0)
-    assert bool(runner._unstuck_pnl_buffers) == enabled
+    assert runner.loss_gate_enabled == enabled
+    assert not hasattr(runner, "_unstuck_pnl_buffers")
+    assert runner.settings[-1].item() == float(enabled)
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("coins", [1, 2])
-@pytest.mark.parametrize("lookback", [8 / 1440, "all"])
+@pytest.mark.parametrize("memory_span", [3.0, 8.0])
 @pytest.mark.parametrize("unstuck", [False, True])
-def test_ema_loss_gate_expiry_matches_rust(sides, coins, lookback, unstuck):
+def test_ema_shared_decaying_gate_matches_rust(sides, coins, memory_span, unstuck):
     from backtest import run_backtest
 
-    proxy, inputs = loss_gate_proxy(sides, coins, lookback, unstuck=unstuck)
+    proxy, inputs = loss_gate_proxy(sides, coins, memory_span, unstuck=unstuck)
     runner, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
     assert output["fill_count"].item() == len(fills)
@@ -72,20 +138,17 @@ def test_ema_loss_gate_expiry_matches_rust(sides, coins, lookback, unstuck):
         expected = sum(float(fill[9]) for fill in fills if fill[13].endswith(side))
         key = "psize" if side == "long" else "short_psize"
         assert output[key].item() == pytest.approx(abs(expected), abs=2e-5)
-    assert runner.unstuck_pnl_lookback_bars == (0 if lookback == "all" else 8)
-    assert runner.unstuck_pnl_capacity == (0 if lookback == "all" else 9)
-    if lookback != "all":
-        assert len(fills) > coins * len(sides)
+    assert not hasattr(runner, "_unstuck_pnl_buffers")
+    assert len(fills) > coins * len(sides)
 
 
-def test_ema_loss_gate_nine_minute_native_roundtrip_expiry_matches_rust():
+def test_ema_shared_decay_gate_close_boundary_matches_rust():
     import numpy as np
     from backtest import run_backtest
 
-    proxy, inputs = loss_gate_proxy(("long",), coins=1, lookback=9 / 1440)
+    proxy, inputs = loss_gate_proxy(("long",), coins=1, memory_span=9.0)
     fills, _, _ = run_backtest(*inputs)
-    # The exact native parser roundtrip is slightly above nine minutes, so its
-    # ceil admits ten bar endpoints. The fee-only close must really execute.
+    # Continuous decay must admit a real fee-only close at the same CPU/GPU cut.
     assert len(fills) == 2
     assert str(fills[-1, 13]).startswith("close_")
     close_k = int(fills[-1, 0])
@@ -93,8 +156,7 @@ def test_ema_loss_gate_nine_minute_native_roundtrip_expiry_matches_rust():
         runner, output = raw(proxy, [{}], end_steps=np.array([end], dtype=np.int32))
         expected = [fill for fill in fills if int(fill[0]) < end]
         assert len(expected) == (1 if end == close_k else 2)
-        assert runner.unstuck_pnl_lookback_bars == 10
-        assert runner.unstuck_pnl_capacity == 11
+        assert not hasattr(runner, "_unstuck_pnl_buffers")
         assert output["fill_count"].item() == len(expected)
         assert output["balance"].item() == pytest.approx(float(expected[-1][5]), abs=0.002)
         assert output["psize"].item() == pytest.approx(abs(float(expected[-1][11])), abs=2e-5)
@@ -102,13 +164,13 @@ def test_ema_loss_gate_nine_minute_native_roundtrip_expiry_matches_rust():
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("mode", ["pside", "portfolio"])
-def test_ema_loss_gate_history_reuse_specialization_and_scratch(side, mode):
+def test_ema_loss_gate_memory_reuse_specialization_and_scratch(side, mode):
     proxy, _ = loss_gate_proxy((side,), hsl_mode=mode)
     candidates = [{}, {f"{side}_base_qty_pct": 0.3}, {}]
     runner, expected = raw(proxy, candidates)
     assert expected["balance"][0].item() != expected["balance"][1].item()
     assert runner.dispatch_hsl_disabled
-    assert runner.unstuck_pnl_capacity == 9
+    assert not hasattr(runner, "_unstuck_pnl_buffers")
     runner.hsl_disabled_specialization = False
     _, general = raw(proxy, candidates)
     compare(expected, general)
@@ -120,19 +182,9 @@ def test_ema_loss_gate_history_reuse_specialization_and_scratch(side, mode):
     compare(expected, repeated)
 
 
-@pytest.mark.parametrize("sides", [("long",), ("long", "short")])
-def test_ema_loss_gate_history_overflow_fails_closed(sides):
-    # Admit adjacent entry/close events so a one-slot tape really is too small.
-    proxy, _ = loss_gate_proxy(sides, max_loss_pct=0.5)
-    runner = proxy.fused_runner or proxy.runners[sides[0]]
-    runner.unstuck_pnl_capacity = 1
-    with pytest.raises(RuntimeError, match="fill-PnL history overflow"):
-        raw(proxy, [{}])
-
-
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("coins", [1, 2])
-def test_native_loss_gate_reuses_history_without_cpu_backtests(monkeypatch, sides, coins):
+def test_native_loss_gate_reuses_memory_without_cpu_backtests(monkeypatch, sides, coins):
     if not torch.cuda.is_available():
         pytest.skip("native CUDA service required")
     import backtest

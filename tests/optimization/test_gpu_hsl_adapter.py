@@ -225,6 +225,97 @@ def _native_source(root, strategy):
             + (root / "mps_organillo.metal").read_text() + source)
 
 
+_REALIZED_GATE_PROBE = r"""
+kernel void shared_gate_event_probe(
+    constant float* settings, constant float* events, device float* output,
+    uint b [[thread_position_in_grid]]) {
+    if (b != 0) return;
+    HslDecayPolicy policy;
+    if (!hsl_decay_policy(settings[0], 1.0f, 0.1f, 0, policy)) return;
+    JointPortfolioAccount account = init_joint_portfolio_account(settings[2]);
+    account.realized_decay_beta = policy.slow_beta;
+    account.realized_decay_interval_minutes = int(settings[4]);
+    const bool loss_gate_enabled = settings[3] > 0.5f;
+    // SHARED_REALIZED_CONSUMER_SETUP
+    for (int event = 0; event < 8; ++event) {
+        advance_joint_realized_memory(account, int(events[event * 2]));
+        record_joint_portfolio_fill(account, events[event * 2 + 1], event % 2 == 0);
+        const float before_query = account.realized_decay_drawdown;
+        float allowance = 0.0f;
+        bool valid = joint_realized_loss_allowance(account, settings[1], allowance);
+        output[event * 4] = account.realized_decay_drawdown;
+        output[event * 4 + 1] = account.balance;
+        output[event * 4 + 2] = allowance;
+        output[event * 4 + 3] = float(valid && account.realized_decay_valid
+            && before_query == account.realized_decay_drawdown);
+    }
+}
+
+kernel void shared_gate_invalid_probe(
+    constant float* inputs, device float* output, uint b [[thread_position_in_grid]]) {
+    if (b != 0) return;
+    JointPortfolioAccount account = init_joint_portfolio_account(inputs[0]);
+    account.realized_decay_drawdown = inputs[2];
+    float allowance = NAN;
+    output[0] = float(joint_realized_loss_allowance(account, inputs[1], allowance));
+    output[1] = float(account.realized_decay_valid);
+}
+"""
+
+
+@pytest.fixture(scope="module", params=["ema", "tm"])
+def shared_gate_program(request):
+    import re
+
+    torch = pytest.importorskip("torch")
+    if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
+        pytest.skip("actual supported Metal/CUDA execution required")
+    from optimization.gpu.runtime import compile_shader, gpu_device
+
+    root = Path(__file__).resolve().parents[2] / "passivbot-rust/src/gpu"
+    source = _native_source(root, request.param)
+    assignments = re.findall(r"account.realized_decay_enabled =[^;]+;", source)
+    assert len(assignments) == 3  # Default initializer and two production entry points.
+    assert assignments[1] == assignments[2]
+    probe = _REALIZED_GATE_PROBE.replace("// SHARED_REALIZED_CONSUMER_SETUP", assignments[1])
+    # Gate-only production must keep the fill producer when unstuck is compiled out.
+    source = "#define PASSIVBOT_UNSTUCK_ENABLED 0\n" + source + probe
+    return torch, compile_shader(source, mps_coin_capacity=2), gpu_device(torch)
+
+
+@pytest.mark.parametrize("span,fraction,interval", [(3.0, 0.1, 1), (3.0, 0.0, 1), (8.0, 0.99999999, 5)])
+def test_gate_only_ordered_fills_share_exact_decaying_memory(shared_gate_program, span, fraction, interval):
+    from v9_risk_reference import add, allowance, coefficients, f32, fma, sub
+
+    torch, library, device = shared_gate_program
+    events = [(0, -10.0), (0, 20.0), (0, -5.0), (0, -0.25),
+              (0, 0.125), (5, 0.0), (5, -2.0), (6, 3.0)]
+    settings = torch.tensor([span, fraction, 1000.0, 1.0, interval], dtype=torch.float32, device=device)
+    packed = torch.tensor(events, dtype=torch.float32, device=device)
+    output = torch.full((8, 4), float("nan"), dtype=torch.float32, device=device)
+    library.shared_gate_event_probe(settings, packed, output, threads=1)
+    _, beta = coefficients(span)
+    expected, drawdown, balance, previous_minute = [], 0.0, 1000.0, 0
+    for bar, net in events:
+        minute = bar * interval
+        for _ in range(previous_minute, minute):
+            drawdown = fma(beta, drawdown, 0.0)
+        previous_minute = minute
+        drawdown = max(0.0, sub(drawdown, f32(net)))
+        balance = add(balance, f32(net))  # Exact dyadic fixture amounts.
+        expected.append([drawdown, balance, allowance(balance, fraction, drawdown), 1.0])
+    assert output.cpu().tolist() == expected
+
+
+@pytest.mark.parametrize("inputs", [(2e38, 0.1, 2e38), (1000.0, 0.1, -1.0)])
+def test_shared_gate_invalid_memory_is_not_a_neutral_allowance(shared_gate_program, inputs):
+    torch, library, device = shared_gate_program
+    values = torch.tensor(inputs, dtype=torch.float32, device=device)
+    output = torch.full((2,), float("nan"), dtype=torch.float32, device=device)
+    library.shared_gate_invalid_probe(values, output, threads=1)
+    assert output.cpu().tolist() == [0.0, 0.0]
+
+
 @pytest.fixture(scope="module")
 def adapter_program():
     torch = pytest.importorskip("torch")

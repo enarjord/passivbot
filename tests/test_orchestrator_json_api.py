@@ -389,8 +389,18 @@ def test_realized_drawdown_is_required_instead_of_reconstructed_from_gate_stats(
 
     inp = make_input(balance=1000.0, symbols=[make_symbol(0, bid=100.0, ask=100.0)])
     del inp["global"]["realized_pnl_drawdown"]
-    inp["global"].update(realized_pnl_cumsum_max=10.0, realized_pnl_cumsum_last=5.0)
     with pytest.raises(ValueError, match="missing field `realized_pnl_drawdown`"):
+        compute(pbr, inp)
+
+
+
+@pytest.mark.parametrize("retired", ["realized_pnl_cumsum_max", "realized_pnl_cumsum_last"])
+def test_json_rejects_retired_realized_gate_cumsum_fields(retired):
+    import passivbot_rust as pbr
+
+    inp = make_input(balance=1000.0, symbols=[make_symbol(0, bid=100.0, ask=100.0)])
+    inp["global"][retired] = 0.0
+    with pytest.raises(ValueError, match=rf"unknown field `{retired}`"):
         compute(pbr, inp)
 
 
@@ -5031,8 +5041,7 @@ def test_twel_loss_gate_block_emits_twel_specific_warning():
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 1_000.0
     inp["global"]["max_realized_loss_pct"] = 0.0
-    inp["global"]["realized_pnl_cumsum_max"] = 0.0
-    inp["global"]["realized_pnl_cumsum_last"] = 0.0
+    inp["global"]["realized_pnl_drawdown"] = 0.0
 
     out = compute(pbr, inp)
 
@@ -5089,14 +5098,13 @@ def test_realized_loss_gate_uses_balance_raw():
     )
 
     # With snapped balance=1000 and raw balance=980, a tight gate (0.001),
-    # the gate computes peak from balance_raw: peak = 980 + (50-(-20)) = 1050
-    # floor = 1050 * (1 - 0.001) ≈ 1048.95.  Projected balance after
-    # realizing the loss would be well below floor → gate blocks.
+    # Shared D=70 gives peak=980+70=1050 and zero checked allowance:
+    # max(0, 0.001*1050-70)=0. The effective spend floor is raw balance,
+    # so a negative projected close is blocked without using snapped balance.
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 980.0
     inp["global"]["max_realized_loss_pct"] = 0.001  # very tight gate
-    inp["global"]["realized_pnl_cumsum_max"] = 50.0
-    inp["global"]["realized_pnl_cumsum_last"] = -20.0
+    inp["global"]["realized_pnl_drawdown"] = 70.0
 
     out = compute(pbr, inp)
     loss_gate_blocks = out.get("diagnostics", {}).get("loss_gate_blocks", [])
@@ -5104,6 +5112,9 @@ def test_realized_loss_gate_uses_balance_raw():
         "expected tight loss gate (0.001) to block close orders on underwater position, "
         f"but got no loss_gate_blocks. orders: {[o['order_type'] for o in out['orders']]}"
     )
+    assert all(block["balance_before"] == 980.0 for block in loss_gate_blocks)
+    assert all(block["balance_peak"] == 1050.0 for block in loss_gate_blocks)
+    assert all(block["balance_floor"] == 980.0 for block in loss_gate_blocks)
 
 
 def test_balance_raw_absent_falls_back_to_balance():
@@ -5141,11 +5152,8 @@ def test_balance_raw_absent_falls_back_to_balance():
             r"global\.unstuck_allowance_short must be finite and >= 0",
         ),
         (
-            lambda inp: (
-                inp["global"].__setitem__("realized_pnl_cumsum_max", 5.0),
-                inp["global"].__setitem__("realized_pnl_cumsum_last", 10.0),
-            ),
-            r"global\.realized_pnl_cumsum_max must be >= global\.realized_pnl_cumsum_last",
+            lambda inp: inp["global"].__setitem__("realized_pnl_drawdown", -1.0),
+            r"global\.realized_pnl_drawdown",
         ),
     ],
 )
@@ -5183,8 +5191,7 @@ def test_balance_raw_zero_rejected():
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 0.0
     inp["global"]["max_realized_loss_pct"] = 0.05
-    inp["global"]["realized_pnl_cumsum_max"] = 10.0
-    inp["global"]["realized_pnl_cumsum_last"] = 5.0
+    inp["global"]["realized_pnl_drawdown"] = 5.0
 
     with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
         compute(pbr, inp)
@@ -5211,8 +5218,7 @@ def test_balance_raw_negative_rejected():
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = -1.0
     inp["global"]["max_realized_loss_pct"] = 0.05
-    inp["global"]["realized_pnl_cumsum_max"] = 10.0
-    inp["global"]["realized_pnl_cumsum_last"] = 5.0
+    inp["global"]["realized_pnl_drawdown"] = 5.0
 
     with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
         compute(pbr, inp)

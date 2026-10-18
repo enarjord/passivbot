@@ -64,7 +64,7 @@ def test_legacy_fixture_requires_explicit_v9_migration():
     with pytest.raises(ValueError, match="explicit migration"):
         prepare_config(source, verbose=False)
     migrated = _prepare_explicitly_migrated(source)
-    assert migrated["config_version"] == "v9.0.0"
+    assert migrated["config_version"] == "v9.1.0"
     assert migrated["live"]["lookback_ema_span_minutes"] == 43200.0
 
 

@@ -348,7 +348,7 @@ mod core {
         #[serde(default)]
         pub auto_unstuck_allowed: Option<bool>,
         /// Legacy/diagnostic only: the unstuck decision derives its allowance
-        /// internally from realized_pnl_cumsum_max/last (risk.rs). These values
+        /// internally from shared realized_pnl_drawdown. These values
         /// are consumed solely as the fallback for `auto_unstuck_allowed` when
         /// that flag is absent; explicit-flag callers may omit them.
         #[serde(default)]
@@ -358,13 +358,7 @@ mod core {
         /// Fraction of peak balance that may be realized as drawdown before lossy closes are blocked.
         /// <=0 blocks all lossy closes; >=1 disables gating.
         pub max_realized_loss_pct: f64,
-        /// Net realized pnl cumsum peak from fill history (statelessly reconstructed).
-        #[serde(default)]
-        pub realized_pnl_cumsum_max: f64,
-        /// Net realized pnl cumsum current value from fill history.
-        #[serde(default)]
-        pub realized_pnl_cumsum_last: f64,
-        /// V9 continuous account-wide decaying net-realized drawdown, used only by unstuck.
+        /// Shared account-wide decaying net-realized drawdown for gate and unstuck.
         pub realized_pnl_drawdown: f64,
         /// If true, output orders are globally sorted by the canonical (live-bot) distance metric.
         /// Backtest does not require this global ordering and may disable it for performance.
@@ -530,24 +524,6 @@ mod core {
         {
             return Err(OrchestratorError::NonFiniteInput {
                 field: "global.realized_pnl_drawdown",
-                symbol_idx: None,
-            });
-        }
-        if !input.global.realized_pnl_cumsum_max.is_finite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "global.realized_pnl_cumsum_max",
-                symbol_idx: None,
-            });
-        }
-        if !input.global.realized_pnl_cumsum_last.is_finite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "global.realized_pnl_cumsum_last",
-                symbol_idx: None,
-            });
-        }
-        if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "global.realized_pnl_cumsum_max_lt_last",
                 symbol_idx: None,
             });
         }
@@ -1706,35 +1682,32 @@ mod core {
         }
     }
 
-    fn realized_loss_gate_state(input: &OrchestratorInput) -> Option<RealizedLossGateState> {
-        let max_loss_pct = input.global.max_realized_loss_pct;
-        if !max_loss_pct.is_finite() || max_loss_pct >= 1.0 {
-            return None;
+    fn realized_loss_gate_state(
+        input: &OrchestratorInput,
+    ) -> Result<Option<RealizedLossGateState>, OrchestratorError> {
+        // Enablement is authored f64 policy, separate from the shared f32 graph.
+        let pct = input.global.max_realized_loss_pct;
+        if pct >= 1.0 {
+            return Ok(None);
         }
-        let pct = max_loss_pct.max(0.0);
         let balance_raw = input_balance_raw(input);
-        if !balance_raw.is_finite() || balance_raw <= 0.0 {
-            return None;
-        }
-        let pnl_max = input.global.realized_pnl_cumsum_max;
-        let pnl_last = input.global.realized_pnl_cumsum_last;
-        if !pnl_max.is_finite() || !pnl_last.is_finite() {
-            return None;
-        }
-        let balance_peak = balance_raw + (pnl_max - pnl_last);
-        if !balance_peak.is_finite() || balance_peak <= 0.0 {
-            return None;
-        }
-        let balance_floor = balance_peak * (1.0 - pct);
-        if !balance_floor.is_finite() {
-            return None;
-        }
-        Some(RealizedLossGateState {
+        let drawdown = input.global.realized_pnl_drawdown;
+        let allowance = crate::hsl_decay::allowance(balance_raw, pct, drawdown).map_err(|_| {
+            OrchestratorError::NonFiniteInput {
+                field: "global.realized_loss_allowance",
+                symbol_idx: None,
+            }
+        })?;
+        let balance_peak = ((balance_raw as f32) + (drawdown as f32)) as f64;
+        // Reserve the checked authored allowance in f64 without reassociating
+        // its FMA as (B + D) * (1 - r). Unfilled profits never refill this budget.
+        let balance_floor = balance_raw - allowance;
+        Ok(Some(RealizedLossGateState {
             pct,
             balance_peak,
             balance_floor,
             simulated_balance: balance_raw,
-        })
+        }))
     }
 
     fn close_passes_realized_loss_gate(
@@ -1999,13 +1972,13 @@ mod core {
         per_long: &mut [Option<PerSymbolOrders>],
         per_short: &mut [Option<PerSymbolOrders>],
         diagnostics: &mut OrchestratorDiagnostics,
-    ) {
-        let mut loss_gate = realized_loss_gate_state(input);
+    ) -> Result<(), OrchestratorError> {
+        let mut loss_gate = realized_loss_gate_state(input)?;
 
         let Some(state) = loss_gate.as_mut() else {
             select_finalized_reducers_without_loss_gate(input, per_long, PositionSide::Long);
             select_finalized_reducers_without_loss_gate(input, per_short, PositionSide::Short);
-            return;
+            return Ok(());
         };
 
         // Finalize each candidate's executable close sizing before evaluating its loss. The
@@ -2057,6 +2030,7 @@ mod core {
 
         gate_ordinary_closes_for_side(input, per_long, PositionSide::Long, state, diagnostics);
         gate_ordinary_closes_for_side(input, per_short, PositionSide::Short, state, diagnostics);
+        Ok(())
     }
 
     fn twel_repair_target(bot: &BotParams) -> Option<f64> {
@@ -4468,7 +4442,7 @@ mod core {
 
         // Select one loss-admissible protective reducer per symbol, cap aggregate close quantity,
         // and apply the global realized-loss gate (all close types except panic).
-        gate_lossy_closes_by_peak_balance(input, per_long, per_short, &mut diagnostics);
+        gate_lossy_closes_by_peak_balance(input, per_long, per_short, &mut diagnostics)?;
         push_twel_loss_gate_warnings(
             input,
             per_long,
@@ -5093,8 +5067,6 @@ mod core {
                 unstuck_allowance_long: 0.0,
                 unstuck_allowance_short: 0.0,
                 max_realized_loss_pct: 1.0,
-                realized_pnl_cumsum_max: 0.0,
-                realized_pnl_cumsum_last: 0.0,
                 realized_pnl_drawdown: 0.0,
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
@@ -5569,8 +5541,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: {
@@ -6038,8 +6008,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: {
@@ -6372,8 +6340,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -6413,8 +6379,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -6463,8 +6427,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -6525,8 +6487,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -6584,8 +6544,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -6642,8 +6600,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -6694,8 +6650,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -6746,8 +6700,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -6966,8 +6918,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -7037,8 +6987,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -7091,8 +7039,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -7547,8 +7493,6 @@ mod core {
                 unstuck_allowance_long: 0.0,
                 unstuck_allowance_short: 0.0,
                 max_realized_loss_pct: 1.0,
-                realized_pnl_cumsum_max: 0.0,
-                realized_pnl_cumsum_last: 0.0,
                 realized_pnl_drawdown: 0.0,
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
@@ -7755,6 +7699,88 @@ mod core {
         }
 
         #[test]
+        fn realized_loss_gate_uses_shared_drawdown_without_twel_scaling() {
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            input.global.max_realized_loss_pct = 0.05;
+            input.global.realized_pnl_drawdown = 40.0;
+            let expected = 0.05_f32.mul_add(1040.0, -40.0) as f64;
+            for twel in [0.0, 0.5, 2.0, 100.0] {
+                input
+                    .global
+                    .global_bot_params
+                    .long
+                    .total_wallet_exposure_limit = twel;
+                input
+                    .global
+                    .global_bot_params
+                    .short
+                    .total_wallet_exposure_limit = twel;
+                let gate = realized_loss_gate_state(&input).unwrap().unwrap();
+                assert_eq!(gate.balance_peak, 1040.0);
+                assert_eq!(gate.balance_floor, 1000.0 - expected);
+                assert_eq!(gate.simulated_balance, 1000.0);
+            }
+            // Enablement must not be rounded to f32 alongside the percentage.
+            input.global.max_realized_loss_pct = 1.0 - f64::EPSILON;
+            assert!(realized_loss_gate_state(&input).unwrap().is_some());
+            input.global.max_realized_loss_pct = 0.0;
+            let zero = realized_loss_gate_state(&input).unwrap().unwrap();
+            assert_eq!(zero.balance_floor, 1000.0);
+        }
+
+        #[test]
+        fn realized_loss_gate_active_overflow_is_fatal_and_disabled_bypasses() {
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 2e38,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            input.global.max_realized_loss_pct = 0.5;
+            input.global.realized_pnl_drawdown = 2e38;
+            assert_eq!(
+                compute_ideal_orders_for_test(&input).unwrap_err(),
+                OrchestratorError::NonFiniteInput {
+                    field: "global.realized_loss_allowance",
+                    symbol_idx: None,
+                }
+            );
+            for pct in [1.0, 2.0, f64::MAX] {
+                input.global.max_realized_loss_pct = pct;
+                assert!(realized_loss_gate_state(&input).unwrap().is_none());
+            }
+        }
+
+        #[test]
+        fn realized_loss_gate_schema_rejects_retired_cumsum_authority() {
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            for retired in ["realized_pnl_cumsum_max", "realized_pnl_cumsum_last"] {
+                let mut payload = serde_json::to_value(&input).unwrap();
+                payload["global"][retired] = serde_json::json!(0.0);
+                assert!(serde_json::from_value::<OrchestratorInput>(payload).is_err());
+            }
+        }
+
+        #[test]
         fn realized_loss_gate_blocks_auto_reduce_orders() {
             let mut sym = make_basic_symbol(0);
             sym.long.position = Position {
@@ -7788,8 +7814,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp.clone(),
@@ -7827,6 +7851,22 @@ mod core {
                     .any(|b| b.order_type == OrderType::CloseAutoReduceWelLong),
                 "expected loss-gate diagnostic for blocked auto-reduce order"
             );
+
+            // Identical intent and gate percentage: only the common realized D
+            // changes whether the final reducer fits the batch loss budget.
+            let mut with_memory = input_open.clone();
+            with_memory.global.max_realized_loss_pct = 0.15;
+            let before_loss = compute_ideal_orders_for_test(&with_memory).unwrap();
+            assert!(before_loss
+                .orders
+                .iter()
+                .any(|o| { o.order_type == OrderType::CloseAutoReduceWelLong }));
+            with_memory.global.realized_pnl_drawdown = 100.0;
+            let after_loss = compute_ideal_orders_for_test(&with_memory).unwrap();
+            assert!(after_loss
+                .orders
+                .iter()
+                .all(|o| { o.order_type != OrderType::CloseAutoReduceWelLong }));
         }
 
         #[test]
@@ -7865,8 +7905,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -7930,8 +7968,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.1,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: BotParamsPair::default(),
@@ -7978,7 +8014,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             assert_eq!(per_long[0].as_ref().unwrap().closes.len(), 1);
             assert_eq!(per_long[1].as_ref().unwrap().closes.len(), 0);
@@ -8022,8 +8059,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.1,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: BotParamsPair::default(),
@@ -8070,7 +8105,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             assert!(per_long[0].as_ref().unwrap().closes.is_empty());
             assert_eq!(per_long[1].as_ref().unwrap().closes.len(), 1);
@@ -8142,7 +8178,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             let closes = &per_long[0].as_ref().unwrap().closes;
             assert_eq!(closes.len(), 1);
@@ -8204,7 +8241,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             assert!(per_long[0].as_ref().unwrap().closes.is_empty());
             assert_eq!(diagnostics.loss_gate_blocks.len(), 1);
@@ -8274,7 +8312,8 @@ mod core {
                     &mut per_long,
                     &mut per_short,
                     &mut diagnostics,
-                );
+                )
+                .unwrap();
 
                 let closes = &per_long[0].as_ref().unwrap().closes;
                 assert_eq!(closes.len(), 1);
@@ -8354,7 +8393,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             assert!(per_long[0].as_ref().unwrap().closes.is_empty());
             let accepted = &per_long[1].as_ref().unwrap().closes;
@@ -8451,8 +8491,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.01,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -8515,8 +8553,6 @@ mod core {
                         unstuck_allowance_long: 0.0,
                         unstuck_allowance_short: 0.0,
                         max_realized_loss_pct: 0.01,
-                        realized_pnl_cumsum_max: 0.0,
-                        realized_pnl_cumsum_last: 0.0,
                         realized_pnl_drawdown: 0.0,
                         sort_global: true,
                         global_bot_params: global_bp,
@@ -8538,26 +8574,26 @@ mod core {
         }
 
         #[test]
-        fn account_risk_validation_rejects_pnl_peak_below_current() {
-            let mut input = OrchestratorInput {
-                balance: 1000.0,
-                balance_raw: 1000.0,
-                timestamp_ms: 0,
-                global: make_basic_global(),
-                symbols: vec![make_basic_symbol(0)],
-                peek_hints: None,
-                forager_hysteresis: None,
-            };
-            input.global.realized_pnl_cumsum_max = 5.0;
-            input.global.realized_pnl_cumsum_last = 10.0;
-
-            assert_eq!(
-                compute_ideal_orders_for_test(&input).unwrap_err(),
-                OrchestratorError::NonFiniteInput {
-                    field: "global.realized_pnl_cumsum_max_lt_last",
-                    symbol_idx: None,
-                }
-            );
+        fn account_risk_validation_rejects_invalid_shared_realized_drawdown() {
+            for drawdown in [-1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+                let mut input = OrchestratorInput {
+                    balance: 1000.0,
+                    balance_raw: 1000.0,
+                    timestamp_ms: 0,
+                    global: make_basic_global(),
+                    symbols: vec![make_basic_symbol(0)],
+                    peek_hints: None,
+                    forager_hysteresis: None,
+                };
+                input.global.realized_pnl_drawdown = drawdown;
+                assert_eq!(
+                    compute_ideal_orders_for_test(&input).unwrap_err(),
+                    OrchestratorError::NonFiniteInput {
+                        field: "global.realized_pnl_drawdown",
+                        symbol_idx: None,
+                    }
+                );
+            }
         }
 
         #[test]
@@ -8600,8 +8636,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -8673,8 +8707,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -8753,8 +8785,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -8815,8 +8845,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -8888,8 +8916,6 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
@@ -8940,8 +8966,6 @@ mod core {
                     unstuck_allowance_long: 1000.0,
                     unstuck_allowance_short: 1000.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
                     realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,

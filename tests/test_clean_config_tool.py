@@ -491,7 +491,7 @@ def test_explicit_v9_migration_produces_reusable_cleanup_input(tmp_path):
     cfg["config_version"] = "v8.6.0"
     for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
                 "realized_loss_gate_lookback_minutes"):
-        cfg["live"].pop(key)
+        cfg["live"].pop(key, None)
     cfg["live"]["pnls_max_lookback_days"] = 30.0
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = "always"
@@ -507,7 +507,7 @@ def test_explicit_v9_migration_produces_reusable_cleanup_input(tmp_path):
     result = cleanup_config(json.loads(destination.read_text()))
     assert result["config_version"] == CONFIG_SCHEMA_VERSION
     assert result["live"]["lookback_ema_span_minutes"] == 21600.5
-    assert result["live"]["realized_loss_gate_lookback_minutes"] == 43200.0
+    assert "realized_loss_gate_lookback_minutes" not in result["live"]
     assert "pnls_max_lookback_days" not in result["live"]
     assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
     assert cleanup_config(result) == result

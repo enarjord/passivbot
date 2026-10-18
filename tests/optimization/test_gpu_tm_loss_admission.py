@@ -32,16 +32,17 @@ def test_tm_admission_failure_cannot_be_decoded_as_metrics():
         _require_available_held_valuation(scalars)
 
 
-def fee_only_close_fixture(sides, coins, lookback, max_loss_pct):
+def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_minutes=1):
     from optimization.gpu.service import MpsMulticoinProxy
 
     original, inputs = make_proxy(
-        sides, strategy="trailing_martingale", coins=coins
+        sides, memory_span, strategy="trailing_martingale", coins=coins,
+        interval_minutes=interval_minutes,
     )
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
-    config["live"]["realized_loss_gate_lookback_minutes"] = -1.0 if lookback == "all" else lookback * 1440
+    config["live"]["lookback_ema_span_minutes"] = memory_span
     config["live"]["max_realized_loss_pct"] = max_loss_pct
     candles = candles.copy()
     candles[:, :, :3] = (101.0, 99.0, 100.4)
@@ -66,17 +67,17 @@ def fee_only_close_fixture(sides, coins, lookback, max_loss_pct):
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("coins", [1, 2])
-@pytest.mark.parametrize("lookback", [8 / 1440, "all"])
+@pytest.mark.parametrize("memory_span", [3.0, 8.0])
 @pytest.mark.parametrize("max_loss_pct", [0.0, 0.0003, 0.1])
-def test_tm_ordinary_close_uses_configured_loss_allowance(sides, coins, lookback, max_loss_pct):
+def test_tm_ordinary_close_uses_configured_loss_allowance(sides, coins, memory_span, max_loss_pct):
     from backtest import run_backtest
 
-    proxy, inputs = fee_only_close_fixture(sides, coins, lookback, max_loss_pct)
+    proxy, inputs = fee_only_close_fixture(sides, coins, memory_span, max_loss_pct)
     _, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
     expected_entries = coins * len(sides)
     assert sum(str(fill[13]).startswith("entry_") for fill in fills) == expected_entries
-    expected_closes = max_loss_pct == 0.1 or (max_loss_pct == 0.0003 and lookback != "all")
+    expected_closes = max_loss_pct > 0.0
     assert len(fills) == expected_entries * (2 if expected_closes else 1)
     assert output["fill_count"].item() == len(fills)
     assert output["balance"].item() == pytest.approx(float(fills[-1, 5]), abs=0.002)
@@ -94,7 +95,7 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
     from backtest import run_backtest
     from optimization.gpu.service import MpsMulticoinProxy
 
-    original, inputs = fee_only_close_fixture(sides, 2, "all", 0.0004)
+    original, inputs = fee_only_close_fixture(sides, 2, 8.0, 0.0004)
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config["live"].update(
@@ -133,15 +134,15 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("coins", [1, 2])
-@pytest.mark.parametrize("lookback", [8 / 1440, "all"])
+@pytest.mark.parametrize("memory_span", [3.0, 8.0])
 @pytest.mark.parametrize("max_loss_pct", [0.0015, 0.1])
-def test_tm_unstuck_and_general_loss_budget_share_effective_history(
-    sides, coins, lookback, max_loss_pct
+def test_tm_unstuck_and_general_loss_budget_share_one_decaying_memory(
+    sides, coins, memory_span, max_loss_pct
 ):
     from backtest import run_backtest
     from optimization.gpu.service import MpsMulticoinProxy
 
-    original, inputs = make_proxy(sides, lookback, coins=coins)
+    original, inputs = make_proxy(sides, memory_span, coins=coins)
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config["live"]["max_realized_loss_pct"] = max_loss_pct
@@ -166,13 +167,12 @@ def test_tm_unstuck_and_general_loss_budget_share_effective_history(
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("max_loss_pct", [0.0, 0.1, 1.0])
 def test_tm_loss_history_consumer_and_compiler_ablation(sides, max_loss_pct):
-    proxy, _ = fee_only_close_fixture(sides, 2, 8 / 1440, max_loss_pct)
+    proxy, _ = fee_only_close_fixture(sides, 2, 8.0, max_loss_pct)
     runner, specialized = raw(proxy, [{}, {}])
     enabled = max_loss_pct < 1.0
     assert runner.loss_gate_enabled == enabled
-    assert runner.unstuck_pnl_lookback_bars == (8 if enabled else 0)
-    assert runner.unstuck_pnl_capacity == (9 if enabled else 0)
-    assert bool(runner._unstuck_pnl_buffers) == enabled
+    assert not hasattr(runner, "_unstuck_pnl_buffers")
+    assert runner.settings[-1].item() == float(enabled)
     if len(sides) == 1:
         runner.max_dispatch_candidate_bars = 24
         _, replayed = raw(proxy, [{}, {}])

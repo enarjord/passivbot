@@ -6,7 +6,7 @@ from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
 from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
-CONFIG_SCHEMA_VERSION = "v9.0.0"
+CONFIG_SCHEMA_VERSION = "v9.1.0"
 SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset()
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This
@@ -445,7 +445,7 @@ def _build_template_config():
                 "max_n_creations_per_batch": 3,
                 "max_n_restarts_per_day": 10,
                 "max_ohlcv_fetches_per_minute": 30,
-                "max_realized_loss_pct": 1,
+                "max_realized_loss_pct": 1.0,
                 "max_warmup_minutes": 0,
                 "minimum_coin_age_days": 60,
                 "order_match_tolerance_pct": 0.0002,
@@ -455,7 +455,6 @@ def _build_template_config():
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "lookback_ema_span_minutes": 43200.0,
                 "risk_bootstrap_max_lookback_minutes": 129600.0,
-                "realized_loss_gate_lookback_minutes": 43200.0,
                 "recv_window_ms": 5000,
                 "startup_phase_budgets": {},
                 "strategy_kind": "trailing_martingale",

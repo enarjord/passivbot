@@ -393,6 +393,27 @@ def test_extract_hsl_trace_returns_serializable_state():
 
 
 @pytest.mark.fake_live
+@pytest.mark.parametrize("gate_fraction", [0.0, 0.5, 1.0])
+@pytest.mark.parametrize("now_ms,expected", [
+    (60_000, (None, "all")),
+    (2_000_000, (1_100_000, "window")),
+])
+def test_fake_history_coverage_uses_shared_bootstrap_origin(gate_fraction, now_ms, expected):
+    from config.schema import get_template_config
+
+    config = get_template_config()
+    config["live"].update(lookback_ema_span_minutes=3.0,
+                          risk_bootstrap_max_lookback_minutes=15.0,
+                          max_realized_loss_pct=gate_fraction)
+    for pside in ("long", "short"):
+        config["bot"][pside]["hsl"]["enabled"] = False
+        config["bot"][pside]["unstuck"]["enabled"] = False
+    bot = SimpleNamespace(config=config)
+    client = SimpleNamespace(now_ms=now_ms)
+    assert run_fake_live_module._fake_fill_cache_coverage(bot, client, []) == expected
+
+
+@pytest.mark.fake_live
 def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     scenario = _scenario()
     scenario["account"]["fills"] = [
@@ -926,7 +947,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
 
 @pytest.mark.asyncio
 @pytest.mark.fake_live
-async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
+async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_once(
     tmp_path, monkeypatch
 ):
     import passivbot_rust as pbr
@@ -934,7 +955,7 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
-    user = "fake_hsl_pnls_lookback_all_test"
+    user = "fake_gate_only_memory_backfill_test"
     user = _isolated_fake_user(user, tmp_path)
     scenario_path = REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson"
     cache_dir = REPO_ROOT / "caches" / "fill_events" / "fake" / user
@@ -944,14 +965,13 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
         str(REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json"), verbose=False
     )
     cfg["bot"]["long"]["hsl"]["enabled"] = False
-    # Exercise the independent all-history realized-loss gate. Continuous
-    # auto-unstuck memory has its own finite bootstrap requirement.
+    # The gate alone owns strict shared-memory bootstrap coverage, even with
+    # both HSL and auto-unstuck disabled.
     for pside in ("long", "short"):
         cfg["bot"][pside]["unstuck"]["enabled"] = False
     cfg["live"]["max_realized_loss_pct"] = 0.5
-    cfg["live"]["realized_loss_gate_lookback_minutes"] = -1.0
     cfg["live"]["hsl_signal_mode"] = "pside"
-    config_path = tmp_path / "fake_live_hsl_btc_all_lookback.json"
+    config_path = tmp_path / "fake_live_gate_only_memory.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
     scenario_copy_path = tmp_path / "hsl_long_red_restart_no_assertions.hjson"
     scenario_cfg = hjson.loads(scenario_path.read_text(encoding="utf-8"))
@@ -1015,7 +1035,9 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
 
         cache = FillEventCache(cache_dir)
         cached_ids = [str(event.id) for event in cache.load()]
-        assert cache.get_history_scope() == "all"
+        assert cache.get_history_scope() == "window"
+        assert cache.get_covered_start_ms() > 0
+        assert "approximate zero initializer" in log_text
         assert "10" in cached_ids
         assert {"10", "11", "12"}.issubset(set(cached_ids))
     finally:

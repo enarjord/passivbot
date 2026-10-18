@@ -30,7 +30,6 @@ BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
     "market_orders_allowed",
     "market_order_near_touch_threshold",
     "lookback_ema_span_minutes",
-    "realized_loss_gate_lookback_minutes",
 )
 
 TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (

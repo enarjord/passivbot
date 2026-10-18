@@ -29,7 +29,6 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
             config["bot"]["hsl"]["enabled"] = False
     count = 50
     config["live"]["lookback_ema_span_minutes"] = memory_span
-    config["live"]["realized_loss_gate_lookback_minutes"] = 0.0
     for side in sides:
         bot = config["bot"][side]
         bot["risk"].update(
@@ -196,8 +195,7 @@ def test_continuous_unstuck_memory_uses_elapsed_integer_minutes(strategy, side, 
     assert actual["balance"].item() == pytest.approx(float(fills[-1, 5]), abs=.002)
     expected_size = abs(sum(float(fill[9]) for fill in fills if fill[13].endswith(side)))
     assert actual["short_psize" if side == "short" else "psize"].item() == pytest.approx(expected_size, abs=2e-5)
-    assert runner.unstuck_pnl_capacity == 0
-    assert not runner._unstuck_pnl_buffers
+    assert not hasattr(runner, "_unstuck_pnl_buffers")
     from test_gpu_v9_native import _save_evidence
     candles, markets, config, _, btc, timestamps = inputs
     _save_evidence(f"realized-clock-{strategy}-{side}-{interval_minutes}m", {

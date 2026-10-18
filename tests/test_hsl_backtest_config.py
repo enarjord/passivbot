@@ -24,7 +24,6 @@ def inputs(mode="coin"):
         approved_coins={"long": ["AAA"], "short": []},
         ignored_coins={"long": [], "short": []},
         lookback_ema_span_minutes=1440.0,
-        realized_loss_gate_lookback_minutes=1440.0,
     )
     cfg["backtest"]["coins"] = {"binance": ["AAA"]}
     cfg["backtest"]["starting_balance"] = 1000.0
@@ -92,7 +91,7 @@ def test_native_hsl_transport_and_report(mode):
     assert selected["ema_span_minutes"] == 1.5
     assert all("restart_after_red_policy" not in policy for policy in hsl["sides"])
     assert args[-1]["lookback_ema_span_minutes"] == 1440.0
-    assert args[-1]["realized_loss_gate_lookback_minutes"] == 1440.0
+    assert "realized_loss_gate_lookback_minutes" not in args[-1]
     assert not any(
         key.startswith("hsl_")
         for pair in args[2]
@@ -223,17 +222,17 @@ def test_portfolio_ignores_conflicting_inactive_side_policies():
     assert actual[4]["hsl"] == expected[4]["hsl"]
 
 
-def test_disabled_hsl_scopes_keep_independent_zero_window_rolling_loss_gate():
+def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
     args = payload("pside")
     for policy in args[-1]["equity_hard_stop_loss"]["sides"]:
         policy.update(enabled=False)
-    args[-1]["realized_loss_gate_lookback_minutes"] = 0.0
+    args[-1]["max_realized_loss_pct"] = 0.1
     result = run(args)
     assert result[4]["hsl"]["summary"]["triggers"] == 0
     assert result[4]["hsl"]["samples"] == []
 
 
-def test_slow_decay_changes_hsl_memory_without_changing_the_rolling_gate_horizon():
+def test_slow_decay_changes_hsl_memory_with_shared_span_transport():
     cfg, markets, _ = inputs()
     cfg["bot"]["long"]["unstuck"]["enabled"] = False
     cfg["bot"]["long"]["hsl"].update(red_threshold=.03, ema_span_minutes=1.0)
@@ -243,7 +242,8 @@ def test_slow_decay_changes_hsl_memory_without_changing_the_rolling_gate_horizon
     for span in (1.0, 1440.0):
         cfg["live"]["lookback_ema_span_minutes"] = span
         args = payload(cfg=cfg, mss=markets)
-        assert args[-1]["realized_loss_gate_lookback_minutes"] == 1440.0
+        assert args[-1]["lookback_ema_span_minutes"] == span
+        assert "realized_loss_gate_lookback_minutes" not in args[-1]
         counts.append(run(args)[2]["hard_stop_triggers"])
     # At span1 each new minute forgets earlier currency loss. The same gradual
     # decline crosses RED only when the independently selected slow span retains

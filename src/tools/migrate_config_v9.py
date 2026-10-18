@@ -1,4 +1,4 @@
-"""Explicit offline v8-to-v9 migration, with a diff and atomic private output."""
+"""Explicit offline v8/v9.0 migration, with a diff and atomic private output."""
 
 from argparse import ArgumentParser
 from copy import deepcopy
@@ -9,7 +9,10 @@ from pathlib import Path
 import stat
 import tempfile
 
-from config.migrations.v9 import MigrationResult, _hsl_enablement_facts, migrate_v8_to_v9
+from config.migrations.v9 import (
+    MigrationResult, V9_SCHEMA_VERSION, _hsl_enablement_facts, _require_gate_ack,
+    migrate_v8_to_v9,
+)
 from config.risk_memory import normalize_lookback_ema_span_minutes
 from json_utils import json_dumps_streamlined
 
@@ -119,6 +122,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             envelope, memory_span_minutes=span,
             acknowledge_never_removal=acknowledge,
             _null_policy_enablement=enablement,
+            _coin_patch=True,
         )
         # Audit inline authority in this same effective context too. Audit-only
         # scenario/optimizer calls discard the materialized result, so deferring
@@ -128,6 +132,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             {"config_version": "v8.6.0", "bot": {}, **inline}, memory_span_minutes=span,
             acknowledge_never_removal=acknowledge,
             _null_policy_enablement=enablement,
+            _coin_patch=True,
         )
         migrated = file_result.config
         changes.extend({**item, "path": f"coin_overrides.{coin}.override_config_path::{item['path']}"}
@@ -175,7 +180,8 @@ def _optimizer_root_enablement(config, enable_overrides, facts):
 
 
 def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
-            acknowledge_never_removal=False, base_config_path=""):
+            acknowledge_never_removal=False,
+            acknowledge_realized_loss_gate_memory_change=False, base_config_path=""):
     """Transform and canonically validate root, files and every effective scenario."""
     from config import prepare_config
     from config.gpu import validate_hsl_gpu_inputs
@@ -187,16 +193,20 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
     payload = source.get("config", source) if isinstance(source, dict) else source
     if not isinstance(payload, dict):
         raise TypeError("configuration must be a mapping")
-    if payload.get("config_version") == "v9.0.0":
+    if payload.get("config_version") == V9_SCHEMA_VERSION:
         transformed = migrate_v8_to_v9(
             payload, memory_span_minutes=memory_span_minutes,
             memory_span_choices=memory_span_choices,
+            acknowledge_realized_loss_gate_memory_change=acknowledge_realized_loss_gate_memory_change,
         )
     else:
-        if memory_span_minutes is None:
+        old_v9 = payload.get("config_version") == "v9.0.0"
+        if memory_span_minutes is None and not old_v9:
             # The core owns the actionable version/span error.
             return migrate_v8_to_v9(payload, memory_span_minutes=None)
-        span = normalize_lookback_ema_span_minutes(memory_span_minutes)
+        raw_span = (memory_span_minutes if memory_span_minutes is not None else
+                    payload.get("live", {}).get("lookback_ema_span_minutes"))
+        span = normalize_lookback_ema_span_minutes(raw_span) if raw_span is not None else None
         file_changes = []
         null_policy_enablement = {}
         authored = _materialize_files(
@@ -289,6 +299,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
         transformed = migrate_v8_to_v9(
             authored, memory_span_minutes=span, memory_span_choices=memory_span_choices,
             acknowledge_never_removal=acknowledge_never_removal,
+            acknowledge_realized_loss_gate_memory_change=acknowledge_realized_loss_gate_memory_change,
             _null_policy_enablement=null_policy_enablement,
         )
         transformed = MigrationResult(transformed.config, file_changes + transformed.changes,
@@ -314,6 +325,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                 effective, verbose=False, base_config_path=base_config_path,
             ), verbose=False))
     for effective in effective_configs:
+        if payload.get("config_version") != V9_SCHEMA_VERSION:
+            _require_gate_ack(effective, acknowledge_realized_loss_gate_memory_change)
         if effective["optimize"].get("backend") == "gpu":
             validate_hsl_gpu_inputs(effective)
     return MigrationResult(strip_config_metadata(prepared), transformed.changes, transformed.warnings)
@@ -359,6 +372,8 @@ def main(argv=None):
     parser.add_argument("--lookback-ema-span-minutes", type=float)
     parser.add_argument("--memory-span", action="append", default=[], metavar="PATH=MINUTES")
     parser.add_argument("--acknowledge-never-removal", action="store_true")
+    parser.add_argument("--acknowledge-realized-loss-gate-memory-change", action="store_true",
+                        help="Explicitly adopt shared decaying realized memory for every active gate context.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--diff", action="store_true")
     parser.add_argument("--report", type=Path)
@@ -376,7 +391,7 @@ def main(argv=None):
         target = (args.input_config.resolve() if args.in_place else
                   args.output_config or args.input_config.with_name(
                       args.input_config.stem + ".v9" + args.input_config.suffix))
-        backup = (args.backup or target.with_name(target.stem + ".v8-backup" + target.suffix)
+        backup = (args.backup or target.with_name(target.stem + ".pre-v9.1-backup" + target.suffix)
                   if args.in_place else None)
         destinations = [path for path in (target if not args.dry_run else None,
                                           backup if not args.dry_run else None,
@@ -406,16 +421,17 @@ def main(argv=None):
         result = migrate(
             source, memory_span_minutes=args.lookback_ema_span_minutes,
             memory_span_choices=choices, acknowledge_never_removal=args.acknowledge_never_removal,
+            acknowledge_realized_loss_gate_memory_change=args.acknowledge_realized_loss_gate_memory_change,
             base_config_path=str(args.input_config.resolve()),
         )
         rendered = json_dumps_streamlined(result.config, allow_nan=False) + "\n"
-        report = dict(source_version=source.get("config_version"), target_version="v9.0.0",
+        report = dict(source_version=source.get("config_version"), target_version=V9_SCHEMA_VERSION,
                       changes=result.changes, warnings=list(result.warnings))
         report_rendered = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.diff:
             before = json_dumps_streamlined(source, allow_nan=False) + "\n"
             print("".join(difflib.unified_diff(before.splitlines(True), rendered.splitlines(True),
-                                            fromfile="v8 input", tofile="v9 output")), end="")
+                                            fromfile="migration input", tofile="v9.1 output")), end="")
         if not args.dry_run:
             if args.input_config.resolve() != source_path or args.input_config.read_bytes() != original_bytes:
                 raise ValueError("input changed during migration; no configuration was written")

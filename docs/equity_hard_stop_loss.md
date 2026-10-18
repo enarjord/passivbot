@@ -112,10 +112,11 @@ See the [failure contract](ai/error_contract.md).
 
 ## Migration, reporting and qualification
 
-V9 configs use `config_version="v9.0.0"`, coin/pside/portfolio modes, and no restart field.
-The explicit migration tool requires a slow-memory choice and acknowledgement of any
-removed Never policy. It retains original configs for version-matched rollback and never
-reuses v8 optimizer fitness. See [configuration](configuration.md#hsl-configuration).
+V9 configs use `config_version="v9.1.0"`, coin/pside/portfolio modes, and no restart field.
+The explicit migration tool accepts v8 and v9.0.0 and requires acknowledgment of an active
+realized-loss gate's shared-memory semantics. V8 also needs a slow-memory choice and
+acknowledgement of any removed Never policy. It retains original configs for version-matched
+rollback and never reuses old optimizer fitness. See [configuration](configuration.md#hsl-configuration).
 
 HSL risk diagnostics are model-dependent. Use ordinary account-equity metrics from full
 fills/equity for v8/v9 economic comparison. Optional `backtest.hsl_detailed_report=true`

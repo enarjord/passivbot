@@ -145,7 +145,7 @@ def torch_runtime():
 
 
 SCRATCH_CACHES = (
-    "_buffers", "_hsl_scratch_buffers", "_unstuck_pnl_buffers", "_recovery_buffers",
+    "_buffers", "_hsl_scratch_buffers", "_recovery_buffers",
     "_volume_buffers", "_weighted_equity_buffers", "_hsl_ema_tail_buffers",
     "_equity_balance_diff_buffers", "_entry_interval_stat_buffers",
     "_entry_interval_count_buffers", "_replay_states", "_sizes", "_full_end_steps",
@@ -227,11 +227,12 @@ def test_physical_attempt_releases_scratch_before_first_device_allocation(monkey
     value._disable_native_cache_over_budget = lambda: False
     value._history_bytes_per_candidate = lambda: 0
     value.hsl_capacity = 0
-    value.settings = [0, 0]
+    value.settings = [0, 0, 1]  # Factual capacity, replay control, gate activation.
     monkeypatch.setattr(kernel, "_cached_library_with_miss", lambda *_: (None, False))
     monkeypatch.setattr(kernel, "gpu_device", lambda: "cuda")
     def allocate(*_, **__):
         assert all(ref() is None for ref in refs)
+        assert value.settings[-1] == 1
         raise AllocationReached
     monkeypatch.setattr(kernel.torch, "as_tensor", allocate)
     with pytest.raises(AllocationReached):

@@ -126,7 +126,7 @@ def test_last_scenario_global_memory_span_override_is_request_owned():
 
 @pytest.mark.parametrize("path,value", [
     ("live.risk_bootstrap_max_lookback_minutes", 64800.0),
-    ("live.realized_loss_gate_lookback_minutes", 60.0),
+    ("live.max_realized_loss_pct", 0.5),
     ("live.market_orders_allowed", True),
     ("backtest.starting_balance", 2000.0),
 ])

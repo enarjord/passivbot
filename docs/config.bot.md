@@ -197,9 +197,10 @@ remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 ```
 
 Queries do not reapply decay or fills. Profits repay remembered losses; excess profits
-create no negative loss credit. The independent `max_realized_loss_pct` gate retains its
-rolling window under `live.realized_loss_gate_lookback_minutes`. V8 memory spans and loss
-percentages require joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
+create no negative loss credit. The global `max_realized_loss_pct` gate consumes this same
+D with `p = max_realized_loss_pct`, without TWEL multiplication. Its threshold and close
+policy remain separate from unstuck. Old rolling windows and loss percentages require
+explicit migration and joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
 
 If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
 coin+side uses the override percentage in this same account-wide allowance formula.
