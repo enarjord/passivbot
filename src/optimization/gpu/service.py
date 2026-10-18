@@ -1109,10 +1109,20 @@ def _fill_pnl_lookback_bars(backtest_params: dict) -> int:
     if lookback_minutes == -1.0:
         return 0
     interval_minutes = int(backtest_params["candle_interval_minutes"])
-    return max(
+    # Preserve the native parser's minutes -> internal days -> minutes graph.
+    # Reassociation changes ceil at ordinary boundaries (9 minutes becomes
+    # 9.000000000000002 in Rust), which would expire fill history a bar early.
+    native_minutes = (lookback_minutes / 1440.0) * 24.0 * 60.0
+    bars = max(
         1,
-        int(np.ceil(lookback_minutes / interval_minutes)),
+        int(np.ceil(native_minutes / interval_minutes)),
     )
+    if bars > np.iinfo(np.int32).max:
+        raise ValueError(
+            "GPU live.realized_loss_gate_lookback_minutes exceeds the signed "
+            "32-bit candle-bar domain; use a CPU backend or a shorter window"
+        )
+    return bars
 
 
 def _require_multicoin_metric_topology(
@@ -2618,6 +2628,15 @@ class MpsMulticoinProxy:
     ):
         from config.gpu import validate_gpu_backtest_config
         validate_gpu_backtest_config(config)
+        if config["live"]["max_realized_loss_pct"] < 1.0:
+            # Reject an unrepresentable shader constant before importing or
+            # preparing the optional device runtime. Disabled gates are inert.
+            _fill_pnl_lookback_bars({
+                "realized_loss_gate_lookback_minutes": config["live"][
+                    "realized_loss_gate_lookback_minutes"
+                ],
+                "candle_interval_minutes": config["backtest"]["candle_interval_minutes"],
+            })
         try:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency

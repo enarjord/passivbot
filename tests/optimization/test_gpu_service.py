@@ -3539,6 +3539,63 @@ def test_fill_pnl_lookback_matches_rust_bar_contract(days, interval, expected):
     )
 
 
+@pytest.mark.parametrize("minutes,interval,expected", [
+    (9.0, 1, 10),
+    (15.000000000000002, 5, 3),
+    (30.000000000000004, 10, 3),
+    (2147483647.0, 1, 2147483647),
+    (10737418235.0, 5, 2147483647),
+])
+def test_fill_pnl_lookback_preserves_native_scaling_and_signed_bar_boundary(
+    minutes, interval, expected
+):
+    from optimization.gpu.service import _fill_pnl_lookback_bars
+
+    assert _fill_pnl_lookback_bars({
+        "realized_loss_gate_lookback_minutes": minutes,
+        "candle_interval_minutes": interval,
+    }) == expected
+
+
+@pytest.mark.parametrize("minutes,interval", [
+    (2147483648.0, 1),
+    (10737418240.0, 5),
+])
+def test_fill_pnl_lookback_rejects_unrepresentable_shader_bar_constant(minutes, interval):
+    from optimization.gpu.service import _fill_pnl_lookback_bars
+
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*32-bit"):
+        _fill_pnl_lookback_bars({
+            "realized_loss_gate_lookback_minutes": minutes,
+            "candle_interval_minutes": interval,
+        })
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_multicoin_loss_gate_domain_preflight_precedes_device_setup(monkeypatch, enabled):
+    import optimization.gpu.service as service
+
+    config = get_template_config()
+    config["backtest"]["btc_collateral_cap"] = 0.0
+    config["live"].update(
+        max_realized_loss_pct=0.5 if enabled else 1.0,
+        realized_loss_gate_lookback_minutes=2147483648.0,
+    )
+    monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
+
+    def device_setup(_):
+        raise RuntimeError("device setup reached")
+
+    monkeypatch.setattr(service, "gpu_device", device_setup)
+    error = ValueError if enabled else RuntimeError
+    message = "realized_loss_gate_lookback_minutes.*32-bit" if enabled else "device setup reached"
+    with pytest.raises(error, match=message):
+        service.MpsMulticoinProxy(
+            config=config, hlcvs=None, mss=None, btc=None, timestamps=None,
+            exchange="binance", batch_size=1, needed_metrics={"adg_usd"},
+        )
+
+
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("device,factual,expected", [
     ("cuda", True, (True, 64, 128)),

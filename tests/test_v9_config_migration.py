@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import math
 from pathlib import Path
 import stat
 
@@ -11,6 +12,7 @@ from config import compile_runtime_config, prepare_config
 from config.migrations.v9 import MigrationResult, migrate_v8_to_v9, require_v9_runtime_config
 from config.risk_memory import (
     normalize_lookback_ema_span_minutes,
+    normalize_realized_loss_gate_lookback_minutes,
     normalize_risk_bootstrap_max_lookback_minutes,
     realized_loss_gate_start_ms,
     risk_bootstrap_horizon_minutes,
@@ -132,6 +134,101 @@ def test_spans_and_bootstrap_are_independent_float_settings():
     assert realized_loss_gate_start_ms(prepared["live"], 120_000, minimum_ms=60_000) == 60_000
     with pytest.raises(ValueError):
         normalize_risk_bootstrap_max_lookback_minutes(129601.0)
+
+
+@pytest.mark.parametrize("minutes", [1e308, 1e100, (1 << 63) / 60_000.0])
+def test_realized_gate_rejects_scaled_duration_outside_signed_millisecond_domain(minutes):
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
+        normalize_realized_loss_gate_lookback_minutes(minutes)
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
+        realized_loss_gate_start_ms({"realized_loss_gate_lookback_minutes": minutes}, 120_000)
+    config = current()
+    config["live"]["realized_loss_gate_lookback_minutes"] = minutes
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
+        prepare_config(config, verbose=False)
+
+
+def test_realized_gate_accepts_last_float_duration_inside_signed_clock_boundary():
+    boundary = (1 << 63) / 60_000.0
+    minutes = math.nextafter(boundary, 0.0)
+    duration = round(minutes * 60_000.0)
+    assert duration <= (1 << 63) - 1 < round(boundary * 60_000.0)
+    assert normalize_realized_loss_gate_lookback_minutes(minutes) == minutes
+    config = current()
+    config["optimize"]["backend"] = "pymoo"  # CPU scope; backend capacity is a separate contract.
+    config["live"]["realized_loss_gate_lookback_minutes"] = minutes
+    prepared = prepare_config(config, verbose=False)
+    assert prepared["live"]["realized_loss_gate_lookback_minutes"] == minutes
+    assert realized_loss_gate_start_ms(prepared["live"], 120_000) == 120_000 - duration
+
+
+@pytest.mark.parametrize("minutes, duration", [
+    (-1.0, None), (0.0, 1), (1 / 128, 469), (3 / 120_000, 2), (5 / 120_000, 2),
+    (1440.0, 86_400_000),
+])
+def test_realized_gate_preserves_all_zero_fractional_and_rounding_semantics(minutes, duration):
+    config = current()
+    config["live"]["realized_loss_gate_lookback_minutes"] = minutes
+    live = prepare_config(config, verbose=False)["live"]
+    assert live["realized_loss_gate_lookback_minutes"] == minutes
+    assert isinstance(live["realized_loss_gate_lookback_minutes"], float)
+    expected = None if duration is None else 120_000 - duration
+    assert realized_loss_gate_start_ms(live, 120_000) == expected
+    expected_bar = None if duration is None else 120_000 - max(60_000, duration)
+    assert realized_loss_gate_start_ms(live, 120_000, minimum_ms=60_000) == expected_bar
+
+
+def test_realized_gate_cli_rejects_out_of_domain_duration(capsys):
+    from argparse import ArgumentParser
+    from config_utils import add_config_arguments
+
+    parser = ArgumentParser()
+    add_config_arguments(parser, get_template_config(), command="backtest")
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args(["--realized-loss-gate-lookback-minutes", "1e308"])
+    assert error.value.code == 2
+    assert "realized_loss_gate_lookback_minutes" in capsys.readouterr().err
+
+
+def test_realized_gate_scenario_revalidates_duration_before_consumption():
+    from suite_runner import apply_scenario_overrides
+
+    config = prepare_config(current(), verbose=False)
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
+        apply_scenario_overrides(config, {"live.realized_loss_gate_lookback_minutes": 1e308})
+
+
+@pytest.mark.parametrize("location", ["root_days", "scenario_minutes", "optimizer_minutes"])
+def test_migration_rejects_unrepresentable_realized_gate_duration(location):
+    source = legacy()
+    if location == "root_days":
+        source["live"]["pnls_max_lookback_days"] = 1e12
+    elif location == "scenario_minutes":
+        source["backtest"]["scenarios"] = [{"label": "oversized-gate", "overrides": {
+            "live.realized_loss_gate_lookback_minutes": 1e308,
+        }}]
+    else:
+        source["optimize"]["fixed_runtime_overrides"] = {
+            "live.realized_loss_gate_lookback_minutes": 1e308,
+        }
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*signed 64-bit"):
+        migrate(source, memory_span_minutes=43200)
+    assert source == before
+
+
+def test_migration_cli_refuses_oversized_gate_before_writing(tmp_path, capsys):
+    source = legacy()
+    source["live"]["pnls_max_lookback_days"] = 1e12
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(source))
+    original = path.read_bytes()
+    with pytest.raises(SystemExit) as error:
+        main([str(path), "--lookback-ema-span-minutes", "43200", "--in-place"])
+    assert error.value.code == 2
+    assert "realized_loss_gate_lookback_minutes" in capsys.readouterr().err
+    assert path.read_bytes() == original
+    assert not path.with_name("legacy.v8-backup.json").exists()
 
 
 def test_migration_requires_a_memory_choice_and_does_not_mutate_input():

@@ -57,6 +57,12 @@ def normalize_realized_loss_gate_lookback_minutes(value):
     minutes = _finite_number(value, field)
     if minutes != ALL_HISTORY_MINUTES and minutes < 0.0:
         raise ValueError(f"{field} must be >= 0.0, or -1.0 for all history")
+    milliseconds = minutes * 60_000.0
+    # Validate the same rounded duration used by live cutoff consumers against
+    # the shared signed millisecond clock, before converting an infinity or an
+    # out-of-domain duration into an integer at runtime.
+    if not math.isfinite(milliseconds) or round(milliseconds) > (1 << 63) - 1:
+        raise ValueError(f"{field} must fit in signed 64-bit milliseconds")
     return minutes
 
 

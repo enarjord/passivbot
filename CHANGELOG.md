@@ -12,7 +12,10 @@ since the latest release tag; these features may already be available when insta
   Preserve individually ordered fills and fees, initialize proven new episodes
   before entry economics, and disclose unknown-prefix bootstrap estimates.
   The independent rolling realized-loss gate uses
-  `live.realized_loss_gate_lookback_minutes`.
+  `live.realized_loss_gate_lookback_minutes`; validate its duration against the
+  signed 64-bit millisecond clock before accepting configuration. Preserve CPU
+  bar-conversion rounding on GPU and reject windows outside its signed 32-bit
+  bar domain before compilation.
 
 - Qualify a fixed finite HSL cooldown from the latest pre-final-fill RED or final
   accounting RED. Later flat queries and balance changes cannot renew or cancel

@@ -78,6 +78,28 @@ def test_ema_loss_gate_expiry_matches_rust(sides, coins, lookback, unstuck):
         assert len(fills) > coins * len(sides)
 
 
+def test_ema_loss_gate_nine_minute_native_roundtrip_expiry_matches_rust():
+    import numpy as np
+    from backtest import run_backtest
+
+    proxy, inputs = loss_gate_proxy(("long",), coins=1, lookback=9 / 1440)
+    fills, _, _ = run_backtest(*inputs)
+    # The exact native parser roundtrip is slightly above nine minutes, so its
+    # ceil admits ten bar endpoints. The fee-only close must really execute.
+    assert len(fills) == 2
+    assert str(fills[-1, 13]).startswith("close_")
+    close_k = int(fills[-1, 0])
+    for end in (close_k, close_k + 1):
+        runner, output = raw(proxy, [{}], end_steps=np.array([end], dtype=np.int32))
+        expected = [fill for fill in fills if int(fill[0]) < end]
+        assert len(expected) == (1 if end == close_k else 2)
+        assert runner.unstuck_pnl_lookback_bars == 10
+        assert runner.unstuck_pnl_capacity == 11
+        assert output["fill_count"].item() == len(expected)
+        assert output["balance"].item() == pytest.approx(float(expected[-1][5]), abs=0.002)
+        assert output["psize"].item() == pytest.approx(abs(float(expected[-1][11])), abs=2e-5)
+
+
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_ema_loss_gate_history_reuse_specialization_and_scratch(side, mode):

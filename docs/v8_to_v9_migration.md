@@ -117,6 +117,8 @@ Consequently the default slow-memory target is capped, with observable unknown-p
 information. This cap is acquisition policy, not the amount of exponential memory. The
 independent rolling `max_realized_loss_pct` gate uses
 `live.realized_loss_gate_lookback_minutes`; `-1.0` means all available history.
+Other values must be nonnegative and convert to a duration within the signed 64-bit
+millisecond clock. Configuration validation rejects overflowing durations before runtime.
 
 Fresh searches may use migrated numeric strategy suggestions. They must not resume old
 checkpoints or reuse their fitness. Offline tests and backtests do not establish live

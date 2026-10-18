@@ -410,6 +410,9 @@ This memory excludes UPNL and survives HSL episode boundaries. The independent
 `max_realized_loss_pct` gate retains its rolling window from
 `live.realized_loss_gate_lookback_minutes`; that optional history is prepared only for
 the gate and does not become HSL or unstuck memory.
+Finite gate windows use the CPU conversion order before rounding up to candle bars.
+GPU replay rejects windows exceeding `2^31 - 1` bars before kernel compilation;
+`-1.0` retains the all-history policy.
 
 Trailing Martingale finalizes executable close quantities before reserving projected
 negative PnL across coins and both sides. It prioritizes finalized protective reducers,
