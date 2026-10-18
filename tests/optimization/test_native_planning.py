@@ -60,6 +60,83 @@ def set_value(planner, vector, key, value):
     return values
 
 
+def global_span_inputs(*, suite=False, fixed=False, scenario_pin=False):
+    previous, _ = inputs(suite=suite)
+    config = deepcopy(previous.base.config)
+    config["optimize"]["bounds"]["live_lookback_ema_span_minutes"] = [1000.0, 50000.0]
+    if fixed:
+        config["optimize"]["fixed_runtime_overrides"] = {
+            "live.lookback_ema_span_minutes": 4096.5,
+        }
+    base = Evaluator(previous.base.hlcvs_specs, previous.base.btc_usd_specs,
+                     previous.base.msss, config)
+    evaluator = base
+    if suite:
+        contexts = deepcopy(previous.scorer.evaluator.contexts)
+        for context in contexts:
+            context.config = deepcopy(config)
+            if scenario_pin and context.label == "stress":
+                context.overrides["live.lookback_ema_span_minutes"] = 2048.5
+        evaluator = SuiteEvaluator(base, contexts, {"default": "mean"})
+    planner = NativeCandidatePlanner(evaluator, previous.bindings)
+    vector = config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)
+    return planner, vector
+
+
+@pytest.mark.parametrize("suite", [False, True])
+def test_global_memory_span_gene_reuses_dataset_and_changes_effective_requests(suite):
+    planner, vector = global_span_inputs(suite=suite)
+    low_vector = set_value(planner, vector, "live_lookback_ema_span_minutes", 1000.0)
+    high_vector = set_value(planner, vector, "live_lookback_ema_span_minutes", 50000.0)
+    low = planner.prepare("low", low_vector)
+    high = planner.prepare("high", high_vector)
+    repeated = planner.prepare("repeated", low_vector)
+    assert low.effective_key == repeated.effective_key != high.effective_key
+    assert [r.dataset_id for r in low.requests] == [r.dataset_id for r in high.requests]
+    for plan, expected in ((low, 1000.0), (high, 50000.0)):
+        assert len(plan.requests) == (2 if suite else 1)
+        for request in plan.requests:
+            for side in ("long", "short"):
+                assert request.parameters[f"{side}_hsl_lookback_ema_span_minutes"] == expected
+
+
+def test_fixed_global_memory_span_deduplicates_shadow_gene():
+    planner, vector = global_span_inputs(fixed=True)
+    low = planner.prepare("low", set_value(planner, vector, "live_lookback_ema_span_minutes", 1000.0))
+    high = planner.prepare("high", set_value(planner, vector, "live_lookback_ema_span_minutes", 50000.0))
+    assert low.effective_key == high.effective_key
+    assert low.requests[0].parameters == high.requests[0].parameters
+    assert low.requests[0].parameters["long_hsl_lookback_ema_span_minutes"] == 4096.5
+    assert low.requests[0].parameters["short_hsl_lookback_ema_span_minutes"] == 4096.5
+
+
+def test_last_scenario_global_memory_span_override_is_request_owned():
+    planner, vector = global_span_inputs(suite=True, scenario_pin=True)
+    low = planner.prepare("low", set_value(planner, vector, "live_lookback_ema_span_minutes", 1000.0))
+    high = planner.prepare("high", set_value(planner, vector, "live_lookback_ema_span_minutes", 50000.0))
+    assert low.effective_key != high.effective_key
+    assert [r.dataset_id for r in low.requests] == [r.dataset_id for r in high.requests]
+    assert low.requests[1].parameters == high.requests[1].parameters
+    for side in ("long", "short"):
+        key = f"{side}_hsl_lookback_ema_span_minutes"
+        assert low.requests[0].parameters[key] == 1000.0
+        assert high.requests[0].parameters[key] == 50000.0
+        assert low.requests[1].parameters[key] == 2048.5
+
+
+@pytest.mark.parametrize("path,value", [
+    ("live.risk_bootstrap_max_lookback_minutes", 64800.0),
+    ("live.realized_loss_gate_lookback_minutes", 60.0),
+    ("live.market_orders_allowed", True),
+    ("backtest.starting_balance", 2000.0),
+])
+def test_global_memory_span_gene_does_not_relax_other_dataset_inputs(path, value):
+    planner, vector = global_span_inputs()
+    planner.base.config["optimize"]["fixed_runtime_overrides"] = {path: value}
+    with pytest.raises(ValueError, match="dataset-owned execution inputs"):
+        planner.prepare("changed-static", set_value(planner, vector, "live_lookback_ema_span_minutes", 1000.0))
+
+
 def test_fixed_runtime_policy_and_exact_last_scenario_override_are_materialized_once(monkeypatch):
     import backtest
     planner, vector = inputs(suite=True, fixed=True)

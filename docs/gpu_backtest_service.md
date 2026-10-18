@@ -114,6 +114,8 @@ fixed runtime policies and exact-last scenario overrides before encoding compact
 parameters. It never calls an evaluator's simulation method. Global candidate values are
 separate from dataset-owned coin patches, so the first coin's patch cannot replace defaults
 for every unpatched coin. Mirrored or fixed shadow genes deduplicate by effective work.
+The global `live_lookback_ema_span_minutes` gene is request-owned after those
+overrides; changing it does not require another prepared dataset.
 
 `prepare(candidate_id, vector, scenarios=...)` returns a candidate plan containing requests
 and expected result slots. A screening plan's duplicate identity includes unscreened

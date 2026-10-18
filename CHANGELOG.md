@@ -16,6 +16,8 @@ since the latest release tag; these features may already be available when insta
   signed 64-bit millisecond clock before accepting configuration. Preserve CPU
   bar-conversion rounding on GPU and reject windows outside its signed 32-bit
   bar domain before compilation.
+  Native GPU optimization transports the global slow-memory span per request,
+  preserving fixed and scenario overrides and effective-candidate deduplication.
 
 - Qualify a fixed finite HSL cooldown from the latest pre-final-fill RED or final
   accounting RED. Later flat queries and balance changes cannot renew or cancel
