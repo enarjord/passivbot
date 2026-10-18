@@ -76,10 +76,16 @@ or order-construction work; it is not mandatory for unrelated documentation or t
 Before broad edits, inspect the branch, recent commits, worktree status, and relevant callers/tests.
 For reviews against a moving branch, refresh the target ref and record the reviewed SHAs.
 
-When disagreeing with pull-request review feedback, do not silently discard the finding. If the
-task authorizes review-comment writes, post an evidence-backed rationale in the original thread,
-leave the thread unresolved, and explicitly request reviewer reconsideration. Otherwise draft the
-reply and ask for authorization. Follow `docs/ai/runbooks/pr_review.md` for adjudication and
+Routine, evidence-backed replies in existing PR review threads are authorized by default for
+assigned implementation or PR-review work. Do not ask for separate approval unless the user
+explicitly restricts public writes, such as read-only, draft-only or no-post instructions. This
+covers findings, fixes, validation and disagreements within the assigned PR. The Public Repository
+Data Boundary still applies; this authority does not permit private-data disclosure, unrelated
+messages or merging.
+
+When disagreeing with pull-request review feedback, do not silently discard the finding. Post an
+evidence-backed rationale in the original thread, leave the thread unresolved, and explicitly
+request reviewer reconsideration. Follow `docs/ai/runbooks/pr_review.md` for adjudication and
 resolution criteria.
 
 Publish completed, validated work as a regular ready-for-review pull request by default. Before

@@ -3,8 +3,9 @@
 Use this for repository-owned semantic review. Read `AGENTS.md`, `../principles.md`,
 `../validation.md`, and the subsystem contracts routed by `../README.md`.
 
-Review is read-only unless the user explicitly asks for implementation. Follow the authority and
-network boundaries in `AGENTS.md` while gathering evidence.
+Review does not authorize code changes unless the user explicitly asks for implementation.
+Routine review-thread replies follow the standing authority below. Follow the authority and
+network boundaries in `AGENTS.md` while gathering evidence and posting replies.
 
 ## Review Loop
 
@@ -43,8 +44,14 @@ diffs, test output, or exchange data.
 
 ## Review Feedback Adjudication
 
+Routine, evidence-backed replies in existing review threads are authorized by default for assigned
+implementation or PR-review work, without per-reply approval. Replies may explain findings, fixes,
+validation or disagreements within the assigned PR. Honor explicit read-only, draft-only or no-post
+instructions. All replies must obey the Public Repository Data Boundary in `AGENTS.md`; this
+standing authority does not authorize private-data disclosure, unrelated messages or merging.
+
 Do not silently treat disputed reviewer feedback as addressed. When an agent disagrees with a
-finding and the task authorizes review-comment writes:
+finding:
 
 1. Reply in the original review thread before moving on. State the decision, cite the exact code
    and governing contract, explain the regression or authority violation the recommendation would
@@ -57,9 +64,9 @@ finding and the task authorizes review-comment writes:
    reviewer acknowledges the rationale, a new exact-head review explicitly clears the dispute, or
    the user makes the final adjudication after the reviewer was asked to reconsider.
 
-If the task does not authorize GitHub comment writes, draft the same evidence-backed reply and ask
-the user for authorization instead of silently rejecting the finding. Continuous-review state may
-record that adjudication is pending, but it must not record the thread as addressed.
+If the user has explicitly restricted public writes, draft the same evidence-backed reply and ask
+for authorization before posting instead of silently rejecting the finding. Continuous-review
+state may record that adjudication is pending, but it must not record the thread as addressed.
 
 ## Architectural Proposal Check
 
