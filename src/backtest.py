@@ -69,7 +69,10 @@ from config.access import (
     require_config_value,
     require_live_value,
 )
-from config.pnl_lookback import parse_pnls_max_lookback_days
+from config.risk_memory import (
+    normalize_lookback_ema_span_minutes,
+    normalize_realized_loss_gate_lookback_minutes,
+)
 from metrics_schema import attach_result_metrics, build_standalone_metrics
 from config.metrics import ANALYSIS_SHARED_KEYS
 from config.coerce import normalize_hsl_signal_mode
@@ -259,13 +262,13 @@ def _looks_like_bool_token(value: str) -> bool:
 
 
 def _resolve_backtest_hsl(config, coin_policies):
-    """Transport canonical policies, preserving explicit disabled null choices."""
+    """Transport canonical v9 HSL policies without retired restart choices."""
     mode = _resolve_backtest_hsl_signal_mode(config)
     return {
         "engine": "hsl",
         "mode": mode,
         "sides": [deepcopy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
-        "portfolio": deepcopy(config["bot"]["hsl"]) if mode == "unified" else None,
+        "portfolio": deepcopy(config["bot"]["hsl"]) if mode == "portfolio" else None,
         "coins": coin_policies if mode == "coin" else {},
     }
 
@@ -942,8 +945,8 @@ class BacktestExecutionSettings:
     market_order_near_touch_threshold: float
     market_order_slippage_pct: float
     limit_order_fill_buffer_pct: float
-    pnls_max_lookback_days: str | float
-    pnls_max_lookback_days_backtest_value: float
+    lookback_ema_span_minutes: float
+    realized_loss_gate_lookback_minutes: float
 
 
 @dataclass
@@ -982,10 +985,10 @@ def build_backtest_payload(
 
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
     if runtime_config is not None:
         require_runtime_support(
-            runtime_config, supported_modes=("coin", "pside", "unified")
+            runtime_config, supported_modes=("coin", "pside", "portfolio")
         )
     if runtime_config is None:
         runtime_config = compile_runtime_config(
@@ -2511,17 +2514,19 @@ def get_backtest_execution_settings(
     )
     if market_order_near_touch_threshold < 0.0:
         raise ValueError("live.market_order_near_touch_threshold must be >= 0.0")
-    pnls_max_lookback = parse_pnls_max_lookback_days(
-        get_optional_live_value(config, "pnls_max_lookback_days", 30.0),
-        field_name="live.pnls_max_lookback_days",
+    memory_span = normalize_lookback_ema_span_minutes(
+        require_config_value(config, "live.lookback_ema_span_minutes")
+    )
+    gate_lookback = normalize_realized_loss_gate_lookback_minutes(
+        require_config_value(config, "live.realized_loss_gate_lookback_minutes")
     )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=market_order_near_touch_threshold,
         market_order_slippage_pct=market_order_slippage_pct,
         limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
-        pnls_max_lookback_days=pnls_max_lookback.display_value,
-        pnls_max_lookback_days_backtest_value=pnls_max_lookback.to_backtest_days_value(),
+        lookback_ema_span_minutes=memory_span,
+        realized_loss_gate_lookback_minutes=gate_lookback,
     )
 
 
@@ -2548,8 +2553,12 @@ def log_backtest_execution_settings(
         execution_settings.limit_order_fill_buffer_pct,
     )
     logging.info(
-        "[backtest]   pnls_max_lookback_days = %s (live)",
-        execution_settings.pnls_max_lookback_days,
+        "[backtest]   lookback_ema_span_minutes = %s (live)",
+        execution_settings.lookback_ema_span_minutes,
+    )
+    logging.info(
+        "[backtest]   realized_loss_gate_lookback_minutes = %s (live)",
+        execution_settings.realized_loss_gate_lookback_minutes,
     )
 
 
@@ -2791,7 +2800,8 @@ def prep_backtest_args(
             "max_realized_loss_pct": float(
                 require_config_value(config, "live.max_realized_loss_pct")
             ),
-            "pnls_max_lookback_days": execution_settings.pnls_max_lookback_days_backtest_value,
+            "lookback_ema_span_minutes": execution_settings.lookback_ema_span_minutes,
+            "realized_loss_gate_lookback_minutes": execution_settings.realized_loss_gate_lookback_minutes,
             "equity_hard_stop_loss": hard_stop_cfg_long,
             "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
             "limit_order_fill_buffer_pct": execution_settings.limit_order_fill_buffer_pct,
@@ -3332,7 +3342,7 @@ async def main():
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1

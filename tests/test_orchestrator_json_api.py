@@ -365,6 +365,8 @@ def make_input(
         "global": {
             "filter_by_min_effective_cost": False,
             "auto_unstuck_allowed": True,
+            # These fixtures start with explicitly empty continuous realized memory.
+            "realized_pnl_drawdown": 0.0,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
             "max_realized_loss_pct": 1.0,
@@ -380,6 +382,16 @@ def make_input(
 def compute(pbr, inp: dict) -> dict:
     out_json = pbr.compute_ideal_orders_json(json.dumps(inp))
     return json.loads(out_json)
+
+
+def test_realized_drawdown_is_required_instead_of_reconstructed_from_gate_stats():
+    import passivbot_rust as pbr
+
+    inp = make_input(balance=1000.0, symbols=[make_symbol(0, bid=100.0, ask=100.0)])
+    del inp["global"]["realized_pnl_drawdown"]
+    inp["global"].update(realized_pnl_cumsum_max=10.0, realized_pnl_cumsum_last=5.0)
+    with pytest.raises(ValueError, match="missing field `realized_pnl_drawdown`"):
+        compute(pbr, inp)
 
 
 def test_live_validator_accepts_complete_rust_output():

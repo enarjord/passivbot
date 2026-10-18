@@ -195,7 +195,7 @@ def permits(bot, order):
     keys = {key}
     config = getattr(bot, "config", {})
     mode = config.get("live", {}).get("hsl_signal_mode", "coin")
-    if mode == "unified" and config.get("bot", {}).get("hsl", {}).get("enabled", False):
+    if mode == "portfolio" and config.get("bot", {}).get("hsl", {}).get("enabled", False):
         keys.update(gate.pending)
     elif mode == "pside" and config.get("bot", {}).get(key[1], {}).get("hsl", {}).get(
         "enabled", False

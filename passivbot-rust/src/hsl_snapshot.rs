@@ -53,6 +53,7 @@ impl Pair {
 pub enum Mode {
     Coin,
     Pside,
+    #[serde(rename = "portfolio")]
     Unified,
 }
 /// Explicitly observed flat coin with an empty retained fill tape. This carries
@@ -181,8 +182,17 @@ fn latest(fills: &[Fill]) -> Vec<&Fill> {
         .filter(|f| versions[f.identity.as_str()] == f.revision)
         .collect()
 }
-fn causal_fills(pair: &Pair, now: i64) -> Vec<Fill> {
+pub(crate) fn quarantined_fill_revisions(pair: &Pair, now: i64) -> BTreeSet<(&str, u64)> {
     let end = now.min(pair.fills_at.unwrap_or(now));
+    pair.fills
+        .iter()
+        .filter(|fill| fill.timestamp > end)
+        .map(|fill| (fill.identity.as_str(), fill.revision))
+        .collect()
+}
+
+pub(crate) fn causal_fills(pair: &Pair, now: i64) -> Vec<Fill> {
+    let quarantined = quarantined_fill_revisions(pair, now);
     let mut versions = BTreeMap::<(&str, u64), Vec<&Fill>>::new();
     for f in &pair.fills {
         versions
@@ -193,14 +203,24 @@ fn causal_fills(pair: &Pair, now: i64) -> Vec<Fill> {
     // A future variant quarantines its entire revision before canonical selection.
     versions
         .values()
-        .filter(|v| v.iter().all(|f| f.timestamp <= end))
+        .filter(|v| !quarantined.contains(&(v[0].identity.as_str(), v[0].revision)))
         .flat_map(|v| v.iter().map(|f| (*f).clone()))
         .collect()
 }
 pub fn prepare(input: &Input) -> Result<Output, String> {
+    prepare_inner(input, false)
+}
+
+/// Ledger bootstrap may repair an older initializer using later receipts whose
+/// facts already passed the identical source-cut quarantine at ingestion. Keep
+/// the original capture clocks as provenance rather than forging a newer cut.
+pub(crate) fn prepare_admitted(input: &Input) -> Result<Output, String> {
+    prepare_inner(input, true)
+}
+
+fn prepare_inner(input: &Input, admitted: bool) -> Result<Output, String> {
     if input.start > input.now
         || !input.balance.is_finite()
-        || input.balance <= 0.0
         || input.max_current_age_ms < 0
         || input.config_at > input.now
     {
@@ -257,7 +277,7 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
         if p.prices_at < p.mark_at {
             reasons.insert("prices_before_mark".into());
         }
-        if p.prices.keys().any(|t| *t > p.prices_at) {
+        if !admitted && p.prices.keys().any(|t| *t > p.prices_at) {
             reasons.insert("post_capture_price".into());
         }
         if p.position_at != input.balance_at || p.mark_at != input.balance_at {
@@ -270,11 +290,15 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             if f.timestamp == p.position_at && !(input.global_fill_sequence && p.anchored()) {
                 reasons.insert("position_fill_timestamp_tie".into());
             }
-            if f.timestamp > input.now.min(p.fills_at.unwrap_or(input.now)) {
+            if !admitted && f.timestamp > input.now.min(p.fills_at.unwrap_or(input.now)) {
                 reasons.insert("post_capture_fill".into());
             }
         }
-        let causal = causal_fills(p, input.now);
+        let causal = if admitted {
+            p.fills.clone()
+        } else {
+            causal_fills(p, input.now)
+        };
         let mut fills = history::canonical_fills(
             &causal,
             input.start,
@@ -282,7 +306,11 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             p.position.pside,
             &mut reasons,
         );
-        let limit = p.position_at.min(p.fills_at.unwrap_or(input.now));
+        let limit = p.position_at.min(if admitted {
+            input.now
+        } else {
+            p.fills_at.unwrap_or(input.now)
+        });
         fills.retain(|f| f.timestamp <= limit);
         let h = history::reconstruct_with_prices(
             &history::Input {
@@ -294,7 +322,11 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
                 prices: BTreeMap::new(),
             },
             &p.prices,
-            input.now.min(p.prices_at),
+            if admitted {
+                input.now
+            } else {
+                input.now.min(p.prices_at)
+            },
         )?;
         reasons.extend(h.reasons.iter().cloned());
         pairs.push(PreparedPair {
@@ -433,7 +465,7 @@ mod tests {
     fn current_flat_uses_last_retained_fill_but_residual_exposure_does_not() {
         let value = serde_json::json!({
             "now": 100, "start": 0, "balance": 100.0, "balance_at": 100,
-            "config_at": 100, "max_current_age_ms": 10, "mode": "unified",
+            "config_at": 100, "max_current_age_ms": 10, "mode": "portfolio",
             "pairs": [{"symbol": "A", "position": {"size": 0.0, "basis": 0.0,
                 "mark": 80.0, "multiplier": 1.0, "inverse": false, "pside": "long"},
                 "position_at": 100, "mark_at": 100, "prices_at": 100,
@@ -459,7 +491,7 @@ mod tests {
     fn historical_flat_survives_capture_skew_and_missing_receipts() {
         let value = serde_json::json!({
             "now": 100, "start": 0, "balance": 1000.0, "balance_at": 100,
-            "config_at": 100, "max_current_age_ms": 10, "mode": "unified",
+            "config_at": 100, "max_current_age_ms": 10, "mode": "portfolio",
             "pairs": [{"symbol": "A", "position": {"size": 1.0, "basis": 100.0,
                 "mark": 100.0, "multiplier": 1.0, "inverse": false, "pside": "long"},
                 "position_at": 100, "mark_at": 100, "prices_at": 100,

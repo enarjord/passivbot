@@ -86,8 +86,7 @@
                 "ema_span_minutes": 60,
                 "enabled": false,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.2,
-                "restart_after_red_policy": "always"
+                "red_threshold": 0.2
             },
             "risk": {
                 "n_positions": 1,
@@ -167,8 +166,7 @@
                 "ema_span_minutes": 60,
                 "enabled": false,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.2,
-                "restart_after_red_policy": "always"
+                "red_threshold": 0.2
             },
             "risk": {
                 "n_positions": 1,
@@ -235,12 +233,11 @@
             "ema_span_minutes": 60,
             "enabled": false,
             "panic_close_order_type": "limit",
-            "red_threshold": 0.2,
-            "restart_after_red_policy": "always"
+            "red_threshold": 0.2
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.6.0",
+    "config_version": "v9.0.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -260,7 +257,7 @@
         "forced_mode_long": "",
         "forced_mode_short": "",
         "hedge_mode": true,
-        "hsl_signal_mode": "unified",
+        "hsl_signal_mode": "portfolio",
         "ignored_coins": {
             "long": [],
             "short": []
@@ -282,7 +279,9 @@
         "minimum_coin_age_days": 180,
         "forager_score_hysteresis_pct": 0.005,
         "order_match_tolerance_pct": 0.0002,
-        "pnls_max_lookback_days": 30,
+        "lookback_ema_span_minutes": 43200.0,
+        "realized_loss_gate_lookback_minutes": 43200.0,
+        "risk_bootstrap_max_lookback_minutes": 129600.0,
         "recv_window_ms": 5000,
         "strategy_kind": "trailing_martingale",
         "time_in_force": "good_till_cancelled",

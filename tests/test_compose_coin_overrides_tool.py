@@ -40,12 +40,9 @@ def _single_coin_config(coin: str) -> dict:
 def _write(path: Path, config: dict) -> None:
     config = deepcopy(config)
     inner = config.get("config", config)
-    if inner["live"]["hsl_signal_mode"] == "unified":
+    if inner["live"]["hsl_signal_mode"] == "portfolio":
         for side in ("long", "short"):
             inner["optimize"]["bounds"][side].pop("hsl", None)
-            inner["optimize"]["fixed_runtime_overrides"].pop(
-                f"bot.{side}.hsl.restart_after_red_policy", None
-            )
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
@@ -306,7 +303,7 @@ def test_external_single_coin_master_is_not_an_extra_input(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "key,value", [("strategy_kind", "ema_anchor"), ("hsl_signal_mode", "unified")]
+    "key,value", [("strategy_kind", "ema_anchor"), ("hsl_signal_mode", "portfolio")]
 )
 def test_external_master_must_match_input_strategy_and_hsl_mode(
     tmp_path: Path, key, value
@@ -535,7 +532,7 @@ def test_cli_writes_sorted_config_and_protects_existing_output(tmp_path: Path, c
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("hsl_signal_mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("hsl_signal_mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("external_master", [False, True])
 def test_verbose_overrides_survive_master_edits(
     tmp_path: Path, strategy_kind: str, hsl_signal_mode: str, external_master: bool
@@ -912,7 +909,7 @@ def test_custom_hsl_selection_obeys_signal_mode_and_preserves_inactive_value(
     }
     for coin in ("BTC", "ETH"):
         config["live"]["approved_coins"] = {"long": [coin], "short": [coin]}
-        config["live"]["hsl_signal_mode"] = "unified"
+        config["live"]["hsl_signal_mode"] = "portfolio"
         _write(tmp_path / f"{coin}.json", config)
     with pytest.raises(ValueError, match="matches no overridable input fields"):
         compose_directory(tmp_path, override_params="long.hsl")

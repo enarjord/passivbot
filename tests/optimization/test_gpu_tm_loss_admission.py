@@ -36,11 +36,12 @@ def fee_only_close_fixture(sides, coins, lookback, max_loss_pct):
     from optimization.gpu.service import MpsMulticoinProxy
 
     original, inputs = make_proxy(
-        sides, lookback, strategy="trailing_martingale", coins=coins
+        sides, strategy="trailing_martingale", coins=coins
     )
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
+    config["live"]["realized_loss_gate_lookback_minutes"] = -1.0 if lookback == "all" else lookback * 1440
     config["live"]["max_realized_loss_pct"] = max_loss_pct
     candles = candles.copy()
     candles[:, :, :3] = (101.0, 99.0, 100.4)

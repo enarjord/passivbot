@@ -2,11 +2,10 @@ from copy import deepcopy
 from typing import Optional
 
 from .access import require_config_dict
-from .pnl_lookback import normalize_pnls_max_lookback_days_config_value
+from .risk_memory import normalize_risk_memory_config
 from .schema import get_template_config
 
-HSL_RESTART_AFTER_RED_POLICIES = ("always", "never")
-HSL_SIGNAL_MODES = ("coin", "pside", "unified")
+HSL_SIGNAL_MODES = ("coin", "pside", "portfolio")
 MONITOR_BOOL_KEYS = (
     "enabled",
     "retain_price_ticks",
@@ -31,15 +30,6 @@ def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
         raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
     return mode
 
-
-def normalize_hsl_restart_after_red_policy(
-    value, path: str = "bot.<pside>.hsl.restart_after_red_policy"
-) -> str:
-    policy = str(value)
-    if policy not in HSL_RESTART_AFTER_RED_POLICIES:
-        allowed = ", ".join(HSL_RESTART_AFTER_RED_POLICIES)
-        raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
-    return policy
 
 
 def normalize_monitor_config(config: dict) -> None:
@@ -288,11 +278,7 @@ def normalize_validation_fields(config: dict, *, raw_optimize=None) -> None:
     config["live"]["hsl_signal_mode"] = normalize_hsl_signal_mode(
         config["live"]["hsl_signal_mode"]
     )
-    config["live"]["pnls_max_lookback_days"] = (
-        normalize_pnls_max_lookback_days_config_value(
-            config["live"]["pnls_max_lookback_days"]
-        )
-    )
+    normalize_risk_memory_config(config)
     normalize_logging_config(config)
     normalize_monitor_config(config)
     normalize_pymoo_config(config, raw_optimize=raw_optimize)

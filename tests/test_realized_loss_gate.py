@@ -85,6 +85,10 @@ def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
     """Return a Passivbot instance with a mocked FillEventsManager."""
     bot = object.__new__(Passivbot)
     bot._orchestrator_uses_realized_pnl = lambda: True
+    bot._unstuck_uses_realized_pnl = lambda: False
+    bot._live_max_realized_loss_pct = lambda: 0.99
+    bot.config = {"live": {"realized_loss_gate_lookback_minutes": -1.0}}
+    bot.get_exchange_time = lambda: 10 * 86_400_000
     bot._pnls_manager = MagicMock()
 
     def _get_events(start_ms=None, end_ms=None, symbol=None):
@@ -131,8 +135,8 @@ def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
     return bot
 
 
-def _set_pnl_lookback(bot, *, lookback_days: float | str, now_ms: int) -> None:
-    bot.config = {"live": {"pnls_max_lookback_days": lookback_days}}
+def _set_gate_lookback(bot, *, minutes: float, now_ms: int) -> None:
+    bot.config = {"live": {"realized_loss_gate_lookback_minutes": minutes}}
     bot.get_exchange_time = lambda: now_ms
 
 
@@ -272,13 +276,21 @@ class TestGetRealizedPnlCumsumStats:
     def test_no_manager_returns_zeros(self):
         bot = object.__new__(Passivbot)
         bot._pnls_manager = None
+        bot._orchestrator_uses_realized_pnl = lambda: False
         result = bot._get_realized_pnl_cumsum_stats()
-        assert result == {"max": 0.0, "last": 0.0}
+        assert result == {"max": 0.0, "last": 0.0, "drawdown": 0.0}
+
+    def test_enabled_realized_risk_requires_manager(self):
+        bot = object.__new__(Passivbot)
+        bot._pnls_manager = None
+        bot._orchestrator_uses_realized_pnl = lambda: True
+        with pytest.raises(RuntimeError, match="canonical fill manager"):
+            bot._get_realized_pnl_cumsum_stats()
 
     def test_empty_events_returns_zeros(self):
         bot = _make_bot_with_events([])
         result = bot._get_realized_pnl_cumsum_stats()
-        assert result == {"max": 0.0, "last": 0.0}
+        assert result == {"max": 0.0, "last": 0.0, "drawdown": 0.0}
 
     @pytest.mark.parametrize(
         "pnl_status,pnl_source",
@@ -296,7 +308,7 @@ class TestGetRealizedPnlCumsumStats:
         )
         bot._orchestrator_uses_realized_pnl = lambda: False
 
-        assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0}
+        assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0, "drawdown": 0.0}
 
     def test_single_positive_event(self):
         bot = _make_bot_with_events([_make_fill_event(50.0)])
@@ -339,7 +351,7 @@ class TestGetRealizedPnlCumsumStats:
             _make_fill_event(-5.0, timestamp=now_ms - 30_000),
         ]
         bot = _make_bot_with_events(events)
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=1440.0, now_ms=now_ms)
 
         result = bot._get_realized_pnl_cumsum_stats()
 
@@ -354,7 +366,7 @@ class TestGetRealizedPnlCumsumStats:
             _make_fill_event(10.0, timestamp=now_ms - 60_000),
         ]
         bot = _make_bot_with_events(events)
-        _set_pnl_lookback(bot, lookback_days=0.0, now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=0.0, now_ms=now_ms)
 
         result = bot._get_realized_pnl_cumsum_stats()
 
@@ -369,12 +381,36 @@ class TestGetRealizedPnlCumsumStats:
             _make_fill_event(10.0, timestamp=now_ms - 60_000),
         ]
         bot = _make_bot_with_events(events)
-        _set_pnl_lookback(bot, lookback_days="all", now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=-1.0, now_ms=now_ms)
 
         result = bot._get_realized_pnl_cumsum_stats()
 
         assert result["max"] == pytest.approx(100.0)
         assert result["last"] == pytest.approx(30.0)
+
+    def test_zero_gate_horizon_retains_native_millisecond_resolution(self):
+        now_ms = 10 * 86_400_000
+        bot = _make_bot_with_events([
+            _make_fill_event(100.0, timestamp=now_ms - 2),
+            _make_fill_event(-10.0, timestamp=now_ms - 1),
+        ])
+        _set_gate_lookback(bot, minutes=0.0, now_ms=now_ms)
+        assert bot._get_realized_pnl_cumsum_stats() == {
+            "max": 0.0, "last": -10.0, "drawdown": 0.0
+        }
+
+    def test_slow_ema_span_does_not_change_independent_rolling_gate(self):
+        now_ms = 10 * 86_400_000
+        bot = _make_bot_with_events([
+            _make_fill_event(50.0, timestamp=now_ms - 2 * 86_400_000),
+            _make_fill_event(-10.0, timestamp=now_ms - 1),
+        ])
+        _set_gate_lookback(bot, minutes=1440.0, now_ms=now_ms)
+        bot.config["live"]["lookback_ema_span_minutes"] = 1.0
+        short = bot._get_realized_pnl_cumsum_stats()
+        bot.config["live"]["lookback_ema_span_minutes"] = 43200.0
+        assert bot._get_realized_pnl_cumsum_stats() == short
+        assert short == {"max": 0.0, "last": -10.0, "drawdown": 0.0}
 
     def test_live_cumsum_matches_rust_effective_contract_reference(self):
         now_ms = 10 * 86_400_000
@@ -385,7 +421,7 @@ class TestGetRealizedPnlCumsumStats:
             _make_fill_event(190.0, timestamp=now_ms - 60_000, fee_paid=-0.5),
         ]
         bot = _make_bot_with_events(events)
-        _set_pnl_lookback(bot, lookback_days=2.0, now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=2880.0, now_ms=now_ms)
         start_ms = now_ms - 2 * 86_400_000
 
         result = bot._get_realized_pnl_cumsum_stats()
@@ -419,7 +455,7 @@ class TestGetRealizedPnlCumsumStats:
             [_make_fill_event(10.0, timestamp=now_ms - 60_000)],
             cache=None,
         )
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=1440.0, now_ms=now_ms)
 
         with pytest.raises(RuntimeError, match="missing FillEventsManager cache"):
             bot._get_realized_pnl_cumsum_stats()
@@ -444,7 +480,7 @@ class TestGetRealizedPnlCumsumStats:
             [_make_fill_event(10.0, timestamp=start_ms + 180_000)],
             cache=cache,
         )
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=1440.0, now_ms=now_ms)
 
         with pytest.raises(
             RuntimeError, match="fill history gap overlaps risk lookback"
@@ -454,7 +490,7 @@ class TestGetRealizedPnlCumsumStats:
     def test_uncovered_empty_history_fails_loudly(self):
         now_ms = 10 * 86_400_000
         bot = _make_bot_with_events([], cache=_RiskCache(history_scope="window"))
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=1440.0, now_ms=now_ms)
 
         with pytest.raises(RuntimeError, match="fill history coverage unknown"):
             bot._get_realized_pnl_cumsum_stats()
@@ -470,7 +506,7 @@ class TestGetRealizedPnlCumsumStats:
                 oldest_event_ts=start_ms - 60_000,
             ),
         )
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=1440.0, now_ms=now_ms)
 
         with pytest.raises(RuntimeError, match="fill history coverage unknown"):
             bot._get_realized_pnl_cumsum_stats()
@@ -485,9 +521,9 @@ class TestGetRealizedPnlCumsumStats:
                 history_scope="window",
             ),
         )
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_gate_lookback(bot, minutes=1440.0, now_ms=now_ms)
 
-        assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0}
+        assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0, "drawdown": 0.0}
 
 
 # ---------------------------------------------------------------------------
@@ -892,10 +928,10 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
             "hsl_ema_span_minutes": 60.0,
             "hsl_cooldown_minutes_after_red": 0.0,
             "hsl_panic_close_order_type": "market",
-            "hsl_restart_after_red_policy": "always",
         }
         hsl_short = deepcopy(hsl_long)
         config = {
+            "config_version": "v9.0.0",
             "backtest": {
                 "coins": {"binance": ["BTC"]},
                 "starting_balance": 10000,
@@ -925,7 +961,9 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
                 "hedge_mode": True,
                 "hsl_signal_mode": "coin",
                 "max_realized_loss_pct": 1.0,
-                "pnls_max_lookback_days": 30.0,
+                "lookback_ema_span_minutes": 43200.0,
+                "risk_bootstrap_max_lookback_minutes": 129600.0,
+                "realized_loss_gate_lookback_minutes": 43200.0,
             },
             "coin_overrides": {},
         }
@@ -950,14 +988,16 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         config = self._make_config()
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(1.0)
-        assert bp["pnls_max_lookback_days"] == pytest.approx(30.0)
+        assert bp["lookback_ema_span_minutes"] == pytest.approx(43200.0)
+        assert bp["realized_loss_gate_lookback_minutes"] == pytest.approx(43200.0)
 
     def test_explicit_value_passthrough(self):
         config = self._make_config(max_realized_loss_pct=0.05)
-        config["live"]["pnls_max_lookback_days"] = 14
+        config["live"]["realized_loss_gate_lookback_minutes"] = 20160.0
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(0.05)
-        assert bp["pnls_max_lookback_days"] == pytest.approx(14.0)
+        assert bp["realized_loss_gate_lookback_minutes"] == pytest.approx(20160.0)
+        assert bp["lookback_ema_span_minutes"] == pytest.approx(43200.0)
 
     def test_zero_disables_lossy_closes(self):
         config = self._make_config(max_realized_loss_pct=0.0)
@@ -1007,7 +1047,6 @@ class TestPrepBacktestArgsEquityHardStopLoss:
             red_threshold=0.3,
             ema_span_minutes=45.5,
             cooldown_minutes_after_red=30.0,
-            restart_after_red_policy="never",
             panic_close_order_type="limit",
         )
         config = self._make_config(policy)

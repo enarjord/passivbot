@@ -480,7 +480,7 @@ def test_cuda_disabled_hsl_specialization_matches_full_hsl_state(cuda):
 @pytest.mark.parametrize("coins", [1, 3])
 def test_cuda_factory_owns_replay_lifetime_and_matches_direct_metrics(cuda, monkeypatch, strategy, coins):
     from optimization.gpu.executor import BacktestRequest, GpuBacktestService
-    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
+    from optimization.gpu.service import MpsMulticoinProxy
     from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
     import backtest
 
@@ -492,7 +492,7 @@ def test_cuda_factory_owns_replay_lifetime_and_matches_direct_metrics(cuda, monk
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", str(coins), "--bars", "128",
     ]))
-    cls = MpsSingleCoinProxy if coins == 1 else MpsMulticoinProxy
+    cls = MpsMulticoinProxy
 
     def construct():
         return cls(config=deepcopy(config), hlcvs=candles, mss=markets, btc=btc,
@@ -1294,9 +1294,8 @@ def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel
     runner.coin_override_label = label
     runner.native_factual_hsl = True
     runner.hsl_replay_sides = sides
-    runner.hsl_fact_capacity_learned = 512
     runner.hsl_fact_capacity = 64
-    runner._hsl_scratch_buffers = {"old": object()}
+    scratch = runner._hsl_scratch_buffers = {"forward": object()}
     runner._coin_hsl_enabled_overrides = tuple(np.array([np.nan, 0.]) for _ in range(sides))
     runner._unstuck_ema_overrides = tuple(np.full((2, 2), np.nan) for _ in range(sides))
     matrix = np.zeros((2, len(keys) * sides), dtype=np.float32)
@@ -1304,8 +1303,8 @@ def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel
         matrix[:, side * len(keys) + keys.index("hsl_signal_mode")] = 2
     matrix[0, (sides - 1) * len(keys) + keys.index("hsl_enabled")] = 1
     runner._prepare_native_factual_hsl(matrix)
-    assert runner.hsl_fact_capacity == 512 and runner.hsl_factual_replay
-    assert runner._hsl_scratch_buffers == {}
+    assert runner.hsl_fact_capacity == 0 and not runner.hsl_factual_replay
+    assert runner._hsl_scratch_buffers is scratch
     assert not runner._unstuck_ema_required(matrix)
     for name in ("unstuck_enabled", "unstuck_ema_gating_enabled"):
         matrix[1, (sides - 1) * len(keys) + keys.index(name)] = 1
@@ -1314,7 +1313,7 @@ def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel
         matrix[:, side * len(keys) + keys.index("hsl_enabled")] = 0
     runner._prepare_native_factual_hsl(matrix)
     assert runner.hsl_fact_capacity == 0 and not runner.hsl_factual_replay
-    assert runner.hsl_fact_capacity_learned == 512
+    assert not hasattr(runner, "hsl_fact_capacity_learned")
 
 
 def test_cuda_decimal_proofs_keep_metal_signed_64_bit_arithmetic():

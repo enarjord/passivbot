@@ -180,8 +180,7 @@
                 "ema_span_minutes": 720.0,
                 "enabled": false,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.15,
-                "restart_after_red_policy": "always"
+                "red_threshold": 0.15
             },
             "entry_cooldown": {
                 "base_duration_minutes": 24.1,
@@ -262,8 +261,7 @@
                 "ema_span_minutes": 1.0,
                 "enabled": false,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.01,
-                "restart_after_red_policy": "always"
+                "red_threshold": 0.01
             },
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
@@ -327,7 +325,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.6.0",
+    "config_version": "v9.0.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -464,7 +462,9 @@
         "order_replacement_churn_gate_market_dist_pct": 0.005,
         "order_replacement_churn_gate_stability_minutes": 2.0,
         "order_replacement_churn_gate_window_minutes": 10.0,
-        "pnls_max_lookback_days": 30.0,
+        "lookback_ema_span_minutes": 43200.0,
+        "realized_loss_gate_lookback_minutes": 43200.0,
+        "risk_bootstrap_max_lookback_minutes": 129600.0,
         "recv_window_ms": 5000,
         "startup_phase_budgets": {},
         "strategy_kind": "trailing_martingale",
@@ -636,8 +636,6 @@
         "enable_overrides": [],
         "fixed_params": [],
         "fixed_runtime_overrides": {
-            "bot.long.hsl.restart_after_red_policy": "always",
-            "bot.short.hsl.restart_after_red_policy": "always"
         },
         "iters": 200000,
         "limits": [

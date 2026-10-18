@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.parametrize(
     "family",
-    ["ema_anchor", "trailing_martingale", "ema_anchor_multicoin", "trailing_martingale_multicoin"],
+    ["ema_anchor_multicoin", "trailing_martingale_multicoin"],
 )
 def test_report_red_covers_terminal_cooldown_but_panic_tier_does_not(family):
     import passivbot_rust
@@ -31,7 +31,7 @@ kernel void red_reporting_probe(constant float* params, device HslNode* trees,
     observe_hsl(h, 1000, 0, -400, true, 1, false);
     out[1] = hsl_report_tier(h);
     out[2] = h.tier;
-    finish_hsl_episode_at_flat(h, 600, 1000, -400, 2, 60000);
+    observe_hsl_event(h, 600, -400, 0, false, 2, true);
     out[3] = hsl_report_tier(h);
     out[4] = h.tier;
     out[5] = h.halted;
@@ -49,7 +49,7 @@ kernel void red_reporting_probe(constant float* params, device HslNode* trees,
 }
 """)
     device = gpu_device()
-    params = torch.tensor([1, 0.1, 1, 5, 0, 2, 1], dtype=torch.float32, device=device)
+    params = torch.tensor([1, 0.1, 1, 300000, 30.5, 2, 0], dtype=torch.float32, device=device)
     trees = torch.empty((36, 32), dtype=torch.uint8, device=device)
     rows = torch.empty(256, dtype=torch.int32, device=device)
     out = torch.zeros(11, dtype=torch.float32, device=device)
@@ -58,7 +58,7 @@ kernel void red_reporting_probe(constant float* params, device HslNode* trees,
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_cooldown_reporting_changes_only_red_samples_in_real_replay(monkeypatch, strategy, mode):
     import passivbot_rust
     from optimization.gpu import mps_kernel

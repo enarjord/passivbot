@@ -287,6 +287,8 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
         backtest_params={
             "coins": ["BTC"],
             "dynamic_wel_by_tradability": True,
+            "lookback_ema_span_minutes": config["live"]["lookback_ema_span_minutes"],
+            "realized_loss_gate_lookback_minutes": config["live"]["realized_loss_gate_lookback_minutes"],
             "equity_hard_stop_loss": {
                 "engine": "hsl",
                 "mode": "coin",

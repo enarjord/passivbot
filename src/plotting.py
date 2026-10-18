@@ -29,7 +29,6 @@ except ImportError:  # pragma: no cover
     Fore = _Dummy()
 from prettytable import PrettyTable
 from config.shared_bot import flatten_shared_bot_side
-from config.pnl_lookback import parse_pnls_max_lookback_days
 from config_utils import dump_config
 from utils import make_get_filepath
 from pure_funcs import denumpyize, ts_to_date

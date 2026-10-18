@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("overridden", [False, True])
 def test_inherited_overrides_preserve_hsl_and_temporal_continuation(monkeypatch, mode, sides, overridden):
@@ -71,7 +71,7 @@ def test_inherited_overrides_preserve_unchunked_disabled_hsl(sides):
     from test_gpu_hsl_multicoin import make_proxy, raw
     from test_gpu_side_specialization import equal_outputs
 
-    proxy = make_proxy("unified", sides=sides, minutes=128, coin_count=3,
+    proxy = make_proxy("portfolio", sides=sides, minutes=128, coin_count=3,
                        enabled=False, factual_hsl=False)
     runner = proxy.fused_runner or proxy.runners[sides[0]]
     runner.max_dispatch_candidate_bars = None

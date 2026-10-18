@@ -29,10 +29,10 @@ FIXTURE_DEFAULTS = {
     "sides": "long", "coins": 2, "bars": 5760, "seed": 7, "hsl": "disabled",
     "unstuck": False, "market_orders": False, "filter_by_min_effective_cost": False,
     "hsl_red_threshold": 0.05, "hsl_ema_span_minutes": 30.0,
-    "hsl_cooldown_minutes": 30.0, "hsl_lookback_days": 1.0, "price_shocks": [],
+    "hsl_cooldown_minutes": 30.0, "lookback_ema_span_minutes": 1440.0, "price_shocks": [],
 }
 STRESS_OPTIONS = ("hsl_red_threshold", "hsl_ema_span_minutes", "hsl_cooldown_minutes",
-                  "hsl_lookback_days", "price_shocks")
+                  "lookback_ema_span_minutes", "price_shocks")
 # Provisional measurement gates for selected definitions, not a release certificate.
 DEFAULT_TOLERANCES = {
     **{name: MetricTolerance(1e-5, 1e-4) for name in EXPOSURE_RMS_METRICS},
@@ -55,7 +55,7 @@ def build_parser():
     parser.add_argument("--coins", type=int)
     parser.add_argument("--bars", type=int)
     parser.add_argument("--seed", type=int)
-    parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "unified"))
+    parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "portfolio"))
     add_fixture_stress_options(parser)
     parser.add_argument("--unstuck", action="store_true", default=None)
     parser.add_argument("--market-orders", action="store_true", default=None)
@@ -82,6 +82,8 @@ def add_fixture_stress_options(parser):
 
 def resolve_fixture_args(args):
     """Validate and normalize the shared recipe before preparing either simulator."""
+    from config.risk_memory import normalize_lookback_ema_span_minutes
+
     args = argparse.Namespace(**vars(args))
     for name, default in FIXTURE_DEFAULTS.items():
         if getattr(args, name, None) is None:
@@ -91,8 +93,12 @@ def resolve_fixture_args(args):
     for name, lower, upper in (("hsl_red_threshold", 0, 1),
                               ("hsl_ema_span_minutes", 1, math.inf),
                               ("hsl_cooldown_minutes", 0, math.inf),
-                              ("hsl_lookback_days", 1, 90)):
+                              ("lookback_ema_span_minutes", 1, math.inf)):
         value = getattr(args, name)
+        if name in {"hsl_ema_span_minutes", "lookback_ema_span_minutes"}:
+            setattr(args, name, normalize_lookback_ema_span_minutes(
+                value, field=f"fixture --{name.replace('_', '-')}"))
+            continue
         if not math.isfinite(value) or not lower <= value <= upper or (
                 name == "hsl_red_threshold" and value == 0):
             raise ValueError(f"invalid fixture --{name.replace('_', '-')}")
@@ -165,7 +171,7 @@ def fixture_inputs(args):
         max_warmup_minutes=60,
         minimum_coin_age_days=0,
         market_orders_allowed=args.market_orders,
-        pnls_max_lookback_days=args.hsl_lookback_days,
+        lookback_ema_span_minutes=args.lookback_ema_span_minutes,
         hsl_signal_mode="coin" if args.hsl == "disabled" else args.hsl,
         approved_coins={side: coins if side in active else [] for side in ("long", "short")},
         ignored_coins={"long": [], "short": []},
@@ -188,15 +194,15 @@ def fixture_inputs(args):
         bot["hsl"].update(
             enabled=side in active and args.hsl in {"coin", "pside"},
             red_threshold=args.hsl_red_threshold, ema_span_minutes=args.hsl_ema_span_minutes,
-            cooldown_minutes_after_red=args.hsl_cooldown_minutes, restart_after_red_policy="always",
+            cooldown_minutes_after_red=args.hsl_cooldown_minutes,
         )
         bot["unstuck"]["enabled"] = args.unstuck and side in active
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
-    if args.hsl == "unified":
+    if args.hsl == "portfolio":
         config["bot"]["hsl"].update(
             enabled=True, red_threshold=args.hsl_red_threshold,
             ema_span_minutes=args.hsl_ema_span_minutes,
-            cooldown_minutes_after_red=args.hsl_cooldown_minutes, restart_after_red_policy="always",
+            cooldown_minutes_after_red=args.hsl_cooldown_minutes,
         )
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     # Ordered coins are derived preparation metadata, outside the canonical config.
@@ -384,6 +390,8 @@ def _native_dataset(inputs, exchange, metrics):
 
 
 def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostics=False, gpu_engine="native"):
+    if gpu_engine == "legacy":
+        raise ValueError("v9 parity requires the native shared-account GPU engine")
     if gpu_engine == "legacy" and inputs[0]["backtest"].get("organillo_csv") is not None:
         raise ValueError("Organillo parity requires the native shared-account GPU engine")
     if gpu_engine not in {"legacy", "native"}:

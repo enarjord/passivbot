@@ -375,7 +375,7 @@ def test_idle_clock_preserves_unmasked_capacity_and_readiness(tmp_path, strategy
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", ["long", "both"])
-@pytest.mark.parametrize("hsl", ["coin", "unified"])
+@pytest.mark.parametrize("hsl", ["coin", "portfolio"])
 @pytest.mark.parametrize("policy", ["zero", "delayed"])
 def test_idle_prefix_hsl_observations_follow_accounting_clock(tmp_path, strategy, sides,
         hsl, policy, monkeypatch, require_real_passivbot_rust_module):
@@ -394,6 +394,14 @@ def test_idle_prefix_hsl_observations_follow_accounting_clock(tmp_path, strategy
                    [[0, 0]] if policy == "zero" else [[0, 0], [1, 1]])
     _fills, _equities, analysis = execute_backtest(build_backtest_payload(
         candles, markets, config, "binance", btc, stamps), config)
+    if policy == "zero":
+        assert len(_fills) == 0
+        assert analysis["hard_stop_triggers_per_year"] == 0.0
+        assert analysis["hard_stop_time_in_red_pct"] == 0.0
+    else:
+        assert len(_fills) > 0
+        first_admission = (int(stamps[0]) // DAY_MS + 1) * DAY_MS
+        assert min(float(fill[1]) for fill in _fills) >= first_admission
     metrics = ("adg_strategy_eq", "hard_stop_time_in_red_pct",
                "hard_stop_triggers_per_year", "drawdown_worst_mean_1pct_ema_strategy_eq",
                "backtest_completion_ratio")
@@ -607,7 +615,7 @@ def test_native_gpu_zero_schedule_and_hsl_replay(tmp_path, strategy,
     from tools.gpu_parity import build_parser, fixture_inputs as prepare, run_comparison, DEFAULT_TOLERANCES
     for policy in ([[0, 0]], [[1, 0]]):
         args = build_parser().parse_args(["--fixture", strategy, "--sides", "both", "--coins", "2",
-                                         "--bars", "512", "--hsl", "unified",
+                                         "--bars", "512", "--hsl", "portfolio",
                                          "--hsl-red-threshold", "0.002"])
         inputs = prepare(args)
         write_schedule(tmp_path / f"selection_{len(policy)}.csv", inputs, policy)
@@ -659,6 +667,7 @@ def test_registry_reuses_shared_selection_and_fallback_handles_sliced_timestamps
     write_schedule(tmp_path / "selection.csv", inputs, [[1, 0]])
     config["optimize"].update(scoring=[{"metric": "adg_strategy_eq", "goal": "max"}], limits=[])
     manager = SharedArrayManager()
+    base = None
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc)]
         base = Evaluator({"binance": specs[0]}, {"binance": specs[1]}, {"binance": markets},
@@ -688,10 +697,11 @@ def test_registry_reuses_shared_selection_and_fallback_handles_sliced_timestamps
                 assert selected.values.shape[1] == 1 and len(selected.rows) == 64
     finally:
         # Attached worker views must close before their parent-owned segments.
-        for group in base._attachments.values():
-            for attachment in group.values():
-                attachment.close()
-        base._attachments.clear()
+        if base is not None:
+            for group in base._attachments.values():
+                for attachment in group.values():
+                    attachment.close()
+            base._attachments.clear()
         manager.cleanup()
 
 
@@ -754,7 +764,7 @@ def test_gpu_chunk_and_factual_hsl_preserve_eligibility_schedule(tmp_path, strat
     from optimization.gpu.service import MpsMulticoinProxy
     from tools.gpu_parity import build_parser, fixture_inputs as prepare
     inputs = prepare(build_parser().parse_args(["--fixture", strategy, "--sides", "both",
-        "--coins", "2", "--bars", "1600", "--hsl", "unified", "--hsl-red-threshold", ".002"]))
+        "--coins", "2", "--bars", "1600", "--hsl", "portfolio", "--hsl-red-threshold", ".002"]))
     write_schedule(tmp_path / "selection.csv", inputs, [[1, 0], [0, 0]])
     config, candles, markets, btc, timestamps = inputs
     proxy = MpsMulticoinProxy(config=config, hlcvs=candles, mss=markets, btc=btc,

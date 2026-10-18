@@ -82,6 +82,7 @@ fn weighted_equity_shared_references_match_current_producers() {
         dynamic_wel_by_tradability: true,
         hedge_mode: true,
         max_realized_loss_pct: 1.0,
+        lookback_ema_span_minutes: 43_200.0,
         pnls_max_lookback_days: 365.0,
         liquidation_threshold: 0.05,
         market_orders_allowed: false,

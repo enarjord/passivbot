@@ -17,7 +17,7 @@ import tools.run_fake_live as runner
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("current_size", [1.0, 2.0, 0.5])
 async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fills(
@@ -35,16 +35,15 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         cfg["bot"]["long"]["risk"].update(
             n_positions=0, total_wallet_exposure_limit=0.0
         )
-    policy = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"][side]["hsl"]
+    policy = cfg["bot"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
     policy.update(
         enabled=True,
         red_threshold=0.9,
         ema_span_minutes=1.0,
         cooldown_minutes_after_red=1.0,
-        restart_after_red_policy="always",
         panic_close_order_type="market",
     )
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
+    cfg["live"]["lookback_ema_span_minutes"] = 288.0
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})
@@ -98,7 +97,7 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         await asyncio.sleep(0.01)
         policy = (
             bot.config["bot"]["hsl"]
-            if mode == "unified"
+            if mode == "portfolio"
             else bot.config["bot"][side]["hsl"]
         )
         policy["red_threshold"] = 0.05

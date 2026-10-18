@@ -1,206 +1,123 @@
-"""Real-extension parity for the isolated hsl numerical kernel."""
+"""Source-verified v9 runtime arithmetic against an independent rational oracle."""
 
+from copy import deepcopy
 import json
-import math
-import random
 
 import pytest
 
-from hsl_reference import Observation, dec, minimal_signal, signal
+from rust_utils import verify_loaded_runtime_extension
+from v9_risk_reference import sample
 
 
 @pytest.fixture(scope="module")
-def require_real_passivbot_rust_module():
-    import passivbot_rust as pbr
+def native():
+    import passivbot_rust
 
-    assert not getattr(pbr, "__is_stub__", False)
-    assert hasattr(pbr, "hsl_signal"), "rebuild the source-matched Rust extension"
-    return pbr
+    verify_loaded_runtime_extension()
+    return passivbot_rust
 
 
-def compare(pbr, rows, budget, span, threshold, entry_reference=None):
-    oracle = signal(
-        [Observation(t, dec(p), dec(u)) for t, p, u in rows],
-        budget,
-        span,
-        threshold,
-        entry_reference=entry_reference,
+def request(*, mode="coin", side="long", slow=3.0, fast=3.0,
+            net=-0.1, final_budget=999.9, now=120_001):
+    direction = 1 if side == "long" else -1
+    mark = 80.0 if side == "long" else 120.0
+    return dict(
+        snapshot=dict(
+            now=now, start=0, balance=final_budget, balance_at=now, config_at=0,
+            max_current_age_ms=120_000, mode=mode,
+            pside=side if mode != "portfolio" else None,
+            symbol="A" if mode == "coin" else None,
+            pairs=[dict(
+                symbol="A", position=dict(size=direction, basis=100.0,
+                    mark=mark, multiplier=1.0, inverse=False, pside=side,
+                    quantity_step=0.1),
+                position_at=now, mark_at=now, fills_started_at=now, fills_at=now,
+                prices_at=now, revisions=[0,0,0,0],
+                fills=[dict(identity="entry", timestamp=60_000, delta=direction,
+                    price=100.0, realized=0.0, fee=net, sequence=0, revision=0)],
+                prices={"0":100.0,"60000":100.0,"120000":mark},
+            )],
+        ),
+        slots=1, scale_budget_with_excess_allowance=False, exposure_budget=None,
+        lookback_span_minutes=slow, span=fast, threshold=0.01,
+        cooldown_ms=120_000,
+        budget_observations=[
+            dict(timestamp=0,order=-1,balance=1000.0,slots=1,
+                 scale_budget_with_excess_allowance=False,exposure_budget=None,
+                 estimated=False),
+            dict(timestamp=60_000,order=0,balance=1000.0+net,slots=1,
+                 scale_budget_with_excess_allowance=False,exposure_budget=None,
+                 estimated=False),
+            dict(timestamp=120_000,order=-1,balance=final_budget,slots=1,
+                 scale_budget_with_excess_allowance=False,exposure_budget=None,
+                 estimated=False),
+        ],
     )
-    actual = json.loads(pbr.hsl_signal(rows, budget, span, threshold, entry_reference))
-    for name in ("equity", "peaks", "raw", "ema"):
-        assert actual[name] == pytest.approx(
-            [float(x) for x in getattr(oracle, name)], rel=2e-12, abs=2e-13
-        )
-    assert actual["panic"] == list(oracle.panic)
-    assert not actual["numeric_range_approximation"]
-    return actual
 
 
-@pytest.mark.parametrize("span", [1.0, 2.5, 3.0, 1e6])
-def test_clean_recovery_boundaries_and_fractional_ema(
-    require_real_passivbot_rust_module, span
+def evaluate(native, value):
+    return json.loads(native.hsl_v9_evaluate(json.dumps(value,allow_nan=False)))
+
+
+@pytest.mark.parametrize("mode",["coin","pside","portfolio"])
+@pytest.mark.parametrize("side",["long","short"])
+@pytest.mark.parametrize("slow,fast",[(3.0,1.0),(43200.0,360.0),(7.5,2.5)])
+@pytest.mark.parametrize("net",[-0.1,0.025])
+@pytest.mark.parametrize("final_budget",[999.9,2000.0])
+def test_actual_native_risk_uses_ordered_f32_graph(
+    native, mode, side, slow, fast, net, final_budget
 ):
-    rows = [
-        (0, 0, 0),
-        (60_000, 0, -100),
-        (60_001, -100, -100),
-        (120_000, -200, 0),
-        (120_001, -200, 50),
-        (180_000, -200, 200),
-    ]
-    compare(require_real_passivbot_rust_module, rows, 1000, span, 0.12)
+    value=request(mode=mode,side=side,slow=slow,fast=fast,net=net,
+                  final_budget=final_budget)
+    entry=sample(previous_d=0,previous_m=0,previous_upnl=0,upnl=0,net=net,
+                 budget=1000.0+net,slow_span=slow,fast_span=fast)
+    marked=sample(previous_d=entry["drawdown"],previous_m=entry["ema"],
+                  previous_upnl=0,upnl=-20,net=0,budget=final_budget,
+                  slow_span=slow,fast_span=fast)
+    actual=evaluate(native,value)["risk"]
+    for key in ["drawdown","raw","ema","nonpositive_equity"]:
+        assert actual[key] == marked[key],(key,actual,marked)
 
 
-@pytest.mark.parametrize(
-    "threshold,expected", [(0.124999, True), (0.125, False), (0.125001, False)]
-)
-def test_strict_threshold_boundary(
-    require_real_passivbot_rust_module, threshold, expected
-):
-    actual = compare(
-        require_real_passivbot_rust_module,
-        [(0, 0, 0), (60_000, 0, -100), (120_000, 0, -200)],
-        1000,
-        3,
-        threshold,
-    )
-    assert actual["panic"][-1] is expected
+def test_retired_risk_exports_are_absent(native):
+    for name in ["hsl_signal","hsl_controller","hsl_evaluate",
+                 "hsl_evaluate_grids","hsl_trace","hsl_candle_free"]:
+        assert not hasattr(native,name)
 
 
-@pytest.mark.parametrize("upnl", [-100, 0, 100])
-@pytest.mark.parametrize("span", [1, 2.5, 1e6])
-def test_singleton_entry_reference(require_real_passivbot_rust_module, upnl, span):
-    expected = minimal_signal(upnl, 1000, span, 0.09)
-    actual = compare(
-        require_real_passivbot_rust_module, [(0, 0, upnl)], 1000, span, 0.09, 1000
-    )
-    assert actual["raw"] == actual["ema"]
-    assert actual["panic"] == list(expected.panic)
+@pytest.mark.parametrize("key,value",[("span",0.5),("lookback_span_minutes",1e12),
+                                      ("threshold",-1),("cooldown_ms",-1)])
+def test_malformed_policy_is_a_producer_error(native,key,value):
+    payload=request();payload[key]=value
+    with pytest.raises(ValueError):
+        evaluate(native,payload)
 
 
-def test_nonpositive_peak_and_common_currency_offset(
-    require_real_passivbot_rust_module,
-):
-    compare(
-        require_real_passivbot_rust_module,
-        [(0, 0, -200), (60_000, 0, -150), (120_000, 0, 0)],
-        100,
-        3,
-        0.1,
-    )
-    compare(
-        require_real_passivbot_rust_module,
-        [(0, 1e60, 0), (60_000, 1e60, -10)],
-        100,
-        1,
-        0.05,
-    )
+def test_disposable_current_preview_does_not_change_the_factual_request(native):
+    value=request();saved=deepcopy(value)
+    first=evaluate(native,value)
+    assert evaluate(native,value) == first
+    assert value == saved
+    repaired=deepcopy(value)
+    repaired["snapshot"]["pairs"][0]["fills"][0]["fee"]=-1.0
+    assert evaluate(native,repaired)["risk"]["drawdown"] > first["risk"]["drawdown"]
+    assert evaluate(native,value) == first
 
 
-@pytest.mark.parametrize("seed", range(40))
-def test_deterministic_currency_paths_match_decimal_oracle(
-    require_real_passivbot_rust_module, seed
-):
-    rng = random.Random(seed)
-    rows, timestamp, realized = [], -120_000, 0
-    for _ in range(100):
-        timestamp += rng.choice([0, 1, 20_000, 60_000, 180_000])
-        realized += rng.randrange(-50, 51)
-        rows.append((timestamp, realized, rng.randrange(-500, 501)))
-    compare(
-        require_real_passivbot_rust_module,
-        rows,
-        rng.choice([250, 1000, 10000]),
-        rng.choice([1, 2.5, 30.5, 10000]),
-        0.075,
-    )
-
-
-@pytest.mark.parametrize(
-    "rows,budget,span,threshold,reference",
-    [
-        ([], 1, 1, 0.1, None),
-        ([(0, math.nan, 0)], 1, 1, 0.1, None),
-        ([(0, 0, math.inf)], 1, 1, 0.1, None),
-        ([(0, 0, 0)], 0, 1, 0.1, None),
-        ([(0, 0, 0)], math.inf, 1, 0.1, None),
-        ([(0, 0, 0)], 1, 0.5, 0.1, None),
-        ([(0, 0, 0)], 1, 1, -1, None),
-        ([(1, 0, 0), (0, 0, 0)], 1, 1, 0.1, None),
-        ([(0, 0, 0)], 1, 1, 0.1, math.nan),
-    ],
-)
-def test_invalid_inputs_are_errors(
-    require_real_passivbot_rust_module, rows, budget, span, threshold, reference
-):
-    with pytest.raises(ValueError, match="invalid HSL"):
-        require_real_passivbot_rust_module.hsl_signal(
-            rows, budget, span, threshold, reference
-        )
-
-
-def test_extreme_finite_inputs_are_observably_bounded(
-    require_real_passivbot_rust_module,
-):
-    big = float.fromhex("0x1.fffffffffffffp+1023")
-    result = json.loads(
-        require_real_passivbot_rust_module.hsl_signal(
-            [(0, big, 0), (60_000, -big, 0), (120_000, -big / 2, 0)], 1, 2.5, 0.1
-        )
-    )
-    assert result["numeric_range_approximation"]
-    assert all(
-        math.isfinite(v)
-        for key in ("equity", "peaks", "raw", "ema")
-        for v in result[key]
-    )
-    assert result["equity"][-1] == 1
-    assert result["panic"][-1]
-
-
-def test_batch_poll_repeat_and_window_reset_have_no_hidden_state(
-    require_real_passivbot_rust_module,
-):
-    pbr = require_real_passivbot_rust_module
-    rows = [(0, 0, 200), (60_000, 0, -100), (120_000, 0, 0)]
-    first = pbr.hsl_signal(rows, 1000, 1, 0.1)
-    compare(pbr, rows[1:], 1000, 1, 0.1)
-    assert pbr.hsl_signal(rows, 1000, 1, 0.1) == first
-
-
-@pytest.mark.parametrize("variant", ["both_deltas_overflow", "one_delta_overflows"])
-def test_cancelling_oversized_deltas_do_not_erase_representable_loss(
-    require_real_passivbot_rust_module, variant
-):
-    big = float.fromhex("0x1.fffffffffffffp+1023")
-    rows, expected = (
-        ([(0, big, -big / 2), (60_000, -big, big)], big)
-        if variant == "both_deltas_overflow"
-        else ([(0, big, -big), (60_000, -big, 0)], big)
-    )
-    result = json.loads(require_real_passivbot_rust_module.hsl_signal(rows, 1, 1, 0.1))
-    assert result["numeric_range_approximation"]
-    assert result["equity"][0] == pytest.approx(expected)
-    assert result["panic"][-1]
-
-
-@pytest.mark.parametrize("budget,loss", [(1e16, 1.0), (1e300, 1e280), (1e-200, 1e-220)])
-@pytest.mark.parametrize("span", [1.0, 2.5, 10000.0])
-def test_multi_point_signal_retains_losses_below_budget_precision(budget, loss, span):
-    from decimal import Decimal, localcontext
-    import json
-    import passivbot_rust as pbr
-
-    rows = [(i * 60_000, -i * loss, 0.0) for i in range(4)]
-    result = json.loads(pbr.hsl_signal(rows, budget, span, 0.0))
-    with localcontext() as context:
-        context.prec = 100
-        peak = Decimal.from_float(budget) + Decimal.from_float(3 * loss)
-        alpha = Decimal(2) / (Decimal.from_float(span) + 1)
-        expected_ema = Decimal(0)
-        for i, (raw, ema) in enumerate(zip(result["raw"], result["ema"])):
-            expected_raw = Decimal.from_float(i * loss) / peak
-            expected_ema = alpha * expected_raw + (1 - alpha) * expected_ema
-            assert raw == pytest.approx(float(expected_raw), rel=1e-14, abs=0)
-            assert ema == pytest.approx(float(expected_ema), rel=1e-14, abs=0)
-    assert result["panic"] == [False, True, True, True]
+@pytest.mark.parametrize("values",[
+    [-1e16,-1.0,1e16],[1e16,-1e16,-1.0],[-1.0,1e16,-1e16],
+])
+def test_scope_upnl_is_summed_before_the_binary32_risk_boundary(native,values):
+    value=request(mode="portfolio")
+    pairs=[]
+    for i,pnl in enumerate(values):
+        pair=deepcopy(value["snapshot"]["pairs"][0])
+        pair.update(symbol=str(i),fills=[],prices={})
+        pair["position"].update(size=abs(pnl),basis=2.0,
+                                 mark=1.0 if pnl<0 else 3.0)
+        pairs.append(pair)
+    value["snapshot"].update(pairs=pairs,balance=1000.0)
+    value["budget_observations"]=[]
+    output=evaluate(native,value)
+    assert output["risk"]["drawdown"] == 1.0
+    assert output["risk"]["raw"] == pytest.approx(0.001)

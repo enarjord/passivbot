@@ -57,9 +57,9 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
         inputs = list(inputs)
         config = inputs[0]
         candle_coins = list(config["backtest"]["coins"]["binance"])
-        if config["live"]["hsl_signal_mode"] != "unified":
-            config = generated_template(config, "unified")
-        config["live"].update(hsl_signal_mode="unified", pnls_max_lookback_days=1)
+        if config["live"]["hsl_signal_mode"] != "portfolio":
+            config = generated_template(config, "portfolio")
+        config["live"].update(hsl_signal_mode="portfolio", lookback_ema_span_minutes=1440)
         config["bot"]["hsl"].update(enabled=True, red_threshold=1., ema_span_minutes=2.5,
             cooldown_minutes_after_red=5, restart_after_red_policy="always")
         inputs[0] = prepare_config(config,verbose=False,target="canonical",runtime=None)

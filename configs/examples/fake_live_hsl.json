@@ -190,8 +190,7 @@
         "ema_span_minutes": 1.0,
         "enabled": true,
         "panic_close_order_type": "market",
-        "red_threshold": 0.05,
-        "restart_after_red_policy": "always"
+        "red_threshold": 0.05
       },
       "risk": {
         "n_positions": 1,
@@ -275,8 +274,7 @@
         "ema_span_minutes": 1.0,
         "enabled": false,
         "panic_close_order_type": "limit",
-        "red_threshold": 0.01,
-        "restart_after_red_policy": "always"
+        "red_threshold": 0.01
       },
       "risk": {
         "n_positions": 1,
@@ -343,7 +341,7 @@
     }
   },
   "coin_overrides": {},
-  "config_version": "v8.6.0",
+  "config_version": "v9.0.0",
   "live": {
     "approved_coins": {
       "long": [],
@@ -401,7 +399,9 @@
     "order_replacement_churn_gate_market_dist_pct": 0.005,
     "order_replacement_churn_gate_stability_minutes": 2.0,
     "order_replacement_churn_gate_window_minutes": 10.0,
-    "pnls_max_lookback_days": 1.0,
+    "lookback_ema_span_minutes": 1440.0,
+    "realized_loss_gate_lookback_minutes": 1440.0,
+    "risk_bootstrap_max_lookback_minutes": 129600.0,
     "recv_window_ms": 5000,
     "startup_phase_budgets": {},
     "strategy_kind": "trailing_martingale",

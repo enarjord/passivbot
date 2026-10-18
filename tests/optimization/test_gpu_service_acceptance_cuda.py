@@ -48,7 +48,7 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "512",
         "--unstuck",
     ]))
-    config["live"].update(max_realized_loss_pct=0.1, pnls_max_lookback_days=8 / 1440)
+    config["live"].update(max_realized_loss_pct=0.1, lookback_ema_span_minutes=8.0, realized_loss_gate_lookback_minutes=8.0)
     key = "long_base_qty_pct" if strategy == "ema_anchor" else "long_entry_initial_qty_pct"
     candidates = [{key: value} for value in (0.005, 0.015, 0.03, 0.045, 0.005)]
     reference = replay_module.MpsMulticoinProxy(
@@ -181,9 +181,9 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
         monkeypatch.setattr(owner, name, forbidden)
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "long", "--coins", "25",
-        "--bars", "11520", "--seed", "7", "--hsl", "unified",
+        "--bars", "11520", "--seed", "7", "--hsl", "portfolio",
         "--hsl-red-threshold", ".99", "--hsl-ema-span-minutes", "2.5",
-        "--hsl-lookback-days", "1",
+        "--lookback-ema-span-minutes", "1440",
     ]))
     config, candles, _markets, _btc, _timestamps = inputs
     candles[:] = [100.1, 99.9, 100., 100.]

@@ -11,20 +11,19 @@ launch command and intervention scope.
    and compatible configuration separately for rollback. Keep account identifiers, credentials and operational artifacts
    outside the public repository.
 2. Validate configuration through the canonical loader. Coin/pside policies belong under
-   `bot.long.hsl` and `bot.short.hsl`; unified requires an explicitly supplied `bot.hsl` block.
-   Confirm the chosen restart policy, the 1–90 day lookback, the raw
-   balance/coin-slot budget and fractional EMA span. Renewed exposure clears cooldown. The historical curve anchors to the scope
-   budget plus current UPNL. See [configuration migration](configuration.md#hsl-configuration).
+   `bot.long.hsl` and `bot.short.hsl`; portfolio requires an explicitly supplied `bot.hsl` block.
+   Confirm the chosen slow/fast EMA spans, the bounded bootstrap horizon, the independent
+   rolling loss-gate window and raw balance/coin-slot budget. There is no Never policy.
+   A pre-final-fill RED or final-accounting RED qualifies a fixed finite cooldown.
+   See [configuration migration](v8_to_v9_migration.md).
 3. Run a representative offline backtest and the fake runner using the intended mode, order type
    and scope count. Include both a panic and an ordinary-entry path. Verify the rebuilt extension,
    effective config, native scope diagnostics and resulting orders, not only process exit status.
-4. Measure complete capture and connector admission with the intended lookback and scope count.
-   The reproducible synthetic probe is
-   `PYTHONPATH=src:tests python tests/hsl_live_benchmark.py --mode coin --lookback-days 90 --coins 30 --admission`.
-   Select the relevant mode and size. Admission must finish while actual input observations remain
-   fresh; do not raise freshness limits to hide excessive computation. The advancing-clock probe
-   includes the two actual evaluations, so inspect permissions as well as latency. It is one
-   no-fill workload and cannot establish a universal performance guarantee.
+4. Measure complete factual capture, Rust reconstruction and connector admission with the
+   intended spans, scope count and bounded bootstrap history. Admission must finish while
+   current account/held-mark observations remain fresh. Inspect reconstructed permissions
+   and unknown-prefix/truncation diagnostics alongside latency. Synthetic no-fill probes
+   cannot establish a universal performance guarantee.
 
 ## Observe during the approved run
 
@@ -43,15 +42,16 @@ launch command and intervention scope.
   admission, reduce-only full-position intent, actual exchange acknowledgements and the next
   authoritative position/order confirmation. A submission log does not prove a fill. Watch that
   unfilled limit orders, a missing peer quote and history repair do not monopolize independent
-  coin scopes. A unified signal still requires the whole portfolio's current inputs.
+  coin scopes. A portfolio signal still requires the whole portfolio's current inputs.
 - If partial execution or restart is deliberately tested, compare the reconstructed decision
   using the same exchange facts and configuration. HSL has no durable local RED
-  commitment: a decision with no reconstructible exchange evidence can disappear. Historical
-  evidence, cooldown and `never` halts expire at the configured lookback boundary by design.
-- If fresh positions are flat but the closing fill is delayed, verify that cooldown uses the
-  latest retained scoped fill timestamp and does not renew on repeated reads. A delivered final
-  fill may correct that timestamp and restore remaining cooldown. No retained history means no
-  historical cooldown; this is an intentional best-effort policy.
+  commitment: qualification comes from factual flatten events. Known-origin replay must
+  reproduce decisions; unknown prefixes retain explicit approximation diagnostics. Later
+  GREEN and budget changes cannot cancel or renew a qualified finite deadline.
+- If fresh positions are flat but the final fill is delayed, verify bounded fact repair and
+  the reconstruction diagnostics. The final event's pre/post RED assessments and factual
+  flatten time determine cooldown. Repeated reads never renew it. Missing evidence cannot
+  be replaced by an old local permission flag or order tag.
 - Confirm that diagnostics stay scoped and bounded, stale observations are labelled, and recovery
   is visible. Monitoring is evidence only; it must not authorize an order or delay admission.
 

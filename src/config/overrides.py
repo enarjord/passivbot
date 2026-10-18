@@ -74,7 +74,6 @@ CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
         "hsl.enabled",
         "hsl.panic_close_order_type",
         "hsl.red_threshold",
-        "hsl.restart_after_red_policy",
     }
 )
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(

@@ -6,7 +6,7 @@ import pytest
 
 from hsl_reference import Fill
 from test_hsl_reference_replay import M, frame, pair
-from test_hsl_evaluator import evaluate
+from test_hsl_evaluator import evaluate_snapshot as evaluate
 
 
 @pytest.mark.parametrize(
@@ -14,7 +14,7 @@ from test_hsl_evaluator import evaluate
     [
         ("coin", {"pside": "long", "symbol": "A"}),
         ("pside", {"pside": "long"}),
-        ("unified", {}),
+        ("portfolio", {}),
     ],
 )
 @pytest.mark.parametrize("mark,expected", [(100, 0), (90, 0.1), (80, 0.2)])
@@ -31,7 +31,7 @@ def test_current_equity_anchor_and_strict_red_threshold(
 def test_coin_budget_uses_slots_and_aggregate_uses_whole_balance():
     snapshot = frame(pair(size=1, basis=100, mark=90), balance=200)
     coin = evaluate(snapshot, "coin", slots=2, pside="long", symbol="A")["decision"]
-    aggregate = evaluate(snapshot, "unified")["decision"]
+    aggregate = evaluate(snapshot, "portfolio")["decision"]
     assert coin["raw"] == pytest.approx(0.1)
     assert aggregate["raw"] == pytest.approx(0.05)
 

@@ -1,6 +1,5 @@
 mod analysis;
 mod backtest;
-mod exposure_rms;
 mod closes;
 mod coin_selection;
 mod config_prefilter;
@@ -9,17 +8,17 @@ mod dynamic;
 mod entries;
 mod entry_cooldown;
 mod ew;
+mod exposure_rms;
 mod gpu;
-mod hsl;
-mod hsl_candle_free;
-mod hsl_controller;
-mod hsl_evaluator;
+mod hsl_decay;
 mod hsl_history;
+mod hsl_intent;
 mod hsl_json;
 mod hsl_prices;
 mod hsl_snapshot;
 mod hsl_sum;
-mod hsl_trace;
+mod hsl_support;
+mod hsl_v9_live;
 mod limit_fills;
 mod orchestrator;
 mod python;
@@ -116,7 +115,10 @@ fn mps_weighted_volume_source_py() -> &'static str {
 /// A Python module implemented in Rust.
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(config_prefilter::config_prefilter_metrics_json, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        config_prefilter::config_prefilter_metrics_json,
+        m
+    )?)?;
     m.add_class::<HlcvsBundlePy>()?;
     m.add_function(wrap_pyfunction!(
         unilateralness::calc_signed_unilateralness,
@@ -128,11 +130,14 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_ew_metrics, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl::signal_py, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_controller::hsl_controller, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_trace::hsl_trace, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_evaluator::hsl_evaluate, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_evaluator::hsl_evaluate_grids, m)?)?;
+    m.add_function(wrap_pyfunction!(hsl_v9_live::hsl_v9_evaluate, m)?)?;
+    m.add_function(wrap_pyfunction!(hsl_v9_live::hsl_v9_evaluate_grids, m)?)?;
+    m.add_class::<hsl_v9_live::HslV9Replay>()?;
+    m.add_function(wrap_pyfunction!(hsl_v9_live::realized_memory_v9, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        hsl_v9_live::calc_auto_unstuck_allowance_v9,
+        m
+    )?)?;
     m.add_class::<hsl_prices::HslPriceGrid>()?;
     m.add_class::<hsl_prices::HslCandleSource>()?;
     m.add_function(wrap_pyfunction!(hsl_prices::hsl_native_price_grid, m)?)?;
@@ -140,7 +145,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hsl_prices::hsl_prices, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_prices::hsl_price_grid, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_snapshot::hsl_snapshot, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_candle_free::hsl_candle_free, m)?)?;
     m.add_function(wrap_pyfunction!(mps_ema_anchor_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(mps_ema_anchor_long_no_hsl_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(mps_ema_anchor_short_no_hsl_source_py, m)?)?;
@@ -205,7 +209,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_twel_enforcer_orders_py, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest_bundle, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_auto_unstuck_allowance, m)?)?;
     m.add_function(wrap_pyfunction!(hysteresis, m)?)?;
     m.add_function(wrap_pyfunction!(ema_last_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_min_entry_qty_py, m)?)?;

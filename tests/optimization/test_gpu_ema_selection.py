@@ -3,7 +3,7 @@
 import pytest
 
 
-@pytest.mark.parametrize("mode", ["disabled", "coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["disabled", "coin", "pside", "portfolio"])
 @pytest.mark.parametrize("sides", ["long", "short", "both"])
 def test_native_ema_current_ranking_matches_cpu(mode, sides):
     torch = pytest.importorskip("torch")
@@ -25,7 +25,7 @@ def test_native_ema_current_ranking_matches_cpu(mode, sides):
         inputs[0]["bot"][side]["hsl"].update(
             red_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
-    if mode == "unified":
+    if mode == "portfolio":
         inputs[0]["bot"]["hsl"].update(
             red_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )

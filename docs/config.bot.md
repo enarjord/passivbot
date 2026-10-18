@@ -182,15 +182,24 @@ Apple MPS screening supports independent unstuck horizons and bounds for both su
 including per-coin overrides and candle-interval scaling. Start a fresh GPU run after upgrading;
 older screening checkpoints use a different parameter layout.
 
-Auto-unstuck requires a positive remaining realized-loss allowance. It does not wait for equity
-to fall below a loss floor. The allowance is reconstructed from the account-wide realized-PnL
-window configured by `live.pnls_max_lookback_days`:
+Auto-unstuck requires a positive remaining realized-loss allowance. It uses one continuous
+account-wide net-realized-PnL drawdown memory, with the shared
+`live.lookback_ema_span_minutes` span. This memory includes ordinary/HSL closes, entry/exit
+fees and signed rebates; it excludes unrealized PnL and does not reset at HSL episode
+boundaries. For each elapsed minute and then each ordered realized event:
 
 ```text
-balance_peak = balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)
-loss_fraction = unstuck.loss_allowance_pct * total_wallet_exposure_limit
-remaining_allowance = max(0, balance - balance_peak * (1 - loss_fraction))
+alpha = 2 / (live.lookback_ema_span_minutes + 1)
+D_realized = (1 - alpha) * D_realized
+D_realized = max(0, D_realized - net_realized_PnL)
+p = unstuck.loss_allowance_pct * applicable_total_wallet_exposure_limit
+remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 ```
+
+Queries do not reapply decay or fills. Profits repay remembered losses; excess profits
+create no negative loss credit. The independent `max_realized_loss_pct` gate retains its
+rolling window under `live.realized_loss_gate_lookback_minutes`. V8 memory spans and loss
+percentages require joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
 
 If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
 coin+side uses the override percentage in this same account-wide allowance formula.

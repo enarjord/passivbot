@@ -98,6 +98,12 @@ def _load_config(
         return None, [
             _issue("error", "config_root_invalid", "config root must be a JSON object")
         ]
+    from config.migrations.v9 import require_v9_runtime_config
+
+    try:
+        require_v9_runtime_config(parsed)
+    except ValueError as error:
+        return None, [_issue("error", "config_migration_required", str(error), path="config_version")]
     return parsed, []
 
 

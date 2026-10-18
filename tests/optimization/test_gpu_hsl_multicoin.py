@@ -1,4 +1,4 @@
-"""Scoped HSL through real multi-coin screening and replay buffers."""
+"""V9 forward HSL dispatch, candidate isolation and temporal replay structure."""
 
 from copy import deepcopy
 import numpy as np
@@ -20,15 +20,15 @@ def make_proxy(
     mode,
     strategy="trailing_martingale",
     sides=("long", "short"),
-    minutes=3000,
+    minutes=256,
     enabled=True,
     override=None,
     chunk=False,
-    lookback=1,
+    memory_span=1440.0,
     coin_count=2,
     prepared_data_cache=None,
     interrupt_check=None,
-    factual_hsl=False,
+    factual_hsl=True,
     override_side="long",
     dispatch_budget=1000000,
 ):
@@ -40,7 +40,7 @@ def make_proxy(
         strategy_kind=strategy,
         approved_coins={s: coins if s in sides else [] for s in ("long", "short")},
         ignored_coins={"long": [], "short": []},
-        pnls_max_lookback_days=lookback,
+        lookback_ema_span_minutes=memory_span,
         max_warmup_minutes=60,
     )
     config["backtest"].update(
@@ -53,19 +53,17 @@ def make_proxy(
             position_exposure_enforcer_enabled=False,
         )
         config["bot"][side]["hsl"].update(
-            enabled=enabled and mode != "unified",
+            enabled=enabled and mode != "portfolio",
             red_threshold=0.02,
             ema_span_minutes=2.5,
             cooldown_minutes_after_red=5,
-            restart_after_red_policy="always",
         )
-    if mode == "unified":
+    if mode == "portfolio":
         config["bot"]["hsl"].update(
             enabled=enabled,
             red_threshold=0.02,
             ema_span_minutes=2.5,
             cooldown_minutes_after_red=5,
-            restart_after_red_policy="always",
         )
     if override:
         config["coin_overrides"] = {"AAA": {"bot": {override_side: {"hsl": override}}}}
@@ -102,14 +100,14 @@ def make_proxy(
         ),
     )
     if chunk:
-        assert proxy.fused_runner is None  # temporal multi-coin replay is single-side
-        for runner in proxy.runners.values():
+        runners = [proxy.fused_runner] if proxy.fused_runner else list(proxy.runners.values())
+        for runner in runners:
             runner.max_dispatch_candidate_bars = 500
     return proxy
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_multicoin_hsl_service_dispatch(strategy, mode, sides):
     proxy = make_proxy(mode, strategy, sides)
@@ -155,7 +153,7 @@ def compare(a, b):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, sides):
     proxy = make_proxy(mode, strategy, sides, enabled=False)
@@ -170,16 +168,13 @@ def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, 
             }
         ],
     )
-    # Single-side EMA side/unified replays now compile disabled HSL away.
-    # Coin mode retains loss-reporting state; fused/TM layouts remain full.
-    compact_hsl = strategy == "ema_anchor" and len(sides) == 1 and mode != "coin"
-    assert runner.dispatch_hsl_disabled is compact_hsl
+    assert not runner.dispatch_hsl_disabled
     compare(baseline, changed)
     assert float(baseline["fill_count"].sum()) > 0
     assert not (baseline["hsl_triggers_long"] + baseline["hsl_triggers_short"]).any()
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_multicoin_temporal_replay_and_scratch_batches(mode):
     candidates = [
         {f"long_hsl_red_threshold": 1e-6, "hsl_red_threshold": 1e-6},
@@ -201,7 +196,7 @@ def test_multicoin_temporal_replay_and_scratch_batches(mode):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_multicoin_candidates_do_not_share_history(strategy, mode):
     p = make_proxy(mode, strategy)
     candidates = [
@@ -224,7 +219,7 @@ def test_multicoin_candidates_do_not_share_history(strategy, mode):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
     p = make_proxy(mode, strategy)
     _, r = raw(
@@ -242,17 +237,8 @@ def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
     assert triggers[0] > 0
     assert triggers[1] == 0
     assert r["alive"].all()
-    if mode == "unified":
+    if mode == "portfolio":
         assert (r["hsl_triggers_short"] == 0).all()  # one portfolio owner
-
-
-@pytest.mark.parametrize("lookback", [0, "all"])
-@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-def test_multicoin_inactive_history_is_inert(strategy, lookback):
-    p = make_proxy("coin", strategy, enabled=False, lookback=lookback)
-    _, r = raw(p, [{}])
-    assert r["alive"].all()
-    assert (r["hsl_triggers_long"] + r["hsl_triggers_short"] == 0).all()
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
@@ -281,7 +267,7 @@ def test_scratch_profiles_count_each_candidate_once(strategy, chunk, sides):
     candidates = [{}, {}, {}]
     runner, _ = raw(p, candidates)
     runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() * 2
-    ends = np.array([3000, 1700, 500], dtype=np.int32)
+    ends = np.array([runner.n, runner.n // 2, runner.n // 4], dtype=np.int32)
     runner, _ = raw(p, candidates, end_steps=ends, profile=True)
     steps = int((np.clip(ends, 1, runner.n - 1) - 1).sum())
     assert runner.last_profile["kernel_candidate_steps"] == steps
@@ -300,7 +286,7 @@ def test_scratch_profiles_count_each_candidate_once(strategy, chunk, sides):
     not torch.backends.mps.is_available(), reason="Metal specialization"
 )
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
 def test_metal_hsl_capacity_matches_full_arrays(strategy, mode, sides):
     candidates = [
@@ -336,109 +322,3 @@ def test_metal_capacity_replay_layout_matches_compiled_variant():
     _, expected = raw(full, [{}])
     compare(actual, expected)
     assert 0 < runner._replay_state_bytes < full_runner._replay_state_bytes
-
-
-@pytest.mark.parametrize("strategy,mode,sides", [
-    ("trailing_martingale", "coin", ("long", "short")),
-    ("trailing_martingale", "pside", ("long",)),
-    ("ema_anchor", "coin", ("short",)),
-    ("ema_anchor", "unified", ("long", "short")),
-])
-def test_flat_continuation_ablation_preserves_full_native_replay(
-    monkeypatch, strategy, mode, sides
-):
-    import optimization.gpu.mps_kernel as kernels
-    import backtest
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("CPU backtest used by native replay")
-    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
-    compile_shader = kernels.compile_shader
-    outputs = []
-    for enabled in (False, True):
-        compiled_flat_sources = []
-        def compile_ablation(source, **kwargs):
-            if "bool flat_cursor =" in source:
-                compiled_flat_sources.append(enabled)
-                if not enabled:
-                    source = source.replace("bool flat_cursor =", "bool flat_cursor = false &&", 1)
-            return compile_shader(source, **kwargs)
-
-        monkeypatch.setattr(kernels, "compile_shader", compile_ablation)
-        proxy = make_proxy(mode, strategy, sides, minutes=3000, factual_hsl=True, chunk=len(sides) == 1)
-        runner = proxy.fused_runner or proxy.runners[sides[0]]
-        # Invalidate only this shader recipe so the two attempts truly compile
-        # opposite flat-continuation variants, retaining exposed continuation.
-        library, _ = runner._library_cache_call()
-        library.cache_clear()
-        _, output = raw(proxy, [{}, {"long_hsl_red_threshold": 1e-6,
-                                   "short_hsl_red_threshold": 1e-6,
-                                   "hsl_red_threshold": 1e-6}])
-        outputs.append(output)
-        assert compiled_flat_sources and set(compiled_flat_sources) == {enabled}
-        _, repeated = raw(proxy, [{}, {"long_hsl_red_threshold": 1e-6,
-                                     "short_hsl_red_threshold": 1e-6,
-                                     "hsl_red_threshold": 1e-6}])
-        compare(output, repeated)
-    assert outputs[0]["fill_count"].sum().item() > 0
-    for key in outputs[0]:
-        if isinstance(outputs[0][key], torch.Tensor):
-            torch.testing.assert_close(outputs[0][key], outputs[1][key],
-                                       rtol=0, atol=0, equal_nan=True)
-        else:
-            assert outputs[0][key] == outputs[1][key]
-    # Do not leave an ablation shader in the shared recipe cache.
-    library.cache_clear()
-
-
-@pytest.mark.parametrize("strategy,mode,sides", [
-    ("trailing_martingale", "coin", ("long",)),
-    ("trailing_martingale", "pside", ("long",)),
-    ("ema_anchor", "coin", ("short",)),
-    ("trailing_martingale", "unified", ("short",)),
-])
-def test_historical_endpoint_ablation_preserves_full_native_replay(
-    monkeypatch, strategy, mode, sides
-):
-    import optimization.gpu.mps_kernel as kernels
-    import backtest
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("CPU backtest used by native replay")
-    monkeypatch.setattr(backtest, "execute_backtest", forbidden)
-    compile_shader = kernels.compile_shader
-    outputs = []
-    for enabled in (False, True):
-        compiled_historical_sources = []
-        def compile_ablation(source, **kwargs):
-            if "&& pair_count == 1" in source:
-                compiled_historical_sources.append(enabled)
-                if not enabled:
-                    source = source.replace("&& pair_count == 1", "&& false && pair_count == 1", 1)
-            return compile_shader(source, **kwargs)
-
-        monkeypatch.setattr(kernels, "compile_shader", compile_ablation)
-        proxy = make_proxy(mode, strategy, sides, minutes=3000, coin_count=1, factual_hsl=True, chunk=True)
-        runner = proxy.fused_runner or proxy.runners[sides[0]]
-        # Invalidate only this shader recipe so the two attempts truly compile
-        # opposite historical-endpoint variants, retaining existing continuation.
-        library, _ = runner._library_cache_call()
-        library.cache_clear()
-        _, output = raw(proxy, [{}, {"long_hsl_red_threshold": 1e-6,
-                                   "short_hsl_red_threshold": 1e-6,
-                                   "hsl_red_threshold": 1e-6}])
-        outputs.append(output)
-        assert compiled_historical_sources and set(compiled_historical_sources) == {enabled}
-        _, repeated = raw(proxy, [{}, {"long_hsl_red_threshold": 1e-6,
-                                     "short_hsl_red_threshold": 1e-6,
-                                     "hsl_red_threshold": 1e-6}])
-        compare(output, repeated)
-    assert outputs[0]["fill_count"].sum().item() > 0
-    for key in outputs[0]:
-        if isinstance(outputs[0][key], torch.Tensor):
-            torch.testing.assert_close(outputs[0][key], outputs[1][key],
-                                       rtol=0, atol=0, equal_nan=True)
-        else:
-            assert outputs[0][key] == outputs[1][key]
-    # Do not leave an ablation shader in the shared recipe cache.
-    library.cache_clear()

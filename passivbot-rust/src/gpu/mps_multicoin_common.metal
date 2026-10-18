@@ -392,6 +392,11 @@ struct JointPortfolioAccount {
     float realized_pnl_peak;
     float realized_pnl_long;
     float realized_pnl_short;
+    float realized_decay_beta;
+    float realized_decay_drawdown;
+    long realized_decay_minute;
+    int realized_decay_interval_minutes;
+    bool realized_decay_valid;
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     RollingPnlWindow unstuck_pnl;
     device float2* unstuck_pnl_values;
@@ -412,6 +417,11 @@ inline JointPortfolioAccount init_joint_portfolio_account(
     account.realized_pnl_peak = 0.0f;
     account.realized_pnl_long = 0.0f;
     account.realized_pnl_short = 0.0f;
+    account.realized_decay_beta = 0.0f;
+    account.realized_decay_drawdown = 0.0f;
+    account.realized_decay_minute = 0;
+    account.realized_decay_interval_minutes = 1;
+    account.realized_decay_valid = true;
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     account.unstuck_pnl = init_rolling_pnl_window();
     account.unstuck_pnl_values = nullptr;
@@ -423,11 +433,33 @@ inline JointPortfolioAccount init_joint_portfolio_account(
     return account;
 }
 
+#pragma STDC FP_CONTRACT OFF
+inline void advance_joint_realized_memory(thread JointPortfolioAccount& account, int bar_index) {
+#if PASSIVBOT_UNSTUCK_ENABLED
+    // Fill/recovery coordinates remain bars. Risk memory always advances by
+    // exact integer minutes, including when HSL is disabled on aggregated data.
+    const long minute = long(bar_index) * long(account.realized_decay_interval_minutes);
+    if (minute < account.realized_decay_minute) {
+        account.realized_decay_valid = false;
+        return;
+    }
+    for (long m = account.realized_decay_minute; m < minute; ++m)
+        account.realized_decay_drawdown = fma(account.realized_decay_beta,
+            account.realized_decay_drawdown, 0.0f);
+    account.realized_decay_minute = minute;
+#endif
+}
+#pragma STDC FP_CONTRACT ON
+
 inline void record_joint_portfolio_fill(
     thread JointPortfolioAccount& account,
     float net_pnl,
     bool is_long
 ) {
+#if PASSIVBOT_UNSTUCK_ENABLED
+    account.realized_decay_valid = account.realized_decay_valid
+        && hsl_decay_realized_fill(net_pnl, account.realized_decay_drawdown);
+#endif
 #if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
     record_rolling_pnl(
         account.unstuck_pnl, account.unstuck_pnl_values,
@@ -498,6 +530,7 @@ inline void record_realized_net(
     bool is_entry,
     bool is_long
 ) {
+    advance_joint_realized_memory(account, int(fill_k));
     record_joint_portfolio_fill(account, net_pnl, is_long);
     day_fill_count += 1.0f;
     fill_count += 1.0f;
@@ -551,6 +584,7 @@ inline float coin_override_or(
 #endif
 }
 
+#pragma STDC FP_CONTRACT OFF
 inline float allowed_wallet_exposure_limit(
     float base_limit, float total_limit, float allowance_pct) {
     if (!(isfinite(base_limit) && base_limit > 0.0f)) return 0.0f;
@@ -588,6 +622,8 @@ inline void prepare_coin_hsl_budgets(
     }
 #endif
 }
+
+#pragma STDC FP_CONTRACT ON
 
 inline bool passes_multicoin_min_effective_cost(
     bool enabled, float balance, float wel,

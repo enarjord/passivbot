@@ -11,7 +11,6 @@ import pytest
 from cli_utils import build_command_parser, expand_help_all_argv, help_all_requested
 from config import load_input_config, prepare_config
 from config.coerce import (
-    normalize_hsl_restart_after_red_policy,
     normalize_hsl_signal_mode,
 )
 from config.project import project_config
@@ -74,13 +73,10 @@ def test_hsl_signal_mode_accepts_coin():
     assert normalize_hsl_signal_mode("coin") == "coin"
 
 
-def test_hsl_restart_after_red_policy_normalizes_default_and_rejects_invalid():
-    for removed in (None, "threshold"):
-        with pytest.raises(ValueError, match="restart_after_red_policy"):
-            normalize_hsl_restart_after_red_policy(removed)
-    assert normalize_hsl_restart_after_red_policy("always") == "always"
-    with pytest.raises(ValueError, match="restart_after_red_policy"):
-        normalize_hsl_restart_after_red_policy("sometimes")
+def test_hsl_signal_mode_accepts_portfolio_and_rejects_retired_unified():
+    assert normalize_hsl_signal_mode("portfolio") == "portfolio"
+    with pytest.raises(ValueError, match="hsl_signal_mode"):
+        normalize_hsl_signal_mode("unified")
 
 
 @pytest.mark.parametrize(
@@ -126,10 +122,10 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
     }
     assert "market_orders_allowed" not in loaded["backtest"]
     assert "market_order_near_touch_threshold" not in loaded["backtest"]
-    assert "pnls_max_lookback_days" not in loaded["backtest"]
+    assert "lookback_ema_span_minutes" not in loaded["backtest"]
     assert "market_orders_allowed" in loaded["live"]
     assert "market_order_near_touch_threshold" in loaded["live"]
-    assert "pnls_max_lookback_days" in loaded["live"]
+    assert "lookback_ema_span_minutes" in loaded["live"]
     assert "risk_input_max_attempts" not in loaded["live"]
 
 
@@ -174,7 +170,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "unstuck",
         }
         expected_bounds = {"entry_cooldown", "forager", "risk", "strategy", "unstuck"}
-        if loaded["live"]["hsl_signal_mode"] == "unified":
+        if loaded["live"]["hsl_signal_mode"] == "portfolio":
             assert "hsl" in loaded["optimize"]["bounds"]
             assert "hsl" in loaded["bot"]
         else:
@@ -494,6 +490,7 @@ def test_rename_config_keys_records_tracker_events():
 
 def test_load_config_renames_legacy_panic_market_slippage_pct(tmp_path):
     raw = {
+        "config_version": "v9.0.0",
         "backtest": {"panic_market_slippage_pct": 0.0015},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -674,6 +671,7 @@ def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatt
     assert template["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
     sparse = {
+        "config_version": "v9.0.0",
         "live": {},
         "backtest": {},
         "bot": {"long": {}, "short": {}},
@@ -1799,9 +1797,9 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
         help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
     )
     _assert_help_option_aliases(help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT")
-    _assert_help_option_aliases(
-        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
-    )
+    assert "--lookback-ema-span-minutes FLOAT" in help_text
+    assert "--realized-loss-gate-lookback-minutes FLOAT" in help_text
+    assert "--pnls-max-lookback-days" not in help_text
     assert "--bot.long.entry_grid_inflation_enabled" not in help_text
     assert "--bot.long.hsl.enabled" not in help_text
     assert "--optimize_population_size" not in help_text
@@ -1880,9 +1878,9 @@ def test_live_default_help_shows_curated_groups():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
     )
-    _assert_help_option_aliases(
-        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
-    )
+    assert "--lookback-ema-span-minutes FLOAT" in help_text
+    assert "--realized-loss-gate-lookback-minutes FLOAT" in help_text
+    assert "--pnls-max-lookback-days" not in help_text
     _assert_help_option_aliases(help_text, "--user", "-u", "VALUE")
     assert "--live.auto_gs" not in help_text
     assert "--optimize.iters" not in help_text
@@ -1905,9 +1903,9 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
         help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
     )
     _assert_help_option_aliases(help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT")
-    _assert_help_option_aliases(
-        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
-    )
+    assert "--lookback-ema-span-minutes FLOAT" in help_text
+    assert "--realized-loss-gate-lookback-minutes FLOAT" in help_text
+    assert "--pnls-max-lookback-days" not in help_text
     assert "--reducer-default MODE" in help_text
     assert "--iters INT, -i INT" not in help_text
 
@@ -2080,7 +2078,7 @@ def test_risk_cli_aliases_last_value_wins(legacy_last):
     )
 
 
-def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
+def test_live_risk_memory_and_independent_gate_flags_parse():
     config = get_template_config()
     del config["optimize"]
     del config["backtest"]
@@ -2097,17 +2095,17 @@ def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
         group_map=group_map,
     )
 
-    parsed_short = parser.parse_args(["-pmld", "14"])
-    parsed_long = parser.parse_args(["--pnls-max-lookback-days", "21"])
-    parsed_all = parser.parse_args(["--pnls-max-lookback-days", "all"])
+    parsed_short = parser.parse_args(["--live.lookback_ema_span_minutes", "14"])
+    parsed_long = parser.parse_args(["--lookback-ema-span-minutes", "21"])
+    parsed_all = parser.parse_args(["--realized-loss-gate-lookback-minutes", "-1"])
 
-    assert getattr(parsed_short, "live.pnls_max_lookback_days") == pytest.approx(14.0)
-    assert getattr(parsed_long, "live.pnls_max_lookback_days") == pytest.approx(21.0)
-    assert getattr(parsed_all, "live.pnls_max_lookback_days") == "all"
+    assert getattr(parsed_short, "live.lookback_ema_span_minutes") == pytest.approx(14.0)
+    assert getattr(parsed_long, "live.lookback_ema_span_minutes") == pytest.approx(21.0)
+    assert getattr(parsed_all, "live.realized_loss_gate_lookback_minutes") == -1.0
 
 
 @pytest.mark.parametrize("command", ["backtest", "optimize"])
-def test_dotted_pnls_lookback_override_accepts_all_for_non_live_commands(command):
+def test_dotted_loss_gate_override_accepts_all_sentinel_for_non_live_commands(command):
     config = project_template_config_for_cli(get_template_config(), command)
     parser = argparse.ArgumentParser(prog=command)
     group_map = {
@@ -2122,9 +2120,9 @@ def test_dotted_pnls_lookback_override_accepts_all_for_non_live_commands(command
         group_map=group_map,
     )
 
-    parsed = parser.parse_args(["--live.pnls_max_lookback_days", "all"])
+    parsed = parser.parse_args(["--live.realized_loss_gate_lookback_minutes", "-1"])
 
-    assert getattr(parsed, "live.pnls_max_lookback_days") == "all"
+    assert getattr(parsed, "live.realized_loss_gate_lookback_minutes") == -1.0
 
 
 @pytest.mark.parametrize("command", ["backtest", "optimize"])
@@ -2167,15 +2165,14 @@ def test_optimize_fixed_bot_runtime_overrides_parse():
         [
             "--bot.short.hsl.enabled",
             "y",
-            "--bot.long.hsl.restart_after_red_policy",
-            "always",
             "--bot.short.hsl.panic_close_order_type",
             "market",
         ]
     )
 
     assert getattr(parsed, "bot.short.hsl.enabled") is True
-    assert getattr(parsed, "bot.long.hsl.restart_after_red_policy") == "always"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--bot.long.hsl.restart_after_red_policy", "always"])
     assert getattr(parsed, "bot.short.hsl.panic_close_order_type") == "market"
 
 
@@ -2238,7 +2235,7 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     parsed_market = parser.parse_args(["-moa", "y"])
     parsed_hedge = parser.parse_args(["-hm", "n"])
     parsed_near_touch = parser.parse_args(["-montt", "0.002"])
-    parsed_lookback = parser.parse_args(["-pmld", "14"])
+    parsed_lookback = parser.parse_args(["--lookback-ema-span-minutes", "14"])
     parsed_loss = parser.parse_args(["-mrlp", "0.75"])
     parsed_fee_fallback = parser.parse_args(["--fee-pct-fallback", "0"])
     parsed_fee_sanity = parser.parse_args(["--fee-pct-sanity-abs-max", "0.002"])
@@ -2250,7 +2247,7 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     assert getattr(
         parsed_near_touch, "live.market_order_near_touch_threshold"
     ) == pytest.approx(0.002)
-    assert getattr(parsed_lookback, "live.pnls_max_lookback_days") == pytest.approx(
+    assert getattr(parsed_lookback, "live.lookback_ema_span_minutes") == pytest.approx(
         14.0
     )
     assert getattr(parsed_loss, "live.max_realized_loss_pct") == pytest.approx(0.75)
@@ -2295,7 +2292,7 @@ def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_f
     assert "market_orders_allowed" in config["live"]
     assert "market_order_near_touch_threshold" in config["live"]
     assert "max_warmup_minutes" in config["live"]
-    assert "pnls_max_lookback_days" in config["live"]
+    assert "lookback_ema_span_minutes" in config["live"]
     assert "user" not in config["live"]
 
 
@@ -2305,7 +2302,7 @@ def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_f
     assert "market_orders_allowed" in config["live"]
     assert "market_order_near_touch_threshold" in config["live"]
     assert "max_warmup_minutes" in config["live"]
-    assert "pnls_max_lookback_days" in config["live"]
+    assert "lookback_ema_span_minutes" in config["live"]
     assert "user" not in config["live"]
 
 
@@ -2350,8 +2347,8 @@ def test_retired_hsl_recovery_controls_are_not_runtime_inputs(key, value):
     config = get_template_config()
     assert key not in config["live"]
     config["live"][key] = value
-    normalized = prepare_config(config, verbose=False, target="canonical", runtime=None)
-    assert key not in normalized["live"]
+    with pytest.raises(ValueError, match="removed in v9"):
+        prepare_config(config, verbose=False, target="canonical", runtime=None)
 
 
 @pytest.mark.parametrize("wrapped", [False, True])

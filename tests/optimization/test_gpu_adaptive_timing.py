@@ -219,15 +219,15 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
 
 
 @GPU
-@pytest.mark.parametrize("recent", [False, True])
-def test_adaptive_temporal_chunks_preserve_all_outputs(recent):
-    from test_gpu_mps import _tm_directional_temporal_fixture
-    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
-    from optimization.gpu.model import (
-        TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS as keys,
-    )
+def test_adaptive_temporal_chunks_preserve_all_native_outputs():
+    from test_gpu_mps import _multicoin_exposure_fixture
+    from optimization.gpu.model import TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS as keys
 
-    market, run, data, row, kwargs = _tm_directional_temporal_fixture()
+    count = 250
+    phase = np.arange(count, dtype=float)
+    closes = np.column_stack((100 + 2*np.sin(phase/11), 120 + 3*np.cos(phase/17)))
+    runner, row = _multicoin_exposure_fixture("trailing_martingale", "long",
+                                             count=count, closes=closes)
     for key, value in dict(
         entry_cooldown_max_duration_minutes=30,
         entry_cooldown_exposure_weight=7,
@@ -236,23 +236,16 @@ def test_adaptive_temporal_chunks_preserve_all_outputs(recent):
         unilateralness_window=65,
     ).items():
         row[keys.index(key)] = value
-    matrix = np.asarray([row + row], dtype=float)
-    history = dict(history_start_step=73, trade_start_step=113) if recent else {}
-    plain = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
-    expected = {
-        k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
-        for k, v in plain.run(matrix, **history).items()
-    }
-    chunked = MpsTrailingMartingaleRunner(
-        market, run, data, max_dispatch_candidate_bars=94, **kwargs
-    )
-    for key, value in chunked.run(matrix, **history).items():
+    matrix = np.asarray([row], dtype=float)
+    expected = {key: value.cpu().clone() if isinstance(value, torch.Tensor) else value
+                for key, value in runner.run(matrix).items()}
+    runner.max_dispatch_candidate_bars = 94
+    for key, value in runner.run(matrix).items():
         if isinstance(value, torch.Tensor):
-            torch.testing.assert_close(
-                value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True
-            )
+            torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
         else:
             assert value == expected[key]
+    assert runner._last_temporal_dispatch["dispatch_count"] > 1
 
 
 

@@ -16,7 +16,7 @@ def _write_config(path, config):
 
 def _sample_config() -> dict:
     return {
-        "config_version": "v8.0.0",
+        "config_version": "v9.0.0",
         "live": {
             "user": "binance_01",
             "exchange": "binance",
@@ -31,7 +31,6 @@ def _sample_config() -> dict:
                     "cooldown_minutes_after_red": 45,
                     "ema_span_minutes": 120,
                     "panic_close_order_type": "limit",
-                    "restart_after_red_policy": "always",
                 }
             },
             "short": {
@@ -185,7 +184,7 @@ def test_hsl_preview_degraded_capture_never_becomes_current_by_timestamp():
 
 def test_hsl_preview_portfolio_policy_uses_explicit_block():
     config = _sample_config()
-    config["live"]["hsl_signal_mode"] = "unified"
+    config["live"]["hsl_signal_mode"] = "portfolio"
     config["bot"]["hsl"] = {
         "enabled": True,
         "red_threshold": 0.25,
@@ -204,7 +203,6 @@ def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
         "hsl_cooldown_minutes_after_red": 45,
         "hsl_ema_span_minutes": 120,
         "hsl_panic_close_order_type": "limit",
-        "hsl_restart_after_red_policy": "always",
     }
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
@@ -224,7 +222,6 @@ def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
         "cooldown_minutes_after_red": 45,
         "ema_span_minutes": 120,
         "panic_close_order_type": "limit",
-        "restart_after_red_policy": "always",
     }
 
 
@@ -240,6 +237,17 @@ def test_hsl_startup_preview_missing_config_path_is_user_safe():
     assert report["config_path"] == "~/passivbot/configs/missing.json"
     assert report["issues"][0]["path"] == "~/passivbot/configs/missing.json"
     assert "/root" not in rendered
+
+
+def test_hsl_startup_preview_rejects_v8_without_mislabeling_runtime_status(tmp_path):
+    config = _sample_config()
+    config["config_version"] = "v8.0.0"
+    path = tmp_path / "old.json"
+    _write_config(path, config)
+    report = hsl_startup_preview.build_hsl_startup_preview_report(path, monitor_root="", now_ms=1)
+    assert not report["ok"]
+    assert report["issues"][0]["code"] == "config_migration_required"
+    assert "migrate-config-v9" in report["issues"][0]["message"]
 
 
 def test_hsl_startup_preview_config_only_marks_runtime_inputs_unavailable(tmp_path):

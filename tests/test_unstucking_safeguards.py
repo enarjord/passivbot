@@ -122,9 +122,12 @@ def _make_mock_pbr():
 
     module.get_strategy_kinds = _get_strategy_kinds
 
-    module.calc_auto_unstuck_allowance = (
-        lambda balance, allowance_pct, max_pnl, last_pnl: allowance_pct * balance
-    )
+    def _calc_auto_unstuck_allowance_v9(balance, loss_pct, twel, drawdown):
+        from v9_risk_reference import allowance, f32, mul
+
+        return allowance(balance, mul(f32(loss_pct), f32(twel)), f32(drawdown))
+
+    module.calc_auto_unstuck_allowance_v9 = _calc_auto_unstuck_allowance_v9
     module.calc_wallet_exposure = (
         lambda c_mult, balance, size, price: abs(size) * price / max(balance, 1e-6)
     )
@@ -309,6 +312,7 @@ def mock_pbr(monkeypatch):
     stub_module = _make_mock_pbr()
     stub_module.get_strategy_spec = native_pbr.get_strategy_spec
     stub_module.get_strategy_kinds = native_pbr.get_strategy_kinds
+    stub_module.realized_memory_v9 = native_pbr.realized_memory_v9
     monkeypatch.setitem(sys.modules, "passivbot_rust", stub_module)
 
     class _DummyLockException(Exception):
@@ -3099,10 +3103,21 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
     assert isinstance(returned["error"], FatalBotException)
 
 
+def _supply_known_empty_realized_risk(bot):
+    # These orchestrator-output fixtures explicitly start with no realized fills.
+    # A scenario supplying a manager must retain the actual history/memory path.
+    assert bot._pnls_manager is None
+    bot._get_realized_pnl_cumsum_stats = lambda: {
+        "max": 0.0, "last": 0.0, "drawdown": 0.0
+    }
+
+
 def _stamp_staged_account_and_candles(bot):
     from freshness_ledger import ACCOUNT_SURFACES
     from market_snapshot import MarketSnapshot
 
+    if bot._pnls_manager is None:
+        _supply_known_empty_realized_risk(bot)
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
@@ -3232,9 +3247,20 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 
-    bot._pnls_manager = _DummyPnlsManager([_DummyFillEvent(symbol, "long", 120_000)])
+    fill = _DummyFillEvent(symbol, "long", 120_000, event_id="realized-loss")
+    fill.pnl = -2.0
+    fill.fee_paid = -0.5
+    bot._pnls_manager = _DummyPnlsManager([fill])
+    bot.get_exchange_time = lambda: 121_000
     monkeypatch.setattr(bot, "_pnls_lookback_start_ms", lambda: None)
     monkeypatch.setattr(bot, "_assert_pnl_history_safe_for_risk", lambda *a, **k: None)
+    memory_calls = []
+
+    def replay_realized_memory(input_json):
+        memory_calls.append(json.loads(input_json))
+        return native_pbr.realized_memory_v9(input_json)
+
+    monkeypatch.setattr(pbr, "realized_memory_v9", replay_realized_memory)
 
     # Pretend an unstuck order is already live on the exchange.
     bot.open_orders[symbol] = [
@@ -3294,8 +3320,11 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
 
     payload = json.loads(captured["input"])
     assert payload["global"]["auto_unstuck_allowed"] is True
-    # Allowance values are no longer passed: Rust derives the unstuck
-    # allowance internally from the realized-pnl cumsum facts.
+    assert len(memory_calls) == 1
+    assert [row["net"] for row in memory_calls[0]["fills"]] == [-2.5]
+    assert payload["global"]["realized_pnl_drawdown"] == 2.5
+    # Rust derives allowance from the continuous realized-loss memory, rather
+    # than an existing order or rolling realized-loss-gate cumsum.
     assert "unstuck_allowance_long" not in payload["global"]
     assert "unstuck_allowance_short" not in payload["global"]
 
@@ -3405,6 +3434,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
     from freshness_ledger import ACCOUNT_SURFACES
 
+    _supply_known_empty_realized_risk(bot)
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
@@ -3510,6 +3540,7 @@ async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypat
 
     from freshness_ledger import ACCOUNT_SURFACES
 
+    _supply_known_empty_realized_risk(bot)
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))

@@ -858,20 +858,6 @@ pub fn calc_order_price_diff(side: &str, order_price: f64, market_price: f64) ->
     Ok(diff)
 }
 
-#[pyfunction]
-pub fn calc_auto_unstuck_allowance(
-    balance: f64,
-    loss_allowance_pct: f64,
-    pnl_cumsum_max: f64,
-    pnl_cumsum_last: f64,
-) -> f64 {
-    // allow up to x% drop from balance peak for auto unstuck
-
-    let balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last);
-    let drop_since_peak_pct = balance / balance_peak - 1.0;
-    (balance_peak * (loss_allowance_pct + drop_since_peak_pct)).max(0.0)
-}
-
 pub fn calc_ema_price_bid(
     price_step: f64,
     order_book_bid: f64,

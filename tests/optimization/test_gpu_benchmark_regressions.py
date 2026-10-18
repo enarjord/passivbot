@@ -37,34 +37,66 @@ def test_native_coin_hsl_forager_preserves_unfilled_incumbents(tmp_path):
 @pytest.mark.parametrize("strategy,temporal", [
     ("ema_anchor", False), ("trailing_martingale", False), ("trailing_martingale", True),
 ])
-def test_single_coin_pipeline_profile_preserves_replay(strategy, temporal, tmp_path):
+def test_single_coin_native_pipeline_profile_preserves_replay(strategy, temporal, tmp_path, monkeypatch):
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import NativeBacktestService
+    from optimization.gpu.parameters import prepare_candidate_parameters
+    from optimization.gpu import service as replay_module
+    from rust_utils import verify_loaded_runtime_extension
+    from tools.gpu_parity import _native_dataset
     from tools.optimizer_benchmark.workloads import freeze
-    from tools.optimizer_benchmark.worker import instrument_replay, legacy_parameters
-    from optimization.gpu.service import MpsSingleCoinProxy
+    from tools.optimizer_benchmark.worker import instrument_replay
 
+    verify_loaded_runtime_extension()
     directory = tmp_path / "workload"
     entry = freeze(directory, profile="standard",
         patterns=[f"{strategy}/both/single/base/oscillating"],
         candidates=2, seeds=[7], bars=256)["entries"][0]
     with np.load(directory / entry["data_file"]) as data:
         candles, btc, timestamps = (data[key] for key in ("hlcvs", "btc", "timestamps"))
-    inputs = (candles, entry["markets"], btc, timestamps, entry["exchange"])
-    parameters = [legacy_parameters(config, inputs, entry["metrics"]) for config in entry["configs"]]
-    replay = MpsSingleCoinProxy(config=entry["configs"][0], hlcvs=candles,
-        mss=entry["markets"], btc=btc, timestamps=timestamps, exchange=entry["exchange"],
-        batch_size=2, needed_metrics=set(entry["metrics"]),
-        max_dispatch_candidate_bars=50_000_000)
-    expected = replay.evaluate(parameters)
-    if temporal:
-        runners = [getattr(replay, "runner", None), *getattr(replay, "runners", {}).values()]
-        for runner in runners:
+    inputs = (entry["configs"][0], candles, entry["markets"], btc, timestamps)
+    parameters = [prepare_candidate_parameters(config, entry["markets"], entry["exchange"])
+                  for config in entry["configs"]]
+
+    def evaluate(dataset, tag):
+        with NativeBacktestService(batch_size=2, tuning_mode="off") as service:
+            service.register_dataset("one", dataset)
+            futures = [service.submit(BacktestRequest(f"{tag}:{i}", "one", parameter))
+                       for i, parameter in enumerate(parameters)]
+            return [(result.metrics, result.liquidated)
+                    for result in (future.result(timeout=120) for future in futures)]
+
+    profiles, dispatches, temporal_dispatch_counts = [], [], []
+    original_init = replay_module.MpsMulticoinProxy.__init__
+
+    def observed_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        def configure(runner):
+            if temporal:
+                runner.max_dispatch_candidate_bars = 64
+            original_run = runner.run
+            def run(*args, **kwargs):
+                result = original_run(*args, **kwargs)
+                temporal_dispatch_counts.append(
+                    (runner._last_temporal_dispatch or {}).get("dispatch_count", 1))
+                return result
+            runner.run = run
+            return runner
+        for runner in [self.fused_runner, *self.runners.values()]:
             if runner is not None:
-                runner.tuning_chunk_bars = 64
-    profiles, dispatches = [], []
-    instrument_replay(replay, dispatches, profiles=profiles)
-    assert replay.evaluate(parameters) == expected
-    assert profiles and profiles[0]["pipeline_preparation_measured"]
-    assert profiles[0]["timings_seconds"]["pipeline_preparation"] > 0
-    assert all(row["runner_profile"]["pipeline_seconds"] > 0 for row in dispatches)
+                configure(runner)
+        original_construct = self._construct_runner
+        def construct(*args, **kwargs):
+            return configure(original_construct(*args, **kwargs))
+        self._construct_runner = construct
+        instrument_replay(self, dispatches, profiles=profiles)
+
+    with _native_dataset(inputs, entry["exchange"], entry["metrics"]) as dataset:
+        expected = evaluate(dataset, "baseline")
+        monkeypatch.setattr(replay_module.MpsMulticoinProxy, "__init__", observed_init)
+        assert evaluate(dataset, "profiled") == expected
+    assert profiles and all(row["pipeline_preparation_measured"] for row in profiles)
+    assert all(row["timings_seconds"]["pipeline_preparation"] >= 0 for row in profiles)
+    assert dispatches and all("pipeline_seconds" in row["runner_profile"] for row in dispatches)
     if temporal:
-        assert any(row["runner_profile"]["dispatch_count"] > 1 for row in dispatches)
+        assert any(count > 1 for count in temporal_dispatch_counts)

@@ -79,12 +79,11 @@ device observations and reduce the actual largest `max(floor(count / 100), 1)`
 samples after replay succeeds. Scratch admission includes capture and reduction;
 unrequested or disabled HSL capture remains compiled away. Temporal replay retains
 observations across dispatches, while a rejected attempt starts again with empty
-capture. Unified HSL reports only at portfolio scope; its long/short channels are
+capture. Portfolio HSL reports only at portfolio scope; its long/short channels are
 zero. Reporting includes cooldown bars and the fresh mark-driven liquidation signal,
-without adding samples for fill-boundary controller refreshes. The retained legacy
-observation engine and directional single-coin proxy keep their historical reductions;
-native optimization requires its observed portfolio summary and rejects a missing
-payload. Exact selection does not eliminate CPU/GPU float32 trajectory differences.
+without adding samples for fill-boundary controller refreshes. V9 parity uses the
+native shared-account engine, including single-coin requests, and rejects a missing
+portfolio summary. Required account metrics retain their independent factual curves.
 
 ## CPU completion scoring
 
@@ -346,8 +345,7 @@ including terminal loss marks. Calmar/Sterling additionally request raw daily
 worst drawdowns. Two f32 daily columns add eight bytes per candidate per calendar
 day; these columns and their replay updates compile away when unused. USD account
 metrics and account exposure normalization keep their original source. Native
-single-coin requests use this shared path; legacy directional single-coin screening
-retains its existing reducer. CUDA validation does not establish Metal acceptance.
+single-coin requests use this shared path. CUDA validation does not establish Metal acceptance.
 
 Shared native replay captures factual raw strategy and account equity separately when
 weighted ADG, MDG, Sharpe, Sortino, Omega, Calmar or Sterling metrics require them.
@@ -363,8 +361,7 @@ f64 arithmetic; Metal reduces suffix daily summaries on-device and analyzes thos
 compact summaries with f64 host arithmetic before history sub-batches combine.
 Only compact metrics reach the caller. Admission accounts for history storage and reduction working space; raw
 and account capture each compile away when unused. Existing recovery-history
-semantics stay separate. Legacy directional single-coin screening still uses its
-existing reducer.
+semantics stay separate.
 Other weighted metric families have separate parity and implementation requirements.
 
 Admission bounds queued plus running work. The oldest waiting request chooses the next
@@ -391,41 +388,28 @@ results. Width changes occur between dispatches; FIFO dataset choice, cancellati
 backpressure and fail-stop producer semantics remain independent of tuning.
 
 The shared-account engine permits 1..64 selected coins and supplies the authoritative
-`gpu` optimizer backend. Retained directional replay is available only through explicit
-diagnostic tooling. Earlier short synthetic one-coin measurements showed a throughput
-disadvantage against that directional implementation; they do not measure the current
-complete optimizer or establish a universal throughput advantage. Compiler specialization
-and adaptive dispatch select execution policy within the native service.
-
-Shared-account EMA/TM coin HSL uses the current position's last factual fill to
-detect when no fills remain in the inclusive lookback. Held exposure then uses a
-fresh current-position loss estimate on each observation, matching Rust's empty-
-history reconstruction rather than preserving exposure across older marks. This
-uses existing replay state and leaves aggregate controllers and partially retained
-fill-history reconstruction unchanged. It is not general HSL parity acceptance.
-
-Single-side multicoin EMA replay selects a compact HSL layout only when every request
-in the dispatch disables HSL, no effective coin override can enable it, and all signal
-modes are side or unified. The specialized kernel removes controller/history binding
-and per-candle HSL scans but retains aggregate forced-delisting loss diagnostics. Coin
-mode retains full state even when HSL is disabled: its separate panic segments affect
-reported drawdown reductions. Fused portfolios and Trailing Martingale retain their
-existing layouts. Execution scheduling does not decide this semantic specialization.
+`gpu` optimizer backend. V9 numerical qualification uses this engine for single-coin and
+multicoin workloads. Retired `MpsSingleCoinProxy`/`MpsEmaAnchorProxy` and directional
+EMA/TM runner constructors reject execution with a capability error directing callers
+to `NativeBacktestService`, including one-coin datasets. Compiler specialization and adaptive dispatch select execution
+policy within the native service.
 
 Shared-account EMA/TM dispatches prove whether any packed candidate and effective
 coin-side override can use unstuck EMA gating. When none can, compilation removes
 only its EMA band, initialization, per-candle updates and gating consumers. Ungated
-unstuck selection, ordinary strategy EMAs and realized-loss history retain their
-existing behavior. Finite coin flags override candidate flags; nonfinite overrides
+unstuck selection and ordinary strategy EMAs retain their existing policies;
+continuous realized memory and the independent rolling loss gate remain distinct. Finite coin flags override candidate flags; nonfinite overrides
 inherit them. The feature bit belongs to the compilation/replay-state identity,
 independently of batch scheduling or search policy. Both fused sides participate
 in the proof, and each replay reconstructs its state for the selected layout.
 
-Shared-account EMA and Trailing Martingale realized-loss admission and auto-unstuck
-use one bounded fill-PnL window selected by `live.pnls_max_lookback_days`. The history
-is prepared when either consumer is enabled and compiled out when neither needs it
-or the scope is all history. Loss-only requests retain the window even with
-auto-unstuck and HSL disabled. HSL history remains separate.
+Shared-account EMA and Trailing Martingale auto-unstuck use continuous decaying
+net-realized-PnL memory with `live.lookback_ema_span_minutes`. Every ordinary, protective
+or unstuck fill contributes its net economics once, including signed fees and rebates.
+This memory excludes UPNL and survives HSL episode boundaries. The independent
+`max_realized_loss_pct` gate retains its rolling window from
+`live.realized_loss_gate_lookback_minutes`; that optional history is prepared only for
+the gate and does not become HSL or unstuck memory.
 
 Trailing Martingale finalizes executable close quantities before reserving projected
 negative PnL across coins and both sides. It prioritizes finalized protective reducers,
@@ -433,8 +417,7 @@ then ordinary closes; projected profits cannot fund another emitted loss. Unfill
 emitted orders also reserve allowance, panic closes are exempt, and fills consume
 admitted intent without repeating the loss check at a changed candle price or balance.
 The disabled loss gate compiles out its admission state and work. Native single-coin
-requests use this shared-account engine as well. The retained legacy directional
-single-coin Trailing Martingale engine still uses its conservative loss policy.
+requests use this shared-account engine as well.
 
 GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
 Reporting state is separate from the panic tier used by the simulation; counting
@@ -444,36 +427,43 @@ elapsed-time reporting. A flat execution observes its updated portfolio tier at 
 fill timestamp before the following bar interval; GREEN at that boundary adds no
 unobserved RED minute. First observations add no duration, terminal states add no
 unobserved tail, and temporal dispatches retain the complete clock. The two packed
-scalar labels remain unchanged. Retained legacy directional single-coin replay
-still counts samples. Controller-active parity checks remain required to assess
-observation timing and numerical discrepancies.
+scalar labels remain unchanged. Controller-active parity checks remain required to
+assess observation timing and numerical discrepancies.
 
-### Coin HSL replay arithmetic
+### Forward risk replay
 
-Native trailing-martingale replay on CUDA and Metal may maintain a bounded arithmetic
-index per coin and position side. Execution facts, current positions, current balance
-budgets and the independent factual composer remain authoritative. The index owns no
-panic permission or cooldown. Changed facts return to independent composition. A budget
-change prevents reuse of a previously certified scalar continuation and refreshes that path.
-Sliding lookbacks or histories without scalar continuation can use bounded indexed queries
-with the current budget. A certified scalar continuation supplies ordinary observations
-without maintaining an unused index. Changed facts and budgets retire optional
-arithmetic; unchanged sliding histories build it after three consecutive observations
-that cannot continue the scalar result. Brief gaps between fills do not rebuild the index.
+The [v9 risk model](v9_risk_model.md) defines the CPU/device arithmetic and event contract.
+Each coin/side, side or portfolio controller retains constant-size currency drawdown,
+ratio EMA, causal mark and integer clock state. Ordinary replay never reconstructs a
+historical fill/candle window after a fill, budget change or query. Required account and
+objective histories remain separate from this risk state.
 
-Each owner has separate scratch and event ownership. Candidate batches with mixed HSL
-scope modes, unsupported devices, or insufficient cache/scratch budget use independent
-factual replay. Cache rejection or loss never clips retained facts or publishes a rejected
-attempt. Numerical conditioning and threshold guards retain the scalar adjudication path.
-Growing factual capacity can disable optional indexing while retaining authoritative history.
+At each execution, the traded symbol's supported execution price becomes its causal
+mark for both sides. Assess the old inventory, consume that fill's fee/PnL and inventory
+change once, then assess the resulting inventory. Other symbols retain their latest
+causal marks. Completed candle closes become observable at the candle end; forced
+end-of-bar delisting follows that completed observation. No later candle close may
+become an earlier fill observation.
 
-Fresh scope composition may skip a flat zero-signal prefix, gap or tail within one
-query. The next causal fill and the current endpoint are always evaluated, logical
-observation counts are preserved, and requested traces retain every observation.
-Native candle projection and prepared-mark validity retain the same admission rules.
+The same authored f32 graph serves Metal and CUDA. Implicit contraction is disabled;
+only explicit `fma` operations fuse. Slow and fast span coefficients must remain finite
+and decaying after f32 conversion. Finite nonpositive equity is an immediate RED branch;
+malformed or overflowing required economics fail the request without replacement metrics.
 
-Run the offline synthetic matched benchmark with
-`python -m tools.gpu_hsl_coin_cache_benchmark --sides both --bars 8192 --lookback-days 1 --candidates 8`.
-It warms both shader variants before comparing repeated cache-off/cache-on runs,
-checks replay parity, and reports completed single-scenario backtests per second.
-Results depend on device, batch size and history; they do not predict suite throughput.
+A flat event latches finite cooldown when the latest exposed pre-fill signal OR the
+post-accounting signal is RED. Queries and later budget/mark changes cannot renew or
+reclassify that deadline. There is no `never` restart policy. Configured slot counts and
+authored headroom continue to determine coin budgets independently of held positions.
+
+The canonical cooldown duration is rounded from f64 minutes to integer milliseconds.
+Device transport uses two exact 24-bit float limbs, preserving carries and fractional
+minute boundary decisions without converting the duration to f32 minutes. Durations
+above `2^48 - 1` milliseconds are an explicit GPU capability error. Temporal dispatches
+retain complete risk state and reconstruct only pointer bindings, never risk history.
+
+Run the bounded source-verified native scope regressions with
+`pytest tests/optimization/test_gpu_v9_native.py`. Risk-only actual-device witnesses are
+in `tests/optimization/test_gpu_hsl_decay.py`; host policy transport tests are in
+`tests/optimization/test_gpu_v9_transport.py`. These cases do not establish broad device
+coverage or search speed. CUDA qualification requires actual CUDA execution separately
+from Metal and CPU evidence.

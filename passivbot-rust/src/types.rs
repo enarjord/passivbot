@@ -317,6 +317,8 @@ pub struct BacktestParams {
     pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
     pub max_realized_loss_pct: f64,
+    pub lookback_ema_span_minutes: f64,
+    // Internal rolling horizon for the independent realized-loss gate only.
     pub pnls_max_lookback_days: f64,
     pub liquidation_threshold: f64,
     pub equity_hard_stop_loss: EquityHardStopLossConfig,

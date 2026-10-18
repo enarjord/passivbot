@@ -390,7 +390,7 @@ class KucoinBot(CCXTBot):
         if start_time is None:
             logging.warning(
                 "fetch_fills called without start_time; "
-                "consider setting pnls_max_lookback_days in config to limit fetch"
+                "fill acquisition requires an explicit start from the configured consumer horizons"
             )
         all_fills = []
         params = {}
@@ -441,7 +441,7 @@ class KucoinBot(CCXTBot):
         if start_time is None:
             logging.warning(
                 "fetch_positions_history called without start_time; "
-                "consider setting pnls_max_lookback_days in config to limit fetch"
+                "PnL acquisition requires an explicit start from the configured consumer horizons"
             )
         all_ph = []
         params = {}

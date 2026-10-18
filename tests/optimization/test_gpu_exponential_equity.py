@@ -191,7 +191,7 @@ def test_disabled_half_life_rejects_explicit_ew_request():
         compute_objectives(out, run, data, needed={"adg_ew_usd"})
 
 
-@pytest.mark.parametrize("proxy_name", ["MpsSingleCoinProxy", "MpsMulticoinProxy"])
+@pytest.mark.parametrize("proxy_name", ["MpsMulticoinProxy"])
 def test_exponential_metal_still_requires_configured_half_life(monkeypatch, proxy_name):
     from config.schema import get_template_config
     from optimization.gpu import service
@@ -329,14 +329,14 @@ def test_seeded_daily_reduction_matches_current_rust(interval_minutes, half_life
         assert metadata["effective_sample_size"].item() == pytest.approx(reference["metadata"]["effective_sample_size"], abs=1e-13)
 
 
-def test_legacy_directional_proxy_retains_metal_ew_guard(monkeypatch):
+def test_legacy_directional_proxy_rejects_v9_before_ew_setup(monkeypatch):
     from config.schema import get_template_config
     from optimization.gpu import service
 
     monkeypatch.setattr(service, "gpu_device", lambda *_args: "mps")
     config = get_template_config()
     config["backtest"]["ew_half_life_days"] = 180.5
-    with pytest.raises(ValueError, match="Exponential GPU metrics require CUDA"):
+    with pytest.raises(ValueError, match="NativeBacktestService"):
         service.MpsSingleCoinProxy(config=config, hlcvs=None, mss={}, btc=None,
                                    timestamps=None, exchange="binance", batch_size=1,
                                    needed_metrics={"adg_strategy_eq_ew"})

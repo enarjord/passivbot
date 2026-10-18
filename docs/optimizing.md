@@ -587,24 +587,26 @@ operator-risk settings such as:
 ```json
 "optimize": {
   "fixed_runtime_overrides": {
-    "bot.long.hsl.restart_after_red_policy": "always",
-    "bot.short.hsl.restart_after_red_policy": "always"
+    "bot.long.hsl.cooldown_minutes_after_red": 60.0,
+    "bot.short.hsl.cooldown_minutes_after_red": 60.0
   }
 }
 ```
 
-These explicit overrides permit restart after the configured cooldown during optimizer
-evaluations. Use `never` instead when testing a stop that lasts until its evidence expires
-from lookback. For unified mode set `bot.hsl.restart_after_red_policy` instead of side
-paths. Compare risk with `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strategy_eq`,
-`drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
-`strategy_eq_recovery_days_max`.
+These overrides set the finite cooldown after a qualifying flatten during optimizer
+evaluations. Portfolio mode uses `bot.hsl.cooldown_minutes_after_red` instead of side
+paths. There is no permanent restart selector. Inspect strategy-equity drawdown and
+recovery with `drawdown_worst_strategy_eq`, `drawdown_worst_mean_1pct_strategy_eq`,
+and `strategy_eq_recovery_days_max`. The `drawdown_worst_ema_strategy_eq` and
+`drawdown_worst_mean_1pct_ema_strategy_eq` fields describe the enabled HSL signal
+scopes and are within-model diagnostics. Use independent ordinary-account equity
+and account-based metrics for cross-version economic comparisons.
 
-Legacy HSL configs supplied as starting seeds for a fresh search are loaded best effort:
-retired HSL fields are discarded and usable numeric parameters enter the current schema.
-HSL enablement and restart choices come from the main optimizer config, and seed fitness
-is reevaluated. The main config still requires explicit migration when legacy HSL is enabled;
-checkpoint/resume compatibility checks remain enforced.
+Migrate v8 starting configurations explicitly before using them with v9. The main optimizer
+config owns HSL activation, memory and cooldown policy; numeric starting suggestions do not
+restore old policy or authorize old fitness. Every seed is freshly evaluated, and old
+checkpoints cannot resume under the v9 risk contract. The main config requires migration
+even when its HSL policies are disabled. See the [migration guide](v8_to_v9_migration.md).
 
 When you provide many starting configs to a CPU optimizer, it bounds how many seed evaluations may
 be in flight at once. For the DEAP backend, the same cap also applies to generation offspring

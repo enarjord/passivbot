@@ -26,6 +26,7 @@ from tools.clean_config import (
     normalize_export_numbers,
     render_source,
 )
+from tools.migrate_config_v9 import main as migrate_config_v9_main
 
 EXAMPLE_CONFIGS = sorted(
     (Path(__file__).resolve().parents[1] / "configs" / "examples").glob("*.json")
@@ -391,7 +392,7 @@ def test_export_numeric_normalization_rejects_lossy_float_conversion(value):
 
 
 @pytest.mark.parametrize("mode", ["full", "live", "backtest", "optimize"])
-@pytest.mark.parametrize("hsl_mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("hsl_mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize(
     "strategy", ["trailing_martingale", "ema_anchor", "trailing_grid_v7"]
 )
@@ -409,10 +410,10 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     for side in ("long", "short"):
         cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = rng.uniform(0.1, 2.0)
         cfg["bot"][side]["risk"]["n_positions"] = rng.randint(1, 10)
-        cfg["bot"][side]["hsl"].update(enabled=True, restart_after_red_policy="never")
+        cfg["bot"][side]["hsl"].update(enabled=True, cooldown_minutes_after_red=17.5)
         cfg["bot"][side]["unstuck"]["ema_span_0"] = rng.uniform(5.1, 1000.9)
-    if hsl_mode == "unified":
-        cfg["bot"]["hsl"].update(enabled=True, restart_after_red_policy="never")
+    if hsl_mode == "portfolio":
+        cfg["bot"]["hsl"].update(enabled=True, cooldown_minutes_after_red=23.5)
     target = "canonical" if mode == "full" else mode
     projected = project_config(cfg, target, record_step=False)
     expected = project_config(
@@ -425,6 +426,14 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     result = cleanup_config(cfg, mode=mode)
     assert result == expected
     assert cleanup_config(result, mode=mode) == result
+    assert result["live"]["hsl_signal_mode"] == hsl_mode
+    policies = [result["bot"][side]["hsl"] for side in ("long", "short")]
+    if hsl_mode == "portfolio":
+        policies.append(result["bot"]["hsl"])
+        assert result["bot"]["hsl"]["cooldown_minutes_after_red"] == 23.5
+    assert all(policy["cooldown_minutes_after_red"] == 17.5 for policy in policies[:2])
+    assert all("restart_after_red_policy" not in policy for policy in policies)
+    assert all(policy["cooldown_minutes_after_red"] >= 0.0 for policy in policies)
     assert (
         result["bot"]["long"]["unstuck"]["ema_span_0"]
         == cfg["bot"]["long"]["unstuck"]["ema_span_0"]
@@ -466,20 +475,42 @@ def test_non_configs_fail_instead_of_becoming_defaults(source):
         cleanup_config(source)
 
 
-def test_enabled_legacy_hsl_requires_explicit_migration():
+@pytest.mark.parametrize("enabled", [False, True])
+def test_legacy_schema_requires_explicit_migration_even_when_hsl_disabled(enabled):
     cfg = get_template_config()
     cfg["config_version"] = "v8.5.0"
-    cfg["bot"]["long"]["hsl"]["enabled"] = True
-    with pytest.raises(ValueError, match="migrate-hsl"):
+    cfg["bot"]["long"]["hsl"]["enabled"] = enabled
+    original = deepcopy(cfg)
+    with pytest.raises(ValueError, match="migrate-config-v9"):
         cleanup_config(cfg)
+    assert cfg == original
 
 
-def test_supported_schema_renames_use_shared_migration():
+def test_explicit_v9_migration_produces_reusable_cleanup_input(tmp_path):
     cfg = get_template_config()
-    cfg["config_version"] = "v8.5.0"
-    result = cleanup_config(cfg)
+    cfg["config_version"] = "v8.6.0"
+    for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
+                "realized_loss_gate_lookback_minutes"):
+        cfg["live"].pop(key)
+    cfg["live"]["pnls_max_lookback_days"] = 30.0
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = "always"
+    source = write_config(tmp_path / "input.v8.json", cfg)
+    original = source.read_bytes()
+    destination = tmp_path / "input.v9.json"
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        cleanup_config(cfg)
+    assert migrate_config_v9_main([
+        str(source), str(destination), "--lookback-ema-span-minutes", "21600.5"
+    ]) == 0
+    assert source.read_bytes() == original
+    result = cleanup_config(json.loads(destination.read_text()))
     assert result["config_version"] == CONFIG_SCHEMA_VERSION
-    assert result["bot"]["long"]["hsl"]["restart_after_red_policy"] is None
+    assert result["live"]["lookback_ema_span_minutes"] == 21600.5
+    assert result["live"]["realized_loss_gate_lookback_minutes"] == 43200.0
+    assert "pnls_max_lookback_days" not in result["live"]
+    assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
+    assert cleanup_config(result) == result
 
 
 def test_full_cleanup_normalizes_optimizer_policy_without_resolving_inputs():
@@ -669,7 +700,9 @@ def test_directory_depth_structure_and_hjson(tmp_path):
     two = write_config(source / "sub" / "b.JSON")
     three = write_config(source / "sub" / "deeper" / "c.json")
     hjson_path = source / "sparse.hjson"
-    hjson_path.write_text("{bot: {long: {}, short: {}}, live: {}}")
+    hjson_path.write_text(
+        f'{{config_version: "{CONFIG_SCHEMA_VERSION}", bot: {{long: {{}}, short: {{}}}}, live: {{}}}}'
+    )
     assert discover_files(source) == [one]
     assert discover_files(source, max_depth=2) == [one, two]
     assert discover_files(source, max_depth=3) == [one, two, three]

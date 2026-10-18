@@ -1,4 +1,7 @@
 from copy import deepcopy
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -18,13 +21,21 @@ def _prepared_config(overrides):
 
 
 def _parse(overrides, *, loaded=None, symbol_normalizer=lambda coin: coin):
-    prepared = _prepared_config(overrides)
-    return parse_overrides(
-        prepared,
-        verbose=False,
-        override_loader=lambda config, coin: deepcopy(loaded or {}),
-        symbol_normalizer=symbol_normalizer,
-    )
+    with TemporaryDirectory() as directory:
+        overrides = deepcopy(overrides)
+        for patch in overrides.values():
+            if "override_config_path" in patch:
+                path = Path(directory) / "override.json"
+                path.write_text(json.dumps(loaded or {}))
+                patch["override_config_path"] = str(path)
+        prepared = _prepared_config(overrides)
+        return parse_overrides(
+            prepared,
+            verbose=False,
+            override_loader=lambda config, coin: deepcopy(loaded or {}),
+            symbol_normalizer=symbol_normalizer,
+        )
+
 
 
 def test_explicit_inline_values_equal_to_global_are_retained():

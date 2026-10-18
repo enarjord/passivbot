@@ -650,7 +650,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "dynamic_wel_by_tradability",
         "hedge_mode",
         "max_realized_loss_pct",
-        "pnls_max_lookback_days",
+        "lookback_ema_span_minutes",
+        "realized_loss_gate_lookback_minutes",
         "market_order_slippage_pct",
         "market_orders_allowed",
         "market_order_near_touch_threshold",
@@ -1093,23 +1094,24 @@ def _hsl_lookback_bars(backtest_params, *, hsl_enabled):
     if not hsl_enabled:
         # Inactive hsl policies consume no history. Keep 0/all inert.
         return 0
-    days = float(backtest_params["pnls_max_lookback_days"])
-    if not np.isfinite(days) or not 1 <= days <= 90:
-        raise ValueError("Enabled GPU HSL requires 1..90d lookback")
-    # Rust clips at now - round(days * 86_400_000). Observations use whole minutes.
-    milliseconds = int(np.floor(days * 86_400_000.0 + 0.5))
-    return milliseconds // 60_000
+    # A constant-sized inert binding preserves the existing kernel argument
+    # shape. V9 HSL owns no historical window or factual replay capacity.
+    return 1
 
 
 def _fill_pnl_lookback_bars(backtest_params: dict) -> int:
     """Rust's finite fill-PnL lookback in candle bars; zero means all history."""
-    lookback_days = float(backtest_params.get("pnls_max_lookback_days", -1.0))
-    if lookback_days < 0.0:
+    from config.risk_memory import normalize_realized_loss_gate_lookback_minutes
+
+    lookback_minutes = normalize_realized_loss_gate_lookback_minutes(
+        backtest_params["realized_loss_gate_lookback_minutes"]
+    )
+    if lookback_minutes == -1.0:
         return 0
     interval_minutes = int(backtest_params["candle_interval_minutes"])
     return max(
         1,
-        int(np.ceil(lookback_days * 24.0 * 60.0 / interval_minutes)),
+        int(np.ceil(lookback_minutes / interval_minutes)),
     )
 
 
@@ -1800,7 +1802,7 @@ def _candidate_parameter_matrix(
 
 
 class MpsSingleCoinProxy:
-    """Batched directional screening proxy for supported single-coin strategies."""
+    """Retired directional replay; v9 uses the shared-account native service."""
 
     def __init__(
         self,
@@ -1816,6 +1818,9 @@ class MpsSingleCoinProxy:
         interrupt_check=None,
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
     ):
+        from optimization.gpu.hsl import V9_NATIVE_SERVICE_REQUIRED
+        raise ValueError(V9_NATIVE_SERVICE_REQUIRED)
+
         try:
             import torch
         except (
@@ -2215,13 +2220,13 @@ class MpsSingleCoinProxy:
             )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
-        if self.hsl_signal_mode == "unified":
+        if self.hsl_signal_mode == "portfolio":
             candidates = [dict(c) for c in candidates]
             for candidate in candidates:
                 for key in (
                     "hsl_red_threshold",
                     "hsl_ema_span_minutes",
-                    "hsl_cooldown_minutes_after_red",
+                    "hsl_cooldown_ms_lo", "hsl_cooldown_ms_hi",
                 ):
                     if key in candidate:
                         for side in ("long", "short"):
@@ -3104,7 +3109,7 @@ class MpsMulticoinProxy:
         loss_gate_enabled = common_runner_kwargs["max_realized_loss_pct"] < 1.0
         common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
             _fill_pnl_lookback_bars(backtest_params)
-            if unstuck_enabled or loss_gate_enabled else 0
+            if loss_gate_enabled else 0
         )
         common_runner_kwargs.update(
             pnl_lookback_bars=_hsl_lookback_bars(
@@ -3186,13 +3191,7 @@ class MpsMulticoinProxy:
 
     def _construct_runner(self, key, runner_cls, kwargs):
         runner = runner_cls(self.run, self.data, **kwargs)
-        if self._factual_capacity_hints is not None and runner.native_factual_hsl:
-            capacity = self._factual_capacity_hints.get(key, runner.hsl_fact_capacity_learned)
-            if type(capacity) is not int or capacity < 1:
-                raise ValueError("Invalid learned GPU HSL factual capacity")
-            capacity = max(capacity, runner.hsl_fact_capacity_learned)
-            runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = capacity
-        if (self._automatic_scratch_budget and runner.bars.device.type == "cuda"):
+        if self._automatic_scratch_budget and runner.bars.device.type == "cuda":
             from optimization.gpu.autotune import cuda_history_budget
 
             runner.automatic_scratch_budget = True
@@ -3201,24 +3200,11 @@ class MpsMulticoinProxy:
                 runner, free, total,
                 owners=1 if self.shared_account_fused else len(self.sides),
             )
-        if (self._factual_capacity_hints is not None and runner.native_factual_hsl
-                and runner._history_batch_bytes(1) > runner.hsl_scratch_budget_bytes):
-            raise ValueError("Learned GPU HSL factual capacity exceeds scratch budget")
-        if (self._factual_capacity_hints is not None and not self._automatic_scratch_budget
-                and runner.native_factual_hsl):
-            # Fixed service owners reserve against their maximum configured width.
-            # Automatic owners retain the existing seed and growth policy.
-            runner.initial_factual_capacity_batch_width = self.dispatch_batch_size
         return runner
 
     def _remember_factual_capacities(self):
-        if self._factual_capacity_hints is None:
-            return
-        owners = ([("fused", self.fused_runner)] if self.fused_runner is not None
-                  else self.runners.items())
-        for key, runner in owners:
-            if runner.native_factual_hsl:
-                self._factual_capacity_hints[key] = runner.hsl_fact_capacity_learned
+        # V9 forward risk has no historical capacity to learn.
+        return
 
     def _parameter_matrix(
         self, candidates: list[dict], side: str | None = None
@@ -3227,13 +3213,13 @@ class MpsMulticoinProxy:
             if len(self.sides) != 1:
                 raise ValueError("side is required for dual-side multicoin parameters")
             side = self.sides[0]
-        if self.hsl_signal_mode == "unified":
+        if self.hsl_signal_mode == "portfolio":
             candidates = [dict(c) for c in candidates]
             for candidate in candidates:
                 for key in (
                     "hsl_red_threshold",
                     "hsl_ema_span_minutes",
-                    "hsl_cooldown_minutes_after_red",
+                    "hsl_cooldown_ms_lo", "hsl_cooldown_ms_hi",
                 ):
                     if key in candidate:
                         candidate[f"{side}_{key}"] = candidate[key]

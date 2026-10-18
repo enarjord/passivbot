@@ -30,8 +30,8 @@ pub struct ForagerHysteresisState {
 mod core {
     use crate::closes::{calc_wel_auto_reduce_long, calc_wel_auto_reduce_short};
     use crate::coin_selection::{
-        forager_scoring_positions, select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
-        ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
+        forager_scoring_positions, select_forager_candidates_with_diagnostics, ForagerCandidate,
+        ForagerPositionSide, ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
     };
     use crate::constants::{LONG, SHORT};
     use crate::entries::{
@@ -39,7 +39,7 @@ mod core {
         wallet_exposure_limit_with_allowance_from_base,
     };
     use crate::risk::{
-        calc_twel_enforcer_actions, calc_unstucking_action_with_position_allowances,
+        calc_twel_enforcer_actions, calc_unstucking_action_with_realized_drawdown,
         GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
     };
     use crate::strategies::{
@@ -364,6 +364,8 @@ mod core {
         /// Net realized pnl cumsum current value from fill history.
         #[serde(default)]
         pub realized_pnl_cumsum_last: f64,
+        /// V9 continuous account-wide decaying net-realized drawdown, used only by unstuck.
+        pub realized_pnl_drawdown: f64,
         /// If true, output orders are globally sorted by the canonical (live-bot) distance metric.
         /// Backtest does not require this global ordering and may disable it for performance.
         pub sort_global: bool,
@@ -519,6 +521,15 @@ mod core {
         {
             return Err(OrchestratorError::NonFiniteInput {
                 field: "global.max_realized_loss_pct",
+                symbol_idx: None,
+            });
+        }
+        if !input.global.realized_pnl_drawdown.is_finite()
+            || input.global.realized_pnl_drawdown < 0.0
+            || !(input.global.realized_pnl_drawdown as f32).is_finite()
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_drawdown",
                 symbol_idx: None,
             });
         }
@@ -2452,8 +2463,8 @@ mod core {
             });
         }
         if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
-            let scoring_positions = forager_scoring_positions(out, cfg)
-                .map_err(map_forager_selection_error)?;
+            let scoring_positions =
+                forager_scoring_positions(out, cfg).map_err(map_forager_selection_error)?;
             let mut ranking_unavailable = false;
             for pos in scoring_positions {
                 let s = &symbols[out[pos].index];
@@ -2462,7 +2473,11 @@ mod core {
                     Ok(value) => out[pos].unilateralness_score = value.abs(),
                     Err(err) => {
                         handle_strategy_input_error(
-                            err, s, pside, StrategyInputScope::ForagerSelection, diagnostics,
+                            err,
+                            s,
+                            pside,
+                            StrategyInputScope::ForagerSelection,
+                            diagnostics,
                         )?;
                         ranking_unavailable = true;
                     }
@@ -2502,21 +2517,32 @@ mod core {
             if !input.position_size.is_finite()
                 || (input.pside == PositionSide::Long && input.position_size < 0.0)
                 || (input.pside == PositionSide::Short && input.position_size > 0.0)
-                || !input.price_step.is_finite() || input.price_step <= 0.0
-                || !input.order_book.bid.is_finite() || input.order_book.bid <= 0.0
-                || !input.order_book.ask.is_finite() || input.order_book.ask < input.order_book.bid
+                || !input.price_step.is_finite()
+                || input.price_step <= 0.0
+                || !input.order_book.bid.is_finite()
+                || input.order_book.bid <= 0.0
+                || !input.order_book.ask.is_finite()
+                || input.order_book.ask < input.order_book.bid
             {
                 return Err("invalid protective close input");
             }
             if input.position_size == 0.0 {
                 continue;
             }
-            let order = panic_close_order(input.symbol_idx, input.pside,
-                input.position_size, &input.order_book, input.price_step)
-                .ok_or("invalid protective close result")?;
+            let order = panic_close_order(
+                input.symbol_idx,
+                input.pside,
+                input.position_size,
+                &input.order_book,
+                input.price_step,
+            )
+            .ok_or("invalid protective close result")?;
             orders.push(ExecutableOrder {
-                symbol_idx: order.symbol_idx, pside: order.pside,
-                qty: order.qty, price: order.price, order_type: order.order_type,
+                symbol_idx: order.symbol_idx,
+                pside: order.pside,
+                qty: order.qty,
+                price: order.price,
+                order_type: order.order_type,
                 execution_type: input.execution_type,
                 execution_priority: ExecutionPriority::RiskCritical,
             });
@@ -2525,8 +2551,11 @@ mod core {
     }
 
     fn calc_panic_close(
-        symbol_idx: usize, pside: PositionSide, pos: &Position,
-        ob: &OrderBook, exchange: &ExchangeParams,
+        symbol_idx: usize,
+        pside: PositionSide,
+        pos: &Position,
+        ob: &OrderBook,
+        exchange: &ExchangeParams,
     ) -> Option<IdealOrder> {
         panic_close_order(symbol_idx, pside, pos.size, ob, exchange.price_step)
     }
@@ -2548,8 +2577,7 @@ mod core {
         let price = match pside {
             PositionSide::Long => {
                 let touch = tolerant_round_dn_preserve_step(ob.ask, price_step);
-                tolerant_round_dn_preserve_step(touch - price_step, price_step)
-                    .max(price_step)
+                tolerant_round_dn_preserve_step(touch - price_step, price_step).max(price_step)
             }
             PositionSide::Short => {
                 let touch = tolerant_round_up_preserve_step(ob.bid, price_step);
@@ -2783,12 +2811,18 @@ mod core {
                 } else {
                     &symbol.unilateralness_unavailable.current
                 };
-                if symbol.unilateralness_warmup_spans.contains(&bp.unilateralness_ema_span_1m)
+                if symbol
+                    .unilateralness_warmup_spans
+                    .contains(&bp.unilateralness_ema_span_1m)
                     || unavailable.contains(&bp.unilateralness_ema_span_1m)
                 {
-                    OrchestratorError::UnilateralnessUnavailable { symbol_idx: symbol.symbol_idx }
+                    OrchestratorError::UnilateralnessUnavailable {
+                        symbol_idx: symbol.symbol_idx,
+                    }
                 } else {
-                    OrchestratorError::MissingEma { symbol_idx: symbol.symbol_idx }
+                    OrchestratorError::MissingEma {
+                        symbol_idx: symbol.symbol_idx,
+                    }
                 }
             })?;
         if !value.is_finite() || value.abs() > 1.0 {
@@ -2879,8 +2913,10 @@ mod core {
                     resolve_runtime_budget(side, side.bot_params.n_positions),
                 ) {
                     Ok(value) => Some(value),
-                    Err(OrchestratorError::MissingEma { .. }
-                        | OrchestratorError::UnilateralnessUnavailable { .. }) => None,
+                    Err(
+                        OrchestratorError::MissingEma { .. }
+                        | OrchestratorError::UnilateralnessUnavailable { .. },
+                    ) => None,
                     Err(err) => return Err(format!("{err:?}")),
                 };
                 result.insert(format!("{}:{name}", symbol.symbol_idx), value);
@@ -3022,16 +3058,22 @@ mod core {
     ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
         let side = symbol_side_input(symbol, pside);
         let rms_warming = crate::entry_cooldown::uses_adverse_rms(&side.bot_params)
-            && (symbol.unilateralness_warmup_spans.contains(&side.bot_params.unilateralness_ema_span_1m)
-                || symbol.unilateralness_unavailable.current.contains(&side.bot_params.unilateralness_ema_span_1m));
-        let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
-            && wants_entries
-            && wants_closes
-        {
-            [(true, false), (false, true)]
-        } else {
-            [(wants_entries, wants_closes), (false, false)]
-        };
+            && (symbol
+                .unilateralness_warmup_spans
+                .contains(&side.bot_params.unilateralness_ema_span_1m)
+                || symbol
+                    .unilateralness_unavailable
+                    .current
+                    .contains(&side.bot_params.unilateralness_ema_span_1m));
+        let requests =
+            if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
+                && wants_entries
+                && wants_closes
+            {
+                [(true, false), (false, true)]
+            } else {
+                [(wants_entries, wants_closes), (false, false)]
+            };
         let mut entries = Vec::new();
         let mut closes = Vec::new();
         let mut close_inputs_unavailable = false;
@@ -4211,12 +4253,15 @@ mod core {
             input.global.unstuck_allowance_long > 0.0 || input.global.unstuck_allowance_short > 0.0,
         );
         if auto_unstuck_allowed {
-            if let Some((idx, side, order)) = calc_unstucking_action_with_position_allowances(
+            if let Some((idx, side, order)) = calc_unstucking_action_with_realized_drawdown(
                 input_balance_raw(input),
-                input.global.realized_pnl_cumsum_max,
-                input.global.realized_pnl_cumsum_last,
+                input.global.realized_pnl_drawdown,
                 &workspace.unstuck_inputs,
-            ) {
+            )
+            .map_err(|_| OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_drawdown_or_allowance",
+                symbol_idx: None,
+            })? {
                 let ideal = IdealOrder {
                     symbol_idx: idx,
                     pside: if side == LONG {
@@ -5050,6 +5095,7 @@ mod core {
                 max_realized_loss_pct: 1.0,
                 realized_pnl_cumsum_max: 0.0,
                 realized_pnl_cumsum_last: 0.0,
+                realized_pnl_drawdown: 0.0,
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
                 hedge_mode: true,
@@ -5180,24 +5226,50 @@ mod core {
             for pside in [PositionSide::Long, PositionSide::Short] {
                 for size in [0.0, 0.000003, 1.0] {
                     for execution_type in [ExecutionType::Limit, ExecutionType::Market] {
-                        let signed_size = if pside == PositionSide::Long { size } else { -size };
+                        let signed_size = if pside == PositionSide::Long {
+                            size
+                        } else {
+                            -size
+                        };
                         let input = ProtectiveCloseInput {
-                            symbol_idx: 7, pside, position_size: signed_size,
-                            order_book: OrderBook { bid: 99.97, ask: 100.03 },
-                            price_step: 0.1, execution_type,
+                            symbol_idx: 7,
+                            pside,
+                            position_size: signed_size,
+                            order_book: OrderBook {
+                                bid: 99.97,
+                                ask: 100.03,
+                            },
+                            price_step: 0.1,
+                            execution_type,
                         };
                         let orders = compute_protective_closes(&[input.clone()]).unwrap();
-                        if size == 0.0 { assert!(orders.is_empty()); continue; }
-                        let old = calc_panic_close(7, pside,
-                            &Position { size: signed_size, price: 123.0 },
+                        if size == 0.0 {
+                            assert!(orders.is_empty());
+                            continue;
+                        }
+                        let old = calc_panic_close(
+                            7,
+                            pside,
+                            &Position {
+                                size: signed_size,
+                                price: 123.0,
+                            },
                             &input.order_book,
-                            &ExchangeParams { price_step: 0.1, ..Default::default() }).unwrap();
+                            &ExchangeParams {
+                                price_step: 0.1,
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap();
                         assert_eq!(orders.len(), 1);
                         assert_eq!(orders[0].qty, old.qty);
                         assert_eq!(orders[0].price, old.price);
                         assert_eq!(orders[0].order_type, old.order_type);
                         assert_eq!(orders[0].execution_type, execution_type);
-                        assert_eq!(orders[0].execution_priority, ExecutionPriority::RiskCritical);
+                        assert_eq!(
+                            orders[0].execution_priority,
+                            ExecutionPriority::RiskCritical
+                        );
                     }
                 }
             }
@@ -5206,9 +5278,15 @@ mod core {
         #[test]
         fn minimal_protective_close_rejects_whole_invalid_batch() {
             let good = ProtectiveCloseInput {
-                symbol_idx: 0, pside: PositionSide::Long, position_size: 1.0,
-                order_book: OrderBook { bid: 99.0, ask: 100.0 },
-                price_step: 0.1, execution_type: ExecutionType::Market,
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                position_size: 1.0,
+                order_book: OrderBook {
+                    bid: 99.0,
+                    ask: 100.0,
+                },
+                price_step: 0.1,
+                execution_type: ExecutionType::Market,
             };
             assert!(compute_protective_closes(&[good.clone(), good.clone()]).is_err());
             for bad in [f64::NAN, f64::INFINITY, -1.0] {
@@ -5493,6 +5571,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: {
                         let mut pair = BotParamsPair::default();
@@ -5961,6 +6040,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: {
                         let mut pair = BotParamsPair::default();
@@ -5980,7 +6060,11 @@ mod core {
             // values that JSON cannot represent.
             for buffer in [-0.001, 1.0, 2.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
                 let mut invalid = input.clone();
-                invalid.symbols[0].next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = buffer;
+                invalid.symbols[0]
+                    .next_candle
+                    .as_mut()
+                    .unwrap()
+                    .limit_order_fill_buffer_pct = buffer;
                 assert!(matches!(
                     compute_ideal_orders_for_test(&invalid),
                     Err(OrchestratorError::InvalidNextCandle { symbol_idx: 0, .. })
@@ -6290,6 +6374,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6330,6 +6415,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
@@ -6379,6 +6465,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
@@ -6440,6 +6527,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
@@ -6498,6 +6586,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
@@ -6555,6 +6644,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6606,6 +6696,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6657,6 +6748,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6876,6 +6968,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6946,6 +7039,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6999,6 +7093,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -7454,6 +7549,7 @@ mod core {
                 max_realized_loss_pct: 1.0,
                 realized_pnl_cumsum_max: 0.0,
                 realized_pnl_cumsum_last: 0.0,
+                realized_pnl_drawdown: 0.0,
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
                 hedge_mode: true,
@@ -7694,6 +7790,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp.clone(),
                     hedge_mode: true,
@@ -7770,6 +7867,7 @@ mod core {
                     max_realized_loss_pct: 0.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -7834,6 +7932,7 @@ mod core {
                     max_realized_loss_pct: 0.1,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: BotParamsPair::default(),
                     hedge_mode: true,
@@ -7925,6 +8024,7 @@ mod core {
                     max_realized_loss_pct: 0.1,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: BotParamsPair::default(),
                     hedge_mode: true,
@@ -8353,6 +8453,7 @@ mod core {
                     max_realized_loss_pct: 0.01,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8416,6 +8517,7 @@ mod core {
                         max_realized_loss_pct: 0.01,
                         realized_pnl_cumsum_max: 0.0,
                         realized_pnl_cumsum_last: 0.0,
+                        realized_pnl_drawdown: 0.0,
                         sort_global: true,
                         global_bot_params: global_bp,
                         hedge_mode: true,
@@ -8500,6 +8602,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8572,6 +8675,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8651,6 +8755,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8712,6 +8817,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8784,6 +8890,7 @@ mod core {
                     max_realized_loss_pct: 0.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8835,6 +8942,7 @@ mod core {
                     max_realized_loss_pct: 1.0,
                     realized_pnl_cumsum_max: 0.0,
                     realized_pnl_cumsum_last: 0.0,
+                    realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,

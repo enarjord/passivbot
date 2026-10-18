@@ -27,7 +27,8 @@ def _record(config):
         ("market_orders_allowed", True),
         ("market_order_near_touch_threshold", 0.03),
         ("max_realized_loss_pct", 0.17),
-        ("pnls_max_lookback_days", 17),
+        ("lookback_ema_span_minutes", 24480.0),
+        ("realized_loss_gate_lookback_minutes", 24480.0),
         ("warmup_ratio", 0.7),
         ("max_warmup_minutes", 200),
         ("minimum_coin_age_days", 17),
@@ -137,8 +138,24 @@ def test_changed_contract_blocks_checkpoint_fitness_reuse(tmp_path):
         _validate_resume_results(str(tmp_path), config)
 
 
+@pytest.mark.parametrize("version", [1, 2])
+def test_pre_v9_contract_version_cannot_reuse_saved_fitness(tmp_path, version):
+    import msgpack
+    from optimize import _resume_config_mismatches, _validate_resume_results
+
+    config = _config()
+    old = _record(config)
+    old[CONTRACT_KEY]["version"] = version
+    old[CONTRACT_KEY].pop("risk_model", None)
+    old["metrics"] = {"objectives": {"w_0": -1.0}}
+    assert any("unsupported or malformed" in item for item in _resume_config_mismatches(old, config))
+    (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
+    with pytest.raises(ValueError, match="critical parameters have changed"):
+        _validate_resume_results(str(tmp_path), config)
+
+
 @pytest.mark.parametrize("backend", ["deap", "pymoo"])
-@pytest.mark.parametrize("mode", ["legacy", "coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["disabled", "coin", "pside", "portfolio"])
 @pytest.mark.parametrize("suite", [False, True])
 def test_result_writers_persist_contract_before_candidate_projection(
     backend, mode, suite, monkeypatch
@@ -148,7 +165,7 @@ def test_result_writers_persist_contract_before_candidate_projection(
     from optimization.callback import build_pymoo_record_entry
 
     config = _config()
-    if mode != "legacy":
+    if mode != "disabled":
         from config.hsl import generated_template
 
         config = generated_template(config, mode)

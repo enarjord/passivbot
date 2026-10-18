@@ -43,7 +43,7 @@ passivbot tool optimizer-benchmark run --workload /tmp/optimizer-pilot \
   --output /tmp/optimizer-pilot-results
 
 # Real production optimizer, including scoring, checkpoint and result persistence.
-# Master's legacy GPU drift gate needs at least 64 iterations.
+# A backend with a periodic drift gate needs enough iterations to exercise it.
 passivbot tool optimizer-benchmark run --workload /tmp/optimizer-smoke \
   --case 'trailing_martingale/long/single/*' \
   --backend baseline "$BASELINE_CHECKOUT" "$BASELINE_PYTHON" \
@@ -87,7 +87,7 @@ retracement separately. There is no duplicate passive feature case.
 |---|---|
 | Strategy and sides | TM, EMA Anchor, CPU v7; long, short, both; hedge and one-way |
 | Universe | One coin, fixed multicoin, competing forager slots |
-| HSL | Off, coin, pside, unified, market/limit panic, restart policies, budget scaling |
+| HSL | Off, coin, pside, portfolio, market/limit panic, zero/finite cooldown, slow memory, budget scaling |
 | Unstuck | Off/on, EMA gating off/on |
 | Cooldown | Zero, constant, exposure/directionality weighted and clamped |
 | Exposure | Position/total enforcers, both total-reduction policies, entry gate, excess allowance |
@@ -127,8 +127,12 @@ iteration counts do not by themselves establish equal search quality.
   completion latency includes queueing and collection.
 - Throughput is total completed evaluations divided by total measured wall time,
   never the unweighted mean of per-batch rates. A candidate has one scenario here.
-- Master uses direct legacy GPU replay in frozen-population mode. That timing omits
-  its CPU exact-validation pipeline. `search-gpu` uses each branch's real backend.
+- Frozen GPU replay selects the implementation's supported native service, or a
+  supported historical direct-replay path. Direct-replay timing omits any separate
+  CPU exact-validation pipeline. V9 requires the shared-account native service;
+  a missing capability fails explicitly. `search-gpu` uses each implementation's
+  selected production backend. Inspect the recorded path rather than inferring
+  it from a branch name.
 - `run --phase-profile` adds opt-in frozen-GPU phase measurements to each
   cohort and runner observation: packing, upload/clear, library compilation,
   lazy pipeline preparation, kernel execution, readback and metric reduction.
@@ -201,3 +205,82 @@ Workloads, results and logs are private by default. Public contributions should
 contain only the harness, synthetic recipes, tests and procedure; do not publish
 operator configs, absolute local paths, raw reports or machine-specific provenance
 without case-specific approval.
+
+## Ordinary-account economics and useful discoveries
+
+The Python APIs in `tools.optimizer_benchmark.account_metrics`, `replay_account`
+and `discovery` support a separately registered economic campaign. The existing
+`run` command's replay/ranking diagnostics do not automatically establish these
+economic or timing criteria. Calibrate the criteria first, freeze the protocol
+and input/runtime identities, and preserve unsuccessful trials as well as successes.
+
+`extract_account_metrics` requires a full ordinary account-equity grid, a separate
+pre-first-fill capital baseline, gross exposure observations, complete fills and
+authoritative completion/liquidation flags. Net return is final equity divided by
+initial equity minus one; geometric daily growth uses the actual observed duration.
+Account drawdown includes the initial baseline. Recovery episodes measure time
+from the preceding peak and explicitly identify unrecovered terminal episodes as
+right-censored lower bounds. Fees and rebates are reported separately; signed fee
+cashflow is already included in net realized PnL and account equity, so it is not
+subtracted from return a second time. Nonpositive equity has no fabricated growth
+score. The replay assumes fixed initial capital and no external transfers.
+
+`metrics_from_native_replay` consumes full native outputs from each version's own
+CPU runner. It uses ordinary account equity, without substituting HSL signals or
+strategy-equity definitions. Native equity timestamp `k` stores the valuation at
+`close[k]`, observable at the end of that candle. The adapter advances its clock
+accordingly and retains a separate initial baseline. Expected activation/end bars
+and any pre-evaluation bootstrap rows must be declared before replay. Bootstrap
+rows require known-flat capital and no earlier fills; their warmup gap does not
+count as evaluated coverage. Missing evaluated observations remain errors or an
+explicit incomplete prefix, rather than invented flat history.
+
+Gross exposure is the sum of absolute long and short position sizes times each
+causal close price and contract multiplier, divided by positive initial capital.
+Hedges remain gross, and a depleted or clamped current balance cannot hide or
+inflate exposure. Fill indices keep a next-bar opening position out of the
+preceding close even when their timestamps coincide. Exposure averages use
+left-held close samples; they do not estimate an intrabar position/price path.
+Missing marks for held inventory, missing multipliers, contradictory position
+transitions and metrics-only output are unsupported evidence. Prepared valuation
+inputs are checked against their frozen hash before and after extraction; the
+scenario identity must also bind all other actual runner inputs.
+
+`DiscoveryCounter` requires explicit account objective axes/reducers, economic
+constraints, positive activity requirements, native-unit novelty tolerances,
+required and distinct held-out inputs, per-model CPU runtime hashes, a common
+starting pool, K and a time budget. It supplies no economic cutoffs. Exact
+canonical effective configurations are counted once. Broad unique feasible
+newcomers are reported separately from novel nondominated frontier additions
+beyond the starting pool. Near copies of the initial pool or earlier useful
+additions remain excluded even after their representative is dominated.
+`target_measure` explicitly chooses K retained newcomer frontier choices or K
+historical frontier additions; both counts remain available.
+
+`canonical_configuration_identity` binds the full materialized policy, including
+evaluation dates, venue, capital and fees. When scenarios use distinct effective
+configs, use `compound_candidate_identity` on the complete label-to-config-hash
+mapping. Supply `scenario_effective_configs` for exactly the frozen search and
+held-out labels to `DiscoveryCounter`; each confirmation must prove both the
+compound candidate hash and its selected `scenario_configuration_sha256`.
+Workers verify that selected hash against the actual own-version loader output
+before replay. Changing one scenario's policy invalidates the compound identity;
+changing dates does not permit reusing another scenario's confirmation. The
+single `effective_config` record remains available when every scenario uses that
+same configuration. Fixed data-input and runtime hashes are checked separately.
+
+Every counted discovery needs CPU confirmation under the matching model on all
+required and held-out scenarios plus completed export. Held-out results must not
+feed search fitness. Partial, GPU-only and unexported evidence remains pending;
+failed, inactive or liquidated candidates cannot become neutral feasible scores.
+Use one cold clock starting before preparation, including startup, compilation,
+tuning, search, CPU confirmation, held-out evaluation and export. The bridge's
+clock callback runs after account extraction; starting-pool confirmation time is
+also included. Target misses are right-censored at the registered budget. The
+utilities validate declarations and supplied evidence; the campaign must measure
+the phases and independently verify runtime identity. No performance result or
+readiness claim follows from these APIs alone.
+
+Current workload manifests use version 2 and finite v9 HSL policy. Older manifests
+and retired permanent/threshold restart feature requests require a fresh workload;
+their saved fitness is not comparable under the changed risk model.

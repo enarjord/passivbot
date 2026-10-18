@@ -1,200 +1,128 @@
 # Equity Hard Stop Loss
 
-HSL has one implementation across live execution, the offline fake runner, backtests,
-CPU optimization and GPU optimization. Use `passivbot tool migrate-hsl` to prepare
-older configurations and re-backtest their thresholds before use.
+V9 HSL uses forward exponential currency drawdown, an independent EMA of the drawdown
+ratio, and finite cooldown after a qualifying flatten. Rust owns the model across CPU,
+supported GPU execution and live fact reconstruction. See the exact
+[numerical and bootstrap reference](v9_risk_model.md) and the
+[v8 migration guide](v8_to_v9_migration.md) before using older configurations.
 
-## Signals and scopes
+## Scopes and budgets
 
-All three modes use the same reconstructed equity-peak drawdown and EMA calculation.
-They differ in which positions contribute and which positions a RED signal closes.
-
-| `live.hsl_signal_mode` | Controller and RED scope | Current budget | Policy configuration |
+| `live.hsl_signal_mode` | Scope and RED closes | Current base budget | Policy |
 |---|---|---|---|
-| `coin` | One symbol and position side | Raw balance / that side's applicable position-slot count | `bot.long.hsl`, `bot.short.hsl`; coin overrides allowed |
-| `pside` | All positions on one side | Raw balance | `bot.long.hsl`, `bot.short.hsl` |
-| `unified` | One controller for the whole portfolio | Raw balance | Explicit `bot.hsl` |
+| `coin` | One symbol/position-side pair | Raw balance / that side's applicable slot count | `bot.long.hsl`, `bot.short.hsl`; coin patches allowed |
+| `pside` | Every position on one side | Raw balance | `bot.long.hsl`, `bot.short.hsl` |
+| `portfolio` | All positions | Raw balance | Explicit `bot.hsl` |
 
-Unified protection includes exposure on either side even if ordinary entries on that
-side are disabled. It does not inherit policy from the long or short blocks. Coin mode
-never substitutes a divisor for an inactive zero-slot side. Live coin budgets use configured
-slots; a backtest's explicitly enabled tradability-aware slot policy remains applicable.
-TWEL does not multiply the HSL budget directly.
+Portfolio protection includes existing exposure on disabled entry sides. A hedged scope is
+flat only when gross inventory is zero. Replacing a constituent while an aggregate remains
+exposed does not start a new episode. Coin mode does not invent slots for an inactive side.
+TWEL does not directly multiply the HSL budget.
 
-`bot.<side>.hsl.scale_budget_with_excess_allowance` defaults to `false`. In coin
-mode, setting it to `true` changes the budget to:
+`bot.<side>.hsl.scale_budget_with_excess_allowance` defaults to `false`. In coin mode only,
+`true` multiplies its slot budget by bounded authored exposure headroom:
 
 ```text
-base_wel = authored wallet_exposure_limit, or side TWEL / applicable slots if automatic
+base_wel = authored WEL, or side TWEL / applicable slots if automatic
 allowance = min(max(0, we_excess_allowance_pct), max(0, side TWEL / base_wel - 1))
 budget = raw balance / applicable slots * (1 + allowance)
 ```
 
-A nonpositive base WEL grants no headroom. Use each coin's WEL and excess percentage,
-including coin overrides. The switch is global per side and cannot be overridden per
-coin. `true` is rejected in `pside` and `unified` modes. It scales both current and
-terminal episode signals, so it can change panic points and cooldown eligibility.
-It uses configured headroom, regardless of how much of that headroom the position
-actually uses. A single automatic slot receives no additional budget because its
-base WEL already equals TWEL. Existing configurations keep their HSL budget through
-the default `false`.
+A nonpositive base WEL grants no headroom. The switch is global per side; coin-specific
+WEL/excess values still apply. It uses configured headroom rather than current utilization.
+The option is rejected in pside/portfolio modes.
 
+## Drawdown and ratio smoothing
 
-For each scope, add realized cashflows and unrealized PnL in currency before computing
-drawdown. Within the configured lookback and current reset episode:
+The shared `live.lookback_ema_span_minutes` controls slow decay. Each HSL policy's
+`ema_span_minutes` independently controls fast smoothing of the sampled ratio. Both are
+float EMA spans in minutes. For one observation, omitting numerical rounding details:
 
 ```text
-X[t] = cumulative net realized PnL[t] + unrealized PnL[t]
-current_equity = budget + unrealized PnL[last]
-equity[t] = current_equity + X[t] - X[last]
-peak[t] = cumulative_max(equity)[t]
-raw_drawdown[t] = (peak[t] - equity[t]) / peak[t]
-smoothed[t] = EMA(raw_drawdown, span=ema_span_minutes, adjust=False)[t]
-score = min(raw_drawdown[last], smoothed[last])
-RED = score > red_threshold
+alpha_slow = 2 / (lookback_ema_span_minutes + 1)
+alpha_fast = 2 / (ema_span_minutes + 1)
+loss = previous_UPNL - current_UPNL - net_realized_cashflow
+D = max(0, (1 - alpha_slow) * D_previous + loss) # first event of a new minute
+E = current_budget + current_UPNL
+R = D / (E + D)
+M = (1 - alpha_fast) * M_previous_minute + alpha_fast * R
+RED = min(R, M) > red_threshold
 ```
 
-Only the current score authorizes panic. Historical threshold crossings do not latch RED.
-Recovery to GREEN retires unfilled panic orders, including after a partial panic close.
+Currency D and dimensionless R/M are different quantities. Historical ratios retain their
+contemporaneous budgets; current balance/slot changes do not renormalize old ratios. Entry
+and exit fees, signed rebates and all supported trading cashflows are consumed exactly once.
+Deposits/withdrawals and unrelated-scope budget changes are not trading losses.
 
-The first raw drawdown seeds the EMA. Fractional spans are preserved. Repeated updates
-within a minute replace that minute's sample rather than repeatedly advancing the EMA.
-Known fill boundaries are evaluated before an episode reset or reopening. Nonpositive
-historical peaks and extreme numeric histories use explicit, reported approximations.
-Thresholds and saved fitness from older HSL versions are not interchangeable.
-Migrate and re-backtest configurations before enabling older HSL policies. Pre-v8.6
-inputs with HSL enabled require explicit `passivbot tool migrate-hsl` conversion,
-even when `live.hsl_engine` is absent. The check runs after CLI changes and includes
-coin overrides, legacy `-lc` references, optimizer fixed overrides and suite scenarios.
-Disabled legacy HSL settings load with a warning; retired engine selection and old
-restart authorization are cleared in the normalized copy. The source file is unchanged.
-Later enablement requires an explicit current restart choice; loading disabled settings
-is not semantic migration. Moving an enabled old policy into an external file is not migration.
-`config_version` records the source file schema and cannot be overridden at runtime.
+At a proven flat-to-exposed transition, initialize D=M=0 before entry economics. Partial
+closes do not reset the episode. Each elapsed minute applies slow decay exactly once;
+ordered events within that minute update D without a second slow decay. A changed same-minute
+observation replaces fast smoothing from the same previous-minute baseline. Pure queries
+advance no clock and consume no fill twice. Nonpositive finite equity/denominator is RED;
+nonfinite or missing required inputs are errors, not a neutral signal.
 
-Fresh optimizer starting configs are parameter seeds: legacy enabled HSL policies are
-accepted best effort, with numeric settings normalized to the current layout. The main
-optimizer config owns HSL activation and restart policy, and fitness is reevaluated.
-This exception does not apply to the main config or checkpoint compatibility.
+For example, with both spans 3.0, a first-minute loss of 100 against a 1000 budget gives
+D=100, E=900, R=0.1 and M=0.05 from the zero seed. A threshold of 0.04 is RED; a threshold
+of 0.05 is GREEN because the comparison is strict. The exact f32 graph, causal candle/fill
+ordering and unsupported cashflow branches are specified in the reference.
 
-To migrate and replace a config explicitly, use `passivbot tool migrate-hsl input.json
---in-place --restart-policy long=always` (choose the restart policy for each required
-scope). Replacement happens only after complete validation. Back up the original yourself
-if you need to retain it; omit `--in-place` and supply an output path to save a separate file.
+Current GREEN retires unfinished panic intent, including after a partial close. HSL does
+not preserve a prior panic order as continuing strategy authority.
 
-## Best-effort history
+## Qualified finite cooldown
 
-Missing, delayed, conflicting or incomplete historical fills and candles are estimation
-inputs, not a requirement for perfect reconstruction before HSL can act. The shared Rust
-evaluator preserves usable cashflows and reconciles history to current positions, reporting
-approximation reasons. Restored evidence replaces estimates on subsequent evaluation.
+At the exposed-to-flat transition, use the latest causal assessment immediately before the
+final fill and the final accounting assessment, including realized PnL and fees:
 
-Historical valuation uses minute closes for both long and short positions. When true 1m
-candles are absent, the finest available completed 5m/15m/1h candle is expanded along a
-deterministic OHLC zigzag. Remaining gaps use forward-fill, then backfill for a missing
-prefix inside the lookback. Live valuation ends at a fresh current mark. A historical
-wick that recovers before the close is not an additional HSL sample.
-
-With no usable history, current size, basis and mark still define current UPNL. The
-estimator uses an entry-equity reference `budget` and one drawdown sample; it does
-not invent an earlier zero sample to dilute the EMA. For loss `L`, the minimal signal is
-`L / budget`: a 100 loss against a 1,000 budget gives 10%.
-Current equity may be zero or negative; this is a loss signal, not missing input. This is
-part of the same evaluator, not a separately timed fallback. Available history is not
-arbitrarily discarded to use this shorter path.
-
-Estimation can produce earlier or later stops than complete evidence. Completely missing
-realized losses cannot be recovered from current positions alone. Diagnostics expose this
-uncertainty; they are not trading authority. Fresh usable current balance, positions and
-required marks remain mandatory, and exchange writes also require current order state.
-Other strategy consumers retain their own input requirements.
-
-## Stops, cooldown and restart
-
-Trading has GREEN and RED behavior; there are no YELLOW/ORANGE trading tiers or separate
-terminal drawdown threshold. Only the latest episode matters. Evaluate its terminal accounting sample, including the
-final realized PnL and fees, before resetting the peak and EMA. If that terminal score
-exceeds RED, the flat scope is eligible for cooldown regardless of the closing order type.
-An earlier RED followed by terminal GREEN does not start cooldown. For an eligible scope:
-
-- `restart_after_red_policy=always` permits restart after cooldown. Zero cooldown means
-  no wait, subject to current HSL and ordinary strategy requirements.
-- `restart_after_red_policy=never` prevents automatic restart while the stop remains
-  inside the configured lookback. It is not a permanent, locally persisted halt.
-
-Fresh exchange positions establish flatness even if the closing fill is missing. Prefer
-its reconstructed timestamp; otherwise estimate cooldown from the last retained causal
-fill in that scope. Repeated observations do not renew it. A delayed final fill may correct
-the anchor and restore remaining cooldown. No retained fills means no historical cooldown.
-Aggregate flatness requires every selected position to be zero, not zero net exposure.
-
-Any renewed exposure clears the preceding cooldown and begins normal evaluation of the
-new episode. Fresh losses in that new episode can independently produce current RED.
-
-Cooldown is reconstructed each evaluation. A balance/budget change or corrected history
-can remove or restore terminal RED; any remaining duration is measured from the original
-estimated flatten timestamp, never from the time of reclassification. This also applies
-to the lookback-bounded `never` restriction.
-
-All history and lifecycle anchors outside the lookback are forgotten, including `never`
-halts. Equal exchange evidence and configuration reconstruct
-equal decisions after restart. A previous RED decision that produced no recoverable
-exchange evidence has no separate local authority. No local journal supplies trading authority.
-Repeated stops under `always` have no second, terminal accumulated-loss threshold.
-
-## Configuration and live validation
-
-Follow the [migration rules](configuration.md#hsl-configuration):
-enabled scopes need an explicit restart choice and a 1–90 day lookback; unified requires
-an explicit portfolio policy. Removed tier fields, intervention values, optimizer paths
-and cached fitness must not silently become different policies.
-
-Offline reference, unit, native parity and fake-exchange tests do not establish actual
-exchange execution correctness. Use the [live validation and rollback checklist](hsl_live_validation.md)
-for an operator-approved trial. Upgrading source does not restart running processes; deployment remains an operator decision.
-
-
-See the [validation matrix](hsl_testing.md) for reproducible checks and their limits.
-
-## Simulator replay performance
-
-The simulator can discard completed episodes that no longer affect current panic or the
-latest cooldown. Before its first entry, a single preceding flat sample preserves the zero
-EMA seed. These are suffixes of the configured lookback; no older evidence is imported.
-
-With unchanged fills, balance budget and slot count, consecutive minute observations can
-advance the same numerical signal without rebuilding fills and candles. On ordinary fills or
-budget changes within a proven episode, the simulator can extend its factual PNL/UPNL trace
-and replay the shared controller with the new inputs. Episode changes, lookback boundary
-crossings, estimated opening changes and sensitive numeric comparisons rebuild the full
-shared reconstruction. Rebuilding or discarding either cache preserves trading decisions.
-These disposable caches do not authorize trading independently and are not persisted.
-
-
-## Offline GPU optimization
-
-Single- and multi-coin GPU optimization support HSL for both supported strategy families
-and all three signal modes. Unified mode uses the explicit `bot.hsl` policy and portfolio
-HSL bounds; coin and pside modes use their directional policies. They use bounded per-candidate history, recompute drawdown when its equity anchor
-changes, and derive current panic and terminal cooldown without latching past decisions.
-The same Rust-owned shader source runs on Metal and CUDA. Candidate batches are partitioned
-to keep history scratch below 512 MiB; temporal replay rebinds that scratch explicitly.
-History stores two floats per minute plus summaries of completed 64-minute blocks;
-partial boundary blocks are evaluated directly, including same-minute replacement peaks.
-
-Select `optimize.backend=gpu` with 1m candles. Multi-coin scenarios support one or both position sides, effective coin overrides,
-and one shared portfolio controller in unified mode. Existing GPU metric and execution
-restrictions still apply. Saved
-checkpoints include the calculation contract and effective policies; incompatible resume is
-rejected. GPU float32 results are screening estimates; exact Rust backtests remain
-authoritative for retained candidates. This offline path does not execute live orders.
-Run the reproducible timing fixtures with:
-
-```sh
-PYTHONPATH=src python tests/hsl_gpu_benchmark.py --minutes 4000 --candidates 16
-PYTHONPATH=src python tests/hsl_gpu_benchmark.py --coins 2 --mode unified --minutes 4000 --candidates 16
+```text
+qualified = pre_final_fill_RED OR post_final_accounting_RED
+cooldown_until = flatten_timestamp + duration if qualified else no_deadline
+in_cooldown = flat AND now < cooldown_until
 ```
 
-Hardware parity tests cover changing budgets, sliding windows, fractional EMA spans,
-current RED recovery, terminal accounting, cooldown reclassification, candidate batching,
-and full versus chunked replay. A successful GPU fixture is not live-exchange evidence.
+Any close can qualify, including a manual close without a Passivbot order tag. An earlier
+RED followed by GREEN while still exposed is insufficient by itself. A final accounting
+GREEN does not erase a qualifying pre-fill RED. For example, threshold 0.099 with a latest
+pre-fill score 0.09912 and final score 0.09884 still starts the configured finite cooldown.
+
+After qualification, later GREEN, budget changes or repeated flat observations do not
+cancel, renew or extend the deadline. Corrected facts require shared reconstruction.
+Actual new exposure clears the old terminal record and starts a new episode. Zero cooldown
+permits immediate restart subject to normal strategy/risk gates. There is no `never`
+restart policy; an operator or external supervisor owns permanent shutdown.
+
+## Live reconstruction and availability
+
+Forward CPU/GPU simulation keeps constant retained risk state per scope and processes new
+facts once. Fills, budget changes and diagnostics do not rescan historical candles. Live
+startup/repair can reconstruct bounded history through the same Rust core.
+
+Live targets five slow spans and at least every active policy's configured cooldown, within
+`live.risk_bootstrap_max_lookback_minutes` (maximum 90 days). An enabled cooldown exceeding
+that cap fails live capability validation. Coverage, unknown prefix, shortened targets, ambiguous fills, missing historical
+marks and estimated budgets are observable. Exact known-origin facts reproduce decisions
+at restart cuts. Unknown exposed prefixes use the explicit approximation in the reference;
+a finite suffix cannot prove equality to an unknown infinite past. Cooldown comes from
+factual flatten reconstruction, never a local permission journal or old order tag.
+
+Fresh current balance, positions, open orders and required marks remain mandatory for
+protective exchange actions. Historical approximation does not make stale current facts
+fresh. Ordinary strategy and unrelated risk consumers retain their own readiness needs.
+See the [failure contract](ai/error_contract.md).
+
+## Migration, reporting and qualification
+
+V9 configs use `config_version="v9.0.0"`, coin/pside/portfolio modes, and no restart field.
+The explicit migration tool requires a slow-memory choice and acknowledgement of any
+removed Never policy. It retains original configs for version-matched rollback and never
+reuses v8 optimizer fitness. See [configuration](configuration.md#hsl-configuration).
+
+HSL risk diagnostics are model-dependent. Use ordinary account-equity metrics from full
+fills/equity for v8/v9 economic comparison. Optional `backtest.hsl_detailed_report=true`
+adds risk samples/plots; optimizer replay omits extra diagnostic arrays while required
+account/objective metrics remain complete.
+
+Follow the [validation matrix](hsl_testing.md). Supported-device numerical execution,
+end-to-end performance and exact intended-config backtests are separate evidence gates.
+Offline qualification authorizes no actual live trial or deployment; those use the
+[separately approved live validation/rollback procedure](hsl_live_validation.md).

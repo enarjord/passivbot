@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from config.shared_bot import BOT_GROUP_FIELD_MAP, get_grouped_bot_value
+from config.risk_memory import (
+    normalize_lookback_ema_span_minutes, normalize_risk_bootstrap_max_lookback_minutes,
+    normalize_realized_loss_gate_lookback_minutes, risk_bootstrap_horizon_minutes,
+)
 from live.smoke_report import _user_safe_display_path
 
 DEFAULT_SAMPLE_SIZE = 8
@@ -27,7 +31,9 @@ CACHE_LIVE_KEYS = (
     "max_memory_candles_per_symbol",
     "max_ohlcv_fetches_per_minute",
     "max_warmup_minutes",
-    "pnls_max_lookback_days",
+    "lookback_ema_span_minutes",
+    "risk_bootstrap_max_lookback_minutes",
+    "realized_loss_gate_lookback_minutes",
     "warmup_concurrency",
     "warmup_jitter_seconds",
     "warmup_ratio",
@@ -42,7 +48,9 @@ CACHE_SETTING_CHECK_KEYS = (
     "max_disk_candles_per_symbol_per_tf",
     "max_memory_candles_per_symbol",
     "max_warmup_minutes",
-    "pnls_max_lookback_days",
+    "lookback_ema_span_minutes",
+    "risk_bootstrap_max_lookback_minutes",
+    "realized_loss_gate_lookback_minutes",
     "warmup_ratio",
 )
 FORAGER_LIVE_KEYS = (
@@ -271,7 +279,7 @@ def _hsl_policy_reports(config):
     bot = config.get("bot")
     live = live if isinstance(live, dict) else {}
     bot = bot if isinstance(bot, dict) else {}
-    if _effective_hsl_signal_mode(live) == "unified":
+    if _effective_hsl_signal_mode(live) == "portfolio":
         return {"portfolio": _hsl_side_report({"hsl": bot.get("hsl", {})})}
     return {side: _hsl_side_report(_bot_side_config(config, side)) for side in SIDES}
 
@@ -540,6 +548,7 @@ def _cache_root_hints(identity: dict[str, Any]) -> dict[str, Any]:
 def _cache_readiness_report(
     live: dict[str, Any],
     *,
+    config: dict[str, Any],
     identity: dict[str, Any],
     hsl_sides: dict[str, dict[str, Any]],
     balance_override: dict[str, Any] | None = None,
@@ -657,23 +666,24 @@ def _cache_readiness_report(
         "preflight inspects config only; run cache-integrity-doctor to prove local candle coverage",
     )
 
-    lookback_status = _numeric_status(
-        _setting_value(live, "pnls_max_lookback_days"),
-        allow_all=True,
-    )
-    if lookback_status in {"missing", "invalid", "invalid_bool", "negative", "zero"}:
-        _append_attention(
-            fills,
-            f"pnls_max_lookback_days_{lookback_status}",
-            "live.pnls_max_lookback_days must be positive or 'all' for fill/PnL lookback consumers",
-        )
-    else:
-        fills["evidence"].append(
-            {
-                "code": "pnls_max_lookback_days_configured",
-                "value": live.get("pnls_max_lookback_days"),
-            }
-        )
+    lookback_status = "present"
+    for key, validator in (
+        ("lookback_ema_span_minutes", normalize_lookback_ema_span_minutes),
+        ("risk_bootstrap_max_lookback_minutes", normalize_risk_bootstrap_max_lookback_minutes),
+        ("realized_loss_gate_lookback_minutes", normalize_realized_loss_gate_lookback_minutes),
+    ):
+        try:
+            value = validator(live.get(key))
+        except (ValueError, TypeError) as error:
+            if key != "realized_loss_gate_lookback_minutes":
+                lookback_status = "invalid"
+            _append_attention(fills, f"{key}_invalid", str(error))
+        else:
+            fills["evidence"].append({"code": f"{key}_configured", "value": value})
+    if lookback_status == "present":
+        horizon, truncated = risk_bootstrap_horizon_minutes(live)
+        fills["evidence"].append({"code": "risk_bootstrap_horizon",
+                                  "minutes": horizon, "target_truncated": truncated})
     for key in ("fills_recent_overlap_minutes", "fills_confirmation_overlap_minutes"):
         status = _numeric_status(_setting_value(live, key), allow_zero=True)
         if status == "missing":
@@ -695,6 +705,12 @@ def _cache_readiness_report(
     )
 
     if _any_hsl_enabled(hsl_sides):
+        from config.hsl import require_live_runtime_support
+
+        try:
+            require_live_runtime_support(config)
+        except (KeyError, ValueError, TypeError) as error:
+            _append_attention(hsl, "hsl_bootstrap_capability_invalid", str(error))
         hsl["evidence"].append(
             {
                 "code": "hsl_enabled",
@@ -708,7 +724,7 @@ def _cache_readiness_report(
                 "message": (
                     "HSL reconstructs history from exchange state plus config; deposits, "
                     "withdrawals, balance overrides, HSL mode changes, and HSL budget/"
-                    "threshold changes can reinterpret historical drawdown"
+                    "threshold changes require reconstruction; acquisition caps do not define EMA forgetting"
                 ),
             }
         )
@@ -716,7 +732,7 @@ def _cache_readiness_report(
         if (
             isinstance(balance_override, dict)
             and balance_override.get("active") is True
-            and signal_mode in {"unified", "pside"}
+            and signal_mode in {"portfolio", "pside"}
         ):
             _append_attention(
                 hsl,
@@ -737,7 +753,7 @@ def _cache_readiness_report(
             _append_attention(
                 hsl,
                 "hsl_fill_lookback_unready",
-                "HSL is enabled but live.pnls_max_lookback_days is not a usable positive/'all' value",
+                "HSL is enabled but its v9 memory span or bootstrap cap is invalid",
             )
         _append_not_proven(
             hsl,
@@ -895,12 +911,14 @@ def build_live_config_diff_report(
     target_identity = _identity_report(target, target_live)
     baseline_readiness = _cache_readiness_report(
         baseline_live,
+        config=baseline,
         identity=baseline_identity,
         hsl_sides=baseline_hsl_sides,
         balance_override=_balance_override_report(baseline_live),
     )
     target_readiness = _cache_readiness_report(
         target_live,
+        config=target,
         identity=target_identity,
         hsl_sides=target_hsl_sides,
         balance_override=_balance_override_report(target_live),
@@ -1018,6 +1036,12 @@ def build_live_config_preflight_report(
 
     live = _section(parsed["live"] if "live" in parsed else None, "live", issues)
     bot = _section(parsed["bot"] if "bot" in parsed else None, "bot", issues)
+    from config.migrations.v9 import require_v9_runtime_config
+
+    try:
+        require_v9_runtime_config(parsed)
+    except ValueError as error:
+        issues.append(_issue("error", "config_migration_required", str(error), path="config_version"))
     side_configs = {
         side: bot[side] if isinstance(bot.get(side), dict) else {} for side in SIDES
     }
@@ -1049,6 +1073,18 @@ def build_live_config_preflight_report(
     severity_counts = Counter(issue["severity"] for issue in issues)
     identity_report = _identity_report(parsed, live)
     hsl_sides = _hsl_policy_reports(parsed)
+    if _any_hsl_enabled(hsl_sides):
+        from config.hsl import require_live_runtime_support
+
+        try:
+            require_live_runtime_support(parsed)
+        except KeyError:
+            # A sparse/flat inspection is not a compiled runtime configuration;
+            # missing capability facts remain explicit readiness attention.
+            pass
+        except (ValueError, TypeError) as error:
+            issues.append(_issue("error", "hsl_bootstrap_capability_invalid", str(error),
+                                 path="live.risk_bootstrap_max_lookback_minutes"))
     balance_override_report = _balance_override_report(
         live, override_value=balance_override
     )
@@ -1070,14 +1106,14 @@ def build_live_config_preflight_report(
     if (
         _any_hsl_enabled(hsl_sides)
         and balance_override_report.get("active") is True
-        and hsl_signal_mode in {"unified", "pside"}
+        and hsl_signal_mode in {"portfolio", "pside"}
     ):
         issues.append(
             _issue(
                 "error",
                 "hsl_balance_override_account_level_replay_unsafe",
                 (
-                    "HSL signal modes 'unified' and 'pside' reconstruct "
+                    "HSL signal modes 'portfolio' and 'pside' reconstruct "
                     "account-level equity history and are unsafe with an active "
                     "balance override; use hsl_signal_mode='coin', remove the "
                     "balance override, or disable HSL before live trading"
@@ -1123,6 +1159,7 @@ def build_live_config_preflight_report(
             "live_settings": _selected_values(live, CACHE_LIVE_KEYS),
             "readiness": _cache_readiness_report(
                 live,
+                config=parsed,
                 identity=identity_report,
                 hsl_sides=hsl_sides,
                 balance_override=balance_override_report,

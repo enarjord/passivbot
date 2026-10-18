@@ -1,11 +1,10 @@
-//! HSL backtest execution integration. Permission is rebuilt from simulator facts.
+//! Forward-only v9 CPU adapter. No history reconstruction enters ordinary replay.
 use super::*;
-use crate::hsl_controller::{Action, Restart};
-use crate::hsl_evaluator as evaluator;
-use crate::hsl_history::PositionSide;
-use crate::hsl_snapshot::Mode;
+use crate::hsl_decay::{self, Event, ScopeState};
+use crate::hsl_intent::{Action, Decision, LifecycleEvent};
+use crate::hsl_support as evaluator;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -16,7 +15,6 @@ pub struct Policy {
     pub red_threshold: f64,
     pub ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
-    pub restart_after_red_policy: Option<String>,
     pub panic_close_order_type: String,
 }
 
@@ -37,12 +35,10 @@ impl Default for Policy {
             red_threshold: 0.25,
             ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
-            restart_after_red_policy: None,
             panic_close_order_type: "limit".into(),
         }
     }
 }
-
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -53,35 +49,10 @@ impl Default for Config {
         }
     }
 }
-
-#[cfg(test)]
-mod config_tests {
-    use super::*;
-
-    #[test]
-    fn default_has_no_active_or_inherited_policy() {
-        let config = Config::default();
-        assert_eq!(config.mode, "coin");
-        assert!(config.portfolio.is_none());
-        assert!(config.coins.is_empty());
-        assert!(config
-            .sides
-            .iter()
-            .all(|p| !p.enabled && p.restart_after_red_policy.is_none()));
-        config.validate(&[], -1.0, 5).unwrap();
-        let mut enabled = config;
-        enabled.sides[0].enabled = true;
-        assert!(enabled.validate(&[], 1.0, 1).is_err());
-        enabled.sides[0].restart_after_red_policy = Some("always".into());
-        enabled.validate(&[], 1.0, 1).unwrap();
-    }
-}
-
 impl Config {
-    /// Validate before simulation, even when no candle ever causes an evaluation.
-    pub fn validate(&self, coins: &[String], lookback: f64, interval: u64) -> Result<(), String> {
-        if !["coin", "pside", "unified"].contains(&self.mode.as_str()) {
-            return Err("invalid HSL signal mode".into());
+    pub fn validate(&self, coins: &[String], slow_span: f64, interval: u64) -> Result<(), String> {
+        if !["coin", "pside", "portfolio"].contains(&self.mode.as_str()) {
+            return Err("invalid v9 HSL signal mode".into());
         }
         if self.mode != "coin" && !self.coins.is_empty() {
             return Err("HSL coin policies require coin mode".into());
@@ -89,14 +60,14 @@ impl Config {
         if self.coins.keys().any(|coin| !coins.contains(coin)) {
             return Err("HSL policy names a coin outside the dataset".into());
         }
-        let policies: Vec<&Policy> = if self.mode == "unified" {
+        let policies: Vec<&Policy> = if self.mode == "portfolio" {
             vec![self
                 .portfolio
                 .as_ref()
-                .ok_or("missing explicit hsl portfolio policy")?]
+                .ok_or("missing explicit portfolio HSL policy")?]
         } else {
             if self.portfolio.is_some() {
-                return Err("hsl portfolio policy requires unified mode".into());
+                return Err("portfolio policy requires portfolio mode".into());
             }
             self.sides
                 .iter()
@@ -107,61 +78,35 @@ impl Config {
             if self.mode != "coin" && policy.scale_budget_with_excess_allowance {
                 return Err("HSL excess allowance budget scaling requires coin mode".into());
             }
-            if !policy.red_threshold.is_finite()
-                || !(0.0 < policy.red_threshold && policy.red_threshold <= 1.0)
-                || !policy.ema_span_minutes.is_finite()
-                || policy.ema_span_minutes < 1.0
-                || !policy.cooldown_minutes_after_red.is_finite()
-                || policy.cooldown_minutes_after_red < 0.0
-                || policy.cooldown_minutes_after_red * 60_000.0 >= i64::MAX as f64
-            {
-                return Err("invalid HSL numeric policy".into());
-            }
             if !["limit", "market"].contains(&policy.panic_close_order_type.as_str()) {
                 return Err("invalid HSL panic close order type".into());
             }
-            if policy.enabled
-                && !matches!(
-                    policy.restart_after_red_policy.as_deref(),
-                    Some("always" | "never")
-                )
-            {
-                return Err("enabled HSL requires explicit always or never restart policy".into());
+            let cooldown = policy.cooldown_minutes_after_red * 60_000.0;
+            if !cooldown.is_finite() || cooldown < 0.0 || cooldown >= i64::MAX as f64 {
+                return Err("invalid HSL cooldown".into());
             }
+            hsl_decay::Policy::new(
+                slow_span,
+                policy.ema_span_minutes,
+                policy.red_threshold,
+                cooldown.round() as i64,
+            )?;
         }
-        if policies.iter().any(|p| p.enabled) {
-            if !lookback.is_finite() || !(1.0..=90.0).contains(&lookback) {
-                return Err("enabled HSL requires finite lookback in [1,90] days".into());
-            }
-            if interval != 1 {
-                return Err("enabled HSL backtest requires 1m candles".into());
-            }
+        if policies.iter().any(|p| p.enabled) && interval != 1 {
+            return Err("enabled HSL backtest requires 1m candles".into());
         }
         Ok(())
     }
 }
 
-/// Borrow-free numeric view of the already validated immutable policy.
-#[derive(Clone, Copy)]
-pub(super) struct SignalSettings {
-    pub scale_budget_with_excess_allowance: bool,
-    pub span: f64,
-    pub threshold: f64,
-    pub cooldown_ms: i64,
-    pub restart: Restart,
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct Scope {
-    pub(super) timestamp: i64,
-    pub(super) fill_count: usize,
-    pub(super) budget: f64,
-    pub(super) slots: u64,
     pub(super) side: Option<usize>,
     pub(super) coin: Option<usize>,
+    policy: hsl_decay::Policy,
+    state: ScopeState,
     pub result: evaluator::Output,
 }
-
 impl Scope {
     fn contains(&self, side: usize, coin: usize) -> bool {
         self.side.is_none_or(|s| s == side) && self.coin.is_none_or(|c| c == coin)
@@ -169,47 +114,6 @@ impl Scope {
 }
 
 impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
-    pub(super) fn hsl_exposure_budget(
-        &self,
-        side: Option<usize>,
-        coin: Option<usize>,
-    ) -> Option<evaluator::ExposureBudget> {
-        let (side, coin) = (side?, coin?);
-        let params = if side == LONG {
-            &self.bot_params_original[coin].long
-        } else {
-            &self.bot_params_original[coin].short
-        };
-        Some(evaluator::ExposureBudget {
-            wallet_exposure_limit: params.wallet_exposure_limit,
-            total_wallet_exposure_limit: params.total_wallet_exposure_limit,
-            we_excess_allowance_pct: params.risk_we_excess_allowance_pct,
-        })
-    }
-    pub(super) fn hsl_balance_budget(
-        &self,
-        side: Option<usize>,
-        coin: Option<usize>,
-        slots: u64,
-        scale: bool,
-    ) -> Result<f64, String> {
-        let mode = if coin.is_some() {
-            Mode::Coin
-        } else if side.is_some() {
-            Mode::Pside
-        } else {
-            Mode::Unified
-        };
-        evaluator::budget(
-            self.balance.usd_total_balance,
-            &mode,
-            slots,
-            scale,
-            self.hsl_exposure_budget(side, coin).as_ref(),
-        )
-    }
-
-    /// Current post-fill account value, before ordinary collateral revaluation.
     pub(super) fn hsl_fill_is_terminal(&self, k: usize) -> bool {
         let balance = if self.balance.use_btc_collateral {
             self.balance.btc_cash_wallet * self.btc_usd_prices[k] + self.balance.usd_cash_wallet
@@ -222,7 +126,17 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
     }
 
     pub(super) fn hsl_enabled(&self) -> bool {
-        self.backtest_params.equity_hard_stop_loss.hsl.is_some()
+        self.backtest_params
+            .equity_hard_stop_loss
+            .hsl
+            .as_ref()
+            .is_some_and(|c| {
+                c.portfolio.as_ref().is_some_and(|p| p.enabled)
+                    || c.sides
+                        .iter()
+                        .chain(c.coins.values().flatten())
+                        .any(|p| p.enabled)
+            })
     }
 
     pub(super) fn hsl_policy(
@@ -240,144 +154,319 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
             None => cfg
                 .portfolio
                 .as_ref()
-                .ok_or("missing hsl portfolio HSL policy".into()),
+                .ok_or_else(|| "missing portfolio HSL policy".into()),
             Some(side) => Ok(coin
                 .and_then(|c| cfg.coins.get(&self.backtest_params.coins[c]))
                 .map_or(&cfg.sides[side], |p| &p[side])),
         }
     }
 
-    fn hsl_scopes(&self) -> Result<Vec<(Option<usize>, Option<usize>)>, String> {
-        let cfg = self
-            .backtest_params
-            .equity_hard_stop_loss
-            .hsl
-            .as_ref()
-            .ok_or("missing HSL config")?;
-        Ok(match cfg.mode.as_str() {
-            "unified" => vec![(None, None)],
+    pub(super) fn initialize_hsl(&mut self) -> Result<(), String> {
+        if self.hsl_initialized {
+            return Ok(());
+        }
+        let Some(cfg) = &self.backtest_params.equity_hard_stop_loss.hsl else {
+            self.hsl_initialized = true;
+            return Ok(());
+        };
+        cfg.validate(
+            &self.backtest_params.coins,
+            self.backtest_params.lookback_ema_span_minutes,
+            self.backtest_params.candle_interval_minutes,
+        )?;
+        let keys: Vec<_> = match cfg.mode.as_str() {
+            "portfolio" => vec![(None, None)],
             "pside" => vec![(Some(LONG), None), (Some(SHORT), None)],
             "coin" => [LONG, SHORT]
                 .into_iter()
                 .flat_map(|s| (0..self.n_coins).map(move |c| (Some(s), Some(c))))
                 .collect(),
-            _ => return Err("invalid HSL signal mode".into()),
-        })
+            _ => return Err("invalid HSL mode".into()),
+        };
+        let mut scopes = Vec::new();
+        for (side, coin) in keys {
+            let p = self.hsl_policy(side, coin)?;
+            if !p.enabled {
+                continue;
+            }
+            scopes.push(Scope {
+                side,
+                coin,
+                policy: hsl_decay::Policy::new(
+                    self.backtest_params.lookback_ema_span_minutes,
+                    p.ema_span_minutes,
+                    p.red_threshold,
+                    (p.cooldown_minutes_after_red * 60_000.0).round() as i64,
+                )?,
+                state: ScopeState::default(),
+                result: evaluator::Output {
+                    decision: None,
+                    events: Vec::new(),
+                    reasons: BTreeSet::new(),
+                    observations: 0,
+                    episodes: 0,
+                },
+            });
+        }
+        self.hsl_scopes = scopes;
+        self.hsl_initialized = true;
+        Ok(())
     }
 
-    fn evaluate_hsl_scope(
-        &mut self,
-        k: usize,
+    fn scope_facts(
+        &self,
         side: Option<usize>,
         coin: Option<usize>,
-        boundary: bool,
-    ) -> Result<Scope, String> {
-        let policy = self.hsl_policy(side, coin)?;
-        let restart = match policy.restart_after_red_policy.as_deref() {
-            Some("always") => Restart::Always,
-            Some("never") => Restart::Never,
-            _ => return Err("invalid HSL restart policy".into()),
-        };
-        if !["limit", "market"].contains(&policy.panic_close_order_type.as_str()) {
-            return Err("invalid HSL panic close order type".into());
-        }
-        let cooldown = policy.cooldown_minutes_after_red * 60_000.0;
-        if !cooldown.is_finite() || cooldown < 0.0 || cooldown >= i64::MAX as f64 {
-            return Err("invalid HSL cooldown".into());
-        }
-        let settings = SignalSettings {
-            scale_budget_with_excess_allowance: policy.scale_budget_with_excess_allowance,
-            span: policy.ema_span_minutes,
-            threshold: policy.red_threshold,
-            cooldown_ms: cooldown.round() as i64,
-            restart,
-        };
-        if !boundary {
-            if let Some(scope) = self.advance_hsl_scope(k, side, coin, settings) {
-                return Ok(scope);
+        _k: usize,
+        _boundary_price: Option<(usize, f64)>,
+    ) -> Result<(f64, f64, bool), String> {
+        let mut upnl = 0.0;
+        let mut exposed = false;
+        for s in [LONG, SHORT] {
+            if side.is_some_and(|v| v != s) {
+                continue;
             }
-            if let Some(scope) = self.replay_hsl_trace(k, side, coin, settings) {
-                return Ok(scope);
-            }
-        }
-        let mode = if coin.is_some() {
-            Mode::Coin
-        } else if side.is_some() {
-            Mode::Pside
-        } else {
-            Mode::Unified
-        };
-        let side_name = side.map(|s| {
-            if s == LONG {
-                PositionSide::Long
+            let positions = if s == LONG {
+                &self.positions.long
             } else {
-                PositionSide::Short
+                &self.positions.short
+            };
+            let first = coin.unwrap_or(0);
+            let end = coin.map_or(self.n_coins, |c| c + 1);
+            for c in first..end {
+                let position = positions[c];
+                if position.size == 0.0 {
+                    continue;
+                }
+                exposed = true;
+                let mark = self.hsl_marks[c];
+                if !mark.is_finite() || mark <= 0.0 {
+                    return Err("invalid causal HSL mark".into());
+                }
+                upnl += if s == LONG {
+                    calc_pnl_long(
+                        position.price,
+                        mark,
+                        position.size,
+                        self.exchange_params_list[c].c_mult,
+                    )
+                } else {
+                    calc_pnl_short(
+                        position.price,
+                        mark,
+                        position.size,
+                        self.exchange_params_list[c].c_mult,
+                    )
+                };
             }
-        });
-        let cutoff = self.hsl_history_cutoff(side, coin);
-        let symbol = coin.map(|c| self.backtest_params.coins[c].as_str());
-        let observed = self.hsl_inputs_at_clipped(k, mode, side_name, symbol, boundary, cutoff)?;
-        let timestamp = observed.snapshot.now;
-        let slots = side.map_or(1, |s| observed.slots[s]) as u64;
-        let exposure_budget = self.hsl_exposure_budget(side, coin);
-        let budget = if coin.is_some() && slots == 0 {
-            0.0
-        } else {
-            evaluator::budget(
-                observed.snapshot.balance,
-                &observed.snapshot.mode,
-                slots,
-                settings.scale_budget_with_excess_allowance,
-                exposure_budget.as_ref(),
-            )?
-        };
-        let rolling = if boundary {
-            None
-        } else {
-            self.rolling_hsl_window(&observed.snapshot)
-        };
-        let mut result = evaluator::evaluate_for_simulator(evaluator::Input {
-            snapshot: observed.snapshot,
-            slots,
-            scale_budget_with_excess_allowance: settings.scale_budget_with_excess_allowance,
-            exposure_budget,
-            span: settings.span,
-            threshold: settings.threshold,
-            cooldown_ms: settings.cooldown_ms,
-            restart: settings.restart,
-        })?;
-        result.reasons.extend(observed.reasons);
-        self.seed_hsl_trace((side, coin), &mut result, rolling, budget, settings);
-        Ok(Scope {
-            timestamp,
-            fill_count: self.fills.len(),
-            budget,
-            slots,
-            side,
-            coin,
-            result,
-        })
+        }
+        let mut budget = self.balance.usd_total_balance;
+        if let (Some(s), Some(c)) = (side, coin) {
+            let slots = self.hard_stop_coin_slot_n_positions(s);
+            if slots == 0 {
+                if exposed {
+                    return Err("held HSL coin has zero configured slots".into());
+                }
+                return Ok((0.0, 0.0, false));
+            }
+            budget /= slots as f64;
+            if self
+                .hsl_policy(side, coin)?
+                .scale_budget_with_excess_allowance
+            {
+                let authored = if s == LONG {
+                    &self.bot_params_original[c].long
+                } else {
+                    &self.bot_params_original[c].short
+                };
+                let base = if authored.wallet_exposure_limit < 0.0 {
+                    authored.total_wallet_exposure_limit / slots as f64
+                } else {
+                    authored.wallet_exposure_limit
+                };
+                budget *= 1.0 + effective_we_excess_allowance_pct(authored, base);
+            }
+        }
+        Ok((budget, upnl, exposed))
     }
 
-    pub(super) fn update_hsl(&mut self, k: usize) -> Result<(), String> {
-        let mut results = Vec::new();
-        for (side, coin) in self.hsl_scopes()? {
-            if self.hsl_policy(side, coin)?.enabled {
-                results.push(self.evaluate_hsl_scope(k, side, coin, false)?);
+    fn observe_hsl(
+        &mut self,
+        k: usize,
+        timestamp: i64,
+        boundary_price: Option<(usize, f64)>,
+        cashflow: Option<(usize, usize, f64)>,
+        phase: &'static str,
+    ) -> Result<(), String> {
+        self.initialize_hsl()?;
+        if self.hsl_scopes.is_empty() {
+            return Ok(());
+        }
+        if let Some((coin, price)) = boundary_price {
+            self.hsl_marks[coin] = price;
+            for c in 0..self.n_coins {
+                if !self.hsl_marks[c].is_finite() && k > 0 {
+                    self.hsl_marks[c] = self.hlcvs_value(k - 1, c, CLOSE);
+                }
+            }
+        } else {
+            for c in 0..self.n_coins {
+                if self.coin_is_valid_at(c, k) {
+                    self.hsl_marks[c] = self.hlcvs_value(k, c, CLOSE);
+                }
             }
         }
-        // Replace atomically only after every selected current evaluation succeeds.
-        self.hsl_scopes = results;
-        for scope in &self.hsl_scopes {
-            self.hsl_report.observe(
-                (scope.side, scope.coin),
-                scope.timestamp,
-                "bar_close",
-                &scope.result,
-            );
+        for i in 0..self.hsl_scopes.len() {
+            let (side, coin) = (self.hsl_scopes[i].side, self.hsl_scopes[i].coin);
+            let (budget, upnl, exposed) = self.scope_facts(side, coin, k, boundary_price)?;
+            if coin.is_some() && side.is_some_and(|s| self.hard_stop_coin_slot_n_positions(s) == 0)
+            {
+                // Zero configured slots are an inactive scope, not an observed
+                // zero-equity GREEN. scope_facts still rejects held exposure.
+                let scope = &mut self.hsl_scopes[i];
+                scope.result = evaluator::Output {
+                    decision: None,
+                    events: Vec::new(),
+                    reasons: BTreeSet::from(["inactive_scope".into()]),
+                    observations: 0,
+                    episodes: 0,
+                };
+                self.hsl_report
+                    .observe((side, coin), timestamp, phase, &scope.result);
+                continue;
+            }
+            let net = cashflow
+                .filter(|(s, c, _)| side.is_none_or(|v| v == *s) && coin.is_none_or(|v| v == *c))
+                .map_or(0.0, |(_, _, net)| net);
+            let scope = &mut self.hsl_scopes[i];
+            let previous = scope.result.decision.clone();
+            let decision = scope.state.observe(
+                &scope.policy,
+                Event {
+                    timestamp_ms: timestamp,
+                    budget,
+                    upnl,
+                    net_realized_pnl: net,
+                    exposed,
+                },
+            )?;
+            let prior_action = previous.as_ref().map_or(Action::Normal, |d| d.action);
+            let red_at = if decision.action == Action::Normal {
+                None
+            } else {
+                previous.as_ref().and_then(|d| d.red_at).or(Some(timestamp))
+            };
+            let flat_at = decision
+                .cooldown_until
+                .map(|until| until - scope.policy.cooldown_ms);
+            let mut events = Vec::new();
+            let mut event = |kind, reason| {
+                events.push(LifecycleEvent {
+                    timestamp,
+                    kind,
+                    red_at: red_at.unwrap_or(timestamp),
+                    flat_at,
+                    reason,
+                    raw: Some(decision.raw),
+                    ema: Some(decision.ema),
+                })
+            };
+            if decision.action == Action::Panic && prior_action != Action::Panic {
+                event("red", "drawdown");
+            }
+            if decision.flatten_qualified {
+                if prior_action == Action::Normal {
+                    event("red", "final_accounting");
+                }
+                event("flat", "stop_flattened");
+                if decision.action == Action::Normal {
+                    event("restart", "cooldown_complete");
+                }
+            } else if prior_action != Action::Normal && decision.action == Action::Normal {
+                event(
+                    "restart",
+                    if exposed {
+                        "current_green"
+                    } else {
+                        "cooldown_complete"
+                    },
+                );
+            }
+            scope.result = evaluator::Output {
+                decision: Some(Decision {
+                    timestamp,
+                    action: decision.action,
+                    red_at,
+                    flat_at,
+                    reason: if decision.action == Action::Panic {
+                        "drawdown"
+                    } else if decision.action == Action::Halted {
+                        "cooldown"
+                    } else {
+                        "green"
+                    },
+                    raw: decision.raw,
+                    ema: decision.ema,
+                    numeric_range_approximation: false,
+                }),
+                events,
+                reasons: BTreeSet::new(),
+                observations: 1,
+                episodes: 0,
+            };
+            self.hsl_report
+                .observe((side, coin), timestamp, phase, &scope.result);
         }
         self.clear_hsl_entries();
         Ok(())
+    }
+
+    pub(super) fn update_hsl(&mut self, k: usize) -> Result<(), String> {
+        let timestamp = self
+            .first_timestamp_ms
+            .checked_add((k as u64 + 1) * self.interval_ms)
+            .and_then(|t| i64::try_from(t).ok())
+            .ok_or("HSL close timestamp overflow")?;
+        self.observe_hsl(k, timestamp, None, None, "bar_close")
+    }
+
+    pub(super) fn hsl_before_fill(
+        &mut self,
+        k: usize,
+        coin: usize,
+        exec: OrderFillExecution,
+    ) -> Result<(), String> {
+        if !self.hsl_enabled() {
+            return Ok(());
+        }
+        let timestamp = i64::try_from(self.fill_timestamp_ms(k, exec)?)
+            .map_err(|_| "risk fill timestamp overflow")?;
+        self.observe_hsl(k, timestamp, Some((coin, exec.price)), None, "pre_fill")
+    }
+
+    pub(super) fn hsl_after_fill(
+        &mut self,
+        k: usize,
+        coin: usize,
+        side: usize,
+        exec: OrderFillExecution,
+        net: f64,
+    ) -> Result<(), String> {
+        let timestamp = i64::try_from(self.fill_timestamp_ms(k, exec)?)
+            .map_err(|_| "risk fill timestamp overflow")?;
+        if self.realized_memory_enabled {
+            self.realized_memory.fill(timestamp, net)?;
+        }
+        if !self.hsl_enabled() {
+            return Ok(());
+        }
+        self.observe_hsl(
+            k,
+            timestamp,
+            Some((coin, exec.price)),
+            Some((side, coin, net)),
+            "post_fill",
+        )
     }
 
     pub(super) fn hsl_order_params(&self, side: usize, coin: usize) -> BotParams {
@@ -388,7 +477,7 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
         };
         if let Some(cfg) = &self.backtest_params.equity_hard_stop_loss.hsl {
             let scope = match cfg.mode.as_str() {
-                "unified" => (None, None),
+                "portfolio" => (None, None),
                 "pside" => (Some(side), None),
                 "coin" => (Some(side), Some(coin)),
                 _ => panic!("invalid HSL mode before order construction"),
@@ -468,56 +557,6 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
         }
     }
 
-    pub(super) fn finish_hsl_flat(
-        &mut self,
-        k: usize,
-        coin: usize,
-        side: usize,
-    ) -> Result<(), String> {
-        for (scope_side, scope_coin) in self.hsl_scopes()? {
-            if scope_side.is_some_and(|s| s != side)
-                || scope_coin.is_some_and(|c| c != coin)
-                || !self.hsl_policy(scope_side, scope_coin)?.enabled
-            {
-                continue;
-            }
-            let exposed = [LONG, SHORT].into_iter().any(|s| {
-                (0..self.n_coins).any(|c| {
-                    scope_side.is_none_or(|v| v == s)
-                        && scope_coin.is_none_or(|v| v == c)
-                        && (if s == LONG {
-                            self.positions.long[c].size
-                        } else {
-                            self.positions.short[c].size
-                        }) != 0.0
-                })
-            });
-            if exposed {
-                continue;
-            }
-            if self.hsl_fill_is_terminal(k) {
-                // The fill proves this scope flat even though a liquidating account
-                // cannot enter normal risk evaluation. Finalize observation only;
-                // liquidation owns the terminal trading outcome.
-                let now = (self.first_timestamp_ms + k as u64 * self.interval_ms) as i64;
-                self.hsl_report.observed_flat((scope_side, scope_coin), now);
-                continue;
-            }
-            let updated = self.evaluate_hsl_scope(k, scope_side, scope_coin, true)?;
-            self.hsl_report.observe(
-                (scope_side, scope_coin),
-                updated.timestamp,
-                "scope_flat",
-                &updated.result,
-            );
-            self.hsl_scopes
-                .retain(|s| s.side != scope_side || s.coin != scope_coin);
-            self.hsl_scopes.push(updated);
-        }
-        self.clear_hsl_entries();
-        Ok(())
-    }
-
     pub(super) fn apply_hsl_modes(
         &self,
         idx: usize,
@@ -531,5 +570,388 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 Action::Halted => *mode = Some(orchestrator::TradingMode::GracefulStop),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::{Array1, Array3};
+
+    fn params(mode: &str, coins: usize) -> BacktestParams {
+        let policy = Policy {
+            enabled: true,
+            red_threshold: 0.005,
+            ema_span_minutes: 1.0,
+            cooldown_minutes_after_red: 2.0,
+            ..Policy::default()
+        };
+        let config = Config {
+            mode: mode.into(),
+            sides: [policy.clone(), policy.clone()],
+            portfolio: (mode == "portfolio").then_some(policy),
+            coins: BTreeMap::new(),
+        };
+        BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.001,
+            taker_fee: 0.002,
+            coins: (0..coins).map(|i| format!("COIN{i}")).collect(),
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0; coins],
+            last_valid_indices: vec![5; coins],
+            warmup_minutes: vec![0; coins],
+            trade_start_indices: vec![0; coins],
+            global_warmup_bars: 1,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: false,
+            ew_half_life_days: None,
+            calculate_legacy_w: true,
+            hsl_detailed_report: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            lookback_ema_span_minutes: 3.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: crate::types::EquityHardStopLossConfig { hsl: Some(config) },
+            market_orders_allowed: true,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        }
+    }
+
+    fn bots(coins: usize) -> Vec<BotParamsPair> {
+        (0..coins)
+            .map(|_| {
+                let mut pair = BotParamsPair::default();
+                for side in [&mut pair.long, &mut pair.short] {
+                    side.n_positions = coins;
+                    side.total_wallet_exposure_limit = 1.0;
+                    side.unstuck_loss_allowance_pct = 0.01;
+                    side.unstuck_close_pct = 0.1;
+                    side.unstuck_threshold = 0.95;
+                    side.ema_span_0 = 1.0;
+                    side.ema_span_1 = 2.0;
+                }
+                pair
+            })
+            .collect()
+    }
+
+    fn candles(coins: usize, close: f64) -> Array3<f64> {
+        Array3::from_shape_fn(
+            (6, coins, 4),
+            |(_, _, column)| if column == VOLUME { 1.0 } else { close },
+        )
+    }
+
+    fn execution(price: f64) -> OrderFillExecution {
+        OrderFillExecution {
+            at_bar_close: false,
+            price,
+            fee_rate: 0.001,
+            liquidity: "maker",
+        }
+    }
+
+    fn order(qty: f64, order_type: OrderType) -> Order {
+        Order {
+            qty,
+            price: 100.0,
+            order_type,
+        }
+    }
+
+    #[test]
+    fn v9_fill_uses_execution_fact_before_future_candle_close() {
+        let mut values = candles(1, 100.0);
+        values[[1, 0, CLOSE]] = 1.0;
+        let btc = Array1::from_elem(6, 20_000.0);
+        let p = params("coin", 1);
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            bots(1),
+            vec![ExchangeParams::default()],
+            &p,
+        );
+        bt.process_entry_fill_long(
+            1,
+            0,
+            &order(1.0, OrderType::EntryInitialNormalLong),
+            execution(100.0),
+        )
+        .unwrap();
+        let d = bt.hsl_scopes[0].state.current(60_000);
+        assert_eq!(d.drawdown as f32, 0.1_f32);
+        assert_eq!(d.action, Action::Normal);
+        assert_eq!(bt.realized_memory.drawdown() as f32, 0.1_f32);
+        bt.update_hsl(1).unwrap();
+        assert_eq!(bt.hsl_action(LONG, 0), Action::Panic);
+        assert!(bt.hsl_scopes[0].state.current(120_000).drawdown > 99.0);
+    }
+
+    #[test]
+    fn v9_terminal_bar_commits_completed_mark_before_liquidation() {
+        let mut values = candles(1, 100.0);
+        values[[1, 0, CLOSE]] = 1.0;
+        let btc = Array1::from_elem(6, 20_000.0);
+        let p = params("coin", 1);
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            bots(1),
+            vec![ExchangeParams::default()],
+            &p,
+        );
+        bt.process_entry_fill_long(
+            1,
+            0,
+            &order(20.0, OrderType::EntryInitialNormalLong),
+            execution(100.0),
+        )
+        .unwrap();
+        assert_eq!(bt.hsl_action(LONG, 0), Action::Normal);
+        bt.equity_tracking_active = true;
+
+        // Exercise run's early terminal branch: the fill at the bar start was
+        // GREEN, but the now-completed close must be observed before stopping.
+        bt.run().unwrap();
+
+        assert!(bt.liquidated);
+        let terminal = bt.hsl_scopes[0].state.current(120_000);
+        assert_eq!(terminal.action, Action::Panic);
+        assert!(terminal.drawdown > 1900.0);
+        assert!(terminal.nonpositive_equity);
+    }
+
+    #[test]
+    fn v9_inactive_coin_never_fabricates_a_green_signal() {
+        let values = candles(1, 100.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        let p = params("coin", 1);
+        let mut policies = bots(1);
+        policies[0].long.n_positions = 0;
+        policies[0].short.n_positions = 0;
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            policies,
+            vec![ExchangeParams::default()],
+            &p,
+        );
+        bt.update_hsl(1).unwrap();
+        for scope in &bt.hsl_scopes {
+            assert!(scope.result.decision.is_none());
+            assert!(scope.result.reasons.contains("inactive_scope"));
+        }
+        for sample in &bt.hsl_report.samples {
+            assert!(sample.action.is_none() && sample.raw.is_none() && sample.ema.is_none());
+            assert_eq!(sample.reasons, vec!["inactive_scope"]);
+        }
+    }
+
+    #[test]
+    fn v9_partial_realization_counts_only_new_fee_and_preserves_episode() {
+        let values = candles(1, 90.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        let p = params("coin", 1);
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            bots(1),
+            vec![ExchangeParams::default()],
+            &p,
+        );
+        bt.process_entry_fill_long(
+            1,
+            0,
+            &order(1.0, OrderType::EntryInitialNormalLong),
+            execution(100.0),
+        )
+        .unwrap();
+        bt.update_hsl(1).unwrap();
+        let before = bt.hsl_scopes[0].state.current(120_000).drawdown as f32;
+        bt.process_close_fill_long(
+            2,
+            0,
+            &order(-0.5, OrderType::CloseGridLong),
+            execution(90.0),
+        )
+        .unwrap();
+        let after = bt.hsl_scopes[0].state.current(120_000);
+        assert_eq!(after.drawdown as f32, before + 0.045_f32);
+        assert!(after.exposed);
+        assert_eq!(after.cooldown_until, None);
+        assert!((bt.balance.usd_total_balance - 994.855).abs() < 1e-10);
+        assert_eq!(
+            bt.realized_memory.drawdown() as f32,
+            0.05_f32 - (-5.045_f32)
+        );
+    }
+
+    #[test]
+    fn v9_aggregate_constituent_changes_do_not_reset_exposed_scope() {
+        for mode in ["pside", "portfolio"] {
+            let values = candles(2, 90.0);
+            let btc = Array1::from_elem(6, 20_000.0);
+            let p = params(mode, 2);
+            let mut bt = Backtest::new(
+                values.view(),
+                btc.view(),
+                bots(2),
+                vec![ExchangeParams::default(); 2],
+                &p,
+            );
+            bt.process_entry_fill_long(
+                1,
+                0,
+                &order(1.0, OrderType::EntryInitialNormalLong),
+                execution(100.0),
+            )
+            .unwrap();
+            bt.update_hsl(1).unwrap();
+            let before = bt.hsl_scopes[0].state.current(120_000).drawdown;
+            bt.process_entry_fill_long(
+                2,
+                1,
+                &order(1.0, OrderType::EntryInitialNormalLong),
+                execution(100.0),
+            )
+            .unwrap();
+            let after = bt.hsl_scopes[0].state.current(120_000);
+            assert!(
+                after.drawdown >= before,
+                "{mode} reset an aggregate episode"
+            );
+            bt.process_close_fill_long(
+                2,
+                0,
+                &order(-1.0, OrderType::CloseGridLong),
+                execution(90.0),
+            )
+            .unwrap();
+            assert!(bt.hsl_scopes[0].state.current(120_000).exposed);
+            assert_eq!(bt.hsl_scopes[0].state.current(120_000).cooldown_until, None);
+        }
+    }
+
+    #[test]
+    fn v9_hedged_net_zero_is_gross_exposed_and_realized_memory_is_shared() {
+        let values = candles(1, 100.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        let p = params("portfolio", 1);
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            bots(1),
+            vec![ExchangeParams::default()],
+            &p,
+        );
+        bt.process_entry_fill_long(
+            1,
+            0,
+            &order(1.0, OrderType::EntryInitialNormalLong),
+            execution(100.0),
+        )
+        .unwrap();
+        bt.process_entry_fill_short(
+            1,
+            0,
+            &order(-1.0, OrderType::EntryInitialNormalShort),
+            execution(100.0),
+        )
+        .unwrap();
+        assert!(bt.hsl_scopes[0].state.current(60_000).exposed);
+        assert_eq!(bt.realized_memory.drawdown() as f32, 0.2_f32);
+        bt.process_close_fill_long(
+            2,
+            0,
+            &order(-1.0, OrderType::CloseGridLong),
+            execution(80.0),
+        )
+        .unwrap();
+        assert!(bt.hsl_scopes[0].state.current(120_000).exposed);
+        assert!(bt.realized_memory.drawdown() > 20.0);
+        bt.process_close_fill_short(
+            2,
+            0,
+            &order(1.0, OrderType::CloseGridShort),
+            execution(80.0),
+        )
+        .unwrap();
+        assert!(!bt.hsl_scopes[0].state.current(120_000).exposed);
+        assert!(bt.realized_memory.drawdown() > 0.0);
+    }
+
+    #[test]
+    fn v9_flat_queries_and_budget_changes_do_not_renew_cooldown() {
+        let values = candles(1, 80.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        let p = params("coin", 1);
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            bots(1),
+            vec![ExchangeParams::default()],
+            &p,
+        );
+        bt.process_entry_fill_long(
+            1,
+            0,
+            &order(1.0, OrderType::EntryInitialNormalLong),
+            execution(100.0),
+        )
+        .unwrap();
+        bt.update_hsl(1).unwrap();
+        bt.process_close_fill_long(
+            2,
+            0,
+            &order(-1.0, OrderType::CloseGridLong),
+            execution(80.0),
+        )
+        .unwrap();
+        assert_eq!(bt.hsl_action(LONG, 0), Action::Halted);
+        let deadline = bt.hsl_scopes[0].state.current(120_000).cooldown_until;
+        bt.balance.usd_total_balance = 1_000_000.0;
+        bt.update_hsl(2).unwrap();
+        assert_eq!(
+            bt.hsl_scopes[0].state.current(180_000).cooldown_until,
+            deadline
+        );
+        assert_eq!(bt.hsl_action(LONG, 0), Action::Halted);
+        bt.update_hsl(3).unwrap();
+        assert_eq!(bt.hsl_action(LONG, 0), Action::Normal);
+    }
+
+    #[test]
+    fn v9_disabled_risk_does_not_narrow_unconsumed_economics() {
+        let values = candles(1, 100.0);
+        let btc = Array1::from_elem(6, 20_000.0);
+        let mut p = params("coin", 1);
+        p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
+        let mut bot_params = bots(1);
+        bot_params[0].long.unstuck_enabled = false;
+        bot_params[0].short.unstuck_enabled = false;
+        let mut bt = Backtest::new(
+            values.view(),
+            btc.view(),
+            bot_params,
+            vec![ExchangeParams::default()],
+            &p,
+        );
+        assert!(!bt.realized_memory_enabled);
+        bt.hsl_after_fill(1, 0, LONG, execution(100.0), f64::MAX)
+            .unwrap();
+        assert_eq!(bt.realized_memory.drawdown(), 0.0);
     }
 }

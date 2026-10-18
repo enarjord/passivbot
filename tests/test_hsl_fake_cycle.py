@@ -17,7 +17,7 @@ import tools.run_fake_live as runner
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entrypoint", ["in_process", "cli"])
 @pytest.mark.parametrize("case", ["panic", "entry"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 async def test_standard_fake_runner_hsl_execution_and_trace(
     tmp_path, monkeypatch, mode, side, case, entrypoint
@@ -34,15 +34,14 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
         cfg["bot"]["long"]["risk"].update(
             n_positions=0, total_wallet_exposure_limit=0.0
         )
-    block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"][side]["hsl"]
+    block = cfg["bot"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
     block.update(
         enabled=True,
         red_threshold=0.06,
         ema_span_minutes=1.0,
         panic_close_order_type="market",
-        restart_after_red_policy="never",
     )
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
+    cfg["live"]["lookback_ema_span_minutes"] = 288.0
     if case == "entry":
         block["red_threshold"] = 0.5
         for pside in ("long", "short"):
@@ -338,7 +337,8 @@ async def test_fake_cycle_settles_current_source_before_advancing_scenario(
             await reads
         return dict(updated=True, ordinary_executed=True)
 
-    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _source_task=reads)
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _source_task=reads,
+                               _quote_tasks={}, _discard_quote_tasks=set())
     monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
     bot = SimpleNamespace(config={"live": {}})
     result = await runner._run_fake_cycle_ready(bot)
@@ -365,7 +365,8 @@ async def test_fake_cycle_raises_read_failure_that_finishes_during_final_pass(
         await asyncio.sleep(0.01)
         return dict(updated=updated, ordinary_executed=True)
 
-    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _fill_task=reads)
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _fill_task=reads,
+                               _quote_tasks={}, _discard_quote_tasks=set())
     monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
     bot = SimpleNamespace(config={"live": {}})
     with pytest.raises(RuntimeError, match="unexpected history failure"):
@@ -390,7 +391,8 @@ async def test_fake_cycle_raises_read_failure_in_last_bounded_wait(monkeypatch):
             instance._fill_task = asyncio.create_task(read())
         return dict(updated=True, ordinary_executed=False)
 
-    instance = SimpleNamespace(cycle=cycle, _ordinary=None)
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None,
+                               _quote_tasks={}, _discard_quote_tasks=set())
     monkeypatch.setattr(hsl_live, "owner", lambda bot: instance)
     bot = SimpleNamespace(config={"live": {}})
     with pytest.raises(RuntimeError, match="last wait history failure"):

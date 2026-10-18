@@ -85,7 +85,8 @@ def _complete_hsl_payload(payload):
     payload.backtest_params = params
     params.setdefault("coins", ["BTC", "ETH"][: len(payload.bot_params_list)])
     params.setdefault("dynamic_wel_by_tradability", True)
-    params.setdefault("pnls_max_lookback_days", 1.0)
+    params.setdefault("lookback_ema_span_minutes", 1440.0)
+    params.setdefault("realized_loss_gate_lookback_minutes", 1440.0)
     old = params.get("equity_hard_stop_loss", {})
     if "mode" in old:
         return
@@ -99,8 +100,6 @@ def _complete_hsl_payload(payload):
             policy.update(
                 {key: bot[f"hsl_{key}"] for key in defaults if f"hsl_{key}" in bot}
             )
-            if policy["enabled"]:
-                policy["restart_after_red_policy"] = "always"
             bot.setdefault("n_positions", 1)
             pair.append(policy)
         policies[coin] = pair
@@ -113,7 +112,7 @@ def _complete_hsl_payload(payload):
     }
 
 
-@pytest.mark.parametrize("proxy_cls", [MpsSingleCoinProxy, MpsMulticoinEmaProxy])
+@pytest.mark.parametrize("proxy_cls", [MpsMulticoinEmaProxy])
 def test_proxy_constructors_reject_exact_only_metrics_before_setup(
     monkeypatch, proxy_cls
 ):
@@ -163,7 +162,8 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "dynamic_wel_by_tradability": True,
         "hedge_mode": False,
         "max_realized_loss_pct": 1.0,
-        "pnls_max_lookback_days": 30.0,
+        "lookback_ema_span_minutes": 43200.0,
+        "realized_loss_gate_lookback_minutes": 43200.0,
         "market_order_slippage_pct": 0.0005,
         "market_orders_allowed": False,
         "market_order_near_touch_threshold": 0.001,
@@ -316,21 +316,14 @@ def test_gpu_proxy_execution_checkpoint_contract_rejects_timestamp_shape_mismatc
         )
 
 
-@pytest.mark.parametrize(
-    "days,enabled,expected",
-    [(1, True, 1440), (30, True, 43200), (90, True, 129600), (0, False, 0)],
-)
-def test_hsl_lookback_bar_contract(days, enabled, expected):
+@pytest.mark.parametrize("enabled,expected", [(True, 1), (False, 0)])
+def test_forward_hsl_keeps_only_an_inert_binding(enabled, expected):
     assert (
-        _hsl_lookback_bars({"pnls_max_lookback_days": days}, hsl_enabled=enabled)
+        _hsl_lookback_bars({}, hsl_enabled=enabled)
         == expected
     )
 
 
-@pytest.mark.parametrize("days", [0, -1, 0.5, 91, float("nan"), float("inf")])
-def test_enabled_hsl_rejects_invalid_lookback(days):
-    with pytest.raises(ValueError, match="1..90d"):
-        _hsl_lookback_bars({"pnls_max_lookback_days": days}, hsl_enabled=True)
 
 
 @pytest.mark.parametrize("malformed", [None, "dtype", "device", "columns", "rows", "bounds", "ambiguous", "non_tensor"])
@@ -2105,7 +2098,7 @@ def test_single_coin_hsl_packs_state_machine_inputs():
             "hsl_red_threshold": 0.2,
             "hsl_ema_span_minutes": 60.0,
             "hsl_cooldown_minutes_after_red": 120.0,
-            "hsl_restart_after_red_policy": "never",
+            "hsl_lookback_ema_span_minutes": 43200.5,
             "n_positions": 4,
             "hsl_slot_count": 1,
         },
@@ -2116,22 +2109,22 @@ def test_single_coin_hsl_packs_state_machine_inputs():
         "hsl_enabled": 1.0,
         "hsl_red_threshold": 0.2,
         "hsl_ema_span_minutes": 60.0,
-        "hsl_cooldown_minutes_after_red": 120.0,
-        "hsl_restart_policy": 2.0,
+        "hsl_cooldown_ms_lo": 7200000.0,
+        "hsl_lookback_ema_span_minutes": 43200.5,
         "hsl_signal_mode": 2.0,
-        "hsl_slot_count": 1.0,
+        "hsl_cooldown_ms_hi": 0.0,
     }
 
 
 @pytest.mark.parametrize(
     ("signal_mode", "expected_id"),
-    [("unified", 0.0), ("pside", 1.0), ("coin", 2.0)],
+    [("portfolio", 0.0), ("pside", 1.0), ("coin", 2.0)],
 )
 def test_single_coin_hsl_packs_explicit_signal_mode_ids(signal_mode, expected_id):
     packed = _hsl_params(
         {
             "hsl_enabled": False,
-            "hsl_restart_after_red_policy": None,
+            "hsl_lookback_ema_span_minutes": 43200.0,
             "hsl_red_threshold": 0.1,
             "hsl_ema_span_minutes": 1.0,
             "hsl_cooldown_minutes_after_red": 0.0,
@@ -2143,21 +2136,21 @@ def test_single_coin_hsl_packs_explicit_signal_mode_ids(signal_mode, expected_id
     assert packed["hsl_signal_mode"] == expected_id
 
 
-@pytest.mark.parametrize("signal_mode", ["unified", "coin", "pside"])
+@pytest.mark.parametrize("signal_mode", ["portfolio", "coin", "pside"])
 def test_dual_side_single_coin_hsl_accepts_all_signal_modes(signal_mode):
     validate_single_coin_hsl_signal_topology(signal_mode, enabled_side_count=2)
 
 
-def test_one_sided_single_coin_hsl_accepts_unified_signal_mode():
-    validate_single_coin_hsl_signal_topology("unified", enabled_side_count=1)
+def test_one_sided_single_coin_hsl_accepts_portfolio_signal_mode():
+    validate_single_coin_hsl_signal_topology("portfolio", enabled_side_count=1)
 
 
 def test_single_coin_hsl_rejects_unknown_signal_mode():
-    with pytest.raises(ValueError, match="coin, pside, or unified"):
-        validate_single_coin_hsl_signal_topology("portfolio", enabled_side_count=1)
+    with pytest.raises(ValueError, match="coin, pside, or portfolio"):
+        validate_single_coin_hsl_signal_topology("unified", enabled_side_count=1)
 
 
-@pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
+@pytest.mark.parametrize("signal_mode", ["portfolio", "pside", "coin"])
 def test_one_sided_multicoin_hsl_accepts_all_signal_modes(signal_mode):
     validate_hsl_signal_topology(signal_mode, coin_count=3, enabled_side_count=1)
 
@@ -2166,7 +2159,7 @@ def test_dual_side_multicoin_hsl_accepts_decomposable_pside_mode():
     validate_hsl_signal_topology("pside", coin_count=3, enabled_side_count=2)
 
 
-@pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
+@pytest.mark.parametrize("signal_mode", ["portfolio", "pside", "coin"])
 def test_dual_side_multicoin_hsl_accepts_shared_account_controller(signal_mode):
     validate_hsl_signal_topology(
         signal_mode,
@@ -2176,7 +2169,7 @@ def test_dual_side_multicoin_hsl_accepts_shared_account_controller(signal_mode):
     )
 
 
-@pytest.mark.parametrize("signal_mode", ["coin", "unified"])
+@pytest.mark.parametrize("signal_mode", ["coin", "portfolio"])
 def test_dual_side_multicoin_hsl_rejects_joint_account_modes(signal_mode):
     with pytest.raises(ValueError, match="supports only pside"):
         validate_hsl_signal_topology(signal_mode, coin_count=3, enabled_side_count=2)
@@ -2957,7 +2950,6 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
         "hsl_red_threshold": 0.2,
         "hsl_ema_span_minutes": 5.5,
         "hsl_cooldown_minutes_after_red": 12.5,
-        "hsl_restart_after_red_policy": "always",
         "hsl_panic_close_order_type": "market",
     }
     payload = SimpleNamespace(
@@ -2973,7 +2965,6 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
         "red_threshold": 0.2,
         "ema_span_minutes": 5.5,
         "cooldown_minutes_after_red": 12.5,
-        "restart_after_red_policy": "always",
         "panic_close_order_type": "market",
     }
     config = {"coin_overrides": {"ETH": {"bot": {"long": {"hsl": hsl_patch}}}}}
@@ -2994,7 +2985,7 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     assert np.isnan(matrix[0]).all()
     assert matrix[
         1, 19:EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN
-    ].tolist() == pytest.approx([0.0, 0.2, 5.5, 12.5, 0.0, 1.0])
+    ].tolist() == pytest.approx([0.0, 0.2, 5.5, 750000.0, 0.0, 1.0])
     assert contract["values"][1][
         19:EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN
     ] == pytest.approx(
@@ -3540,7 +3531,7 @@ def test_fill_pnl_lookback_matches_rust_bar_contract(days, interval, expected):
     assert (
         _fill_pnl_lookback_bars(
             {
-                "pnls_max_lookback_days": days,
+                "realized_loss_gate_lookback_minutes": -1.0 if days < 0.0 else days * 1440.0,
                 "candle_interval_minutes": interval,
             }
         )

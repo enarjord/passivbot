@@ -1259,8 +1259,12 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
     }
     if backtest_params.candle_interval_minutes != 1
         && crate::unilateralness::backtest_enabled_sides(
-            &bot_params_vec, backtest_params.dynamic_wel_by_tradability,
-        ).iter().flatten().any(|enabled| *enabled)
+            &bot_params_vec,
+            backtest_params.dynamic_wel_by_tradability,
+        )
+        .iter()
+        .flatten()
+        .any(|enabled| *enabled)
     {
         return Err(PyValueError::new_err(
             "RMS unilateralness requires completed one-minute candles",
@@ -1638,7 +1642,8 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
                     &equities.timestamps_ms,
                     half_life_days,
                     backtest_params.candle_interval_minutes,
-                ).map_err(PyValueError::new_err)?;
+                )
+                .map_err(PyValueError::new_err)?;
                 if backtest.liquidated() {
                     result.metrics = None;
                     result.metadata.status = "liquidated";
@@ -1783,9 +1788,9 @@ pub(crate) fn hsl_report_to_py<const ORGANILLO: bool>(
             pyo3::types::PyString::intern_bound(py, row.phase),
         )?;
         let action = row.action.map(|action| match action {
-            crate::hsl_controller::Action::Normal => pyo3::intern!(py, "normal"),
-            crate::hsl_controller::Action::Panic => pyo3::intern!(py, "panic"),
-            crate::hsl_controller::Action::Halted => pyo3::intern!(py, "halted"),
+            crate::hsl_intent::Action::Normal => pyo3::intern!(py, "normal"),
+            crate::hsl_intent::Action::Panic => pyo3::intern!(py, "panic"),
+            crate::hsl_intent::Action::Halted => pyo3::intern!(py, "halted"),
         });
         dict.set_item(pyo3::intern!(py, "action"), action)?;
         samples.append(dict)?;
@@ -1882,7 +1887,6 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
                 "red_threshold",
                 "ema_span_minutes",
                 "cooldown_minutes_after_red",
-                "restart_after_red_policy",
                 "panic_close_order_type",
             ],
         )?;
@@ -1897,7 +1901,6 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
             red_threshold: extract_value(dict, "red_threshold")?,
             ema_span_minutes: extract_value(dict, "ema_span_minutes")?,
             cooldown_minutes_after_red: extract_value(dict, "cooldown_minutes_after_red")?,
-            restart_after_red_policy: extract_value(dict, "restart_after_red_policy")?,
             panic_close_order_type: extract_value(dict, "panic_close_order_type")?,
         })
     }
@@ -2016,7 +2019,9 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(1.0),
-        pnls_max_lookback_days: extract_value(dict, "pnls_max_lookback_days")?,
+        lookback_ema_span_minutes: extract_value(dict, "lookback_ema_span_minutes")?,
+        pnls_max_lookback_days: extract_value::<f64>(dict, "realized_loss_gate_lookback_minutes")?
+            / 1440.0,
         liquidation_threshold: dict
             .get_item("liquidation_threshold")?
             .map(|item| item.extract::<f64>())
@@ -2056,12 +2061,18 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or(1), // default to 1m candles
     };
+    crate::hsl_decay::RealizedMemory::new(
+        params.lookback_ema_span_minutes,
+        i64::try_from(params.first_timestamp_ms)
+            .map_err(|_| PyValueError::new_err("risk timestamp exceeds i64"))?,
+    )
+    .map_err(PyValueError::new_err)?;
     crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_pct)
         .map_err(PyValueError::new_err)?;
     if let Some(hsl) = &params.equity_hard_stop_loss.hsl {
         hsl.validate(
             &params.coins,
-            params.pnls_max_lookback_days,
+            params.lookback_ema_span_minutes,
             params.candle_interval_minutes,
         )
         .map_err(PyValueError::new_err)?;

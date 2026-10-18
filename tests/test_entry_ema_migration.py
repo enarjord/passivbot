@@ -10,6 +10,7 @@ from config.param_paths import resolve_bound_selectors, require_existing_config_
 from config_utils import clean_config
 from optimizer_overrides import apply_coupled_unstuck_ema_spans
 from warmup_utils import compute_per_coin_warmup_minutes
+from tools.migrate_config_v9 import migrate as migrate_config_v9
 
 KIND = "trailing_martingale"
 SPANS = ("ema_span_0", "ema_span_1")
@@ -18,6 +19,11 @@ SPANS = ("ema_span_0", "ema_span_1")
 def legacy_config():
     config = clean_config(get_template_config())
     config["config_version"] = "v8.3.0"
+    for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
+                "realized_loss_gate_lookback_minutes"):
+        config["live"].pop(key)
+    config["live"]["pnls_max_lookback_days"] = 30.0
+    config["optimize"]["bounds"].pop("live", None)
     # This fixture migrates unrelated strategy fields with old HSL disabled,
     # not newly generated current-schema HSL restart authorization.
     for side in ("long", "short"):
@@ -35,6 +41,15 @@ def legacy_config():
     return config
 
 
+def prepare_migrated_legacy(config):
+    original = deepcopy(config)
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        prepare_config(config, verbose=False)
+    migrated = migrate_config_v9(config, memory_span_minutes=43200.0).config
+    assert config == original
+    return prepare_config(migrated, verbose=False)
+
+
 def test_lossless_migration_runtime_warmup_and_roundtrip():
     old = legacy_config()
     old["bot"]["long"]["strategy"][KIND].update(ema_span_0=123.75, ema_span_1=998.125)
@@ -43,7 +58,7 @@ def test_lossless_migration_runtime_warmup_and_roundtrip():
         321.75,
         0.25,
     ]
-    prepared = prepare_config(old, verbose=False)
+    prepared = prepare_migrated_legacy(old)
     strategy = prepared["bot"]["long"]["strategy"][KIND]
     assert strategy["entry"]["ema_span_0"] == 123.75
     assert strategy["entry"]["ema_span_1"] == 998.125
@@ -133,7 +148,7 @@ def test_nested_and_dotted_scenario_conflict_is_deterministic(caplog):
             },
         }
     ]
-    prepared = prepare_config(config, verbose=False)
+    prepared = prepare_migrated_legacy(config)
     overrides = prepared["backtest"]["scenarios"][0]["overrides"]
     assert overrides["bot.long.strategy.trailing_martingale.entry.ema_span_0"] == 51.25
     assert "bot.long.strategy.trailing_martingale.ema_span_0" not in overrides
@@ -177,7 +192,7 @@ def test_new_scenario_alias_wins_over_old_fully_qualified_path(reverse, caplog):
     if reverse:
         items.reverse()
     config["backtest"]["scenarios"] = [{"label": "alias", "overrides": dict(items)}]
-    prepared = prepare_config(config, verbose=False)
+    prepared = prepare_migrated_legacy(config)
     assert (
         prepared["backtest"]["scenarios"][0]["overrides"][
             "bot.long.strategy.trailing_martingale.entry.ema_span_0"

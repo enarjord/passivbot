@@ -118,8 +118,8 @@ def _runner_context(strategy, sides, *, requested=(), chunked=False,
         keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS if strategy == "ema_anchor" else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
         for key, value in {"hsl_enabled": 1, "hsl_signal_mode": 2,
                            "hsl_red_threshold": .01, "hsl_ema_span_minutes": 2.5,
-                           "hsl_cooldown_minutes_after_red": 5, "hsl_slot_count": 2,
-                           "hsl_restart_policy": 0}.items():
+                           "hsl_cooldown_ms_lo": 300000, "hsl_cooldown_ms_hi": 0,
+                           "hsl_lookback_ema_span_minutes": 1440}.items():
             row[keys.index(key)] = value
     kwargs = dict(weighted_equity_metrics=requested, recovery_distribution_enabled=True,
                   hsl_ema_tail_enabled=hsl_tail,
@@ -297,7 +297,7 @@ def test_native_weighted_service_adapts_admission_without_cpu(monkeypatch, strat
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", ["long", "short", "both"])
-@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "unified"])
+@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "portfolio"])
 def test_native_weighted_metrics_on_active_shock_replay(strategy, sides, hsl):
     from test_gpu_side_equity_sampling import _side_equity_inputs
     from tools.gpu_parity import run_comparison
@@ -339,7 +339,7 @@ def test_native_weighted_metrics_on_active_shock_replay(strategy, sides, hsl):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "unified"])
+@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "portfolio"])
 def test_weighted_shock_capture_preserves_existing_shared_trace(strategy, hsl):
     from test_gpu_side_equity_sampling import _side_equity_inputs
     from optimization.gpu.service import MpsMulticoinProxy

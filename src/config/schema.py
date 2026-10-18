@@ -6,10 +6,8 @@ from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
 from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
-CONFIG_SCHEMA_VERSION = "v8.6.0"
-SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset(
-    {"v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0"}
-)
+CONFIG_SCHEMA_VERSION = "v9.0.0"
+SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset()
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This
 # generous bound also keeps hours-to-milliseconds conversion finite and well
@@ -39,7 +37,6 @@ def _get_shared_bot_defaults():
                 "scale_budget_with_excess_allowance": False,
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.15,
-                "restart_after_red_policy": "always",
             },
             "entry_cooldown": {
                 "base_duration_minutes": 24.1,
@@ -89,7 +86,6 @@ def _get_shared_bot_defaults():
                 "scale_budget_with_excess_allowance": False,
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.01,
-                "restart_after_red_policy": "always",
             },
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
@@ -457,7 +453,9 @@ def _build_template_config():
                 "order_replacement_churn_gate_market_dist_pct": 0.005,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
                 "order_replacement_churn_gate_window_minutes": 10.0,
-                "pnls_max_lookback_days": 30.0,
+                "lookback_ema_span_minutes": 43200.0,
+                "risk_bootstrap_max_lookback_minutes": 129600.0,
+                "realized_loss_gate_lookback_minutes": 43200.0,
                 "recv_window_ms": 5000,
                 "startup_phase_budgets": {},
                 "strategy_kind": "trailing_martingale",
@@ -506,8 +504,6 @@ def _build_template_config():
                     "prefilter": deepcopy(PREFILTER_DEFAULTS),
                     "fixed_params": [],
                     "fixed_runtime_overrides": {
-                        "bot.long.hsl.restart_after_red_policy": "always",
-                        "bot.short.hsl.restart_after_red_policy": "always",
                     },
                     "iters": 200000,
                     "mutation_eta": 20,

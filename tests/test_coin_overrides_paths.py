@@ -77,11 +77,11 @@ def test_override_file_not_found_fails_closed(tmp_path):
     base_path = tmp_path / "base.json"
     _write_config(base_path, base_cfg)
 
-    loaded = config_utils.load_config(str(base_path), verbose=False)
     with pytest.raises(
         FileNotFoundError,
         match=r"coin_overrides\.DOGE\.override_config_path not found",
     ):
+        loaded = config_utils.load_config(str(base_path), verbose=False)
         config_utils.parse_overrides(deepcopy(loaded), verbose=False)
 
 
@@ -95,11 +95,11 @@ def test_malformed_override_file_fails_closed(tmp_path):
     base_cfg["coin_overrides"] = {"DOGE": {"override_config_path": override_path.name}}
     _write_config(base_path, base_cfg)
 
-    loaded = config_utils.load_config(str(base_path), verbose=False)
     with pytest.raises(
         ValueError,
         match=r"coin_overrides\.DOGE\.override_config_path .* is invalid",
     ):
+        loaded = config_utils.load_config(str(base_path), verbose=False)
         config_utils.parse_overrides(deepcopy(loaded), verbose=False)
 
 
@@ -113,11 +113,11 @@ def test_structurally_invalid_override_file_fails_closed(tmp_path):
     base_cfg["coin_overrides"] = {"DOGE": {"override_config_path": override_path.name}}
     _write_config(base_path, base_cfg)
 
-    loaded = config_utils.load_config(str(base_path), verbose=False)
     with pytest.raises(
         ValueError,
         match=r"coin_overrides\.DOGE\.override_config_path .* is invalid",
     ):
+        loaded = config_utils.load_config(str(base_path), verbose=False)
         config_utils.parse_overrides(deepcopy(loaded), verbose=False)
 
 
@@ -134,3 +134,16 @@ def test_unreadable_override_file_error_propagates(tmp_path):
 
     with pytest.raises(PermissionError, match="cannot read"):
         load_override_config(config, "DOGE", config_loader=raise_permission_error)
+
+
+def test_referenced_retired_policy_error_identifies_coin_and_file(tmp_path):
+    config = config_utils.get_template_config()
+    override = tmp_path / "doge-policy.json"
+    _write_config(override, {"bot": {"long": {"hsl": {"restart_after_red_policy": "never"}}}})
+    config["coin_overrides"] = {"DOGE": {"override_config_path": str(override)}}
+    base = tmp_path / "base.json"
+    _write_config(base, config)
+
+    with pytest.raises(ValueError, match=r"coin_overrides\.DOGE.*doge-policy\.json.*migrate-config-v9") as error:
+        config_utils.load_config(str(base), verbose=False)
+    assert isinstance(error.value.__cause__, ValueError)

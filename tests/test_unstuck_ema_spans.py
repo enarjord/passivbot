@@ -13,6 +13,8 @@ from config import (
     compile_runtime_config,
 )
 from config.overrides import parse_overrides
+from config.migrations.v9 import migrate_v8_to_v9
+from tools.migrate_config_v9 import migrate
 from config.optimize_bounds import flatten_optimize_bounds
 from warmup_utils import compute_per_coin_warmup_minutes
 
@@ -42,6 +44,30 @@ def legacy_config(kind="trailing_martingale"):
     return c
 
 
+def _prepare_explicitly_migrated(source):
+    migrated = migrate_v8_to_v9(source, memory_span_minutes=43200.0)
+    return prepare_config(migrated.config, verbose=False)
+
+
+def _load_explicitly_migrated_file(path):
+    migrated = migrate(
+        json.loads(path.read_text()), memory_span_minutes=43200.0,
+        base_config_path=str(path),
+    )
+    destination = path.with_name(f"migrated-{path.name}")
+    destination.write_text(json.dumps(migrated.config))
+    return load_prepared_config(str(destination), verbose=False)
+
+
+def test_legacy_fixture_requires_explicit_v9_migration():
+    source = legacy_config()
+    with pytest.raises(ValueError, match="explicit migration"):
+        prepare_config(source, verbose=False)
+    migrated = _prepare_explicitly_migrated(source)
+    assert migrated["config_version"] == "v9.0.0"
+    assert migrated["live"]["lookback_ema_span_minutes"] == 43200.0
+
+
 @pytest.mark.parametrize(
     "kind", ["trailing_martingale", "ema_anchor", "trailing_grid_v7"]
 )
@@ -53,7 +79,7 @@ def test_legacy_composed_spans_and_roundtrip(kind, caplog):
         "ETH": {"bot": {"short": {"strategy": {kind: {"ema_span_1": 211.25}}}}},
     }
     with caplog.at_level(logging.INFO):
-        prepared = prepare_config(c, verbose=False)
+        prepared = _prepare_explicitly_migrated(c)
     assert prepared["bot"]["long"]["unstuck"]["ema_span_0"] == 101.25
     assert prepared["bot"]["long"]["unstuck"]["ema_span_1"] == 902.75
     assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == {
@@ -87,7 +113,9 @@ def test_explicit_global_spans_are_inherited_by_strategy_overrides():
     assert resolved["bot"]["long"]["unstuck"]["ema_span_0"] == 300.5
 
 
-def test_file_inline_precedence_migration(tmp_path):
+@pytest.mark.parametrize("file_canonical", [False, True])
+@pytest.mark.parametrize("inline_canonical", [False, True])
+def test_file_inline_precedence_migration(tmp_path, file_canonical, inline_canonical):
     c = legacy_config()
     external = {
         "bot": {
@@ -98,6 +126,9 @@ def test_file_inline_precedence_migration(tmp_path):
             }
         }
     }
+    if file_canonical:
+        strategy = external["bot"]["long"]["strategy"]["trailing_martingale"]
+        external["bot"]["long"]["strategy"]["trailing_martingale"] = {"entry": strategy}
     (tmp_path / "coin.json").write_text(json.dumps(external))
     c["coin_overrides"] = {
         "BTC": {
@@ -107,10 +138,13 @@ def test_file_inline_precedence_migration(tmp_path):
             },
         }
     }
+    if inline_canonical:
+        strategy = c["coin_overrides"]["BTC"]["bot"]["long"]["strategy"]
+        strategy["trailing_martingale"] = {"entry": strategy["trailing_martingale"]}
     path = tmp_path / "master.json"
     path.write_text(json.dumps(c))
     resolved = parse_overrides(
-        load_prepared_config(str(path), verbose=False), verbose=False
+        _load_explicitly_migrated_file(path), verbose=False
     )
     assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == {
         "ema_span_0": 19.5,
@@ -134,7 +168,7 @@ def test_partial_explicit_spans_and_bounds_win():
             }
         }
     }
-    prepared = parse_overrides(prepare_config(c, verbose=False), verbose=False)
+    prepared = parse_overrides(_prepare_explicitly_migrated(c), verbose=False)
     assert prepared["bot"]["long"]["unstuck"]["ema_span_0"] == 81.5
     assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == {
         "ema_span_1": 77.5
@@ -211,7 +245,7 @@ def test_legacy_scenario_span_override_migrates():
             "overrides": {"bot.long.strategy.trailing_martingale.ema_span_0": 401.5},
         }
     ]
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     assert (
         prepared["backtest"]["scenarios"][0]["overrides"]["bot.long.unstuck.ema_span_0"]
         == 401.5
@@ -259,7 +293,7 @@ def test_legacy_coin_flags_file_spans_are_preserved(tmp_path):
     path = tmp_path / "master.json"
     path.write_text(json.dumps(c))
     resolved = parse_overrides(
-        load_prepared_config(str(path), verbose=False), verbose=False
+        _load_explicitly_migrated_file(path), verbose=False
     )
     assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == {
         "ema_span_0": 41.25,
@@ -270,7 +304,7 @@ def test_legacy_coin_flags_file_spans_are_preserved(tmp_path):
 def test_zero_span_on_disabled_legacy_side_warns_and_gets_positive_default(caplog):
     c = legacy_config()
     c["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] = 0
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     assert prepared["bot"]["short"]["unstuck"]["ema_span_0"] > 0
     assert "Cannot copy zero strategy span" in caplog.text
     assert "review spans before enabling" in caplog.text
@@ -279,7 +313,7 @@ def test_zero_span_on_disabled_legacy_side_warns_and_gets_positive_default(caplo
 def test_missing_legacy_bounds_warn_about_implicitly_coupled_search(caplog):
     c = legacy_config()
     c["optimize"]["bounds"] = {}
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     assert "1-to-1 optimizer-search migration is impossible" in caplog.text
     value = prepared["bot"]["long"]["unstuck"]["ema_span_0"]
     assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0"] == [
@@ -295,7 +329,7 @@ def test_zero_span_on_disabled_legacy_coin_override_warns_and_migrates(caplog):
             "bot": {"short": {"strategy": {"trailing_martingale": {"ema_span_0": 0}}}}
         }
     }
-    prepared = parse_overrides(prepare_config(c, verbose=False), verbose=False)
+    prepared = parse_overrides(_prepare_explicitly_migrated(c), verbose=False)
     assert (
         prepared["coin_overrides"]["BTC"]["bot"]["short"]["unstuck"]["ema_span_0"] > 0
     )
@@ -313,7 +347,7 @@ def test_omitted_legacy_bounds_are_fixed_after_hydration(omitted, caplog):
     else:
         del c["optimize"]
     c["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 403.5
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0"] == [
         403.5,
         403.5,
@@ -333,7 +367,7 @@ def test_inactive_coin_wel_zero_span_migrates(caplog):
             }
         }
     }
-    prepared = parse_overrides(prepare_config(c, verbose=False), verbose=False)
+    prepared = parse_overrides(_prepare_explicitly_migrated(c), verbose=False)
     assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0"] > 0
     assert "Cannot copy zero strategy span" in caplog.text
 
@@ -349,7 +383,7 @@ def test_nested_scenario_spans_migrate_and_explicit_unstuck_wins(explicit):
     c["backtest"]["scenarios"] = [
         {"label": "nested", "overrides": {"bot": {"long": side}}}
     ]
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     overrides = _normalize_scenario_overrides(
         prepared["backtest"]["scenarios"][0]["overrides"]
     )
@@ -425,7 +459,7 @@ def test_legacy_fixed_strategy_bound_preserves_optimizer_unstuck_span(key, bound
     c = legacy_config()
     c["bot"]["long"]["strategy"]["trailing_martingale"][key] = 401.5
     c["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][key] = bound
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     assert prepared["bot"]["long"]["unstuck"][key] == 401.5
     assert prepared["optimize"]["bounds"]["long"]["unstuck"][key] == [199.25, 199.25]
 
@@ -436,7 +470,7 @@ def test_legacy_inactive_zero_fixed_bound_gets_positive_fallback(caplog, bound):
     c["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"][
         "ema_span_0"
     ] = bound
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     assert prepared["optimize"]["bounds"]["short"]["unstuck"]["ema_span_0"][0] > 0
     assert "optimize.bounds.short.unstuck.ema_span_0" in caplog.text
 
@@ -517,7 +551,7 @@ def test_legacy_flat_optimizer_bounds_migrate_without_mixing_shapes(explicit, bo
     c["optimize"]["bounds"]["long_ema_span_0"] = bound
     if explicit:
         c["optimize"]["bounds"]["long_unstuck_ema_span_0"] = [34.5, 34.5]
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     flat = flatten_optimize_bounds(
         prepared["optimize"]["bounds"], strategy_kind="trailing_martingale"
     )
@@ -567,7 +601,7 @@ def test_inactive_scenario_zero_span_migration_uses_positive_fallback(
         }
     )
     c["backtest"]["scenarios"] = [{"label": "inactive", "overrides": overrides}]
-    prepared = prepare_config(c, verbose=False)
+    prepared = _prepare_explicitly_migrated(c)
     scenario_overrides = _normalize_scenario_overrides(
         prepared["backtest"]["scenarios"][0]["overrides"]
     )

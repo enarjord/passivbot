@@ -1,4 +1,4 @@
-"""Native CUDA capacity uses resident data, factual history and metric workspace."""
+"""Native CUDA capacity uses resident data, replay state and metric workspace."""
 
 from types import SimpleNamespace
 
@@ -14,7 +14,7 @@ def runner(*, row=64 * MIB, workspace=256 * MIB, device="cuda"):
     value = SimpleNamespace(
         bars=SimpleNamespace(device=SimpleNamespace(type=device)),
         native_factual_hsl=True,
-        hsl_fact_capacity_learned=1,
+        hsl_fact_capacity=0,
         hsl_scratch_budget_bytes=512 * MIB,
     )
     value._history_batch_bytes = lambda width: width * row + workspace
@@ -46,7 +46,7 @@ def test_workspace_is_reserved_once_and_capacity_can_exceed_legacy_budget():
     assert value._history_batch_bytes(width + 1) > value.hsl_scratch_budget_bytes
 
 
-def test_allowance_leaves_room_for_fact_growth_but_dispatch_still_caps_width():
+def test_allowance_reserves_headroom_but_dispatch_still_caps_width():
     value = runner()
     value.hsl_scratch_budget_bytes = cuda_history_budget(value, 10 * GIB, 12 * GIB)
     assert value.hsl_scratch_budget_bytes > value._history_batch_bytes(3)
@@ -79,7 +79,7 @@ def test_empty_history_does_not_reduce_dispatch_width():
 
 @pytest.mark.parametrize("automatic,device", [(True, "cuda"), (False, "cuda"), (True, "mps")])
 @pytest.mark.parametrize("fused", [False, True])
-def test_new_owner_policy_preserves_fixed_and_metal_and_learned_facts(automatic, device, fused):
+def test_new_owner_policy_preserves_fixed_and_metal_and_ignores_retired_facts(automatic, device, fused):
     from optimization.gpu.service import MpsMulticoinProxy
 
     proxy = object.__new__(MpsMulticoinProxy)
@@ -98,8 +98,9 @@ def test_new_owner_policy_preserves_fixed_and_metal_and_learned_facts(automatic,
     result = proxy._construct_runner("long", lambda *_args, **_kwargs: value, {})
     assert result is value
     assert getattr(value, "automatic_scratch_budget", False) == (automatic and device == "cuda")
-    assert value.hsl_fact_capacity == value.hsl_fact_capacity_learned == 9
-    assert getattr(value, "initial_factual_capacity_batch_width", 0) == (0 if automatic else 128)
+    assert value.hsl_fact_capacity == 0
+    assert not hasattr(value, "hsl_fact_capacity_learned")
+    assert not hasattr(value, "initial_factual_capacity_batch_width")
     assert len(calls) == int(automatic and device == "cuda")
     if automatic and device == "cuda":
         expected = cuda_history_budget(value, 10 * GIB, 12 * GIB, owners=1 if fused else 2)
@@ -108,7 +109,7 @@ def test_new_owner_policy_preserves_fixed_and_metal_and_learned_facts(automatic,
         assert value.hsl_scratch_budget_bytes == 512 * MIB
 
 
-def test_learned_fact_capacity_is_sized_before_legacy_limit_check():
+def test_retired_fact_hints_do_not_inflate_forward_scratch():
     from optimization.gpu.service import MpsMulticoinProxy
 
     proxy = object.__new__(MpsMulticoinProxy)
@@ -120,7 +121,6 @@ def test_learned_fact_capacity_is_sized_before_legacy_limit_check():
     proxy.dispatch_batch_size = 4
     proxy._torch = SimpleNamespace(cuda=SimpleNamespace(mem_get_info=lambda: (10 * GIB, 12 * GIB)))
     value = runner()
-    value._history_batch_bytes = lambda width: width * value.hsl_fact_capacity * MIB
     proxy._construct_runner("long", lambda *_args, **_kwargs: value, {})
     assert value.hsl_scratch_budget_bytes == 10 * GIB - int(12 * GIB * .2)
 
@@ -165,7 +165,7 @@ def scratch_runner():
     return value
 
 
-@pytest.mark.parametrize("change", ["grow", "shrink", "facts", "cache", "state"])
+@pytest.mark.parametrize("change", ["grow", "shrink", "state"])
 @pytest.mark.usefixtures("torch_runtime")
 def test_shape_changes_release_all_retained_scratch_and_reuse_unchanged_shapes(change):
     import weakref
@@ -240,7 +240,7 @@ def test_physical_attempt_releases_scratch_before_first_device_allocation(monkey
 
 @pytest.mark.parametrize("automatic", [False, True])
 @pytest.mark.usefixtures("torch_runtime")
-def test_real_hsl_allocator_does_not_overlap_64_and_117_candidate_histories(monkeypatch, automatic):
+def test_automatic_scratch_replacement_releases_old_binding_before_allocation(monkeypatch, automatic):
     import math
     from optimization.gpu import mps_kernel as kernel
 
@@ -307,7 +307,7 @@ def test_device_shape_release_preserves_native_replay(strategy, sides):
 
     if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
         pytest.skip("GPU unavailable")
-    proxy = make_proxy("unified", strategy, sides, minutes=128, factual_hsl=True)
+    proxy = make_proxy("portfolio", strategy, sides, minutes=128, factual_hsl=True)
     value = proxy.fused_runner or proxy.runners["long"]
     # Exercise the CUDA scratch-lifetime helper with the available device's
     # real allocator. Production only enables this flag for automatic CUDA.

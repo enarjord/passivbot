@@ -6,8 +6,8 @@ from itertools import combinations, product
 
 STRATEGIES = ("trailing_martingale", "ema_anchor")
 FEATURES = (
-    "hsl_coin", "hsl_pside", "hsl_unified", "hsl_market", "hsl_never",
-    "hsl_threshold", "hsl_scaled", "unstuck", "unstuck_no_ema", "cooldown",
+    "hsl_coin", "hsl_pside", "hsl_portfolio", "hsl_market", "hsl_zero_cooldown",
+    "hsl_slow_memory", "hsl_scaled", "unstuck", "unstuck_no_ema", "cooldown",
     "adaptive_cooldown", "overrides", "excess", "position_enforcer", "total_enforcer",
     "entry_gate_off", "volatility", "exposure_weight", "entry_trailing",
     "close_trailing", "gate_disabled", "gate_all", "gate_reentry", "one_way",

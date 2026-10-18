@@ -35,7 +35,7 @@ def test_prepared_side_preserves_every_raw_output_and_general_cache(
 ):
     from test_gpu_hsl_multicoin import make_proxy, raw
 
-    proxy = make_proxy("unified", strategy, sides, minutes=512, coin_count=coins,
+    proxy = make_proxy("portfolio", strategy, sides, minutes=512, coin_count=coins,
                        enabled=hsl, factual_hsl=True)
     candidates = [{"hsl_red_threshold": 1e-6}, {"hsl_red_threshold": 1e-6}]
     runner, specialized = raw(proxy, candidates)

@@ -16,11 +16,11 @@ def _write_config(path, config):
 
 def _sample_config() -> dict:
     return {
-        "config_version": "v8.0.0",
+        "config_version": "v9.0.0",
         "backtest": {"exchanges": ["binance"]},
         "live": {
             "user": "binance_01",
-            "hsl_signal_mode": "unified",
+            "hsl_signal_mode": "portfolio",
             "approved_coins": {
                 "long": ["BTC", "ETH", "SOL", "XMR"],
                 "short": ["BTC"],
@@ -31,14 +31,16 @@ def _sample_config() -> dict:
             "forager_score_hysteresis_pct": 0.02,
             "force_cold_startup": False,
             "max_warmup_minutes": 30,
-            "pnls_max_lookback_days": 7,
+            "lookback_ema_span_minutes": 10080.0,
+            "risk_bootstrap_max_lookback_minutes": 129600.0,
+            "realized_loss_gate_lookback_minutes": 10080.0,
             "api_key": "super-secret-api-key",
         },
         "bot": {
             "hsl": {
                 "enabled": True,
                 "red_threshold": 0.05,
-                "restart_after_red_policy": "always",
+                "cooldown_minutes_after_red": 60.0,
             },
             "long": {
                 "risk": {"n_positions": 3},
@@ -49,7 +51,6 @@ def _sample_config() -> dict:
                     "cooldown_minutes_after_red": 60,
                     "ema_span_minutes": 120,
                     "panic_close_order_type": "limit",
-                    "restart_after_red_policy": "always",
                 },
             },
             "short": {
@@ -83,7 +84,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "user": "binance_01",
         "user_exchange_hint": "binance",
     }
-    assert report["hsl"]["signal_mode"] == "unified"
+    assert report["hsl"]["signal_mode"] == "portfolio"
     assert report["hsl"]["sides"]["long"]["enabled"] is True
     assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
     assert report["hsl"]["sides"]["short"]["enabled"] is False
@@ -120,7 +121,8 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "status": "defaulted",
         "warning_threshold": 0.05,
     }
-    assert report["cache"]["live_settings"]["pnls_max_lookback_days"] == 7
+    assert report["cache"]["live_settings"]["lookback_ema_span_minutes"] == 10080.0
+    assert report["cache"]["live_settings"]["realized_loss_gate_lookback_minutes"] == 10080.0
     assert report["cache"]["readiness"]["status"] == "attention"
     assert report["cache"]["readiness"]["summary"] == {
         "attention_count": 7,
@@ -143,6 +145,27 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert "super-secret-api-key" not in rendered
     assert "api_key" not in rendered
+
+
+def test_live_preflight_requires_explicit_v8_migration(tmp_path):
+    config = _sample_config()
+    config["config_version"] = "v8.0.0"
+    path = tmp_path / "old.json"
+    _write_config(path, config)
+    report = live_config_preflight.build_live_config_preflight_report(path)
+    assert not report["ok"]
+    assert any(row["code"] == "config_migration_required" and "migrate-config-v9" in row["message"]
+               for row in report["issues"])
+
+
+def test_live_preflight_rejects_cooldown_beyond_reconstructable_bootstrap_cap(tmp_path):
+    config = _sample_config()
+    config["live"]["risk_bootstrap_max_lookback_minutes"] = 30.0
+    path = tmp_path / "bound.json"
+    _write_config(path, config)
+    report = live_config_preflight.build_live_config_preflight_report(path)
+    assert not report["ok"]
+    assert any(row["code"] == "hsl_bootstrap_capability_invalid" for row in report["issues"])
 
 
 def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
@@ -254,7 +277,7 @@ def test_live_config_preflight_flags_account_hsl_with_config_balance_override(tm
     report = live_config_preflight.build_live_config_preflight_report(config_path)
 
     assert report["ok"] is False
-    assert report["hsl"]["effective_signal_mode"] == "unified"
+    assert report["hsl"]["effective_signal_mode"] == "portfolio"
     assert report["hsl"]["balance_override"] == {
         "active": True,
         "present": True,
@@ -365,7 +388,6 @@ def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
         "hsl_cooldown_minutes_after_red": 60,
         "hsl_ema_span_minutes": 120,
         "hsl_panic_close_order_type": "limit",
-        "hsl_restart_after_red_policy": "always",
     }
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
@@ -376,7 +398,7 @@ def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
     assert report["hsl"]["sides"]["long"]["present"] is True
     assert report["hsl"]["sides"]["long"]["enabled"] is True
     assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
-    assert report["hsl"]["sides"]["long"]["restart_after_red_policy"] == "always"
+    assert "restart_after_red_policy" not in report["hsl"]["sides"]["long"]
     assert report["forager"]["sides"]["long"]["n_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True
     assert report["forager"]["sides"]["long"]["settings"] == {"volume_drop_pct": 0.02}
@@ -510,7 +532,7 @@ def test_live_config_preflight_handles_all_and_invalid_coin_shapes(tmp_path):
 
 def test_live_config_preflight_malformed_structure_returns_nonzero(tmp_path, capsys):
     config_path = tmp_path / "bad.json"
-    _write_config(config_path, {"live": []})
+    _write_config(config_path, {"config_version": "v9.0.0", "live": []})
 
     assert live_config_preflight.main([str(config_path), "--compact"]) == 1
     report = json.loads(capsys.readouterr().out)

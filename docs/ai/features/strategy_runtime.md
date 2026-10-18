@@ -116,7 +116,7 @@ shared span cannot leak a projected strategy value into coin ranking.
 
 ## Trailing Martingale Semantics
 
-Trailing-martingale price spans belong to `entry.ema_span_0/1`. Schema v8.4.0 migrates
+Trailing-martingale price spans belong to `entry.ema_span_0/1`. Supported normalization moves
 old strategy-root leaves before hydration and before file/inline override merges; explicit
 new leaves win with warnings on conflicting values. Public optimizer bounds share the nested
 paths; internal optimizer keys and Metal columns retain `ema_span_0/1`. Entry subtree selectors
@@ -199,6 +199,19 @@ Auto-unstuck has its own EMA trigger toggle:
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
 threshold, close sizing, and valid market/exchange inputs.
 
+V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
+`live.lookback_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
+ordinary closes, HSL closes and signed rebates all contribute in deterministic economic
+order. UPNL and external balance changes do not. HSL episode transitions never reset it.
+Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32/FMA
+graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
+exposure thresholds and close sizing retain their existing policies. The independent
+`max_realized_loss_pct` gate uses its own rolling history, configured by
+`live.realized_loss_gate_lookback_minutes`; it must not consume decaying D instead.
+Live realized-memory bootstrap discloses an unknown prefix and residual attenuation;
+a finite suffix is not proof of infinite-tail equality. Required malformed or missing
+realized facts are fatal/deferred at their owning boundary, never an invented zero D.
+
 `bot.<side>.unstuck.ema_span_0` and `ema_span_1` independently define the unstuck price EMA
 band, using the same base candle stream and unrounded geometric-mean third span as the strategy
 band. Long eligibility uses the upper band; short eligibility uses the lower band. Strategy EMA
@@ -209,12 +222,12 @@ unstuck horizon is unavailable. Live warmup uses that same held/static eligibili
 expand flat forager candidates to an unused unstuck horizon. Monitor bands are independently
 available for each consumer.
 
-Schema v8.3.0 materializes missing unstuck spans from the effective active strategy before default
+Supported normalization materializes missing unstuck spans from the effective active strategy before default
 hydration, including coin overrides and external-file/inline precedence. Explicit unstuck spans
 win. New optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
 varying legacy ranges unless supplied; a warning explains that independent genes cannot preserve
 the old coupled search. New defaults expose tunable spans.
-Apple MPS models a separate price EMA band for unstuck in all directional and multicoin kernels.
+Supported shared-account Metal kernels model a separate price EMA band for unstuck.
 It uses the same seeded recurrence, floating horizons and candle-interval scaling as exact Rust.
 Coin overrides win over candidate globals, and temporal replay persists the independent band.
 

@@ -1,4 +1,7 @@
 from copy import deepcopy
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -12,16 +15,24 @@ from config.schema import get_template_config
 
 
 def _parse(overrides, *, loaded=None):
-    source = get_template_config()
-    source["live"]["user"] = "tester"
-    source["coin_overrides"] = deepcopy(overrides)
-    prepared = prepare_config(source, verbose=False, log_config_transforms=False)
-    return parse_overrides(
-        prepared,
-        verbose=False,
-        override_loader=lambda config, coin: deepcopy(loaded or {}),
-        symbol_normalizer=lambda coin: coin,
-    )
+    with TemporaryDirectory() as directory:
+        overrides = deepcopy(overrides)
+        for patch in overrides.values():
+            if "override_config_path" in patch:
+                path = Path(directory) / "override.json"
+                path.write_text(json.dumps(loaded or {}))
+                patch["override_config_path"] = str(path)
+        source = get_template_config()
+        source["live"]["user"] = "tester"
+        source["coin_overrides"] = deepcopy(overrides)
+        prepared = prepare_config(source, verbose=False, log_config_transforms=False)
+        return parse_overrides(
+            prepared,
+            verbose=False,
+            override_loader=lambda config, coin: deepcopy(loaded or {}),
+            symbol_normalizer=lambda coin: coin,
+        )
+
 
 
 @pytest.mark.parametrize("pside", ["long", "short"])

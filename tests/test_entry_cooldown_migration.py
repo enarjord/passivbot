@@ -16,11 +16,17 @@ from config_utils import (
     create_acronym,
     update_config_with_args,
 )
+from tools.migrate_config_v9 import migrate as migrate_config_v9
 
 
 def legacy_config():
     config = clean_config(get_template_config())
     config["config_version"] = "v8.4.0"
+    for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
+                "realized_loss_gate_lookback_minutes"):
+        config["live"].pop(key)
+    config["live"]["pnls_max_lookback_days"] = 30.0
+    config["optimize"]["bounds"].pop("live", None)
     # This fixture migrates unrelated strategy fields with old HSL disabled,
     # not newly generated current-schema HSL restart authorization.
     for side in ("long", "short"):
@@ -38,6 +44,15 @@ def legacy_config():
     return config
 
 
+def prepare_migrated_legacy(config):
+    original = deepcopy(config)
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        prepare_config(config, verbose=False)
+    migrated = migrate_config_v9(config, memory_span_minutes=43200.0).config
+    assert config == original
+    return prepare_config(migrated, verbose=False)
+
+
 @pytest.mark.parametrize("duration", [0.0, 0.05, 2.5, 24.1])
 def test_migration_preserves_runtime_optimizer_and_saved_roundtrip(duration):
     old = legacy_config()
@@ -47,7 +62,7 @@ def test_migration_preserves_runtime_optimizer_and_saved_roundtrip(duration):
         17.5,
         0.05,
     ]
-    prepared = prepare_config(old, verbose=False)
+    prepared = prepare_migrated_legacy(old)
     assert prepared["bot"]["long"]["entry_cooldown"] == {
         "base_duration_minutes": duration,
         "min_duration_minutes": 0.0,
@@ -72,7 +87,7 @@ def test_migration_preserves_runtime_optimizer_and_saved_roundtrip(duration):
                 )
             }
     assert (
-        compile_runtime_config(prepare_config(canonical, verbose=False))["bot"]
+        compile_runtime_config(prepare_migrated_legacy(canonical))["bot"]
         == runtime["bot"]
     )
 
@@ -128,7 +143,7 @@ def test_scenario_alias_and_nested_legacy_collision(reverse, caplog):
     config["backtest"]["scenarios"] = [
         {"label": "mixed", "overrides": dict(reversed(items) if reverse else items)}
     ]
-    result = prepare_config(config, verbose=False)["backtest"]["scenarios"][0][
+    result = prepare_migrated_legacy(config)["backtest"]["scenarios"][0][
         "overrides"
     ]
     assert result == {"bot.long.entry_cooldown.base_duration_minutes": 0.05}
@@ -257,7 +272,7 @@ def test_dotted_scenario_group_replacement_migrates_with_canonical_precedence(re
     config["backtest"]["scenarios"] = [
         {"label": "groups", "overrides": dict(reversed(items) if reverse else items)}
     ]
-    result = prepare_config(config, verbose=False)["backtest"]["scenarios"][0][
+    result = prepare_migrated_legacy(config)["backtest"]["scenarios"][0][
         "overrides"
     ]
     assert result["bot.long.entry_cooldown.base_duration_minutes"] == 7.0

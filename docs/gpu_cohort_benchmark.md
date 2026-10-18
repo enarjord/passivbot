@@ -8,12 +8,12 @@ cohorts through serial CPU backtests, direct shared-account GPU replay and the
 native CUDA service. It never downloads data, reads accounts or runs optimization.
 It requires a full backtest installation, NVIDIA CUDA and a source-verified Rust
 extension. CPU backtests belong to this explicit development measurement only.
-Direct GPU replay uses the same factual simulation policy as the native worker;
+Direct GPU replay uses the same forward risk model as the native worker;
 `measurement_scope.gpu_replay` records `native_factual`. This isolates transport,
 packing and scheduling comparisons from differences between simulation policies.
-The historical measurements below predate factual-worker adoption unless explicitly
-identified otherwise; refresh a report before applying their numerical conclusions
-to the current native optimizer.
+The numerical measurements below were collected with v8 and remain historical
+evidence. They do not establish v9 risk parity or performance; collect a new report
+before applying their conclusions to the current native optimizer.
 
 ```sh
 passivbot tool gpu-cohort-benchmark --seeds 7 43 --report cohort.json
@@ -32,19 +32,19 @@ unstuck default off; explicit toggles prepare additional workloads but do not
 guarantee controller transitions. No production configuration is accepted.
 
 The [parity fixture stress options](gpu_parity.md#reproducible-fixtures) are shared:
-explicit HSL threshold/span/cooldown/lookback and repeatable price shocks. Resolved
+explicit HSL threshold, fast ratio span, cooldown, slow memory span and repeatable price shocks. Resolved
 values and ordered shocks appear in the cohort recipe, including execution failures.
 Cooldowns outside Rust's timestamp range and policies outside the GPU float32
 encoding are rejected before device work. With shocks, preflight each synthetic
 seed's final high/low/close encoding on CPU, one seed at a time, before initializing
 CUDA. This preparation is outside the measured simulation timing.
-For the unified HSL history
-expiry and three-objective materiality measurement:
+For portfolio HSL risk stress and a three-objective materiality measurement:
 
 ```sh
 passivbot tool gpu-cohort-benchmark --seeds 7 43 --coins 2 --bars 3000 \
-  --candidates 16 --warm-runs 1 --widths 16 auto --hsl unified \
+  --candidates 16 --warm-runs 1 --widths 16 auto --hsl portfolio \
   --hsl-red-threshold 0.002 --hsl-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
+  --lookback-ema-span-minutes 1440.0 \
   --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
   --objective adg_strategy_eq max --objective drawdown_worst_strategy_eq min \
   --objective hard_stop_time_in_red_pct min \
@@ -55,11 +55,11 @@ passivbot tool gpu-cohort-benchmark --seeds 7 43 --coins 2 --bars 3000 \
   --limit backtest_completion_ratio less_than 0.99 --report hsl-cohort.json
 ```
 
-Earlier replay exposed a material HSL discrepancy in this measurement. Factual
-native replay now passes the matched cohort HSL checks recorded in the
+Earlier v8 replay exposed a material HSL discrepancy in this measurement. Its
+subsequent matched-cohort checks are recorded as historical evidence in the
 [acceptance map](plans/gpu_optimizer_acceptance.md#unified-hsl-cohort-materiality).
 Inspect the current report for its actual numerical, ranking and feasibility outcomes;
-those bounded checks do not establish every trajectory or tighter constraint.
+those older checks do not qualify the changed v9 model.
 
 The JSON report includes fixture/candidate and implementation fingerprints,
 per-candidate strict CPU/GPU metric comparisons, Pareto membership for the requested
@@ -142,7 +142,7 @@ execution failures return `2` with structured error JSON. Use
 parity diagnostics. Cohort throughput and Pareto agreement do not certify general
 simulator parity or repeated-seed evolutionary search quality.
 
-## Initial synthetic measurements
+## Historical v8 synthetic measurements
 
 The default seed-7 recipe gives these median warm cohort times (seconds) on an
 RTX 3070 Ti Laptop GPU, with Torch 2.13/CUDA 13.0 and CuPy 13.6. Each sample

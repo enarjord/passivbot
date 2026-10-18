@@ -216,7 +216,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         requires_full=True,
     ),
     "migrate-hsl": CommandSpec(
-        "tools.migrate_hsl_config", "write a validated HSL config without deploying it"
+        "tools.migrate_hsl_config", "retired command; use migrate-config-v9 with an explicit risk span"
+    ),
+    "migrate-config-v9": CommandSpec(
+        "tools.migrate_config_v9", "explicitly migrate v8 risk policy to v9 without exchange access"
     ),
     "migrate-config-v7": CommandSpec(
         "tools.migrate_config_v7",

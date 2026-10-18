@@ -311,6 +311,8 @@ def make_input(*, balance: float, global_bp=None, symbols):
         "balance": balance,
         "balance_raw": balance,
         "global": {
+            # Explicit known-empty continuous realized memory for these order fixtures.
+            "realized_pnl_drawdown": 0.0,
             "filter_by_min_effective_cost": False,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
@@ -520,7 +522,7 @@ class TestOrchestratorOrderAccuracy:
 
         # The allowance input fields are legacy/diagnostic: omitting them
         # entirely parses (serde defaults) and emission is governed by the
-        # explicit flag plus the realized-pnl cumsum facts alone.
+        # explicit flag plus the continuous realized-drawdown fact.
         omitted_input = stuck_input()
         del omitted_input["global"]["unstuck_allowance_long"]
         del omitted_input["global"]["unstuck_allowance_short"]

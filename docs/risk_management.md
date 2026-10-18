@@ -68,7 +68,7 @@ Instead of a traditional stop-loss that closes the entire position at a massive 
 Auto-unstuck works best when running multiple coins:
 * **Prioritization:** It prioritizes unstucking the **least underwater** coin first, quickly returning it to profitability.
 * **Profit Offsetting:** While one coin realizes losses to unstuck, the other active coins continue generating profit, smoothing out the equity curve.
-* **Loss Pacing:** A realized-loss allowance limits how quickly auto-unstuck takes losses relative to a reconstructed balance peak. Exchange minimum sizing can exceed the remaining allowance; later realized profits can rebuild it, as described below.
+* **Loss Pacing:** A continuous realized-loss allowance limits how quickly auto-unstuck takes losses. Exchange minimum sizing can exceed the remaining allowance; later realized profits or exponential decay can replenish it, as described below.
 
 #### Weakness of Auto-Unstuck
 Extreme black-swan events (exchange failure, stablecoin depeg, delisting, and other causes of prolonged unilateral price movement) may cause the auto-unstuck mechanism to keep taking losses and re-entering continually on an adversely moving coin. The only realistic solution to these edge cases is **human intervention** as the final backstop.
@@ -90,7 +90,7 @@ Auto-unstuck loss allowance is a pacing budget, not an exact per-order loss
 cap. The bot may need to snap an unstuck close to the exchange's minimum
 quantity or minimum cost. If the remaining allowance is smaller than that
 minimum executable close, the close may exceed the remaining allowance. Further
-unstucking is then blocked until later realized profits rebuild positive
+unstucking is then blocked until later realized profits or loss-memory decay rebuild positive
 allowance.
 
 The global realized-loss gate remains separate. `live.max_realized_loss_pct`
@@ -109,11 +109,12 @@ evaluates reducer candidates largest-first across the shared batch allowance
 before ordinary closes, and live reconciliation reapplies the cap against the
 latest position without consuming reducer quantity first.
 
-Auto-unstuck allowance is reconstructed from the configured
-`live.pnls_max_lookback_days` fill/PnL window. Enabling auto-unstuck on an
-account with existing history can therefore inherit prior profits or losses
-inside that window; this is intentional stateless behavior, not a local bot
-memory file.
+Auto-unstuck uses one continuous account-wide net-realized loss memory, controlled
+by `live.lookback_ema_span_minutes`. Every ordered fill updates that memory, including
+fees and signed rebates; profits repay remembered loss and elapsed minutes decay it.
+HSL episode boundaries do not reset it. Live bootstrap uses available fill coverage
+and discloses its unknown prefix; a finite suffix is not proof of the infinite past.
+See the [v9 risk model](v9_risk_model.md) for the exact allowance and sampling rules.
 
 ### B. Exposure Enforcers
 While exposure limits prevent *new* orders, it is still possible for existing positions to swell beyond their limits (e.g., the account holds BTC as collateral and the BTC/USD price drops, the user withdraws funds while positions are maxed out, or the account realizes significant losses). To handle this, Passivbot provides three parameters that control how aggressively to cap and trim exposure.
@@ -259,30 +260,33 @@ Operational notes:
 * Live bot logs visible warnings whenever an order is blocked by this gate.
 * This can intentionally block automatic reducers if they would realize too much loss.
 * If you need immediate forced reduction regardless of realized loss, use panic mode.
-* The gate uses fill/PnL history from `live.pnls_max_lookback_days`; it is not
+* The gate uses its independent rolling `live.realized_loss_gate_lookback_minutes` window;
+  `-1.0` means all available history. It is not
   limited to fills created by the current bot process.
 
 ### D. Equity Hard Stop Loss
 
-HSL uses one Rust evaluator in live trading, backtesting and optimization. Coin mode
+HSL uses one Rust forward risk model in live trading, backtesting and optimization. Coin mode
 uses one signal per coin and position side; pside mode uses one per active side;
-unified mode uses one explicit portfolio policy under `bot.hsl`.
+portfolio mode uses one explicit policy under `bot.hsl`.
 
-The current signal is the minimum of raw episode-equity drawdown and its EMA.
-Equity history anchors to the current scope balance budget plus current unrealized
-PnL. Only a current threshold breach authorizes panic orders; recovery immediately
-retires them. The episode ends when its whole scope becomes flat. Cooldown depends
-on the last episode's terminal signal, expires within the configured lookback, and
-clears immediately if exposure returns.
+HSL maintains slowly decaying currency drawdown and an independent fast EMA of its
+contemporaneous drawdown ratio. The minimum of the raw ratio and ratio EMA must
+strictly exceed the threshold for RED; finite nonpositive current equity is RED
+immediately. Current recovery retires unfinished panic intent. A final close starts
+a fixed finite cooldown when its latest causal pre-fill assessment or final accounting
+assessment is RED. Flat queries and later balance changes do not renew or cancel
+that deadline. New exposure clears it.
 
 Current account facts and acted-on marks must be valid and fresh. Missing or damaged
 historical fills/candles instead use the documented best-effort Rust reconstruction,
 with visible approximation diagnostics. A local journal never preserves a past
-panic decision. Config or balance changes can change the reconstructed current
-signal and cooldown; assess them as risk-policy changes.
+panic decision. Historical ratios retain supported contemporaneous budgets;
+later balance changes do not rebase them. Corrected facts or changed risk policy
+require reconstruction from the same retained factual initializer.
 
 See [Equity Hard Stop Loss](equity_hard_stop_loss.md) for formulas, scope budgets,
-configuration migration, restart policies, execution and diagnostics.
+configuration migration, finite cooldown, execution and diagnostics.
 
 ---
 

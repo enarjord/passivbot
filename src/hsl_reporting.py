@@ -12,7 +12,7 @@ def hsl_report(plot_data):
         not isinstance(report, dict)
         or report.get("schema_version") != 1
         or report.get("engine") != "hsl"
-        or report.get("mode") not in {"coin", "pside", "unified"}
+        or report.get("mode") not in {"coin", "pside", "portfolio"}
     ):
         raise ValueError("unsupported HSL report schema")
     return report
@@ -51,7 +51,7 @@ def create_hsl_figures(report, *, figsize, autoplot, return_figures, display=Non
         elif report["mode"] == "pside":
             name, key = side_name, f"hard_stop_drawdown_{side_name}"
         else:
-            name, key = "portfolio", "hard_stop_drawdown_unified"
+            name, key = "portfolio", "hard_stop_drawdown_portfolio"
         policy = scope["policy"]
         frame = pd.DataFrame(rows)
         x = pd.to_datetime(frame["timestamp"], unit="ms")

@@ -13,11 +13,9 @@ const MPS_UNSTUCK_EMA_MARKER: &str = "// PASSIVBOT_UNSTUCK_EMA_COMMON";
 const MPS_UNSTUCK_EMA_COMMON_SOURCE: &str = include_str!("gpu/mps_unstuck_ema_common.metal");
 
 const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
+const MPS_HSL_DECAY_SOURCE: &str = include_str!("gpu/mps_hsl_decay.metal");
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
 const MPS_HSL_SOURCE: &str = include_str!("gpu/mps_hsl.metal");
-const MPS_HSL_HISTORY_SOURCE: &str = include_str!("gpu/mps_hsl_history.metal");
-const MPS_HSL_SCOPE_SOURCE: &str = include_str!("gpu/mps_hsl_scope.metal");
-const MPS_HSL_NATIVE_CACHE_SOURCE: &str = include_str!("gpu/mps_hsl_native_cache.metal");
 const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
 const MPS_BTC_RISK_COMMON_SOURCE: &str = include_str!("gpu/mps_btc_risk_common.metal");
 const MPS_EQUITY_BALANCE_DIFF_MARKER: &str = "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON";
@@ -68,40 +66,42 @@ fn compose_hsl_source(body: &str) -> String {
         1,
         "MPS source must contain exactly one shared entry-interval marker"
     );
-    body.replacen(
-        "// PASSIVBOT_DECIMAL_ROUNDING\n",
-        MPS_DECIMAL_ROUNDING_SOURCE,
-        1,
-    )
-    .replacen(
-        "// PASSIVBOT_ADAPTIVE_TIMING",
-        MPS_ADAPTIVE_TIMING_SOURCE,
-        1,
-    )
-    .replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
-    .replacen(
-        MPS_HSL_MARKER,
-        &format!(
-            "{}\n{}\n{}\n{}\n{}",
-            MPS_HSL_SOURCE,
-            MPS_HSL_HISTORY_SOURCE,
-            MPS_HSL_SCOPE_SOURCE,
-            MPS_HSL_NATIVE_CACHE_SOURCE,
-            MPS_HSL_COMMON_SOURCE
-        ),
-        1,
-    )
-    .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
-    .replacen(
-        MPS_EQUITY_BALANCE_DIFF_MARKER,
-        MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
-        1,
-    )
-    .replacen(
-        MPS_ENTRY_INTERVAL_MARKER,
-        MPS_ENTRY_INTERVAL_COMMON_SOURCE,
-        1,
-    )
+    let source = body
+        .replacen(
+            "using namespace metal;",
+            &format!("using namespace metal;\n{MPS_HSL_DECAY_SOURCE}"),
+            1,
+        )
+        .replacen(
+            "// PASSIVBOT_DECIMAL_ROUNDING\n",
+            MPS_DECIMAL_ROUNDING_SOURCE,
+            1,
+        )
+        .replacen(
+            "// PASSIVBOT_ADAPTIVE_TIMING",
+            MPS_ADAPTIVE_TIMING_SOURCE,
+            1,
+        )
+        .replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
+        .replacen(
+            MPS_HSL_MARKER,
+            &format!("{}\n{}", MPS_HSL_SOURCE, MPS_HSL_COMMON_SOURCE),
+            1,
+        )
+        .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
+        .replacen(
+            MPS_EQUITY_BALANCE_DIFF_MARKER,
+            MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
+            1,
+        )
+        .replacen(
+            MPS_ENTRY_INTERVAL_MARKER,
+            MPS_ENTRY_INTERVAL_COMMON_SOURCE,
+            1,
+        );
+    // Authored risk helpers fence their own arithmetic, including inlining.
+    // Preserve ordinary strategy contraction outside those definitions.
+    source
 }
 
 fn compose_multicoin_source(body: &str) -> String {
@@ -213,23 +213,79 @@ pub fn mps_weighted_volume_source() -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn replay_exports_share_v9_risk_arithmetic_and_explicit_contraction() {
+        for source in [
+            mps_ema_anchor_source(),
+            mps_ema_anchor_multicoin_source(),
+            mps_trailing_martingale_source(),
+            mps_trailing_martingale_multicoin_source(),
+        ] {
+            let off = source.matches("#pragma STDC FP_CONTRACT OFF").count();
+            assert!(off >= 2);
+            assert_eq!(off, source.matches("#pragma STDC FP_CONTRACT ON").count());
+            assert!(!source.starts_with("#pragma STDC FP_CONTRACT OFF"));
+            let contract_at = |definition: &str| {
+                let prefix = &source[..source.find(definition).unwrap()];
+                match prefix.rfind("#pragma STDC FP_CONTRACT OFF") {
+                    None => true,
+                    Some(off) => prefix
+                        .rfind("#pragma STDC FP_CONTRACT ON")
+                        .is_some_and(|on| on > off),
+                }
+            };
+            for definition in [
+                "inline bool hsl_decay_policy(",
+                "inline bool hsl_decay_observe(",
+                "inline bool hsl_decay_auto_allowance(",
+                "inline bool hsl_current_scope_facts(",
+                "inline void observe_hsl_event(",
+            ] {
+                assert!(
+                    !contract_at(definition),
+                    "risk definition must not contract: {definition}"
+                );
+            }
+            for definition in [
+                "inline void advance_joint_realized_memory(",
+                "inline float allowed_wallet_exposure_limit(",
+                "inline float coin_hsl_budget_multiplier(",
+            ] {
+                if source.contains(definition) {
+                    assert!(
+                        !contract_at(definition),
+                        "risk definition must not contract: {definition}"
+                    );
+                }
+            }
+            if source.contains("inline void record_joint_portfolio_fill(") {
+                assert!(contract_at("inline void record_joint_portfolio_fill("));
+            }
+            assert_eq!(source.matches("struct HslDecayPolicy {").count(), 1);
+            assert_eq!(source.matches("inline bool hsl_decay_observe(").count(), 1);
+            assert!(source.contains(MPS_HSL_DECAY_SOURCE));
+            assert!(
+                source.find("struct HslDecayPolicy {").unwrap()
+                    < source
+                        .find("struct JointPortfolioAccount {")
+                        .unwrap_or(usize::MAX)
+            );
+        }
+    }
+
     fn assert_shared_hsl_contract(source: &str) {
         assert!(!source.contains(MPS_HSL_MARKER));
         assert!(source.contains(MPS_HSL_COMMON_SOURCE));
-        assert!(source.contains(MPS_HSL_HISTORY_SOURCE));
-        assert!(source.contains(MPS_HSL_SCOPE_SOURCE));
-        assert_eq!(source.matches("struct HslScopePair").count(), 1);
-        assert_eq!(source.matches("inline bool hsl_compose_scope(").count(), 1);
-        assert_eq!(source.matches("struct HslPairFact {").count(), 1);
-        assert_eq!(source.matches("struct HslPairRingState {").count(), 1);
-        assert_eq!(
-            source.matches("inline bool hsl_pair_ring_append(").count(),
-            1
-        );
+        assert!(source.contains(MPS_HSL_DECAY_SOURCE));
+        assert!(!source.contains("replay_factual_hsl("));
+        assert!(!source.contains("hsl_compose_scope("));
+        assert!(!source.contains("never_restart"));
+        assert_eq!(source.matches("inline void hsl_before_fill(").count(), 1);
+        assert_eq!(source.matches("inline void hsl_after_fill(").count(), 1);
         assert_eq!(source.matches("struct HslState").count(), 1);
         assert_eq!(source.matches("inline HslState load_hsl(").count(), 1);
         assert_eq!(source.matches("inline void observe_hsl(").count(), 1);
-        assert_eq!(source.matches("inline bool hsl_observe(").count(), 1);
+        assert_eq!(source.matches("inline bool hsl_decay_observe(").count(), 1);
         assert_eq!(source.matches("inline void update_hsl(").count(), 1);
         assert_eq!(
             source.matches("inline bool update_dual_side_hsl(").count(),
@@ -403,8 +459,13 @@ mod tests {
 
     fn assert_shared_multicoin_contract(source: &str) {
         assert!(!source.contains(MPS_MULTICOIN_MARKER));
-        assert!(source.contains(&MPS_MULTICOIN_COMMON_SOURCE.replace(" ORGANILLO_PASS", "").replace(" ORGANILLO_ARGS", ""))
-            || source.contains(MPS_MULTICOIN_COMMON_SOURCE));
+        assert!(
+            source.contains(
+                &MPS_MULTICOIN_COMMON_SOURCE
+                    .replace(" ORGANILLO_PASS", "")
+                    .replace(" ORGANILLO_ARGS", "")
+            ) || source.contains(MPS_MULTICOIN_COMMON_SOURCE)
+        );
         assert_eq!(source.matches("struct GpuDecimal {").count(), 1);
         for signature in [
             "inline float round_step(",
@@ -783,7 +844,9 @@ mod tests {
         assert!(source.contains("record_hsl_panic_fill("));
         assert!(source.contains("h.panic_loss_drawdown_sum"));
         assert!(source.contains("h.slot_count"));
-        assert!(source.contains("bool red = fmin(score.x, score.y) > threshold"));
+        assert!(source.contains(
+            "sample.red = nonpositive || fmin(sample.ratio, sample.ema) > policy.threshold"
+        ));
         assert!(source.contains("load_hsl(params, po, 23)"));
         assert!(source.contains("load_hsl(params, po + SIDE_PARAMS, 23)"));
         assert!(source.contains("total_exposure_reducer_qty"));
@@ -834,7 +897,9 @@ mod tests {
 
     #[test]
     fn ema_anchor_multicoin_mps_source_exposes_expected_kernel_contract() {
-        let normalized = mps_ema_anchor_multicoin_source().replace(" ORGANILLO_PASS", "").replace(" ORGANILLO_ARGS", "");
+        let normalized = mps_ema_anchor_multicoin_source()
+            .replace(" ORGANILLO_PASS", "")
+            .replace(" ORGANILLO_ARGS", "");
         let source = normalized.as_str();
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
@@ -1044,7 +1109,10 @@ mod tests {
         assert!(source.contains("one global auto-unstuck intent"));
         assert!(source.contains("unstuck_loss_allowance_pct"));
         assert!(!source.contains("hard_stop"));
-        assert_eq!(mps_ema_anchor_multicoin_source(), mps_ema_anchor_multicoin_long_source());
+        assert_eq!(
+            mps_ema_anchor_multicoin_source(),
+            mps_ema_anchor_multicoin_long_source()
+        );
     }
 
     #[test]
@@ -1122,7 +1190,9 @@ mod tests {
         assert!(source.contains("if (!long_side.close_is_panic"));
         assert!(source.contains("if (!short_side.close_is_panic"));
         assert!(source.contains("h.slot_count"));
-        assert!(source.contains("bool red = fmin(score.x, score.y) > threshold"));
+        assert!(source.contains(
+            "sample.red = nonpositive || fmin(sample.ratio, sample.ema) > policy.threshold"
+        ));
         assert!(source.contains("load_hsl(params, po, 40)"));
         assert!(source.contains("load_hsl(params, po + SIDE_PARAMS, 40)"));
         assert!(source.contains("unstuck_reducer_qty"));
@@ -1333,7 +1403,9 @@ mod tests {
 
     #[test]
     fn trailing_martingale_multicoin_mps_source_exposes_expected_kernel_contract() {
-        let normalized = mps_trailing_martingale_multicoin_source().replace(" ORGANILLO_PASS", "").replace(" ORGANILLO_ARGS", "");
+        let normalized = mps_trailing_martingale_multicoin_source()
+            .replace(" ORGANILLO_PASS", "")
+            .replace(" ORGANILLO_ARGS", "");
         let source = normalized.as_str();
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);

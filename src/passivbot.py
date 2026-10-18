@@ -148,7 +148,8 @@ from config.strategy import (
 )
 from config.shared_bot import get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
-from config.pnl_lookback import parse_pnls_max_lookback_days
+from config.pnl_lookback import PnlsLookback
+from config.risk_memory import risk_bootstrap_horizon_minutes, realized_loss_gate_start_ms
 from config.overrides import parse_overrides
 from config.runtime_compile import compile_runtime_config
 from risk_limits import (
@@ -1298,7 +1299,7 @@ class Passivbot:
         """Initialise the bot with configuration, user context, and runtime caches."""
         from config.hsl import require_runtime_support, require_live_balance_support
 
-        require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+        require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
         require_live_balance_support(config)
         self.config = config
         try:
@@ -1891,15 +1892,51 @@ class Passivbot:
         if stage is not None:
             self._log_silence_watchdog_stage = str(stage)
 
+    def _realized_memory_start_ms(self, now_ms: int) -> int:
+        """Keep one factual bootstrap origin throughout an uninterrupted run.
+
+        Moving a finite replay suffix forward on every query would silently turn
+        exponential memory back into rolling memory. Corrections replay from the
+        same origin; a restart declares a new approximate bounded origin.
+        """
+        minutes, _ = risk_bootstrap_horizon_minutes(self.config["live"])
+        requested = max(0, int(now_ms) - int(math.floor(minutes * 60_000 + 0.5)))
+        origin = getattr(self, "_realized_memory_origin_ms", None)
+        origin = requested if origin is None else min(origin, requested)
+        self._realized_memory_origin_ms = origin
+        return origin
+
+    def _pnl_history_acquisition_lookback(self):
+        now_ms = int(self.get_exchange_time())
+        starts = []
+        if self._live_risk_uses_authoritative_pnl():
+            starts.append(self._strict_pnl_history_start_ms(now_ms))
+        if hsl_live.runtime.enabled(self):
+            starts.append(hsl_live.runtime.history_start_ms(self, now_ms))
+        if any(start is None for start in starts):
+            return PnlsLookback("all", math.inf)
+        if not starts:
+            minutes, _ = risk_bootstrap_horizon_minutes(self.config["live"])
+            starts.append(max(0, now_ms - int(math.floor(minutes * 60_000 + 0.5))))
+        # Legacy internal acquisition helper uses days; the public v9 fields and
+        # the risk recurrence are expressed in minutes.
+        return PnlsLookback("window", (now_ms - min(starts)) / 86_400_000.0)
+
+    def _strict_pnl_history_start_ms(self, now_ms):
+        starts = []
+        if self._unstuck_uses_realized_pnl():
+            starts.append(self._realized_memory_start_ms(now_ms))
+        if self._live_max_realized_loss_pct() < 1.0:
+            starts.append(realized_loss_gate_start_ms(self.config["live"], now_ms))
+        if any(start is None for start in starts):
+            return None
+        return min(starts) if starts else None
+
     def _pnls_lookback_start_ms(self) -> Optional[int]:
         config = getattr(self, "config", None)
         if config is None:
             return None
-        lookback = parse_pnls_max_lookback_days(
-            require_live_value(config, "pnls_max_lookback_days"),
-            field_name="live.pnls_max_lookback_days",
-        )
-        return lookback.event_history_start_ms(self.get_exchange_time())
+        return self._strict_pnl_history_start_ms(int(self.get_exchange_time()))
 
     def _fill_history_coverage_status(
         self,
@@ -1929,10 +1966,7 @@ class Passivbot:
 
     def _fill_history_coverage_ready(self) -> bool:
         try:
-            lookback = parse_pnls_max_lookback_days(
-                self.live_value("pnls_max_lookback_days"),
-                field_name="live.pnls_max_lookback_days",
-            )
+            lookback = self._pnl_history_acquisition_lookback()
             now_ms = self.get_exchange_time()
             pnl_start_ms = lookback.fill_cache_age_limit_ms(now_ms)
             coverage_required, start_ms = self._required_fill_history_start_ms(
@@ -2016,7 +2050,7 @@ class Passivbot:
     ) -> tuple[bool, Optional[int]]:
         """Return the earliest fill whose PnL an enabled risk consumer needs."""
         return (
-            (True, pnl_start_ms)
+            (True, self._strict_pnl_history_start_ms(now_ms))
             if self._live_risk_uses_authoritative_pnl()
             else (False, None)
         )
@@ -2027,7 +2061,7 @@ class Passivbot:
         """Return whether planning needs historical coverage and its earliest timestamp."""
         orchestrator_pnl_required = self._live_risk_uses_authoritative_pnl()
         if orchestrator_pnl_required:
-            return True, pnl_start_ms
+            return True, self._strict_pnl_history_start_ms(now_ms)
         pnl_required, pnl_start_ms = self._required_pnl_history_start_ms(
             now_ms,
             pnl_start_ms=pnl_start_ms,
@@ -2606,33 +2640,22 @@ class Passivbot:
         if self._pnls_manager is None:
             return {"status": "no_pnl_manager"}
 
-        events = self._get_effective_pnl_events()
-        if not events:
-            return {"status": "no_history"}
-        self._assert_no_pending_pnl_events(
-            events, context="unstuck allowance logging realized PnL"
-        )
-
-        pnls_cumsum = np.array(
-            [fill_event_net_pnl(ev) for ev in events], dtype=float
-        ).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), float(
-            pnls_cumsum[-1]
-        )
-
+        memory = self._get_realized_pnl_cumsum_stats()
+        drawdown = memory["drawdown"]
         balance_raw = self.get_raw_balance()
-        balance_peak = balance_raw + (pnls_cumsum_max - pnls_cumsum_last)
+        balance_peak = balance_raw + drawdown
         pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
-        # Raw allowance WITHOUT .max(0.0) - can be negative
-        allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
+        allowance = float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, pct, twel, drawdown))
         override_allowances = {
-            symbol: balance_peak * (override_pct * twel + pct_from_peak / 100.0)
+            symbol: float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, override_pct, twel, drawdown))
             for symbol, override_pct in override_pcts.items()
         }
 
         return {
             "status": "ok",
-            "allowance": allowance_raw,
+            "allowance": allowance,
+            # Signed deficit is observability only; execution uses Rust output.
+            "raw_allowance": pct * twel * balance_peak - drawdown,
             "peak": balance_peak,
             "pct_from_peak": pct_from_peak,
             "loss_allowance_pct": pct,
@@ -11764,10 +11787,7 @@ class Passivbot:
                 )
 
             async def rebuild_fill_cache_from_lookback() -> None:
-                lookback = parse_pnls_max_lookback_days(
-                    self.live_value("pnls_max_lookback_days"),
-                    field_name="live.pnls_max_lookback_days",
-                )
+                lookback = self._pnl_history_acquisition_lookback()
                 age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
                 start_ms = None if age_limit is None else int(age_limit)
                 history_scope = "all" if lookback.is_all else "window"
@@ -12245,12 +12265,9 @@ class Passivbot:
             return False
 
         try:
-            # Use the same lookback window
-            lookback_config_value = self.live_value("pnls_max_lookback_days")
-            lookback = parse_pnls_max_lookback_days(
-                lookback_config_value,
-                field_name="live.pnls_max_lookback_days",
-            )
+            # Acquisition/coverage is separate from exponential risk memory.
+            lookback = self._pnl_history_acquisition_lookback()
+            lookback_config_value = lookback.display_value
             exchange_time_ms = self.get_exchange_time()
             pnl_age_limit = lookback.fill_cache_age_limit_ms(exchange_time_ms)
             pnl_required, required_pnl_start_ms = self._required_pnl_history_start_ms(
@@ -12995,11 +13012,13 @@ class Passivbot:
             )
 
     def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
-        """Return net realized pnl cumsum peak/current from FillEventsManager history."""
+        """Expose separate rolling-gate facts and Rust continuous unstuck memory."""
         if getattr(self, "_pnls_manager", None) is None:
-            return {"max": 0.0, "last": 0.0}
+            if self._orchestrator_uses_realized_pnl():
+                raise RuntimeError("realized risk requires the canonical fill manager")
+            return {"max": 0.0, "last": 0.0, "drawdown": 0.0}
         if not self._orchestrator_uses_realized_pnl():
-            return {"max": 0.0, "last": 0.0}
+            return {"max": 0.0, "last": 0.0, "drawdown": 0.0}
         start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
         self._assert_pnl_history_safe_for_risk(
@@ -13007,15 +13026,40 @@ class Passivbot:
             context="orchestrator realized PnL cumsum",
             start_ms=start_ms,
         )
-        if not events:
-            return {"max": 0.0, "last": 0.0}
-        pnls_cumsum = np.array(
-            [fill_event_net_pnl(ev) for ev in events], dtype=float
-        ).cumsum()
-        return {
-            "max": max(0.0, float(pnls_cumsum.max())),
-            "last": float(pnls_cumsum[-1]),
-        }
+        now_ms = int(self.get_exchange_time())
+        result = {"max": 0.0, "last": 0.0, "drawdown": 0.0}
+        if self._live_max_realized_loss_pct() < 1.0:
+            gate_start = realized_loss_gate_start_ms(self.config["live"], now_ms)
+            gate_events = [ev for ev in events if gate_start is None or ev.timestamp >= gate_start]
+            if gate_events:
+                cumsum = np.array([fill_event_net_pnl(ev) for ev in gate_events], dtype=float).cumsum()
+                result.update(max=max(0.0, float(cumsum.max())), last=float(cumsum[-1]))
+        if self._unstuck_uses_realized_pnl():
+            from live.realized_facts import canonical_realized_facts
+
+            origin = self._realized_memory_start_ms(now_ms)
+            memory_events = [ev for ev in events if origin <= ev.timestamp <= now_ms]
+            ordered = canonical_realized_facts(memory_events)
+            payload = {
+                "span_minutes": self.config["live"]["lookback_ema_span_minutes"],
+                "start": origin, "now": now_ms, "known_origin": False,
+                "fills": list(ordered.fills),
+            }
+            try:
+                memory = json.loads(pbr.realized_memory_v9(json.dumps(payload, allow_nan=False)))
+                if (type(memory["start"]) is not int or memory["start"] != origin
+                    or type(memory["now"]) is not int or memory["now"] != now_ms
+                    or type(memory["drawdown"]) not in (int, float)
+                    or not math.isfinite(memory["drawdown"]) or memory["drawdown"] < 0):
+                    raise ValueError("invalid realized-memory envelope")
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise FatalBotException("invalid v9 realized-memory producer output") from exc
+            self._realized_memory_diagnostics = memory
+            memory["ordering_reasons"] = list(ordered.reasons)
+            memory["ambiguous_cohort_count"] = ordered.ambiguous_cohort_count
+            memory["proven_pair_chain_count"] = ordered.proven_pair_chain_count
+            result["drawdown"] = float(memory["drawdown"])
+        return result
 
     @staticmethod
     def _fill_event_increases_position(pside: str, side: str, qty: float) -> bool:
@@ -15263,11 +15307,11 @@ class Passivbot:
         if pct <= 0.0 or twel <= 0.0:
             return 0.0
         return float(
-            pbr.calc_auto_unstuck_allowance(
+            pbr.calc_auto_unstuck_allowance_v9(
                 self.get_raw_balance(),
-                pct * twel,
-                float(realized_pnl_cumsum.get("max", 0.0) or 0.0),
-                float(realized_pnl_cumsum.get("last", 0.0) or 0.0),
+                pct,
+                twel,
+                float(realized_pnl_cumsum["drawdown"]),
             )
         )
 
@@ -17833,6 +17877,7 @@ class Passivbot:
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
                 "max_realized_loss_pct": max_realized_loss_pct,
+                "realized_pnl_drawdown": float(realized_pnl_cumsum["drawdown"]),
                 "realized_pnl_cumsum_max": float(
                     realized_pnl_cumsum.get("max", 0.0) or 0.0
                 ),
@@ -20490,7 +20535,7 @@ async def _run_live(startup_context: dict):
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1

@@ -21,12 +21,10 @@ from config.bot import (
 )
 from config.load import load_prepared_config as staged_load_prepared_config
 from config.coerce import (
-    HSL_RESTART_AFTER_RED_POLICIES,
     HSL_SIGNAL_MODES,
     MONITOR_BOOL_KEYS,
     PYMOO_ALGORITHMS,
     PYMOO_REF_DIR_METHODS,
-    normalize_hsl_restart_after_red_policy,
     normalize_hsl_signal_mode,
 )
 from config.gpu import parse_screening_scenarios
@@ -45,7 +43,11 @@ from config.limits import (
 )
 from config.log_output import log_config_message
 from config.metrics import CURRENCY_METRICS, SHARED_METRICS
-from config.pnl_lookback import normalize_pnls_max_lookback_days_config_value
+from config.risk_memory import (
+    normalize_lookback_ema_span_minutes,
+    normalize_realized_loss_gate_lookback_minutes,
+    normalize_risk_bootstrap_max_lookback_minutes,
+)
 from config.normalize import normalize_config
 from config.optimize_bounds import prune_inactive_optimize_strategy_bounds
 from config.overrides import (
@@ -353,7 +355,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.pnls_max_lookback_days": {
+    "live.lookback_ema_span_minutes": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -361,6 +363,14 @@ FIELD_RUNTIME_RULES = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
+    },
+    "live.realized_loss_gate_lookback_minutes": {
+        "owner": "live", "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {"backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
+    },
+    "live.risk_bootstrap_max_lookback_minutes": {
+        "owner": "live", "consumed_by": {"live"}, "cli_exposed_on": {"live"},
     },
     "live.hsl_signal_mode": {
         "owner": "live",
@@ -415,30 +425,7 @@ OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
         "choices": ["limit", "market"],
         "help": "Override bot.short.hsl.panic_close_order_type for this optimize run.",
     },
-    "bot.long.hsl.restart_after_red_policy": {
-        "visible": ["--bot.long.hsl.restart_after_red_policy"],
-        "hidden": [
-            "--bot.long.hsl_restart_after_red_policy",
-            "--bot_long_hsl_restart_after_red_policy",
-        ],
-        "type": normalize_hsl_restart_after_red_policy,
-        "metavar": "POLICY",
-        "commands": {"optimize"},
-        "choices": tuple(HSL_RESTART_AFTER_RED_POLICIES),
-        "help": "Override bot.long.hsl.restart_after_red_policy for this optimize run.",
-    },
-    "bot.short.hsl.restart_after_red_policy": {
-        "visible": ["--bot.short.hsl.restart_after_red_policy"],
-        "hidden": [
-            "--bot.short.hsl_restart_after_red_policy",
-            "--bot_short_hsl_restart_after_red_policy",
-        ],
-        "type": normalize_hsl_restart_after_red_policy,
-        "metavar": "POLICY",
-        "commands": {"optimize"},
-        "choices": tuple(HSL_RESTART_AFTER_RED_POLICIES),
-        "help": "Override bot.short.hsl.restart_after_red_policy for this optimize run.",
-    },
+
 }
 
 
@@ -790,6 +777,12 @@ def clean_config(config: dict) -> dict:
     from config.migrations.excess_allowance import retire_excess_allowance_mode
 
     source = deepcopy(config or {})
+    from config.migrations.v9 import require_v9_runtime_config, reject_retired_v9_fields
+
+    if "config_version" in source:
+        require_v9_runtime_config(source)
+    else:
+        reject_retired_v9_fields(source)
     retire_excess_allowance_mode(source)
     optimize_section = source.get("optimize")
     legacy_gpu = (
@@ -805,7 +798,7 @@ def clean_config(config: dict) -> dict:
         if not isinstance(portfolio, dict):
             raise TypeError("bot.hsl must be a mapping")
         # Preserve only explicitly supplied portfolio fields. Cleaning/export is
-        # not authorization to hydrate a missing unified policy or restart choice.
+        # not authorization to hydrate a missing portfolio policy.
         template["bot"]["hsl"] = {key: None for key in FIELDS if key in portfolio}
     if "hsl" in source.get("optimize", {}).get("bounds", {}):
         from config.optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY
@@ -1249,18 +1242,32 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Maximum age difference allowed when using ticker data to convert non-quote fee tokens.",
     },
-    "live.pnls_max_lookback_days": {
-        "visible": ["--pnls-max-lookback-days", "-pmld"],
-        "hidden": ["--live.pnls_max_lookback_days", "--live_pnls_max_lookback_days"],
-        "type": normalize_pnls_max_lookback_days_config_value,
-        "metavar": "FLOAT|all",
+    "live.lookback_ema_span_minutes": {
+        "visible": ["--lookback-ema-span-minutes"],
+        "hidden": ["--live.lookback_ema_span_minutes", "--live_lookback_ema_span_minutes"],
+        "type": normalize_lookback_ema_span_minutes,
+        "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
-        "group": {
-            "live": "Behavior",
-            "backtest": "Backtest Runtime",
-            "optimize": "Backtest Runtime",
-        },
-        "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
+        "group": {"live": "Behavior", "backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
+        "help": "Shared v9 exponential HSL/unstuck memory EMA span in minutes; requires retuning.",
+    },
+    "live.realized_loss_gate_lookback_minutes": {
+        "visible": ["--realized-loss-gate-lookback-minutes"],
+        "hidden": ["--live.realized_loss_gate_lookback_minutes", "--live_realized_loss_gate_lookback_minutes"],
+        "type": normalize_realized_loss_gate_lookback_minutes,
+        "metavar": "FLOAT",
+        "commands": {"live", "backtest", "optimize"},
+        "group": {"live": "Behavior", "backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
+        "help": "Independent rolling max_realized_loss_pct gate window in minutes; -1 means all history.",
+    },
+    "live.risk_bootstrap_max_lookback_minutes": {
+        "visible": ["--risk-bootstrap-max-lookback-minutes"],
+        "hidden": ["--live.risk_bootstrap_max_lookback_minutes", "--live_risk_bootstrap_max_lookback_minutes"],
+        "type": normalize_risk_bootstrap_max_lookback_minutes,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Live reconstruction cap in minutes (maximum 90 days); requested horizon is five slow spans.",
     },
     "live.hsl_signal_mode": {
         "visible": ["--hsl-signal-mode"],
@@ -1275,7 +1282,7 @@ RESERVED_CLI_ARGS = {
             "optimize": "Backtest Runtime",
         },
         "help": (
-            "HSL signal mode. unified uses one account-level strategy signal for both "
+            "HSL signal mode. portfolio uses one account-level strategy signal for both "
             "sides; pside tracks long/short independently; coin tracks each coin+side "
             "slot and panic-closes only the affected slot."
         ),
@@ -1748,10 +1755,6 @@ for _pside in ("long", "short"):
             f"bot.{_pside}.hsl.cooldown_minutes_after_red": (
                 f"Minutes to wait after {_pside} HSL RED is flattened before "
                 "restart is allowed."
-            ),
-            f"bot.{_pside}.hsl.restart_after_red_policy": (
-                f"Restart policy after {_pside} HSL RED. Allowed values: "
-                "always or never."
             ),
             f"bot.{_pside}.hsl.panic_close_order_type": (
                 "Allowed values: limit or market. market uses "
@@ -2234,8 +2237,8 @@ def add_arguments_recursively(
                     type_ = str
             elif type_ == bool:
                 type_ = str2bool
-            elif full_name == "live.pnls_max_lookback_days":
-                type_ = normalize_pnls_max_lookback_days_config_value
+            elif full_name == "live.lookback_ema_span_minutes":
+                type_ = normalize_lookback_ema_span_minutes
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 type_ = float
             if "combine_ohlcvs" in full_name:
@@ -2372,7 +2375,7 @@ def update_config_with_args(
     if "config_version" in supplied:
         raise ValueError(
             "config_version is source schema metadata and cannot be overridden at runtime; "
-            "use the explicit migration tools (migrate-hsl for HSL) and revalidate the configuration"
+            "use passivbot tool migrate-config-v9 and revalidate the configuration"
         )
     validate_override_paths(config, supplied, allow_engine=True)
     changed_keys = []

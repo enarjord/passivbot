@@ -20,11 +20,12 @@ def loss_gate_proxy(
     from optimization.gpu.service import MpsMulticoinProxy
 
     original, inputs = make_proxy(
-        sides, lookback, strategy="ema_anchor", coins=coins, hsl_mode=hsl_mode
+        sides, strategy="ema_anchor", coins=coins, hsl_mode=hsl_mode
     )
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
+    config["live"]["realized_loss_gate_lookback_minutes"] = -1.0 if lookback == "all" else lookback * 1440
     config["live"]["max_realized_loss_pct"] = 0.003 if unstuck else 0.0003
     if max_loss_pct is not None:
         config["live"]["max_realized_loss_pct"] = max_loss_pct
@@ -78,7 +79,7 @@ def test_ema_loss_gate_expiry_matches_rust(sides, coins, lookback, unstuck):
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_ema_loss_gate_history_reuse_specialization_and_scratch(side, mode):
     proxy, _ = loss_gate_proxy((side,), hsl_mode=mode)
     candidates = [{}, {f"{side}_base_qty_pct": 0.3}, {}]

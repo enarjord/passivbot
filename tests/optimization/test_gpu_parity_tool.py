@@ -19,18 +19,18 @@ def args(*options):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mode):
     base = ["--fixture", strategy, "--bars", "128", "--sides", "both", "--hsl", mode]
     original = gpu_parity.fixture_inputs(args(*base))
     modified = gpu_parity.fixture_inputs(args(*base,
         "--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
-        "--hsl-cooldown-minutes", "10000", "--hsl-lookback-days", "2.5",
+        "--hsl-cooldown-minutes", "10000", "--lookback-ema-span-minutes", "3600.0",
         "--price-shock", "0", "64", ".7", "--price-shock", "0", "96", "1.3"))
     config, candles, markets, btc, timestamps = modified
-    assert config["live"]["pnls_max_lookback_days"] == 2.5
+    assert config["live"]["lookback_ema_span_minutes"] == 3600.0
     for policy in [config["bot"][side]["hsl"] for side in ("long", "short")] + (
-            [config["bot"]["hsl"]] if mode == "unified" else []):
+            [config["bot"]["hsl"]] if mode == "portfolio" else []):
         assert policy["red_threshold"] == .002
         assert policy["ema_span_minutes"] == 2.5
         assert policy["cooldown_minutes_after_red"] == 10000
@@ -49,7 +49,7 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
     ("--hsl-ema-span-minutes", ".9"), ("--hsl-ema-span-minutes", "nan"),
     ("--hsl-ema-span-minutes", "1e300"), ("--hsl-red-threshold", "1e-300"),
     ("--hsl-cooldown-minutes", "-1"), ("--hsl-cooldown-minutes", "inf"),
-    ("--hsl-lookback-days", ".9"), ("--hsl-lookback-days", "91"),
+    ("--lookback-ema-span-minutes", ".9"), ("--lookback-ema-span-minutes", "1e10"),
     ("--price-shock", "2", "64", ".7"), ("--price-shock", "0", "128", ".7"),
     ("--price-shock", "0", "64.5", ".7"), ("--price-shock", "0", "64", "nan"),
     ("--price-shock", "0", "64", "0"),
@@ -81,7 +81,7 @@ def test_shocked_fixture_rejects_final_gpu_encoding_before_simulation(monkeypatc
 
 @pytest.mark.parametrize("flags", [
     ("--hsl-red-threshold", ".05"), ("--hsl-ema-span-minutes", "30"),
-    ("--hsl-cooldown-minutes", "30"), ("--hsl-lookback-days", "1"),
+    ("--hsl-cooldown-minutes", "30"), ("--lookback-ema-span-minutes", "1"),
     ("--price-shock", "0", "64", "1"),
 ])
 def test_prepared_input_rejects_stress_flags_even_when_they_equal_defaults(flags):
@@ -100,14 +100,14 @@ def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypat
         assert inputs[0]["bot"]["hsl"]["red_threshold"] == .002
         return {"passed": False}
     monkeypatch.setattr(gpu_parity, "run_comparison", comparison)
-    assert gpu_parity.main(["--fixture", "ema_anchor", "--bars", "128", "--hsl", "unified",
+    assert gpu_parity.main(["--fixture", "ema_anchor", "--bars", "128", "--hsl", "portfolio",
         "--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
         "--price-shock", "0", "64", ".7"]) == 1
     recipe = json.loads(capsys.readouterr().out)["fixture_recipe"]
     assert recipe["hsl_red_threshold"] == .002
     assert recipe["hsl_ema_span_minutes"] == 2.5
     assert recipe["hsl_cooldown_minutes"] == 30
-    assert recipe["hsl_lookback_days"] == 1
+    assert recipe["lookback_ema_span_minutes"] == 1440.0
     assert recipe["price_shocks"] == [[0, 64, .7]]
     assert recipe["seed"] == 7 and recipe["fixture"] == "ema_anchor"
 
@@ -358,7 +358,7 @@ def test_prepared_inputs_reject_explicit_fixture_options_before_loading(option):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "unified"])
+@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "portfolio"])
 def test_fixtures_are_canonical_and_keep_ordered_prepared_metadata(strategy, hsl):
     options = args("--fixture", strategy, "--bars", "128", "--sides", "both", "--hsl", hsl)
     config, candles, markets, btc, timestamps = gpu_parity.fixture_inputs(options)
@@ -407,7 +407,7 @@ def test_main_reports_execution_failure_as_strict_json(monkeypatch, capsys, tmp_
     monkeypatch.setattr(gpu_parity, "run_comparison", failed)
     saved = tmp_path / "failed.json"
     assert gpu_parity.main(["--fixture", "trailing_martingale", "--bars", "128",
-        "--hsl", "unified", "--hsl-red-threshold", ".002",
+        "--hsl", "portfolio", "--hsl-red-threshold", ".002",
         "--hsl-ema-span-minutes", "2.5", "--hsl-cooldown-minutes", "10000",
         "--price-shock", "0", "64", ".7", "--price-shock", "1", "96", "1.3",
         "--report", str(saved)]) == 2

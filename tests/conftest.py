@@ -82,14 +82,12 @@ def _install_passivbot_rust_stub():
     )
     stub.calc_pprice_diff_int = lambda *args, **kwargs: 0
 
-    def _calc_auto_unstuck_allowance(
-        balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last
-    ):
-        balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last)
-        drop_since_peak_pct = balance / balance_peak - 1.0
-        return max(0.0, balance_peak * (loss_allowance_pct + drop_since_peak_pct))
+    def _calc_auto_unstuck_allowance_v9(balance, loss_pct, twel, drawdown):
+        from v9_risk_reference import allowance, f32, mul
 
-    stub.calc_auto_unstuck_allowance = _calc_auto_unstuck_allowance
+        return allowance(balance, mul(f32(loss_pct), f32(twel)), f32(drawdown))
+
+    stub.calc_auto_unstuck_allowance_v9 = _calc_auto_unstuck_allowance_v9
     stub.calc_wallet_exposure = (
         lambda c_mult, balance, size, price: abs(size) * price / max(balance, 1e-12)
     )

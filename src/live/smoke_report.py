@@ -321,7 +321,7 @@ LIVE_COMMAND_EQ_PREFIXES = {
     "--live.balance_override=": "balance_override",
     "--live.balance-override=": "balance_override",
 }
-ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"unified", "pside", "per_side"}
+ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"portfolio", "pside", "per_side"}
 HSL_BALANCE_OVERRIDE_UNSAFE_CODE = "hsl_balance_override_account_level_replay_unsafe"
 
 
@@ -7015,7 +7015,7 @@ def _smoke_hsl_enabled_scopes(config: dict[str, Any]) -> list[str]:
         return enabled
     if (
         _normalize_smoke_hsl_signal_mode(config.get("live", {}).get("hsl_signal_mode"))
-        == "unified"
+        == "portfolio"
     ):
         policy = bot.get("hsl")
         return (

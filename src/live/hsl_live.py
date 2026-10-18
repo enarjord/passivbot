@@ -15,7 +15,7 @@ from live.market_snapshot import MarketSnapshotUnavailable
 
 
 def policy(bot, side, symbol=None):
-    if bot.config["live"]["hsl_signal_mode"] == "unified":
+    if bot.config["live"]["hsl_signal_mode"] == "portfolio":
         return dict(bot.config["bot"]["hsl"])
     result = dict(bot.config["bot"][side]["hsl"])
     if symbol is not None and bot.config["live"]["hsl_signal_mode"] == "coin":
@@ -136,6 +136,10 @@ class Owner:
         self._discard_quote_tasks = set()
         self._quote_cursor = 0
         self._position_observation = None
+        # Transport clock configuration survives replacement of disposable
+        # HSL observation/replay owners; real live uses UTC by default.
+        self._observation_clock_offset = getattr(bot, "_hsl_observation_clock_offset", None)
+        self._account_clock_projector = getattr(bot, "_hsl_account_clock_projector", None)
 
     def capture(self, quotes=None, *, target=None):
         # Factual caches only. The adapter clips every observation again to the
@@ -158,8 +162,18 @@ class Owner:
             position_observation=self._position_observation,
             use_observed_fills=True,
             target=target,
+            observation_clock_offset_ms=(
+                0 if self._observation_clock_offset is None
+                else self._observation_clock_offset(now_utc)
+            ),
+            account_clock_projector=self._account_clock_projector,
+            fact_clock_projector=getattr(bot, "_hsl_fact_clock_projector", None),
         )
-        decisions = runtime.evaluate(requests)
+        evaluated = runtime.evaluate(requests)
+        if any(not isinstance(item, (runtime.Decision, runtime.Unavailable)) for item in evaluated):
+            raise runtime.InvalidHslOutput("invalid HSL evaluation result type")
+        decisions = tuple(item for item in evaluated if isinstance(item, runtime.Decision))
+        unavailable += tuple(item for item in evaluated if isinstance(item, runtime.Unavailable))
         wave = Wave(
             now_utc,
             self._position_observation.observed_ms,
@@ -181,12 +195,21 @@ class Owner:
         previous = self._position_observation
         now_utc = int(utc_ms())
         max_age = int(bot._live_market_snapshot_max_age_ms())
-        if (
-            previous is None
-            or previous.payload != current_position.payload
-            or previous.generation != current_position.generation
-            or not 0 <= now_utc - previous.observed_ms <= max_age // 2
-        ):
+        retain = (
+            previous is not None
+            and previous.payload == current_position.payload
+            and previous.generation == current_position.generation
+            and 0 <= now_utc - previous.observed_ms <= max_age // 2
+        )
+        if retain and self._account_clock_projector is not None:
+            observed = self._account_clock_projector(
+                "positions", previous.revision, previous.observed_ms
+            )
+            now_event = int(bot.get_exchange_time())
+            if type(observed) is not int or not 0 < observed <= now_event:
+                raise ValueError("invalid projected HSL account clock")
+            retain = now_event - observed <= max_age // 2
+        if not retain:
             self._position_observation = current_position
         return now_utc, max_age
 
@@ -375,9 +398,7 @@ class Owner:
         if not runtime.enabled(bot) or bot._pnls_manager is None:
             return set()
         now = int(bot.get_exchange_time())
-        start = max(
-            0, now - round(bot.config["live"]["pnls_max_lookback_days"] * 86_400_000)
-        )
+        start = runtime.history_start_ms(bot, now)
         tape = runtime.capture_fills(
             bot._pnls_manager.get_events(start_ms=start), bot.c_mults
         )
@@ -471,11 +492,7 @@ class Owner:
             self, "_next_history_window", 0.0
         ):
             end = int(self.bot.get_exchange_time())
-            kwargs["since_ms"] = max(
-                0,
-                end
-                - round(self.bot.config["live"]["pnls_max_lookback_days"] * 86_400_000),
-            )
+            kwargs["since_ms"] = runtime.history_start_ms(self.bot, end)
             self._next_history_window = now + 900.0
         self._fill_task = asyncio.create_task(self._refresh_history(kwargs))
 
@@ -527,11 +544,9 @@ class Owner:
             from utils import utc_ms
 
             self._reader = CandleSourceReader(
-                self.bot.cm, observation_clock=lambda: int(utc_ms())
+                self.bot.cm, observation_clock=lambda: int(utc_ms()),
+                receipt_observer=getattr(self.bot, "_hsl_candle_receipt_observer", None),
             )
-        self._source_task = asyncio.create_task(self._read_sources())
-
-    async def _read_sources(self):
         bot = self.bot
         symbols = {
             symbol
@@ -539,15 +554,19 @@ class Owner:
             if any(position["size"] != 0 for position in sides.values())
         }
         symbols.update(self.history_symbols())
+        # Own the requested cohort before protection can close its last held
+        # position and before the canonical closing fill becomes visible.
+        self._source_task = asyncio.create_task(self._read_sources(tuple(sorted(symbols))))
+
+    async def _read_sources(self, symbols):
+        bot = self.bot
         self.sources = {
             symbol: source
             for symbol, source in self.sources.items()
             if symbol in symbols
         }
         now = int(bot.get_exchange_time())
-        start = max(
-            0, now - round(bot.config["live"]["pnls_max_lookback_days"] * 86_400_000)
-        )
+        start = runtime.history_start_ms(bot, now)
         # Publish each factual result as it arrives; no all-symbol barrier.
         for symbol in sorted(symbols):
             self.sources[symbol] = await self._reader.acquire(

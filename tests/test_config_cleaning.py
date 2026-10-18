@@ -158,6 +158,7 @@ def test_dump_config_clean_migrates_backtest_aggregate_overrides_to_reducer(tmp_
     cfg_path.write_text(
         json.dumps(
             {
+                "config_version": "v9.0.0",
                 "backtest": {
                     "aggregate": {"adg_pnl": "max"},
                     "base_dir": "backtests",
@@ -214,14 +215,14 @@ def test_clean_config_preserves_sparse_backtest_reducer():
     assert cleaned["backtest"]["reducer"] == {"default": "mean"}
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
     from config.hsl import generated_template, REMOVED_FIELDS
 
     cfg = generated_template(get_template_config(), mode)
     cfg["bot"]["long"]["hsl"]["enabled"] = True
-    if mode == "unified":
-        cfg["bot"]["hsl"].update(enabled=True, restart_after_red_policy="never")
+    if mode == "portfolio":
+        cfg["bot"]["hsl"].update(enabled=True)
     original = deepcopy(cfg)
     cleaned = clean_config(cfg)
     assert cfg == original
@@ -229,7 +230,7 @@ def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
     for side in ["long", "short"]:
         assert not REMOVED_FIELDS.intersection(cleaned["bot"][side]["hsl"])
         assert cleaned["bot"][side]["hsl"] == cfg["bot"][side]["hsl"]
-    if mode == "unified":
+    if mode == "portfolio":
         assert cleaned["bot"]["hsl"] == cfg["bot"]["hsl"]
         assert cleaned["optimize"]["bounds"]["hsl"] == cfg["optimize"]["bounds"]["hsl"]
     else:
@@ -241,14 +242,13 @@ def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
 def test_clean_hsl_does_not_author_missing_portfolio_or_restart():
     from config.hsl import generated_template
 
-    cfg = generated_template(get_template_config(), "unified")
-    del cfg["bot"]["hsl"]["restart_after_red_policy"]
+    cfg = generated_template(get_template_config(), "portfolio")
     assert "restart_after_red_policy" not in clean_config(cfg)["bot"]["hsl"]
     del cfg["bot"]["hsl"]
     assert "hsl" not in clean_config(cfg)["bot"]
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     from config.hsl import generated_template
     from optimization.evaluation_contract import build_evaluation_contract
@@ -259,23 +259,25 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     contract = build_evaluation_contract(cfg)
     assert "hsl_engine" not in contract["live"]
     block = (
-        contract["bot"]["hsl"] if mode == "unified" else contract["bot"]["long"]["hsl"]
+        contract["bot"]["hsl"] if mode == "portfolio" else contract["bot"]["long"]["hsl"]
     )
-    assert block["restart_after_red_policy"] == "always"
+    assert "restart_after_red_policy" not in block
+    assert contract["version"] == 3
+    assert contract["risk_model"].startswith("v9_")
     assert "red_threshold" not in block  # candidate value, not fixed policy
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}
     assert _resume_config_mismatches(record, cfg) == []
     candidate_block = (
-        cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+        cfg["bot"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     )
     candidate_block["red_threshold"] = 0.031
     assert _resume_config_mismatches(record, cfg) == []
     path = (
-        "bot.hsl.restart_after_red_policy"
-        if mode == "unified"
-        else "bot.long.hsl.restart_after_red_policy"
+        "bot.hsl.panic_close_order_type"
+        if mode == "portfolio"
+        else "bot.long.hsl.panic_close_order_type"
     )
-    cfg["optimize"]["fixed_runtime_overrides"][path] = "never"
+    cfg["optimize"]["fixed_runtime_overrides"][path] = "market"
     assert any(
         "evaluation.bot" in diff for diff in _resume_config_mismatches(record, cfg)
     )
@@ -285,12 +287,11 @@ def test_hsl_exported_config_can_be_prepared_without_legacy_hydration():
     from config.hsl import generated_template, REMOVED_FIELDS
     from config_utils import format_config
 
-    cfg = generated_template(get_template_config(), "unified")
+    cfg = generated_template(get_template_config(), "portfolio")
     cfg["bot"]["hsl"].update(
         enabled=True,
         ema_span_minutes=12.5,
         red_threshold=0.07,
-        restart_after_red_policy="never",
     )
     cfg["optimize"]["bounds"]["hsl"] = {"red_threshold": [0.02, 0.2]}
     exported = sanitize_prepared_config_for_dump(cfg)
