@@ -971,3 +971,39 @@ def test_internal_metadata_alone_does_not_authorize_dropping_authored_coins():
     config["backtest"]["coins"] = {"bybit": ["AAA"]}
     with pytest.raises(ValueError, match="backtest.coins is an unknown"):
         migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("variable,expected", [("0", "auto"), ("0.0", "auto"),
+                                              ("-0.0", "auto"), ("0e0", "auto"), ("0.01", 0.01)])
+@pytest.mark.parametrize("candidate", ["0", "0.34"])
+def test_best_effort_normalizes_deap_numeric_strings_before_sentinel_selection(variable, expected, candidate):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_indpb=variable,
+                               mutation_probability=candidate, crossover_eta="31.5")
+    config["optimize"]["pymoo"]["shared"] = {}
+    result = migrate(config, best_effort=True)
+    shared = result.config["optimize"]["pymoo"]["shared"]
+    assert shared["mutation_prob_per_variable"] == expected
+    assert shared["mutation_prob"] == float(candidate)
+    assert shared["crossover_eta"] == 31.5
+    choices = {item["path"]: item for item in result.changes if item.get("best_effort")}
+    assert choices["optimize.pymoo.shared.mutation_prob_per_variable"]["new"] == expected
+    assert choices["optimize.pymoo.shared.mutation_prob"]["new"] == float(candidate)
+    assert isinstance(choices["optimize.pymoo.shared.mutation_prob"]["new"], float)
+    assert choices["optimize.pymoo.shared.crossover_eta"]["new"] == 31.5
+
+
+def test_best_effort_cli_preserves_numeric_string_zero_sentinel(tmp_path, capsys):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_indpb="0", mutation_probability="0")
+    config["optimize"]["pymoo"]["shared"] = {}
+    source, target, report = (tmp_path / name for name in ("source.json", "target.json", "report.json"))
+    source.write_text(json.dumps(config))
+    assert main([str(source), str(target), "--best-effort", "--report", str(report)]) == 0
+    shared = json.loads(target.read_text())["optimize"]["pymoo"]["shared"]
+    assert shared["mutation_prob_per_variable"] == "auto"
+    assert shared["mutation_prob"] == 0.0
+    choices = {item["path"]: item for item in json.loads(report.read_text())["changes"]
+               if item.get("best_effort")}
+    assert choices["optimize.pymoo.shared.mutation_prob_per_variable"]["new"] == "auto"
+    capsys.readouterr()

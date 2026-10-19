@@ -106,6 +106,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
             from config.schema import get_template_config
             from .best_effort_v9 import record_guess
 
+            numeric_controls = {}
             for key in ("crossover_eta", "crossover_probability", "mutation_eta",
                         "mutation_probability", "mutation_indpb", "offspring_multiplier"):
                 if key not in optimize:
@@ -119,6 +120,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                     raise ValueError(f"optimize.{key} must be a finite number") from exc
                 if not math.isfinite(number):
                     raise ValueError(f"optimize.{key} must be a finite number")
+                numeric_controls[key] = number
             defaults = get_template_config()["optimize"]["pymoo"]["shared"]
             mapping = {"crossover_eta": "crossover_eta", "crossover_probability": "crossover_prob_var",
                        "mutation_eta": "mutation_eta", "mutation_probability": "mutation_prob",
@@ -127,7 +129,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                 if key in shared:
                     continue
                 legacy = next((old for old, new in mapping.items() if new == key and old in optimize), None)
-                value = optimize[legacy] if legacy is not None else default
+                value = numeric_controls[legacy] if legacy is not None else default
                 if key == "mutation_prob_per_variable" and legacy == "mutation_indpb" and value == 0:
                     value = default
                 shared[key] = deepcopy(value)
