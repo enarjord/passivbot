@@ -166,40 +166,21 @@ def cleanup_config(
     from config.project import project_config
     from config.schema import get_template_config
     from config.authored import validate_authored_config
+    from config.result_records import extract_result_config
     from config.migrations.v9 import require_v9_runtime_config
     from config_utils import sanitize_prepared_config_for_dump
 
     if mode not in MODES[:-1]:
         raise ValueError(f"unsupported config cleanup mode: {mode}")
-    if not isinstance(source, dict):
-        raise TypeError("config root must be an object")
-    payload = source
-    result_record = any(key in payload for key in (
-        "analysis", "metrics", "suite_metrics", "optimizer_anchor",
-        "optimizer_evaluation_contract",
-    ))
-    if "bot" not in payload and isinstance(payload.get("config"), dict):
-        payload = payload["config"]
-        result_record = True
+    payload = extract_result_config(source, allow_unmarked_wrapper=True)
     if not isinstance(payload.get("bot"), dict) or not isinstance(
         payload.get("live"), dict
     ):
         raise ValueError(
             "expected a v9 config with bot and live objects (possibly inside config)"
         )
-    payload = deepcopy(payload)
-    # These exact top-level fields belong to saved result records, rather than
-    # authored configuration. Nested fields still pass through strict validation.
-    for key in (
-        "analysis", "metrics", "suite_metrics", "optimizer_anchor",
-        "optimizer_evaluation_contract",
-        "_raw", "_raw_effective", "_transform_log", "_coins_sources",
-    ):
+    for key in ("_raw", "_raw_effective", "_transform_log", "_coins_sources"):
         payload.pop(key, None)
-    if result_record and isinstance(payload.get("backtest"), dict):
-        # Optimizer result records retain concrete dataset membership as
-        # provenance. Authored membership remains live/scenario policy.
-        payload["backtest"].pop("coins", None)
     for section, value in payload.items():
         if section != "config_version" and not isinstance(value, dict):
             raise TypeError(f"config.{section} must be an object")

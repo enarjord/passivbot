@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Load saved optimizer and backtest result files as backtest inputs by separating known result
+  metadata from authored settings before validation. Commands printed by Pareto can
+  load the selected candidate while unknown configuration fields remain errors.
+
 - Add opt-in `migrate-config-v9 --best-effort` to infer supported `_ew` replacements,
   EMA spans and changed migration policies, warning and reporting every guess while
   preserving explicit choices and strict normal loading. Preserve metric options
