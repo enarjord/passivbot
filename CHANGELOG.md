@@ -6,7 +6,7 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Load saved optimizer and backtest result configs directly by separating known result
+- Load saved optimizer and backtest result files as backtest inputs by separating known result
   metadata from authored settings before validation. Commands printed by Pareto can
   load the selected candidate while unknown configuration fields remain errors.
 

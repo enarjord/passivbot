@@ -10,12 +10,15 @@ from .schema import get_template_config
 
 
 def load_input_config(
-    config_path: str | None, *, log_info: bool = True
+    config_path: str | None, *, log_info: bool = True, allow_result_records: bool = False
 ) -> tuple[dict, str, dict]:
+    """Keep input documents intact unless the caller opts into result extraction."""
     if config_path:
         if log_info:
             logging.info("loading config %s", config_path)
-        source = extract_result_config(load_raw_config(config_path))
+        source = load_raw_config(config_path)
+        if allow_result_records:
+            source = extract_result_config(source)
         return source, config_path, deepcopy(source)
     if log_info:
         logging.info("loading schema defaults from src/config/schema.py")
@@ -68,8 +71,11 @@ def load_prepared_config(
     target: str = "canonical",
     runtime: str | None = None,
     log_info: bool = True,
+    allow_result_records: bool = False,
 ) -> dict:
-    source, base_config_path, raw_snapshot = load_input_config(config_path, log_info=log_info)
+    source, base_config_path, raw_snapshot = load_input_config(
+        config_path, log_info=log_info, allow_result_records=allow_result_records,
+    )
     return prepare_config(
         source,
         base_config_path=base_config_path,

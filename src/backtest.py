@@ -3319,7 +3319,9 @@ async def main():
     cli_log_level = args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
-    source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
+    source_config, base_config_path, raw_snapshot = load_input_config(
+        args.config_path, allow_result_records=True,
+    )
     update_config_with_args(
         source_config, args, verbose=True, allowed_keys=allowed_config_keys
     )

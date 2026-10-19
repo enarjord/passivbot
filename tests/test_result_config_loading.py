@@ -32,7 +32,9 @@ def test_saved_results_load_like_clean_exports_without_changing_sources(tmp_path
     original = json.dumps(source)
     path.write_text(original)
 
-    loaded = load_prepared_config(str(path), verbose=False, log_info=False)
+    loaded = load_prepared_config(
+        str(path), verbose=False, log_info=False, allow_result_records=True,
+    )
     expected = prepare_config(
         cleanup_config(source, base_config_path=str(path)),
         base_config_path=str(path),
@@ -58,7 +60,9 @@ def test_result_extraction_does_not_hide_unknown_authored_fields(tmp_path, wrapp
     path.write_text(json.dumps(source))
 
     with pytest.raises(ValueError, match="unknown configuration field"):
-        load_prepared_config(str(path), verbose=False, log_info=False)
+        load_prepared_config(
+            str(path), verbose=False, log_info=False, allow_result_records=True,
+        )
 
 
 def test_authored_dataset_membership_stays_invalid_without_result_metadata(tmp_path):
@@ -68,7 +72,52 @@ def test_authored_dataset_membership_stays_invalid_without_result_metadata(tmp_p
     path.write_text(json.dumps(config))
 
     with pytest.raises(ValueError, match=r"config.backtest.coins is an unknown"):
+        load_prepared_config(
+            str(path), verbose=False, log_info=False, allow_result_records=True,
+        )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_result_extraction_requires_explicit_loader_opt_in(tmp_path, wrapped):
+    record = result_record()
+    document = {"config": record} if wrapped else record
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(document))
+
+    source, _, snapshot = load_input_config(str(path), log_info=False)
+
+    assert source == snapshot == document
+    with pytest.raises(ValueError, match="config_version|unknown configuration field"):
         load_prepared_config(str(path), verbose=False, log_info=False)
+
+
+def test_unmarked_config_wrapper_still_requires_migration(tmp_path):
+    document = {"config": get_template_config()}
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(document))
+
+    with pytest.raises(ValueError, match="config.config_version.*explicit migration"):
+        load_prepared_config(
+            str(path), verbose=False, log_info=False, allow_result_records=True,
+        )
+    assert cleanup_config(document)["config_version"] == get_template_config()["config_version"]
+
+
+@pytest.mark.parametrize("marker_location", ["outer", "inner"])
+def test_wrapped_results_identified_by_outer_or_inner_metadata(tmp_path, marker_location):
+    config = get_template_config()
+    config["backtest"]["coins"] = {"combined": ["BTC"]}
+    document = {"config": config}
+    (document if marker_location == "outer" else config)["analysis"] = {}
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(document))
+
+    loaded = load_prepared_config(
+        str(path), verbose=False, log_info=False, allow_result_records=True,
+    )
+
+    assert "coins" not in loaded["backtest"]
+    assert "analysis" not in loaded
 
 
 @pytest.mark.parametrize("marker", [
@@ -95,13 +144,17 @@ def test_result_records_still_require_current_schema(tmp_path, version):
     path.write_text(json.dumps({"config": record, "analysis": {}}))
 
     with pytest.raises(ValueError, match="config.config_version"):
-        load_prepared_config(str(path), verbose=False, log_info=False)
+        load_prepared_config(
+            str(path), verbose=False, log_info=False, allow_result_records=True,
+        )
 
 
 def test_result_input_snapshots_preserve_config_before_cli_overrides(tmp_path):
     path = tmp_path / "result.json"
     path.write_text(json.dumps(result_record()))
-    source, base_path, snapshot = load_input_config(str(path), log_info=False)
+    source, base_path, snapshot = load_input_config(
+        str(path), log_info=False, allow_result_records=True,
+    )
     original = deepcopy(source)
     source["backtest"]["starting_balance"] = 1234.0
     prepared = prepare_config(
@@ -114,7 +167,10 @@ def test_result_input_snapshots_preserve_config_before_cli_overrides(tmp_path):
     assert "metrics" not in snapshot
 
 
-def test_backtest_command_printed_by_pareto_loads_selected_result(tmp_path, capsys):
+def test_backtest_command_printed_by_pareto_loads_selected_result(tmp_path, capsys, monkeypatch):
+    import backtest
+    from passivbot_cli.main import main as cli_main
+
     pareto = tmp_path / "pareto"
     pareto.mkdir()
     path = pareto / "candidate.json"
@@ -132,6 +188,19 @@ def test_backtest_command_printed_by_pareto_loads_selected_result(tmp_path, caps
 
     assert (executable, subcommand) == ("passivbot", "backtest")
     assert selected.candidate.path == path
-    loaded = load_prepared_config(selected_path, verbose=False, log_info=False)
-    assert loaded["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+    original_prepare = backtest.prepare_config
+
+    class PreparedBeforeDataAccess(Exception):
+        pass
+
+    def capture_prepared(source, **kwargs):
+        loaded = original_prepare(source, **kwargs)
+        assert loaded["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+        assert "metrics" not in source
+        assert "coins" not in source["backtest"]
+        raise PreparedBeforeDataAccess
+
+    monkeypatch.setattr(backtest, "prepare_config", capture_prepared)
+    with pytest.raises(PreparedBeforeDataAccess):
+        cli_main([subcommand, selected_path])
     assert path.read_bytes() == original

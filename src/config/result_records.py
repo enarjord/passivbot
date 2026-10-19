@@ -9,10 +9,11 @@ RESULT_METADATA_KEYS = frozenset({
 })
 
 
-def extract_result_config(source: dict) -> dict:
+def extract_result_config(source: dict, *, allow_unmarked_wrapper: bool = False) -> dict:
     """Copy config input, removing only known result-record fields.
 
-    Result records may contain the config inline or under ``config``. Concrete
+    Result records may contain the config inline or under ``config``. Cleanup
+    exports may also explicitly unwrap documents without result metadata. Concrete
     dataset membership is provenance in these records, while authored membership
     remains live/scenario policy. Ordinary configs and unknown nested fields
     still pass intact to strict schema validation. No migration occurs here.
@@ -22,8 +23,13 @@ def extract_result_config(source: dict) -> dict:
     payload = source
     result_record = any(key in payload for key in RESULT_METADATA_KEYS)
     if "bot" not in payload and isinstance(payload.get("config"), dict):
-        payload = payload["config"]
-        result_record = True
+        wrapped = payload["config"]
+        if (
+            result_record or allow_unmarked_wrapper
+            or any(key in wrapped for key in RESULT_METADATA_KEYS)
+        ):
+            payload = wrapped
+            result_record = True
     payload = deepcopy(payload)
     for key in RESULT_METADATA_KEYS:
         payload.pop(key, None)

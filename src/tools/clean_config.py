@@ -172,7 +172,7 @@ def cleanup_config(
 
     if mode not in MODES[:-1]:
         raise ValueError(f"unsupported config cleanup mode: {mode}")
-    payload = extract_result_config(source)
+    payload = extract_result_config(source, allow_unmarked_wrapper=True)
     if not isinstance(payload.get("bot"), dict) or not isinstance(
         payload.get("live"), dict
     ):
