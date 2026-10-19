@@ -622,7 +622,7 @@ def test_best_effort_deap_builds_reported_pymoo_policy(caplog):
     assert result.config["optimize"]["backend"] == "pymoo"
     shared = result.config["optimize"]["pymoo"]["shared"]
     assert shared["crossover_eta"] == 31.5
-    assert shared["mutation_prob"] == 0.25
+    assert shared["mutation_prob_per_variable"] == 0.25
     assert "approximate DEAP policy" in caplog.text
     assert "start a fresh optimization" in caplog.text
 
@@ -786,3 +786,61 @@ def test_deap_transition_has_exactly_one_unambiguous_report_entry(best_effort):
     assert transitions[0]["old"] == "deap" and transitions[0]["new"] == "pymoo"
     assert transitions[0].get("best_effort", False) is best_effort
     assert ("acknowledged" in transitions[0]["reason"]) is not best_effort
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+def test_best_effort_never_removal_has_exactly_one_report_entry(acknowledge):
+    config = v8_config()
+    config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
+    result = migrate(config, best_effort=True, acknowledge_never_removal=acknowledge)
+    entries = [item for item in result.changes
+               if item["path"] == "bot.long.hsl.restart_after_red_policy"]
+    assert len(entries) == 1
+    assert entries[0]["old"] == "never" and entries[0]["new"] is None
+    assert entries[0].get("best_effort", False) is not acknowledge
+
+
+@pytest.mark.parametrize("source_policy", ["file", "inline", "both"])
+@pytest.mark.parametrize("context", ["root", "scenario_audit", "fixed_audit", "scenario_patch", "legacy_flags"])
+def test_best_effort_coin_warnings_match_retained_report_decisions(tmp_path, caplog, source_policy, context):
+    config = v8_config()
+    coin = tmp_path / "coin.json"
+    file_policy = "never" if source_policy in {"file", "both"} else "always"
+    coin.write_text(json.dumps({"bot": {"long": {"hsl": {
+        "enabled": False, "restart_after_red_policy": file_policy}}}}))
+    patch = {"AAA": {"override_config_path": "coin.json"}}
+    if source_policy in {"inline", "both"}:
+        patch["AAA"]["bot"] = {"long": {"hsl": {"restart_after_red_policy": "never"}}}
+    config["coin_overrides"] = deepcopy(patch)
+    if context == "scenario_audit":
+        config["backtest"]["scenarios"] = [{"label": "audit", "overrides": {"live.leverage": 7}}]
+    elif context == "fixed_audit":
+        config["optimize"]["fixed_runtime_overrides"] = {"live.leverage": 7}
+    elif context == "scenario_patch":
+        config["backtest"]["scenarios"] = [{"label": "patch", "overrides": {"coin_overrides": deepcopy(patch)}}]
+    elif context == "legacy_flags":
+        config["live"]["coin_flags"] = {"AAA": "-lc coin.json"}
+    result = migrate(config, best_effort=True, base_config_path=str(tmp_path / "root.json"))
+    guesses = [item for item in result.changes if item.get("best_effort")]
+    messages = [record.getMessage() for record in caplog.records
+                if record.getMessage().startswith("[best-effort]")]
+    assert len(messages) == len(guesses)
+    assert len({item["path"] for item in guesses}) == len(guesses)
+    for item in guesses:
+        assert sum(message.startswith(f"[best-effort] {item['path']}:") for message in messages) == 1
+
+
+@pytest.mark.parametrize("candidate,variable,expected_variable", [(0.34, 0.01, 0.01), (0.0, 0.0, "auto")])
+@pytest.mark.parametrize("authored", [False, True])
+def test_best_effort_deap_preserves_candidate_and_variable_mutation_controls(candidate, variable, expected_variable, authored):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_probability=candidate, mutation_indpb=variable)
+    config["optimize"]["pymoo"]["shared"] = ({"mutation_prob": 0.12, "mutation_prob_per_variable": 0.21}
+                                              if authored else {})
+    result = migrate(config, best_effort=True)
+    shared = result.config["optimize"]["pymoo"]["shared"]
+    assert shared["mutation_prob"] == (0.12 if authored else candidate)
+    assert shared["mutation_prob_per_variable"] == (0.21 if authored else expected_variable)
+    guesses = [item for item in result.changes if item.get("best_effort")]
+    assert any(item["path"] == "optimize.pymoo.shared.mutation_prob" for item in guesses) is not authored
+    assert any(item["path"] == "optimize.pymoo.shared.mutation_prob_per_variable" for item in guesses) is not authored

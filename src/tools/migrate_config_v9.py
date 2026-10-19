@@ -118,7 +118,8 @@ def _set_patch(config, overrides, *, authored=False, scenario=False):
 
 
 def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
-                       _null_policy_enablement=None, _root_enablement=None, best_effort=False):
+                       _null_policy_enablement=None, _root_enablement=None, best_effort=False,
+                       _emit_guesses=True, _change_prefix=""):
     """Use normal file resolution and file-then-inline precedence without simulation."""
     from config.overrides import (
         _extract_allowed_patch,
@@ -146,10 +147,12 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             flag_context, base_config_path=base_config_path, span=span,
             acknowledge=acknowledge, changes=changes,
             _root_enablement=_root_enablement, best_effort=best_effort,
+            _emit_guesses=_emit_guesses,
+            _change_prefix=_change_prefix + ("live.coin_flags::" if best_effort else ""),
         )
     if old_flags:
         changes.append(dict(
-            path="live.coin_flags", old=old_flags, new={},
+            path=_change_prefix + "live.coin_flags", old=old_flags, new={},
             reason="materialized legacy flags; canonical coin_overrides take precedence",
         ))
     mode = result.get("live", {}).get("hsl_signal_mode", "coin")
@@ -185,7 +188,8 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             acknowledge_never_removal=acknowledge,
             _null_policy_enablement=enablement,
             _coin_patch=True, best_effort=best_effort,
-            _guess_log_prefix=f"coin_overrides.{coin}.override_config_path::",
+            _guess_log_prefix=(f"{_change_prefix}coin_overrides.{coin}.override_config_path::"
+                               if _emit_guesses else None),
         )
         # Coin-only conversion deliberately avoids hydrating a full config.
         # Validate its authored structure before allowed-leaf extraction can
@@ -209,10 +213,10 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             acknowledge_never_removal=acknowledge,
             _null_policy_enablement=enablement,
             _coin_patch=True, best_effort=best_effort,
-            _guess_log_prefix=f"coin_overrides.{coin}::",
+            _guess_log_prefix=None,
         )
         migrated = file_result.config
-        changes.extend({**item, "path": f"coin_overrides.{coin}.override_config_path::{item['path']}"}
+        changes.extend({**item, "path": f"{_change_prefix}coin_overrides.{coin}.override_config_path::{item['path']}"}
                        for item in file_result.changes)
         patch = _extract_allowed_patch(
             migrated, coin=coin, source=f"coin_overrides.{coin}.override_config_path",
@@ -238,7 +242,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             for flat, (group, leaf) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
                 if flat in values:
                     changes.append(dict(
-                        path=f"coin_overrides.{coin}.bot.{side}.{flat}",
+                        path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.{flat}",
                         old=deepcopy(values[flat]),
                         new={f"{group}.{leaf}": deepcopy(values[flat])},
                         reason="explicit released-v8 shared field conversion before file/inline merge",
@@ -362,6 +366,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                 changes=file_changes if materialize_fixed_coins else [],
                 _null_policy_enablement=fixed_enablement,
                 _root_enablement=optimized_root_enablement, best_effort=best_effort,
+                _emit_guesses=materialize_fixed_coins,
+                _change_prefix="optimize.fixed_runtime_overrides." if best_effort else "",
             )
             if materialize_fixed_coins:
                 null_policy_enablement.update({
@@ -396,6 +402,9 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                     changes=file_changes if materialize_coin_patch else [],
                     _null_policy_enablement=scenario_enablement,
                     _root_enablement=_hsl_enablement_facts(root_policy, overrides), best_effort=best_effort,
+                    _emit_guesses=materialize_coin_patch,
+                    _change_prefix=(f"{'.'.join(container_path)}.scenarios[{index}].overrides."
+                                    if best_effort else ""),
                 )
                 if audit_optimized:
                     optimized_scenario = deepcopy(optimized_payload)
@@ -406,6 +415,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                         optimized_scenario, base_config_path=base_config_path, span=span,
                         acknowledge=acknowledge_never_removal, changes=[],
                         _root_enablement=scenario_optimized_enablement, best_effort=best_effort,
+                        _emit_guesses=False,
                     )
                 if materialize_coin_patch:
                     prefix = (*container_path, "scenarios", str(index), "overrides")

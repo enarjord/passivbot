@@ -108,13 +108,14 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
 
             defaults = get_template_config()["optimize"]["pymoo"]["shared"]
             mapping = {"crossover_eta": "crossover_eta", "crossover_probability": "crossover_prob_var",
-                       "mutation_eta": "mutation_eta", "mutation_indpb": "mutation_prob"}
+                       "mutation_eta": "mutation_eta", "mutation_probability": "mutation_prob",
+                       "mutation_indpb": "mutation_prob_per_variable"}
             for key, default in defaults.items():
                 if key in shared:
                     continue
                 legacy = next((old for old, new in mapping.items() if new == key and old in optimize), None)
                 value = optimize[legacy] if legacy is not None else default
-                if key == "mutation_prob" and not isinstance(value, bool) and value == 0:
+                if key == "mutation_prob_per_variable" and legacy == "mutation_indpb" and value == 0:
                     value = default
                 shared[key] = deepcopy(value)
                 record_guess(changes, f"optimize.pymoo.shared.{key}", None, value,

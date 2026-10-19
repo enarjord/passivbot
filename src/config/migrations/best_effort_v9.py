@@ -7,9 +7,12 @@ from config.risk_memory import DEFAULT_LOOKBACK_EMA_SPAN_MINUTES, normalize_look
 
 
 def record_guess(changes, path, old, new, reason, *, log_prefix=""):
+    """A None prefix keeps validation-only decisions out of the warning stream."""
     item = dict(path=path, old=deepcopy(old), new=deepcopy(new),
                 reason=reason, best_effort=True)
     changes.append(item)
+    if log_prefix is None:
+        return
 
     def display(value):
         rendered = repr(value)

@@ -399,8 +399,9 @@ def migrate_v8_to_v9(
                     record_guess(changes, current, value, None,
                                  "remove permanent stop; v9 resumes after finite cooldown and admission gates",
                                  log_prefix=_guess_log_prefix)
+                else:
+                    record(current, value, None, "removed restart policy; only finite cooldown remains")
                 del node[key]
-                record(current, value, None, "removed restart policy; only finite cooldown remains")
                 continue
             if "hsl_engine" in str(key):
                 del node[key]

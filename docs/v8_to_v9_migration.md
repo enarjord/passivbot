@@ -135,7 +135,11 @@ are emitted as choices are made, including before a later validation failure.
 
 Explicit `--lookback-ema-span-minutes`, `--memory-span` and
 `--metric-replacement` choices take precedence. Authored EW half-lives and pymoo
-shared settings are preserved. Best-effort mode supplies consent for formula,
+shared settings are preserved. For DEAP, candidate-level `mutation_probability`
+initializes `pymoo.shared.mutation_prob`, and per-variable `mutation_indpb`
+initializes `mutation_prob_per_variable`; the old zero `mutation_indpb` sentinel
+uses `auto`. Validation-only passes do not emit duplicate guessed decisions.
+Best-effort mode supplies consent for formula,
 restart, gate-memory and search-algorithm changes; those changes are guesses,
 not equivalence claims. Review limit thresholds, re-tune risk settings, run fresh
 backtests and start fresh optimizations.
