@@ -844,3 +844,63 @@ def test_best_effort_deap_preserves_candidate_and_variable_mutation_controls(can
     guesses = [item for item in result.changes if item.get("best_effort")]
     assert any(item["path"] == "optimize.pymoo.shared.mutation_prob" for item in guesses) is not authored
     assert any(item["path"] == "optimize.pymoo.shared.mutation_prob_per_variable" for item in guesses) is not authored
+
+
+@pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_memory_decision_provenance_is_unique_for_root_scenario_and_fixed(converter, explicit):
+    config = v8_config()
+    config["backtest"]["scenarios"] = [{"label": "span", "overrides": {
+        "live.pnls_max_lookback_days": 2.5}}]
+    config["optimize"]["fixed_runtime_overrides"] = {"live.pnls_max_lookback_days": 4.5}
+    paths = ["live.pnls_max_lookback_days",
+             "backtest.scenarios[0].overrides.live.pnls_max_lookback_days",
+             "optimize.fixed_runtime_overrides.live.pnls_max_lookback_days"]
+    options = {"memory_span_minutes": 123.0,
+               "memory_span_choices": {path: 321.0 for path in paths[1:]}} if explicit else {}
+    result = converter(config, best_effort=True, **options)
+    for path in paths:
+        decisions = [item for item in result.changes if item["path"] == path]
+        assert len(decisions) == 1
+        assert decisions[0].get("best_effort", False) is not explicit
+        assert ("explicit" in decisions[0]["reason"]) is explicit
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+def test_gate_report_does_not_claim_explicit_consent_without_it(acknowledge):
+    config = v8_config()
+    config["live"]["max_realized_loss_pct"] = 0.05
+    result = migrate(config, best_effort=True,
+                     acknowledge_realized_loss_gate_memory_change=acknowledge)
+    consent = [item for item in result.changes if "acknowledged shared realized-loss memory" in item["reason"]]
+    assert len(consent) == (1 if acknowledge else 0)
+    inferred = [item for item in result.changes if "adopt independent decaying realized-loss memory" in item["reason"]]
+    assert bool(inferred) is not acknowledge
+    assert all(item["best_effort"] for item in inferred)
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+def test_best_effort_backend_acknowledgment_is_preserved(acknowledge, caplog):
+    config = v8_config()
+    config["optimize"]["backend"] = "deap"
+    config["optimize"]["pymoo"]["shared"] = {}
+    result = migrate(config, best_effort=True, acknowledge_search_backend_change=acknowledge)
+    decisions = [item for item in result.changes if item["path"] == "optimize.backend"]
+    assert len(decisions) == 1
+    assert decisions[0].get("best_effort", False) is not acknowledge
+    assert ("acknowledged" in decisions[0]["reason"]) is acknowledge
+    assert ("[best-effort] optimize.backend:" in caplog.text) is not acknowledge
+    assert any(item.get("best_effort") and item["path"].startswith("optimize.pymoo.shared.")
+               for item in result.changes)
+
+
+@pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
+def test_saved_analysis_aliases_cannot_become_configuration_authority(converter):
+    config = v8_config()
+    config["analysis"] = {"bot": {"long": {"n_positions": 3, "risk": {"n_positions": 7}}}}
+    from config.migrations.final_v9 import reject_v8_alias_conflicts
+    with pytest.raises(ValueError, match="conflicts"):
+        reject_v8_alias_conflicts(config)
+    result = converter(config, best_effort=True)
+    assert "analysis" not in result.config
+    assert any(item["path"] == "analysis" and item.get("best_effort") for item in result.changes)

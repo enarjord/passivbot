@@ -438,7 +438,9 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             acknowledge_metric_formula_change=acknowledge_metric_formula_change,
             _null_policy_enablement=null_policy_enablement, best_effort=best_effort,
         )
-        transformed = MigrationResult(transformed.config, inferred_changes + file_changes + transformed.changes,
+        inferred_paths = {item["path"] for item in inferred_changes if item.get("best_effort")}
+        changes = [item for item in transformed.changes if item["path"] not in inferred_paths]
+        transformed = MigrationResult(transformed.config, inferred_changes + file_changes + changes,
                                       transformed.warnings)
     prepared = prepare_config(
         transformed.config, verbose=False, target="canonical", runtime=None,

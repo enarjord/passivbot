@@ -120,16 +120,17 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                 shared[key] = deepcopy(value)
                 record_guess(changes, f"optimize.pymoo.shared.{key}", None, value,
                              f"approximate DEAP policy using {legacy or 'canonical pymoo default'}; search evolution differs")
-            record_guess(changes, "optimize.backend", "deap", "pymoo",
-                         "retire DEAP in favor of pymoo; start a fresh optimization")
+            if not acknowledge:
+                record_guess(changes, "optimize.backend", "deap", "pymoo",
+                             "retire DEAP in favor of pymoo; start a fresh optimization")
         if not acknowledge and not best_effort:
             raise ValueError("optimize.backend=deap requires --acknowledge-search-backend-change; pymoo changes search evolution")
         if not shared:
             raise ValueError("DEAP conversion requires an explicit optimize.pymoo.shared policy; outer genetic gates and offspring counts are not equivalent")
         optimize["backend"] = "pymoo"
-        if not best_effort:
+        if not best_effort or acknowledge:
             changes.append(dict(path="optimize.backend", old="deap", new="pymoo",
-                                reason="acknowledged search algorithm change; explicit pymoo policy controls evolution"))
+                                reason="acknowledged search algorithm change; replacement pymoo policy controls evolution"))
     mapping = {"crossover_eta": "crossover_eta", "crossover_probability": "crossover_prob_var",
                "mutation_eta": "mutation_eta", "mutation_indpb": "mutation_prob"}
     for key in ("crossover_eta", "crossover_probability", "mutation_eta", "mutation_indpb",
@@ -146,7 +147,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                                     reason="materialized effective released pymoo fallback without changing its value"))
                 continue
         changes.append(dict(path=f"optimize.{key}", old=value, new=None,
-                            reason="retired DEAP control; explicit pymoo policy retained"))
+                            reason="retired DEAP control; replacement pymoo policy retained"))
 
 
 
