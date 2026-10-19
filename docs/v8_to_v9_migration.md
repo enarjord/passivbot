@@ -103,6 +103,49 @@ set optimizer policy. GPU and pymoo backend selections remain unchanged, while D
 still requires its separate acknowledgment. Start a fresh optimization after conversion;
 retired search controls do not imply equivalent search evolution or reusable fitness.
 
+## Opt-in best-effort migration
+
+Use `--best-effort` to propose a replacement without supplying every semantic choice:
+
+```sh
+passivbot tool migrate-config-v9 input.v8.json output.v9.json \
+  --best-effort --dry-run --diff --report migration-report.json
+```
+
+Remove `--dry-run` after inspecting the proposal. Every inferred choice emits a
+`[best-effort]` warning with its path, old value, new value and rationale
+(large values are abbreviated in the console and retained in full in the report). The
+same decisions have `"best_effort": true` in the report's `changes` list. Warnings
+are emitted as choices are made, including before a later validation failure.
+
+| Missing choice or saved-result field | Best-effort policy |
+|---|---|
+| Retired `_w` metric | Replace `_w` with `_ew` when that metric exists, preserving currency and supported statistic suffixes |
+| EW half-life absent or `null`, with an EW metric requested | Set global `backtest.ew_half_life_days` to `180.0` |
+| Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` to initialize independent slow EMA spans |
+| Scenario or fixed-override rolling-day memory | Convert each authored duration separately, preserving its scope |
+| Zero or sub-minute rolling window | Use the minimum `1.0` minute span |
+| Missing or all-history root window | Use the canonical `43200.0` minute (30-day) span |
+| All-history scenario/fixed window | Use the same canonical 30-day span |
+| `restart_after_red_policy="never"` | Remove it and adopt finite cooldown plus ordinary admission gates |
+| Retired `we_excess_allowance_mode="bounded"` | Remove selector; retain the bounded allowance contract (`legacy_raw` still fails) |
+| Active realized-loss gate | Adopt independent decaying realized memory and report each effective context |
+| Saved-result `analysis`, `metrics`, `suite_metrics`, `optimizer_anchor`, `optimizer_evaluation_contract` | Remove obsolete result metadata; discard derived `backtest.coins`/`cache_dir` only for recognized result records |
+| DEAP backend | Switch to pymoo, retain authored shared policy, approximate missing operator fields from old controls or canonical pymoo defaults |
+
+Explicit `--lookback-ema-span-minutes`, `--memory-span` and
+`--metric-replacement` choices take precedence. Authored EW half-lives and pymoo
+shared settings are preserved. Best-effort mode supplies consent for formula,
+restart, gate-memory and search-algorithm changes; those changes are guesses,
+not equivalence claims. Review limit thresholds, re-tune risk settings, run fresh
+backtests and start fresh optimizations.
+
+Unknown fields, conflicting aliases, malformed values, ambiguous enabled null
+restart policies, retired strategies/venues, unsupported metric counterparts and
+rolling-window search bounds still require explicit correction. Normal config
+loading and migration without `--best-effort` remain strict. Referenced coin
+files are materialized in the output and remain unchanged on disk.
+
 ## Output, rollback and validation
 
 Without an output argument the tool writes `input.v9.json`. Existing output, backup and

@@ -212,6 +212,8 @@ def migrate_v8_to_v9(
     acknowledge_metric_formula_change=False,
     _null_policy_enablement=None,
     _coin_patch=False,
+    best_effort=False,
+    _guess_log_prefix="",
 ):
     """Transform authored policy without importing simulation or exchange runtimes.
 
@@ -252,14 +254,30 @@ def migrate_v8_to_v9(
     from .final_v9 import reject_v8_alias_conflicts
 
     reject_v8_alias_conflicts(result)
+    inferred_changes = []
+    if best_effort and not _coin_patch:
+        from .best_effort_v9 import remove_result_metadata
+
+        remove_result_metadata(result, inferred_changes, wrapped=payload is not source)
     if not _coin_patch:
         from .final_v9 import replace_retired_metrics
 
-        metric_changes = []
+        metric_changes = inferred_changes
         replace_retired_metrics(result, replacements=metric_replacements,
-                                acknowledge=acknowledge_metric_formula_change, changes=metric_changes)
+                                acknowledge=acknowledge_metric_formula_change, changes=metric_changes,
+                                best_effort=best_effort)
     else:
         metric_changes = []
+    if best_effort and memory_span_minutes is None and not _coin_patch:
+        from .best_effort_v9 import infer_memory_span
+
+        live = result.get("live", {})
+        memory_span_minutes = live.get("lookback_ema_span_minutes")
+        if memory_span_minutes is None:
+            memory_span_minutes = infer_memory_span(
+                live.get("pnls_max_lookback_days"), "live.pnls_max_lookback_days", metric_changes,
+                missing="pnls_max_lookback_days" not in live,
+            )
     if is_v8 and memory_span_minutes is None and not _coin_patch:
         raise ValueError(
             "v8 risk memory is not equivalent to an EMA span; explicitly choose "
@@ -337,6 +355,18 @@ def migrate_v8_to_v9(
                 continue
             value = node[key]
             current = f"{path}.{key}" if path else str(key)
+            if best_effort and str(key).split(".")[-1] in {
+                "we_excess_allowance_mode", "risk_we_excess_allowance_mode",
+            }:
+                from .best_effort_v9 import record_guess
+
+                if not isinstance(value, str) or value.strip().lower() != "bounded":
+                    raise ValueError(f"{current}: only retired bounded allowance mode can be removed automatically")
+                del node[key]
+                record_guess(changes, current, value, None,
+                             "remove retired bounded-mode selector; v9 always uses bounded excess allowance",
+                             log_prefix=_guess_log_prefix)
+                continue
             if _retired_control(current, key):
                 del node[key]
                 record(current, value, None, "retired HSL control; v9 uses current RED and finite cooldown")
@@ -354,11 +384,17 @@ def migrate_v8_to_v9(
                     continue
                 if not isinstance(value, str) or value.strip().lower() not in {"always", "never"}:
                     raise ValueError(f"{current} has no v9 policy equivalent; remove it explicitly")
-                if value.strip().lower() == "never" and not acknowledge_never_removal:
+                if value.strip().lower() == "never" and not acknowledge_never_removal and not best_effort:
                     raise ValueError(
                         f"{current}=never requires --acknowledge-never-removal; "
                         "v9 resumes after finite cooldown"
                     )
+                if value.strip().lower() == "never" and best_effort and not acknowledge_never_removal:
+                    from .best_effort_v9 import record_guess
+
+                    record_guess(changes, current, value, None,
+                                 "remove permanent stop; v9 resumes after finite cooldown and admission gates",
+                                 log_prefix=_guess_log_prefix)
                 del node[key]
                 record(current, value, None, "removed restart policy; only finite cooldown remains")
                 continue
@@ -382,6 +418,10 @@ def migrate_v8_to_v9(
                 elif current in choices:
                     span = normalize_lookback_ema_span_minutes(choices[current])
                     used_choices.add(current)
+                elif best_effort:
+                    from .best_effort_v9 import infer_memory_span
+
+                    span = infer_memory_span(value, current, changes)
                 else:
                     raise ValueError(f"{current} requires --memory-span '{current}=MINUTES'")
                 _validate_legacy_gate_window(value, current, days=True)
@@ -422,7 +462,13 @@ def migrate_v8_to_v9(
         live["lookback_ema_span_minutes"] = root_span
         record("live.lookback_ema_span_minutes", None, root_span, "explicit v9 memory choice")
     if not _coin_patch:
-        active_contexts = _require_gate_ack(result, acknowledge_realized_loss_gate_memory_change)
+        active_contexts = _require_gate_ack(result, acknowledge_realized_loss_gate_memory_change or best_effort)
+        if active_contexts and best_effort and not acknowledge_realized_loss_gate_memory_change:
+            from .best_effort_v9 import record_guess
+
+            for context in active_contexts:
+                record_guess(changes, context["context"], None, context,
+                             "adopt independent decaying realized-loss memory instead of rolling history")
         if active_contexts:
             record("live.max_realized_loss_pct", None, active_contexts,
                    "acknowledged shared realized-loss memory in every effective authored context")
@@ -432,7 +478,7 @@ def migrate_v8_to_v9(
 
     result = finalize_v8_layout(result, span=None if _coin_patch else root_span, changes=changes,
                                 acknowledge_search_backend_change=acknowledge_search_backend_change,
-                                sparse=_coin_patch)
+                                sparse=_coin_patch, best_effort=best_effort)
     from config.authored import validate_authored_config
     from config.schema import get_template_config
 

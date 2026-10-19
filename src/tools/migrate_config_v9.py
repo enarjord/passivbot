@@ -118,7 +118,7 @@ def _set_patch(config, overrides, *, authored=False, scenario=False):
 
 
 def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
-                       _null_policy_enablement=None, _root_enablement=None):
+                       _null_policy_enablement=None, _root_enablement=None, best_effort=False):
     """Use normal file resolution and file-then-inline precedence without simulation."""
     from config.overrides import (
         _extract_allowed_patch,
@@ -145,7 +145,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
         _materialize_files(
             flag_context, base_config_path=base_config_path, span=span,
             acknowledge=acknowledge, changes=changes,
-            _root_enablement=_root_enablement,
+            _root_enablement=_root_enablement, best_effort=best_effort,
         )
     if old_flags:
         changes.append(dict(
@@ -184,7 +184,8 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             envelope, memory_span_minutes=span,
             acknowledge_never_removal=acknowledge,
             _null_policy_enablement=enablement,
-            _coin_patch=True,
+            _coin_patch=True, best_effort=best_effort,
+            _guess_log_prefix=f"coin_overrides.{coin}.override_config_path::",
         )
         # Coin-only conversion deliberately avoids hydrating a full config.
         # Validate its authored structure before allowed-leaf extraction can
@@ -207,7 +208,8 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             {"config_version": "v8.6.0", "bot": {}, **inline}, memory_span_minutes=span,
             acknowledge_never_removal=acknowledge,
             _null_policy_enablement=enablement,
-            _coin_patch=True,
+            _coin_patch=True, best_effort=best_effort,
+            _guess_log_prefix=f"coin_overrides.{coin}::",
         )
         migrated = file_result.config
         changes.extend({**item, "path": f"coin_overrides.{coin}.override_config_path::{item['path']}"}
@@ -272,7 +274,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             acknowledge_never_removal=False,
             acknowledge_realized_loss_gate_memory_change=False,
             acknowledge_search_backend_change=False, metric_replacements=None,
-            acknowledge_metric_formula_change=False, base_config_path=""):
+            acknowledge_metric_formula_change=False, base_config_path="", best_effort=False):
     """Transform and canonically validate root, files and every effective scenario."""
     from config import prepare_config
     from config.gpu import validate_hsl_gpu_inputs
@@ -284,6 +286,22 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
     payload = source.get("config", source) if isinstance(source, dict) else source
     if not isinstance(payload, dict):
         raise TypeError("configuration must be a mapping")
+    inferred_changes = []
+    if best_effort and payload.get("config_version") != V9_SCHEMA_VERSION:
+        from config.migrations.best_effort_v9 import remove_result_metadata
+
+        payload = deepcopy(payload)
+        remove_result_metadata(payload, inferred_changes, wrapped="config" in source)
+    if best_effort and payload.get("config_version") != V9_SCHEMA_VERSION and memory_span_minutes is None:
+        from config.migrations.best_effort_v9 import infer_memory_span
+
+        live = payload.get("live", {})
+        memory_span_minutes = live.get("lookback_ema_span_minutes")
+        if memory_span_minutes is None:
+            memory_span_minutes = infer_memory_span(
+                live.get("pnls_max_lookback_days"), "live.pnls_max_lookback_days", inferred_changes,
+                missing="pnls_max_lookback_days" not in live,
+            )
     if payload.get("config_version") == V9_SCHEMA_VERSION:
         transformed = migrate_v8_to_v9(
             payload, memory_span_minutes=memory_span_minutes,
@@ -292,11 +310,19 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             acknowledge_search_backend_change=acknowledge_search_backend_change,
             metric_replacements=metric_replacements,
             acknowledge_metric_formula_change=acknowledge_metric_formula_change,
+            best_effort=best_effort,
         )
     else:
         if memory_span_minutes is None:
             # The core owns the actionable version/span error.
-            return migrate_v8_to_v9(payload, memory_span_minutes=None)
+            return migrate_v8_to_v9(
+                payload, memory_span_minutes=None, memory_span_choices=memory_span_choices,
+                acknowledge_never_removal=acknowledge_never_removal,
+                acknowledge_realized_loss_gate_memory_change=acknowledge_realized_loss_gate_memory_change,
+                acknowledge_search_backend_change=acknowledge_search_backend_change,
+                metric_replacements=metric_replacements,
+                acknowledge_metric_formula_change=acknowledge_metric_formula_change,
+            )
         raw_span = (memory_span_minutes if memory_span_minutes is not None else
                     payload.get("live", {}).get("lookback_ema_span_minutes"))
         span = normalize_lookback_ema_span_minutes(raw_span) if raw_span is not None else None
@@ -305,7 +331,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
         authored = _materialize_files(
             payload, base_config_path=base_config_path, span=span,
             acknowledge=acknowledge_never_removal, changes=file_changes,
-            _null_policy_enablement=null_policy_enablement,
+            _null_policy_enablement=null_policy_enablement, best_effort=best_effort,
         )
         roots = ("coin_overrides", "live.coin_flags")
         root_policy = {"bot": payload.get("bot", {})}
@@ -331,7 +357,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                 acknowledge=acknowledge_never_removal,
                 changes=file_changes if materialize_fixed_coins else [],
                 _null_policy_enablement=fixed_enablement,
-                _root_enablement=optimized_root_enablement,
+                _root_enablement=optimized_root_enablement, best_effort=best_effort,
             )
             if materialize_fixed_coins:
                 null_policy_enablement.update({
@@ -365,7 +391,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                     acknowledge=acknowledge_never_removal,
                     changes=file_changes if materialize_coin_patch else [],
                     _null_policy_enablement=scenario_enablement,
-                    _root_enablement=_hsl_enablement_facts(root_policy, overrides),
+                    _root_enablement=_hsl_enablement_facts(root_policy, overrides), best_effort=best_effort,
                 )
                 if audit_optimized:
                     optimized_scenario = deepcopy(optimized_payload)
@@ -375,7 +401,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                     _materialize_files(
                         optimized_scenario, base_config_path=base_config_path, span=span,
                         acknowledge=acknowledge_never_removal, changes=[],
-                        _root_enablement=scenario_optimized_enablement,
+                        _root_enablement=scenario_optimized_enablement, best_effort=best_effort,
                     )
                 if materialize_coin_patch:
                     prefix = (*container_path, "scenarios", str(index), "overrides")
@@ -396,9 +422,9 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             acknowledge_search_backend_change=acknowledge_search_backend_change,
             metric_replacements=metric_replacements,
             acknowledge_metric_formula_change=acknowledge_metric_formula_change,
-            _null_policy_enablement=null_policy_enablement,
+            _null_policy_enablement=null_policy_enablement, best_effort=best_effort,
         )
-        transformed = MigrationResult(transformed.config, file_changes + transformed.changes,
+        transformed = MigrationResult(transformed.config, inferred_changes + file_changes + transformed.changes,
                                       transformed.warnings)
     prepared = prepare_config(
         transformed.config, verbose=False, target="canonical", runtime=None,
@@ -473,6 +499,8 @@ def main(argv=None):
     parser.add_argument("--acknowledge-search-backend-change", action="store_true")
     parser.add_argument("--metric-replacement", action="append", default=[], metavar="OLD=NEW")
     parser.add_argument("--acknowledge-metric-formula-change", action="store_true")
+    parser.add_argument("--best-effort", action="store_true",
+                        help="Infer replacement formulas and memory policy, logging every guess; review and backtest the result.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--diff", action="store_true")
     parser.add_argument("--report", type=Path)
@@ -530,7 +558,7 @@ def main(argv=None):
             acknowledge_search_backend_change=args.acknowledge_search_backend_change,
             metric_replacements=replacements,
             acknowledge_metric_formula_change=args.acknowledge_metric_formula_change,
-            base_config_path=str(args.input_config.resolve()),
+            base_config_path=str(args.input_config.resolve()), best_effort=args.best_effort,
         )
         rendered = json_dumps_streamlined(result.config, allow_nan=False) + "\n"
         report = dict(source_version=source.get("config_version"), target_version=V9_SCHEMA_VERSION,

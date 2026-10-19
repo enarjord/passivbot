@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add opt-in `migrate-config-v9 --best-effort` to infer supported `_ew` replacements,
+  EMA spans and changed migration policies, warning and reporting every guess while
+  preserving explicit choices and strict normal loading. Preserve metric options
+  when reporting a missing migration memory span.
+
 - Preserve canonical per-coin unstuck exposure triggers in native GPU replay, including
   zero-valued overrides, while unpinned coins inherit the candidate policy.
 

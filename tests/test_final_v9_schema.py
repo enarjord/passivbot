@@ -511,3 +511,240 @@ def test_scoring_shorthand_does_not_relax_other_record_lists(section, key):
     config[section][key] = ["adg_strategy_eq"]
     with pytest.raises(TypeError, match="must be a dict"):
         prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("days,span", [(2.125, 3060.0), (0, 1.0), ("all", 43200.0)])
+def test_best_effort_infers_memory_and_reports_each_guess(days, span, caplog):
+    config = v8_config()
+    config["live"]["pnls_max_lookback_days"] = days
+    original = deepcopy(config)
+    result = migrate(config, best_effort=True)
+    assert config == original
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == span
+    assert result.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] == span
+    assert result.config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == span
+    guesses = [item for item in result.changes if item.get("best_effort")]
+    assert guesses == [dict(path="live.pnls_max_lookback_days", old=days, new=span,
+                            reason=guesses[0]["reason"], best_effort=True)]
+    assert "[best-effort] live.pnls_max_lookback_days" in caplog.text
+
+
+def test_best_effort_missing_window_uses_reported_canonical_default(caplog):
+    config = v8_config()
+    del config["live"]["pnls_max_lookback_days"]
+    result = migrate(config, best_effort=True)
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert "missing rolling window" in caplog.text
+
+
+@pytest.mark.parametrize("days", [True, -1, float("nan"), float("inf"), "invalid", None])
+def test_best_effort_rejects_invalid_authored_windows(days):
+    config = v8_config()
+    config["live"]["pnls_max_lookback_days"] = days
+    with pytest.raises(ValueError, match="legacy duration|must be >= 0"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("location", ["visible", "scoring", "limits", "reducer"])
+@pytest.mark.parametrize("old,new", [("adg_strategy_eq_w", "adg_strategy_eq_ew"),
+                                   ("sharpe_ratio_w_usd", "sharpe_ratio_ew_usd"),
+                                   ("sortino_ratio_w_btc", "sortino_ratio_ew_btc")])
+def test_best_effort_metric_locations_enable_ew_and_log_choices(location, old, new, caplog):
+    config = v8_config()
+    if location == "visible":
+        config["backtest"]["visible_metrics"] = [old]
+    elif location == "scoring":
+        config["optimize"]["scoring"] = [{"metric": old, "goal": "max"}]
+    elif location == "limits":
+        config["optimize"]["limits"] = {"penalize_if_lower_than_" + old: 0.1}
+    else:
+        config["backtest"]["reducer"] = {old: "mean"}
+    result = migrate(config, best_effort=True)
+    assert result.config["backtest"]["ew_half_life_days"] == 180.0
+    assert any(item["old"] == old and item["new"] == new and item.get("best_effort")
+               for item in result.changes)
+    assert old in caplog.text and new in caplog.text
+    assert "backtest.ew_half_life_days" in caplog.text
+
+
+def test_best_effort_explicit_choices_take_precedence():
+    config = v8_config()
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    config["backtest"]["ew_half_life_days"] = 17.0
+    result = migrate(config, best_effort=True, memory_span_minutes=99.5,
+                     metric_replacements={"adg_strategy_eq_w": "adg_strategy_eq"})
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == 99.5
+    assert result.config["backtest"]["visible_metrics"] == ["adg_strategy_eq"]
+    assert result.config["backtest"]["ew_half_life_days"] == 17.0
+    assert not any(item["path"] == "live.pnls_max_lookback_days" and item.get("best_effort")
+                   for item in result.changes)
+
+
+def test_best_effort_retired_metric_without_ew_counterpart_requires_choice():
+    config = v8_config()
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w_per_exposure_long"]
+    with pytest.raises(ValueError, match="no supported _ew replacement"):
+        migrate(config, best_effort=True)
+
+
+def test_best_effort_scenario_and_fixed_windows_keep_distinct_spans():
+    config = v8_config()
+    config["backtest"]["scenarios"] = [{"label": "window", "overrides": {
+        "live.pnls_max_lookback_days": 2.5}}]
+    config["optimize"]["fixed_runtime_overrides"] = {"live.pnls_max_lookback_days": 4.5}
+    result = migrate(config, best_effort=True, memory_span_choices={
+        "backtest.scenarios[0].overrides.live.pnls_max_lookback_days": 61.5})
+    fixed = result.config["optimize"]["fixed_runtime_overrides"]
+    scenario = result.config["backtest"]["scenarios"][0]["overrides"]
+    assert fixed["bot.unstuck.memory_ema_span_minutes"] == 6480.0
+    assert scenario["bot.unstuck.memory_ema_span_minutes"] == 61.5
+    assert any(item["path"] == "optimize.fixed_runtime_overrides.live.pnls_max_lookback_days"
+               and item.get("best_effort") for item in result.changes)
+
+
+def test_best_effort_accepts_changed_never_and_loss_gate_policy(caplog):
+    config = v8_config()
+    config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
+    config["live"]["max_realized_loss_pct"] = 0.05
+    result = migrate(config, best_effort=True)
+    assert result.config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] == 0.05
+    assert "restart_after_red_policy" not in result.config["bot"]["long"]["hsl"]
+    assert "remove permanent stop" in caplog.text
+    assert "decaying realized-loss memory" in caplog.text
+
+
+def test_best_effort_deap_builds_reported_pymoo_policy(caplog):
+    config = v8_config()
+    config["optimize"].update(backend="deap", crossover_eta=31.5, mutation_indpb=0.25)
+    config["optimize"].pop("pymoo")
+    result = migrate(config, best_effort=True)
+    assert result.config["optimize"]["backend"] == "pymoo"
+    shared = result.config["optimize"]["pymoo"]["shared"]
+    assert shared["crossover_eta"] == 31.5
+    assert shared["mutation_prob"] == 0.25
+    assert "approximate DEAP policy" in caplog.text
+    assert "start a fresh optimization" in caplog.text
+
+
+def test_strict_migration_preserves_metric_choices_when_span_is_missing():
+    config = v8_config()
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    with pytest.raises(ValueError, match="explicitly choose --lookback-ema-span-minutes"):
+        migrate(config, metric_replacements={"adg_strategy_eq_w": "adg_strategy_eq"},
+                acknowledge_metric_formula_change=True)
+
+
+def test_best_effort_cli_dry_run_and_report_are_observable(tmp_path, caplog):
+    source = tmp_path / "source.json"
+    target = tmp_path / "target.json"
+    report = tmp_path / "report.json"
+    config = v8_config()
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    source.write_text(json.dumps(config))
+    before = source.read_bytes()
+    assert main([str(source), str(target), "--best-effort", "--dry-run", "--report", str(report)]) == 0
+    assert not target.exists()
+    assert source.read_bytes() == before
+    changes = json.loads(report.read_text())["changes"]
+    assert any(item.get("best_effort") and item["new"] == "adg_strategy_eq_ew" for item in changes)
+    for item in changes:
+        if item.get("best_effort"):
+            assert item["path"] in caplog.text
+    assert main([str(source), str(target), "--best-effort"]) == 0
+    loaded = prepare_config(load_raw_config(str(target)), verbose=False)
+    assert loaded["backtest"]["visible_metrics"] == ["adg_strategy_eq_ew"]
+    published = target.read_bytes()
+    with pytest.raises(SystemExit):
+        main([str(source), str(target), "--best-effort"])
+    assert target.read_bytes() == published
+
+
+def test_best_effort_stat_suffix_is_retained_in_objectives():
+    config = v8_config()
+    config["optimize"]["scoring"] = [{"metric": "adg_w_usd_max", "goal": "max"}]
+    result = migrate(config, best_effort=True)
+    assert result.config["optimize"]["scoring"][0]["metric"] == "adg_ew_usd_max"
+
+
+def test_best_effort_coin_file_guesses_are_reported_and_file_is_unchanged(tmp_path, caplog):
+    config = v8_config()
+    coin = tmp_path / "coin.json"
+    coin.write_text(json.dumps({"bot": {"long": {"hsl": {
+        "enabled": False, "restart_after_red_policy": "never"}}}}))
+    before = coin.read_bytes()
+    config["coin_overrides"] = {"AAA": {"override_config_path": "coin.json"}}
+    result = migrate(config, best_effort=True, base_config_path=str(tmp_path / "root.json"))
+    assert coin.read_bytes() == before
+    assert "override_config_path" not in result.config["coin_overrides"]["AAA"]
+    assert any(item.get("best_effort") and "override_config_path::" in item["path"]
+               and "restart_after_red_policy" in item["path"] for item in result.changes)
+    assert "coin_overrides.AAA.override_config_path::bot.long.hsl.restart_after_red_policy" in caplog.text
+
+
+@pytest.mark.parametrize("kind", ["bounds", "unknown", "conflict", "strategy", "null_policy"])
+def test_best_effort_does_not_hide_unsupported_or_conflicting_authority(kind):
+    config = v8_config()
+    if kind == "bounds":
+        config["optimize"]["bounds"]["live"] = {"pnls_max_lookback_days": [1.0, 30.0]}
+    elif kind == "unknown":
+        config["live"]["unknown_option"] = True
+    elif kind == "conflict":
+        config["bot"]["long"]["n_positions"] = 3
+        config["bot"]["long"]["risk"]["n_positions"] = 7
+    elif kind == "strategy":
+        config["live"]["strategy_kind"] = "trailing_grid_v7"
+    else:
+        config["bot"]["long"]["hsl"].update(enabled=True, restart_after_red_policy=None)
+    original = deepcopy(config)
+    with pytest.raises((ValueError, TypeError)):
+        migrate(config, best_effort=True)
+    assert config == original
+
+
+def test_best_effort_already_v9_is_a_noop_without_guesses():
+    config = migrate(v8_config(), best_effort=True).config
+    result = migrate(config, best_effort=True)
+    assert result.config == config
+    assert result.changes == []
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_best_effort_saved_result_metadata_is_reported_without_reusing_fitness(wrapped, caplog):
+    config = v8_config()
+    config["backtest"].update(coins={"bybit": ["AAA"]}, cache_dir={"bybit": "old-cache"})
+    config["optimizer_evaluation_contract"] = {"live": {"pnls_max_lookback_days": 99.0}}
+    config["metrics"] = {"adg_strategy_eq_w": 0.01}
+    config["suite_metrics"] = {"aggregate": {"old": 0.01}}
+    source = {"config": config} if wrapped else config
+    original = deepcopy(source)
+    result = migrate(source, best_effort=True)
+    assert source == original
+    assert "optimizer_evaluation_contract" not in result.config
+    assert "metrics" not in result.config and "suite_metrics" not in result.config
+    assert "coins" not in result.config["backtest"] and "cache_dir" not in result.config["backtest"]
+    for key in ("optimizer_evaluation_contract", "metrics", "suite_metrics", "backtest.coins", "backtest.cache_dir"):
+        assert any(item["path"] == key and item["new"] is None and item.get("best_effort")
+                   for item in result.changes)
+        assert key in caplog.text
+    assert "optimizer_evaluation_contract.live.pnls_max_lookback_days" not in caplog.text
+
+
+def test_best_effort_does_not_discard_authored_backtest_coins():
+    config = v8_config()
+    config["backtest"]["coins"] = {"bybit": ["AAA"]}
+    with pytest.raises(ValueError, match="backtest.coins is an unknown"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("mode", ["bounded", "legacy_raw", "invalid"])
+def test_best_effort_retired_excess_mode_preserves_bounded_contract(mode):
+    config = v8_config()
+    config["bot"]["long"]["risk"]["we_excess_allowance_mode"] = mode
+    if mode != "bounded":
+        with pytest.raises(ValueError, match="only retired bounded allowance"):
+            migrate(config, best_effort=True)
+        return
+    result = migrate(config, best_effort=True)
+    assert "we_excess_allowance_mode" not in result.config["bot"]["long"]["risk"]
+    assert any(item.get("best_effort") and item["path"] == "bot.long.risk.we_excess_allowance_mode"
+               for item in result.changes)
