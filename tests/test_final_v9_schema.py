@@ -10,6 +10,7 @@ from config.overrides import parse_overrides
 from config.parse import load_raw_config
 from config.risk_memory import risk_bootstrap_horizon_minutes, risk_memory_spans
 from config.schema import get_template_config
+from config.migrations.v9 import migrate_v8_to_v9
 from tools.migrate_config_v9 import main, migrate
 
 
@@ -511,3 +512,498 @@ def test_scoring_shorthand_does_not_relax_other_record_lists(section, key):
     config[section][key] = ["adg_strategy_eq"]
     with pytest.raises(TypeError, match="must be a dict"):
         prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("days,span", [(2.125, 3060.0), (0, 1.0), ("all", 43200.0)])
+def test_best_effort_infers_memory_and_reports_each_guess(days, span, caplog):
+    config = v8_config()
+    config["live"]["pnls_max_lookback_days"] = days
+    original = deepcopy(config)
+    result = migrate(config, best_effort=True)
+    assert config == original
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == span
+    assert result.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] == span
+    assert result.config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == span
+    guesses = [item for item in result.changes if item.get("best_effort")]
+    assert guesses == [dict(path="live.pnls_max_lookback_days", old=days, new=span,
+                            reason=guesses[0]["reason"], best_effort=True)]
+    assert "[best-effort] live.pnls_max_lookback_days" in caplog.text
+
+
+def test_best_effort_missing_window_uses_reported_canonical_default(caplog):
+    config = v8_config()
+    del config["live"]["pnls_max_lookback_days"]
+    result = migrate(config, best_effort=True)
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert "missing rolling window" in caplog.text
+
+
+@pytest.mark.parametrize("days", [True, -1, float("nan"), float("inf"), "invalid", None])
+def test_best_effort_rejects_invalid_authored_windows(days):
+    config = v8_config()
+    config["live"]["pnls_max_lookback_days"] = days
+    with pytest.raises(ValueError, match="legacy duration|must be >= 0"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("location", ["visible", "scoring", "limits", "reducer"])
+@pytest.mark.parametrize("old,new", [("adg_strategy_eq_w", "adg_strategy_eq_ew"),
+                                   ("sharpe_ratio_w_usd", "sharpe_ratio_ew_usd"),
+                                   ("sortino_ratio_w_btc", "sortino_ratio_ew_btc")])
+def test_best_effort_metric_locations_enable_ew_and_log_choices(location, old, new, caplog):
+    config = v8_config()
+    if location == "visible":
+        config["backtest"]["visible_metrics"] = [old]
+    elif location == "scoring":
+        config["optimize"]["scoring"] = [{"metric": old, "goal": "max"}]
+    elif location == "limits":
+        config["optimize"]["limits"] = {"penalize_if_lower_than_" + old: 0.1}
+    else:
+        config["backtest"]["reducer"] = {old: "mean"}
+    result = migrate(config, best_effort=True)
+    assert result.config["backtest"]["ew_half_life_days"] == 180.0
+    assert any(item["old"] == old and item["new"] == new and item.get("best_effort")
+               for item in result.changes)
+    assert old in caplog.text and new in caplog.text
+    assert "backtest.ew_half_life_days" in caplog.text
+
+
+def test_best_effort_explicit_choices_take_precedence():
+    config = v8_config()
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    config["backtest"]["ew_half_life_days"] = 17.0
+    result = migrate(config, best_effort=True, memory_span_minutes=99.5,
+                     metric_replacements={"adg_strategy_eq_w": "adg_strategy_eq"})
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == 99.5
+    assert result.config["backtest"]["visible_metrics"] == ["adg_strategy_eq"]
+    assert result.config["backtest"]["ew_half_life_days"] == 17.0
+    assert not any(item["path"] == "live.pnls_max_lookback_days" and item.get("best_effort")
+                   for item in result.changes)
+
+
+def test_best_effort_retired_metric_without_ew_counterpart_requires_choice():
+    config = v8_config()
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w_per_exposure_long"]
+    with pytest.raises(ValueError, match="no supported _ew replacement"):
+        migrate(config, best_effort=True)
+
+
+def test_best_effort_scenario_and_fixed_windows_keep_distinct_spans():
+    config = v8_config()
+    config["backtest"]["scenarios"] = [{"label": "window", "overrides": {
+        "live.pnls_max_lookback_days": 2.5}}]
+    config["optimize"]["fixed_runtime_overrides"] = {"live.pnls_max_lookback_days": 4.5}
+    result = migrate(config, best_effort=True, memory_span_choices={
+        "backtest.scenarios[0].overrides.live.pnls_max_lookback_days": 61.5})
+    fixed = result.config["optimize"]["fixed_runtime_overrides"]
+    scenario = result.config["backtest"]["scenarios"][0]["overrides"]
+    assert fixed["bot.unstuck.memory_ema_span_minutes"] == 6480.0
+    assert scenario["bot.unstuck.memory_ema_span_minutes"] == 61.5
+    assert any(item["path"] == "optimize.fixed_runtime_overrides.live.pnls_max_lookback_days"
+               and item.get("best_effort") for item in result.changes)
+
+
+def test_best_effort_accepts_changed_never_and_loss_gate_policy(caplog):
+    config = v8_config()
+    config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
+    config["live"]["max_realized_loss_pct"] = 0.05
+    result = migrate(config, best_effort=True)
+    assert result.config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] == 0.05
+    assert "restart_after_red_policy" not in result.config["bot"]["long"]["hsl"]
+    assert "remove permanent stop" in caplog.text
+    assert "decaying realized-loss memory" in caplog.text
+
+
+def test_best_effort_deap_builds_reported_pymoo_policy(caplog):
+    config = v8_config()
+    config["optimize"].update(backend="deap", crossover_eta=31.5, mutation_indpb=0.25)
+    config["optimize"].pop("pymoo")
+    result = migrate(config, best_effort=True)
+    assert result.config["optimize"]["backend"] == "pymoo"
+    shared = result.config["optimize"]["pymoo"]["shared"]
+    assert shared["crossover_eta"] == 31.5
+    assert shared["mutation_prob_per_variable"] == 0.25
+    assert "approximate DEAP policy" in caplog.text
+    assert "start a fresh optimization" in caplog.text
+
+
+def test_strict_migration_preserves_metric_choices_when_span_is_missing():
+    config = v8_config()
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    with pytest.raises(ValueError, match="explicitly choose --lookback-ema-span-minutes"):
+        migrate(config, metric_replacements={"adg_strategy_eq_w": "adg_strategy_eq"},
+                acknowledge_metric_formula_change=True)
+
+
+def test_best_effort_cli_dry_run_and_report_are_observable(tmp_path, caplog):
+    source = tmp_path / "source.json"
+    target = tmp_path / "target.json"
+    report = tmp_path / "report.json"
+    config = v8_config()
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    source.write_text(json.dumps(config))
+    before = source.read_bytes()
+    assert main([str(source), str(target), "--best-effort", "--dry-run", "--report", str(report)]) == 0
+    assert not target.exists()
+    assert source.read_bytes() == before
+    changes = json.loads(report.read_text())["changes"]
+    assert any(item.get("best_effort") and item["new"] == "adg_strategy_eq_ew" for item in changes)
+    for item in changes:
+        if item.get("best_effort"):
+            assert item["path"] in caplog.text
+    assert main([str(source), str(target), "--best-effort"]) == 0
+    loaded = prepare_config(load_raw_config(str(target)), verbose=False)
+    assert loaded["backtest"]["visible_metrics"] == ["adg_strategy_eq_ew"]
+    published = target.read_bytes()
+    with pytest.raises(SystemExit):
+        main([str(source), str(target), "--best-effort"])
+    assert target.read_bytes() == published
+
+
+def test_best_effort_stat_suffix_is_retained_in_objectives():
+    config = v8_config()
+    config["optimize"]["scoring"] = [{"metric": "adg_w_usd_max", "goal": "max"}]
+    result = migrate(config, best_effort=True)
+    assert result.config["optimize"]["scoring"][0]["metric"] == "adg_ew_usd_max"
+
+
+def test_best_effort_coin_file_guesses_are_reported_and_file_is_unchanged(tmp_path, caplog):
+    config = v8_config()
+    coin = tmp_path / "coin.json"
+    coin.write_text(json.dumps({"bot": {"long": {"hsl": {
+        "enabled": False, "restart_after_red_policy": "never"}}}}))
+    before = coin.read_bytes()
+    config["coin_overrides"] = {"AAA": {"override_config_path": "coin.json"}}
+    result = migrate(config, best_effort=True, base_config_path=str(tmp_path / "root.json"))
+    assert coin.read_bytes() == before
+    assert "override_config_path" not in result.config["coin_overrides"]["AAA"]
+    assert any(item.get("best_effort") and "override_config_path::" in item["path"]
+               and "restart_after_red_policy" in item["path"] for item in result.changes)
+    assert "coin_overrides.AAA.override_config_path::bot.long.hsl.restart_after_red_policy" in caplog.text
+
+
+@pytest.mark.parametrize("kind", ["bounds", "unknown", "conflict", "strategy", "null_policy"])
+def test_best_effort_does_not_hide_unsupported_or_conflicting_authority(kind):
+    config = v8_config()
+    if kind == "bounds":
+        config["optimize"]["bounds"]["live"] = {"pnls_max_lookback_days": [1.0, 30.0]}
+    elif kind == "unknown":
+        config["live"]["unknown_option"] = True
+    elif kind == "conflict":
+        config["bot"]["long"]["n_positions"] = 3
+        config["bot"]["long"]["risk"]["n_positions"] = 7
+    elif kind == "strategy":
+        config["live"]["strategy_kind"] = "trailing_grid_v7"
+    else:
+        config["bot"]["long"]["hsl"].update(enabled=True, restart_after_red_policy=None)
+    original = deepcopy(config)
+    with pytest.raises((ValueError, TypeError)):
+        migrate(config, best_effort=True)
+    assert config == original
+
+
+def test_best_effort_already_v9_is_a_noop_without_guesses():
+    config = migrate(v8_config(), best_effort=True).config
+    result = migrate(config, best_effort=True)
+    assert result.config == config
+    assert result.changes == []
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_best_effort_saved_result_metadata_is_reported_without_reusing_fitness(wrapped, caplog):
+    config = v8_config()
+    config["backtest"].update(coins={"bybit": ["AAA"]}, cache_dir={"bybit": "old-cache"})
+    config["optimizer_evaluation_contract"] = {"live": {"pnls_max_lookback_days": 99.0}}
+    config["metrics"] = {"adg_strategy_eq_w": 0.01}
+    config["suite_metrics"] = {"aggregate": {"old": 0.01}}
+    source = {"config": config} if wrapped else config
+    original = deepcopy(source)
+    result = migrate(source, best_effort=True)
+    assert source == original
+    assert "optimizer_evaluation_contract" not in result.config
+    assert "metrics" not in result.config and "suite_metrics" not in result.config
+    assert "coins" not in result.config["backtest"] and "cache_dir" not in result.config["backtest"]
+    for key in ("optimizer_evaluation_contract", "metrics", "suite_metrics", "backtest.coins", "backtest.cache_dir"):
+        path = "config." + key if wrapped else key
+        assert any(item["path"] == path and item["new"] is None and item.get("best_effort")
+                   for item in result.changes)
+        assert path in caplog.text
+    assert "optimizer_evaluation_contract.live.pnls_max_lookback_days" not in caplog.text
+
+
+def test_best_effort_does_not_discard_authored_backtest_coins():
+    config = v8_config()
+    config["backtest"]["coins"] = {"bybit": ["AAA"]}
+    with pytest.raises(ValueError, match="backtest.coins is an unknown"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("mode", ["bounded", "legacy_raw", "invalid"])
+def test_best_effort_retired_excess_mode_preserves_bounded_contract(mode):
+    config = v8_config()
+    config["bot"]["long"]["risk"]["we_excess_allowance_mode"] = mode
+    if mode != "bounded":
+        with pytest.raises(ValueError, match="only retired bounded allowance"):
+            migrate(config, best_effort=True)
+        return
+    result = migrate(config, best_effort=True)
+    assert "we_excess_allowance_mode" not in result.config["bot"]["long"]["risk"]
+    assert any(item.get("best_effort") and item["path"] == "bot.long.risk.we_excess_allowance_mode"
+               for item in result.changes)
+
+
+@pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
+def test_best_effort_reports_outer_and_inner_metadata_distinctly(converter, caplog):
+    config = v8_config()
+    config["analysis"] = {"inner_fitness": 0.1}
+    source = {"config": config, "analysis": {"outer_fitness": 0.2},
+              "metrics": {"old_fitness": 0.3}, "optimizer_evaluation_contract": {"version": 2}}
+    original = deepcopy(source)
+    result = converter(source, best_effort=True)
+    assert source == original
+    expected = {"analysis": source["analysis"], "config.analysis": config["analysis"],
+                "metrics": source["metrics"],
+                "optimizer_evaluation_contract": source["optimizer_evaluation_contract"]}
+    for path, old in expected.items():
+        entries = [item for item in result.changes if item["path"] == path]
+        assert len(entries) == 1
+        assert entries[0]["old"] == old
+        assert entries[0]["new"] is None
+        assert entries[0]["best_effort"] is True
+        assert f"[best-effort] {path}:" in caplog.text
+    assert "analysis" not in result.config
+    assert "optimizer_evaluation_contract" not in result.config
+
+
+@pytest.mark.parametrize("best_effort", [False, True])
+def test_deap_transition_has_exactly_one_unambiguous_report_entry(best_effort):
+    config = v8_config()
+    config["optimize"]["backend"] = "deap"
+    result = migrate(config, best_effort=best_effort, memory_span_minutes=43200.0,
+                     acknowledge_search_backend_change=not best_effort)
+    transitions = [item for item in result.changes if item["path"] == "optimize.backend"]
+    assert len(transitions) == 1
+    assert transitions[0]["old"] == "deap" and transitions[0]["new"] == "pymoo"
+    assert transitions[0].get("best_effort", False) is best_effort
+    assert ("acknowledged" in transitions[0]["reason"]) is not best_effort
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+def test_best_effort_never_removal_has_exactly_one_report_entry(acknowledge):
+    config = v8_config()
+    config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
+    result = migrate(config, best_effort=True, acknowledge_never_removal=acknowledge)
+    entries = [item for item in result.changes
+               if item["path"] == "bot.long.hsl.restart_after_red_policy"]
+    assert len(entries) == 1
+    assert entries[0]["old"] == "never" and entries[0]["new"] is None
+    assert entries[0].get("best_effort", False) is not acknowledge
+
+
+@pytest.mark.parametrize("source_policy", ["file", "inline", "both"])
+@pytest.mark.parametrize("context", ["root", "scenario_audit", "fixed_audit", "scenario_patch", "legacy_flags"])
+def test_best_effort_coin_warnings_match_retained_report_decisions(tmp_path, caplog, source_policy, context):
+    config = v8_config()
+    coin = tmp_path / "coin.json"
+    file_policy = "never" if source_policy in {"file", "both"} else "always"
+    coin.write_text(json.dumps({"bot": {"long": {"hsl": {
+        "enabled": False, "restart_after_red_policy": file_policy}}}}))
+    patch = {"AAA": {"override_config_path": "coin.json"}}
+    if source_policy in {"inline", "both"}:
+        patch["AAA"]["bot"] = {"long": {"hsl": {"restart_after_red_policy": "never"}}}
+    config["coin_overrides"] = deepcopy(patch)
+    if context == "scenario_audit":
+        config["backtest"]["scenarios"] = [{"label": "audit", "overrides": {"live.leverage": 7}}]
+    elif context == "fixed_audit":
+        config["optimize"]["fixed_runtime_overrides"] = {"live.leverage": 7}
+    elif context == "scenario_patch":
+        config["backtest"]["scenarios"] = [{"label": "patch", "overrides": {"coin_overrides": deepcopy(patch)}}]
+    elif context == "legacy_flags":
+        config["live"]["coin_flags"] = {"AAA": "-lc coin.json"}
+    result = migrate(config, best_effort=True, base_config_path=str(tmp_path / "root.json"))
+    guesses = [item for item in result.changes if item.get("best_effort")]
+    messages = [record.getMessage() for record in caplog.records
+                if record.getMessage().startswith("[best-effort]")]
+    assert len(messages) == len(guesses)
+    assert len({item["path"] for item in guesses}) == len(guesses)
+    for item in guesses:
+        assert sum(message.startswith(f"[best-effort] {item['path']}:") for message in messages) == 1
+
+
+@pytest.mark.parametrize("candidate,variable,expected_variable", [(0.34, 0.01, 0.01), (0.0, 0.0, "auto")])
+@pytest.mark.parametrize("authored", [False, True])
+def test_best_effort_deap_preserves_candidate_and_variable_mutation_controls(candidate, variable, expected_variable, authored):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_probability=candidate, mutation_indpb=variable)
+    config["optimize"]["pymoo"]["shared"] = ({"mutation_prob": 0.12, "mutation_prob_per_variable": 0.21}
+                                              if authored else {})
+    result = migrate(config, best_effort=True)
+    shared = result.config["optimize"]["pymoo"]["shared"]
+    assert shared["mutation_prob"] == (0.12 if authored else candidate)
+    assert shared["mutation_prob_per_variable"] == (0.21 if authored else expected_variable)
+    guesses = [item for item in result.changes if item.get("best_effort")]
+    assert any(item["path"] == "optimize.pymoo.shared.mutation_prob" for item in guesses) is not authored
+    assert any(item["path"] == "optimize.pymoo.shared.mutation_prob_per_variable" for item in guesses) is not authored
+
+
+@pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_memory_decision_provenance_is_unique_for_root_scenario_and_fixed(converter, explicit):
+    config = v8_config()
+    config["backtest"]["scenarios"] = [{"label": "span", "overrides": {
+        "live.pnls_max_lookback_days": 2.5}}]
+    config["optimize"]["fixed_runtime_overrides"] = {"live.pnls_max_lookback_days": 4.5}
+    paths = ["live.pnls_max_lookback_days",
+             "backtest.scenarios[0].overrides.live.pnls_max_lookback_days",
+             "optimize.fixed_runtime_overrides.live.pnls_max_lookback_days"]
+    options = {"memory_span_minutes": 123.0,
+               "memory_span_choices": {path: 321.0 for path in paths[1:]}} if explicit else {}
+    result = converter(config, best_effort=True, **options)
+    for path in paths:
+        decisions = [item for item in result.changes if item["path"] == path]
+        assert len(decisions) == 1
+        assert decisions[0].get("best_effort", False) is not explicit
+        assert ("explicit" in decisions[0]["reason"]) is explicit
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+def test_gate_report_does_not_claim_explicit_consent_without_it(acknowledge):
+    config = v8_config()
+    config["live"]["max_realized_loss_pct"] = 0.05
+    result = migrate(config, best_effort=True,
+                     acknowledge_realized_loss_gate_memory_change=acknowledge)
+    consent = [item for item in result.changes if "acknowledged shared realized-loss memory" in item["reason"]]
+    assert len(consent) == (1 if acknowledge else 0)
+    inferred = [item for item in result.changes if "adopt independent decaying realized-loss memory" in item["reason"]]
+    assert bool(inferred) is not acknowledge
+    assert all(item["best_effort"] for item in inferred)
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+def test_best_effort_backend_acknowledgment_is_preserved(acknowledge, caplog):
+    config = v8_config()
+    config["optimize"]["backend"] = "deap"
+    config["optimize"]["pymoo"]["shared"] = {}
+    result = migrate(config, best_effort=True, acknowledge_search_backend_change=acknowledge)
+    decisions = [item for item in result.changes if item["path"] == "optimize.backend"]
+    assert len(decisions) == 1
+    assert decisions[0].get("best_effort", False) is not acknowledge
+    assert ("acknowledged" in decisions[0]["reason"]) is acknowledge
+    assert ("[best-effort] optimize.backend:" in caplog.text) is not acknowledge
+    assert any(item.get("best_effort") and item["path"].startswith("optimize.pymoo.shared.")
+               for item in result.changes)
+
+
+@pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
+def test_saved_analysis_aliases_cannot_become_configuration_authority(converter):
+    config = v8_config()
+    config["analysis"] = {"bot": {"long": {"n_positions": 3, "risk": {"n_positions": 7}}}}
+    from config.migrations.final_v9 import reject_v8_alias_conflicts
+    with pytest.raises(ValueError, match="conflicts"):
+        reject_v8_alias_conflicts(config)
+    result = converter(config, best_effort=True)
+    assert "analysis" not in result.config
+    assert any(item["path"] == "analysis" and item.get("best_effort") for item in result.changes)
+
+
+@pytest.mark.parametrize("key", ["crossover_eta", "crossover_probability", "mutation_eta",
+                                 "mutation_probability", "mutation_indpb", "offspring_multiplier"])
+@pytest.mark.parametrize("value", [False, True])
+def test_best_effort_rejects_boolean_deap_numeric_controls(key, value):
+    config = v8_config()
+    config["optimize"].update(backend="deap", **{key: value})
+    config["optimize"]["pymoo"]["shared"] = {}
+    original = deepcopy(config)
+    with pytest.raises(ValueError, match=rf"optimize\.{key} must be numeric, not a boolean"):
+        migrate(config, best_effort=True)
+    assert config == original
+
+
+def test_best_effort_explicit_pymoo_policy_does_not_hide_malformed_deap_input():
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_indpb=False)
+    with pytest.raises(ValueError, match="mutation_indpb must be numeric, not a boolean"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_best_effort_rejects_nonfinite_deap_probabilities(value):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_probability=value)
+    config["optimize"]["pymoo"]["shared"] = {}
+    with pytest.raises(ValueError, match="mutation_probability must be a finite number"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("value", [False, True])
+def test_best_effort_cli_rejects_boolean_sentinel_before_writing(tmp_path, value, capsys):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_indpb=value)
+    config["optimize"]["pymoo"]["shared"] = {}
+    source, target, report = (tmp_path / name for name in ("source.json", "target.json", "report.json"))
+    source.write_text(json.dumps(config))
+    original = source.read_bytes()
+    with pytest.raises(SystemExit) as exc:
+        main([str(source), str(target), "--best-effort", "--report", str(report)])
+    assert exc.value.code == 2
+    assert "must be numeric, not a boolean" in capsys.readouterr().err
+    assert source.read_bytes() == original
+    assert not target.exists() and not report.exists()
+
+
+@pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
+@pytest.mark.parametrize("key", ["_raw", "_raw_effective", "_transform_log", "_coins_sources"])
+def test_best_effort_internal_metadata_does_not_drive_inference(converter, key):
+    config = v8_config()
+    config[key] = {"backtest": {"visible_metrics": ["adg_strategy_eq_w_per_exposure_long"]},
+                   "live": {"pnls_max_lookback_days": 999.0}}
+    result = converter(config, best_effort=True)
+    assert key not in result.config
+    assert result.config["backtest"].get("ew_half_life_days") is None
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    guesses = [item for item in result.changes if item.get("best_effort")]
+    assert {item["path"] for item in guesses} == {key, "live.pnls_max_lookback_days"}
+
+
+def test_internal_metadata_alone_does_not_authorize_dropping_authored_coins():
+    config = v8_config()
+    config["_raw"] = {}
+    config["backtest"]["coins"] = {"bybit": ["AAA"]}
+    with pytest.raises(ValueError, match="backtest.coins is an unknown"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("variable,expected", [("0", "auto"), ("0.0", "auto"),
+                                              ("-0.0", "auto"), ("0e0", "auto"), ("0.01", 0.01)])
+@pytest.mark.parametrize("candidate", ["0", "0.34"])
+def test_best_effort_normalizes_deap_numeric_strings_before_sentinel_selection(variable, expected, candidate):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_indpb=variable,
+                               mutation_probability=candidate, crossover_eta="31.5")
+    config["optimize"]["pymoo"]["shared"] = {}
+    result = migrate(config, best_effort=True)
+    shared = result.config["optimize"]["pymoo"]["shared"]
+    assert shared["mutation_prob_per_variable"] == expected
+    assert shared["mutation_prob"] == float(candidate)
+    assert shared["crossover_eta"] == 31.5
+    choices = {item["path"]: item for item in result.changes if item.get("best_effort")}
+    assert choices["optimize.pymoo.shared.mutation_prob_per_variable"]["new"] == expected
+    assert choices["optimize.pymoo.shared.mutation_prob"]["new"] == float(candidate)
+    assert isinstance(choices["optimize.pymoo.shared.mutation_prob"]["new"], float)
+    assert choices["optimize.pymoo.shared.crossover_eta"]["new"] == 31.5
+
+
+def test_best_effort_cli_preserves_numeric_string_zero_sentinel(tmp_path, capsys):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_indpb="0", mutation_probability="0")
+    config["optimize"]["pymoo"]["shared"] = {}
+    source, target, report = (tmp_path / name for name in ("source.json", "target.json", "report.json"))
+    source.write_text(json.dumps(config))
+    assert main([str(source), str(target), "--best-effort", "--report", str(report)]) == 0
+    shared = json.loads(target.read_text())["optimize"]["pymoo"]["shared"]
+    assert shared["mutation_prob_per_variable"] == "auto"
+    assert shared["mutation_prob"] == 0.0
+    choices = {item["path"]: item for item in json.loads(report.read_text())["changes"]
+               if item.get("best_effort")}
+    assert choices["optimize.pymoo.shared.mutation_prob_per_variable"]["new"] == "auto"
+    capsys.readouterr()

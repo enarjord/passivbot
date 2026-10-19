@@ -8,24 +8,42 @@ import re
 _RETIRED_WEIGHTED_METRIC = re.compile(r"_w(?:_|$)", re.IGNORECASE)
 
 
-def replace_retired_metrics(source, *, replacements, acknowledge, changes):
+def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_effort=False):
     """Require authored, acknowledged formula choices rather than metric aliases."""
     replacements = dict(replacements or {})
     used = set()
+    ew_requested = False
 
     def convert(name, path):
+        from config.ew import is_ew_metric
+
+        nonlocal ew_requested
         if not isinstance(name, str) or not _RETIRED_WEIGHTED_METRIC.search(name):
+            ew_requested |= isinstance(name, str) and is_ew_metric(name)
             return name
-        if name not in replacements:
+        inferred = name not in replacements and best_effort
+        if inferred:
+            candidate = re.sub(r"_w(?=_|$)", "_ew", name, flags=re.IGNORECASE)
+            if not is_ew_metric(candidate):
+                raise ValueError(f"{path}: no supported _ew replacement for {name!r}; supply --metric-replacement explicitly")
+        elif name not in replacements:
             raise ValueError(f"{path}: retired metric {name!r} requires --metric-replacement {name}=NEW and an explicit formula choice")
-        if not acknowledge:
+        if not acknowledge and not best_effort:
             raise ValueError(f"{path}: metric formula replacement requires --acknowledge-metric-formula-change")
-        new = replacements[name]
+        new = candidate if inferred else replacements[name]
         if not isinstance(new, str) or not new or _RETIRED_WEIGHTED_METRIC.search(new):
             raise ValueError(f"replacement for {name!r} must name a supported non-retired metric")
         used.add(name)
-        changes.append(dict(path=path, old=name, new=new,
-                            reason="acknowledged explicit metric formula replacement"))
+        ew_requested |= is_ew_metric(new)
+        if inferred or (best_effort and not acknowledge):
+            from .best_effort_v9 import record_guess
+
+            record_guess(changes, path, name, new,
+                         ("adopt exponential recency formula; retired _w formula is not equivalent"
+                          if inferred else "accept explicit replacement formula under best-effort consent"))
+        else:
+            changes.append(dict(path=path, old=name, new=new,
+                                reason="acknowledged explicit metric formula replacement"))
         return new
 
     def visit(node, path=""):
@@ -57,12 +75,20 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes):
             else:
                 visit(node[key], current)
     visit(source)
+    if best_effort:
+        from .best_effort_v9 import record_guess
+
+        backtest = source.setdefault("backtest", {})
+        if ew_requested and backtest.get("ew_half_life_days") is None:
+            record_guess(changes, "backtest.ew_half_life_days", None, 180.0,
+                         "enable inferred _ew analysis with a 180-day half-life; re-evaluate objectives and limits")
+            backtest["ew_half_life_days"] = 180.0
     unused = set(replacements) - used
     if unused:
         raise ValueError(f"unused metric replacements: {', '.join(sorted(unused))}")
 
 
-def retire_deap_policy(config, *, acknowledge, changes):
+def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
     """Preserve effective pymoo policy; DEAP algorithm changes require consent."""
     optimize = config.get("optimize", {})
     legacy_backend = optimize.get("backend", "pymoo")
@@ -76,13 +102,50 @@ def retire_deap_policy(config, *, acknowledge, changes):
         changes.append(dict(path="optimize.pymoo.shared.mutation_prob_var", old=value,
                             new={"mutation_prob": value}, reason="explicit released pymoo spelling migration"))
     if legacy_backend == "deap":
-        if not acknowledge:
+        if best_effort:
+            from config.schema import get_template_config
+            from .best_effort_v9 import record_guess
+
+            numeric_controls = {}
+            for key in ("crossover_eta", "crossover_probability", "mutation_eta",
+                        "mutation_probability", "mutation_indpb", "offspring_multiplier"):
+                if key not in optimize:
+                    continue
+                value = optimize[key]
+                if isinstance(value, bool):
+                    raise ValueError(f"optimize.{key} must be numeric, not a boolean")
+                try:
+                    number = float(value)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(f"optimize.{key} must be a finite number") from exc
+                if not math.isfinite(number):
+                    raise ValueError(f"optimize.{key} must be a finite number")
+                numeric_controls[key] = number
+            defaults = get_template_config()["optimize"]["pymoo"]["shared"]
+            mapping = {"crossover_eta": "crossover_eta", "crossover_probability": "crossover_prob_var",
+                       "mutation_eta": "mutation_eta", "mutation_probability": "mutation_prob",
+                       "mutation_indpb": "mutation_prob_per_variable"}
+            for key, default in defaults.items():
+                if key in shared:
+                    continue
+                legacy = next((old for old, new in mapping.items() if new == key and old in optimize), None)
+                value = numeric_controls[legacy] if legacy is not None else default
+                if key == "mutation_prob_per_variable" and legacy == "mutation_indpb" and value == 0:
+                    value = default
+                shared[key] = deepcopy(value)
+                record_guess(changes, f"optimize.pymoo.shared.{key}", None, value,
+                             f"approximate DEAP policy using {legacy or 'canonical pymoo default'}; search evolution differs")
+            if not acknowledge:
+                record_guess(changes, "optimize.backend", "deap", "pymoo",
+                             "retire DEAP in favor of pymoo; start a fresh optimization")
+        if not acknowledge and not best_effort:
             raise ValueError("optimize.backend=deap requires --acknowledge-search-backend-change; pymoo changes search evolution")
         if not shared:
             raise ValueError("DEAP conversion requires an explicit optimize.pymoo.shared policy; outer genetic gates and offspring counts are not equivalent")
         optimize["backend"] = "pymoo"
-        changes.append(dict(path="optimize.backend", old="deap", new="pymoo",
-                            reason="acknowledged search algorithm change; explicit pymoo policy controls evolution"))
+        if not best_effort or acknowledge:
+            changes.append(dict(path="optimize.backend", old="deap", new="pymoo",
+                                reason="acknowledged search algorithm change; replacement pymoo policy controls evolution"))
     mapping = {"crossover_eta": "crossover_eta", "crossover_probability": "crossover_prob_var",
                "mutation_eta": "mutation_eta", "mutation_indpb": "mutation_prob"}
     for key in ("crossover_eta", "crossover_probability", "mutation_eta", "mutation_indpb",
@@ -99,7 +162,7 @@ def retire_deap_policy(config, *, acknowledge, changes):
                                     reason="materialized effective released pymoo fallback without changing its value"))
                 continue
         changes.append(dict(path=f"optimize.{key}", old=value, new=None,
-                            reason="retired DEAP control; explicit pymoo policy retained"))
+                            reason="retired DEAP control; replacement pymoo policy retained"))
 
 
 
@@ -303,13 +366,14 @@ def _migrate_shared_fixed_selector(path, *, scope):
 
 
 def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_change=False,
-                       sparse=False):
+                       sparse=False, best_effort=False):
     """Translate public fields without guessing independent optimizer ranges."""
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
     result = deepcopy(source)
     if not sparse:
-        retire_deap_policy(result, acknowledge=acknowledge_search_backend_change, changes=changes)
+        retire_deap_policy(result, acknowledge=acknowledge_search_backend_change, changes=changes,
+                           best_effort=best_effort)
         retire_released_gpu_policy(result, changes=changes)
 
     def record(path, old, new, reason):
