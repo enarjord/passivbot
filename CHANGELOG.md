@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve canonical per-coin unstuck exposure triggers in native GPU replay, including
+  zero-valued overrides, while unpinned coins inherit the candidate policy.
+
 - Assess retained HSL exposure at a sparse account-only flattening boundary before
   applying the flat account fact, so an older RED signal cannot create a cooldown
   after carried-minute recovery. Preserve causal marks, budgets and existing deadlines.

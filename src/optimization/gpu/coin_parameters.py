@@ -110,10 +110,17 @@ def build_coin_override_parameters(
                 )
 
         unstuck_patch = side_patch.get("unstuck", {}) or {}
-        unstuck_keys = ("enabled", "ema_gating_enabled", "close_pct", "ema_dist", "loss_allowance_pct", "threshold")
-        for offset, key in enumerate(unstuck_keys):
+        unstuck_keys = (
+            ("enabled", "unstuck_enabled"),
+            ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
+            ("close_pct", "unstuck_close_pct"),
+            ("ema_dist", "unstuck_ema_dist"),
+            ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
+            ("exposure_trigger_ratio", "unstuck_threshold"),
+        )
+        for offset, (key, runtime_key) in enumerate(unstuck_keys):
             if key in unstuck_patch:
-                matrix[row, column("UNSTUCK_START_COLUMN") + offset] = float(effective_bot[f"unstuck_{key}"])
+                matrix[row, column("UNSTUCK_START_COLUMN") + offset] = float(effective_bot[runtime_key])
         for offset, key in enumerate(model.UNSTUCK_EMA_PARAM_KEYS):
             strategy_key = key.removeprefix("unstuck_")
             if coupled:

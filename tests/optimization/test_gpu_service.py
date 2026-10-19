@@ -1766,7 +1766,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                             "close_pct": 0.125,
                             "ema_dist": -0.01,
                             "loss_allowance_pct": 0.02,
-                            "threshold": 0.85,
+                            "exposure_trigger_ratio": 0.85,
                         },
                     }
                 }
@@ -2297,7 +2297,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                             "close_pct": 0.125,
                             "ema_dist": -0.01,
                             "loss_allowance_pct": 0.02,
-                            "threshold": 0.85,
+                            "exposure_trigger_ratio": 0.85,
                         },
                     }
                 }
