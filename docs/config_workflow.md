@@ -43,6 +43,11 @@ Inputs stay untouched by default; replacement requires `--in-place`. See
 [Config cleanup and formatting](tools.md#config-cleanup-and-formatting) for bulk depth, HJSON,
 dry-run/check modes and migration boundaries.
 
+Saved optimizer and backtest result files can also be loaded directly as config inputs,
+including records with a nested `config` object. Only known result metadata is removed
+before strict validation. Recorded dataset membership is provenance; live/scenario coin
+settings still control data preparation.
+
 - Keep one normal JSON or HJSON config per strategy/account instead of relying on many CLI overrides.
 - Use CLI overrides for temporary experiments, not as your main configuration workflow.
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.

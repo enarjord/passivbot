@@ -4,6 +4,7 @@ from copy import deepcopy
 from .normalize import normalize_config
 from .parse import load_raw_config
 from .project import project_config
+from .result_records import extract_result_config
 from .runtime_compile import compile_runtime_config
 from .schema import get_template_config
 
@@ -14,7 +15,7 @@ def load_input_config(
     if config_path:
         if log_info:
             logging.info("loading config %s", config_path)
-        source = load_raw_config(config_path)
+        source = extract_result_config(load_raw_config(config_path))
         return source, config_path, deepcopy(source)
     if log_info:
         logging.info("loading schema defaults from src/config/schema.py")
